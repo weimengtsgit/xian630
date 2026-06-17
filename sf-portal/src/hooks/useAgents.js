@@ -80,11 +80,25 @@ export function useAgents() {
     )
   }
 
+  const createAgent = (name, type) => {
+    const newAgent = {
+      id: `agent-${Date.now()}`,
+      name,
+      type,
+      status: 'idle',
+      currentTask: null,
+      progress: 0,
+      lastActivity: new Date()
+    }
+    setAgents(prev => [...prev, newAgent])
+  }
+
   return {
     agents,
     loading,
     getWorkingAgents,
     assignTask,
-    stopAgent
+    stopAgent,
+    createAgent
   }
 }

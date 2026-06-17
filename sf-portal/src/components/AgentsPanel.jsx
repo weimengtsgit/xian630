@@ -1,5 +1,6 @@
 import { useAgents } from '../hooks/useAgents'
-import { Play, StopCircle, CheckCircle, Clock, Bot, Pause } from 'lucide-react'
+import { Play, StopCircle, CheckCircle, Clock, Bot, Pause, Plus, X } from 'lucide-react'
+import { useState } from 'react'
 import './AgentsPanel.css'
 
 function getStatusInfo(status) {
@@ -30,8 +31,131 @@ function formatTime(date) {
   return `${days}天前`
 }
 
+// 创建智能体弹窗组件
+function CreateAgentModal({ isOpen, onClose, onSubmit }) {
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    model: '',
+    instruction: '',
+    skills: ''
+  })
+
+  if (!isOpen) return null
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (formData.name && formData.model && formData.instruction) {
+      onSubmit(formData)
+      setFormData({
+        name: '',
+        description: '',
+        model: '',
+        instruction: '',
+        skills: ''
+      })
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-header-left">
+            <h3>创建智能体</h3>
+            <p className="modal-description">在工作区创建一个新的 AI 智能体。</p>
+          </div>
+          <button className="modal-close-btn" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <form className="modal-body" onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>名称 <span className="required">*</span></label>
+            <input
+              type="text"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="例如：深度研究智能体"
+              required
+            />
+          </div>
+
+          <div className="form-group">
+            <label>描述</label>
+            <textarea
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="这个智能体做什么？"
+              rows={3}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>模型 <span className="required">*</span></label>
+            <select
+              value={formData.model}
+              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+              required
+            >
+              <option value="">请选择模型</option>
+              <option value="claude-3-opus">Claude 3 Opus</option>
+              <option value="claude-3-sonnet">Claude 3 Sonnet</option>
+              <option value="gpt-4">GPT-4</option>
+              <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>指令 <span className="required">*</span></label>
+            <textarea
+              value={formData.instruction}
+              onChange={(e) => setFormData({ ...formData, instruction: e.target.value })}
+              placeholder="描述这个智能体应该如何工作..."
+              rows={5}
+              required
+            />
+          </div>
+
+          <div className="form-group">
+            <label>SKILLS</label>
+            <div className="select-with-icon">
+              <select
+                value={formData.skills}
+                onChange={(e) => setFormData({ ...formData, skills: e.target.value })}
+              >
+                <option value="">从工作区添加 skill</option>
+                <option value="web-search">Web Search</option>
+                <option value="code-executor">Code Executor</option>
+                <option value="file-browser">File Browser</option>
+              </select>
+              <Plus size={14} />
+            </div>
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="modal-btn cancel-btn" onClick={onClose}>
+              取消
+            </button>
+            <button type="submit" className="modal-btn submit-btn">
+              创建
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export function AgentsPanel() {
-  const { agents, loading, assignTask, stopAgent } = useAgents()
+  const { agents, loading, assignTask, stopAgent, createAgent } = useAgents()
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+
+  const handleCreateAgent = (data) => {
+    createAgent(data.name, data.type || '开发助手')
+    setIsCreateModalOpen(false)
+  }
 
   if (loading) {
     return (
@@ -48,7 +172,13 @@ export function AgentsPanel() {
     <div className="agents-panel">
       <div className="panel-header">
         <h2>智能体协同</h2>
-        <span className="panel-count">{agents.length} 个智能体</span>
+        <div className="panel-header-actions">
+          <span className="panel-count">{agents.length} 个智能体</span>
+          <button className="create-agent-btn" onClick={() => setIsCreateModalOpen(true)}>
+            <Plus size={16} />
+            创建
+          </button>
+        </div>
       </div>
       <div className="panel-content">
         <div className="agents-grid">
@@ -143,6 +273,12 @@ export function AgentsPanel() {
           })}
         </div>
       </div>
+
+      <CreateAgentModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSubmit={handleCreateAgent}
+      />
     </div>
   )
 }
