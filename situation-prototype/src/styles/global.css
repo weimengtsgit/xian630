@@ -193,6 +193,8 @@ button {
   left: 56px;
   bottom: 14px;
   width: 310px;
+  display: flex;
+  flex-direction: column;
   padding: 8px 10px 10px;
   background:
     linear-gradient(180deg, rgba(16, 37, 52, 0.92), rgba(10, 24, 37, 0.86)),
@@ -259,6 +261,7 @@ button {
 
 .panel-section {
   margin-top: 9px;
+  flex: 0 0 auto;
 }
 
 .section-title {
@@ -284,6 +287,227 @@ button {
   color: #b9ccd6;
   font-size: 11px;
   line-height: 1.72;
+}
+
+.tab-content {
+  flex: 0 0 auto;
+  min-height: 176px;
+  margin-top: 9px;
+  padding: 8px;
+  background:
+    linear-gradient(180deg, rgba(7, 23, 36, 0.76), rgba(6, 18, 30, 0.62)),
+    repeating-linear-gradient(90deg, rgba(104, 221, 255, 0.035) 0 1px, transparent 1px 6px);
+  border: 1px solid rgba(104, 221, 255, 0.16);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.detail-grid div {
+  min-width: 0;
+  padding: 6px;
+  background: rgba(18, 50, 68, 0.5);
+  border: 1px solid rgba(104, 221, 255, 0.12);
+}
+
+.detail-grid dt,
+.target-callout dt {
+  color: #7ea4b5;
+}
+
+.detail-grid dt {
+  font-size: 10px;
+}
+
+.detail-grid dd {
+  margin: 3px 0 0;
+  color: #e7f8ff;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary-card {
+  margin-top: 8px;
+  padding: 7px 8px;
+  background: rgba(8, 27, 42, 0.68);
+  border-left: 2px solid rgba(104, 221, 255, 0.62);
+}
+
+.summary-card strong {
+  display: block;
+  color: #eefbff;
+  font-size: 11px;
+}
+
+.summary-card p {
+  margin: 4px 0 0;
+  color: #a9c3cf;
+  font-size: 11px;
+  line-height: 1.52;
+}
+
+.relation-list,
+.contact-list,
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.relation-list {
+  margin-top: 8px;
+}
+
+.relation-item {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 7px;
+  background: rgba(16, 52, 71, 0.52);
+  border: 1px solid rgba(104, 221, 255, 0.16);
+  font-size: 11px;
+}
+
+.relation-item span,
+.relation-item em {
+  color: #8fb0bf;
+  font-style: normal;
+}
+
+.relation-item strong {
+  min-width: 0;
+  color: #edf8fc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relation-item em {
+  text-align: right;
+  color: #83e9ff;
+}
+
+.empty-state {
+  padding: 18px 8px;
+  color: #8ca7b4;
+  text-align: center;
+  font-size: 11px;
+  border: 1px dashed rgba(104, 221, 255, 0.18);
+}
+
+.contact-card {
+  padding: 7px 8px;
+  background: rgba(14, 45, 63, 0.5);
+  border: 1px solid rgba(104, 221, 255, 0.15);
+}
+
+.contact-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #8fb0bf;
+  font-size: 10px;
+}
+
+.contact-card header em {
+  color: #82e49c;
+  font-style: normal;
+}
+
+.contact-card strong,
+.contact-card p,
+.contact-card small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-card strong {
+  margin-top: 4px;
+  color: #edf8fc;
+  font-size: 12px;
+}
+
+.contact-card p {
+  margin: 2px 0 0;
+  color: #a9c3cf;
+  font-size: 11px;
+}
+
+.contact-card small {
+  margin-top: 3px;
+  color: #78dfff;
+  font-size: 10px;
+}
+
+.history-list {
+  position: relative;
+  padding-left: 6px;
+}
+
+.history-item {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 8px;
+  position: relative;
+}
+
+.history-item::before {
+  content: "";
+  position: absolute;
+  left: 34px;
+  top: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #78e5ff;
+  box-shadow: 0 0 10px rgba(120, 229, 255, 0.8);
+}
+
+.history-item::after {
+  content: "";
+  position: absolute;
+  left: 37px;
+  top: 15px;
+  bottom: -8px;
+  width: 1px;
+  background: rgba(104, 221, 255, 0.22);
+}
+
+.history-item:last-child::after {
+  display: none;
+}
+
+.history-item time {
+  color: #78dfff;
+  font-size: 11px;
+}
+
+.history-item div {
+  min-width: 0;
+  padding-bottom: 4px;
+}
+
+.history-item strong {
+  display: block;
+  color: #edf8fc;
+  font-size: 11px;
+}
+
+.history-item p {
+  margin: 2px 0 0;
+  color: #9fb8c4;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .kind-controls {
@@ -323,8 +547,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  height: calc(100% - 280px);
-  min-height: 240px;
+  flex: 1 1 auto;
+  min-height: 150px;
   margin-top: 10px;
   overflow-y: auto;
   padding-right: 2px;
@@ -482,6 +706,7 @@ button {
 }
 
 .panel-footer {
+  flex: 0 0 auto;
   height: 28px;
   display: flex;
   align-items: center;
@@ -546,10 +771,6 @@ button {
 
 .target-callout div {
   min-width: 0;
-}
-
-.target-callout dt {
-  color: #7ea4b5;
 }
 
 .target-callout dd {
