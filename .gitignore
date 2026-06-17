@@ -45,3 +45,17 @@ coverage/
 .cache/
 .parcel-cache/
 .eslintcache
+
+# Go (local)
+bin/
+/xian630
+/cc-status/cc-status
+/cc-status/cc-status.exe
+/vendor/
+
+# SQLite state (runtime data, do not commit)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
