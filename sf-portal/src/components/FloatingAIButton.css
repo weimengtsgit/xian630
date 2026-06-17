@@ -1,0 +1,71 @@
+.floating-ai-button {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 60px;
+  height: 60px;
+  border: 0;
+  background: linear-gradient(135deg, #68ddff 0%, #4a9db8 100%);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #03111d;
+  box-shadow: 0 8px 24px rgba(104, 221, 255, 0.4), 0 0 0 0 rgba(104, 221, 255, 0.4);
+  transition: all 0.3s ease;
+  z-index: 999;
+}
+
+.floating-ai-button::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  padding: 4px;
+  background: linear-gradient(135deg, #68ddff, #4a9db8);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.floating-ai-button:hover {
+  transform: scale(1.1);
+  box-shadow: 0 12px 32px rgba(104, 221, 255, 0.5), 0 0 20px rgba(104, 221, 255, 0.3);
+}
+
+.floating-ai-button:hover::before {
+  opacity: 1;
+}
+
+.floating-ai-button.active {
+  background: linear-gradient(135deg, #7feb9b 0%, #5ab888 100%);
+  color: #03111d;
+  box-shadow: 0 8px 24px rgba(127, 235, 155, 0.4);
+}
+
+.pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(127, 235, 155, 0.6);
+  animation: pulse 2s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+.floating-ai-button svg {
+  position: relative;
+  z-index: 1;
+}

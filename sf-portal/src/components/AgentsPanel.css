@@ -1,0 +1,343 @@
+.agents-panel {
+  display: flex;
+  flex-direction: column;
+  background: rgba(11, 29, 44, 0.72);
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: rgba(104, 221, 255, 0.08);
+  border-bottom: 1px solid rgba(111, 218, 255, 0.24);
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #edfaff;
+}
+
+.panel-count {
+  font-size: 12px;
+  color: #8fb0bf;
+}
+
+.panel-loading {
+  padding: 40px;
+  text-align: center;
+  color: #8fb0bf;
+}
+
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.agent-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(3, 17, 29, 0.9) 0%, rgba(11, 29, 44, 0.85) 100%);
+  border: 1px solid rgba(111, 218, 255, 0.16);
+  border-left: 3px solid transparent;
+  border-radius: 10px;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.agent-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(104, 221, 255, 0.3), transparent);
+}
+
+.agent-card:hover {
+  border-color: rgba(111, 218, 255, 0.32);
+  box-shadow: 0 4px 16px rgba(104, 221, 255, 0.1);
+  transform: translateX(4px);
+}
+
+.agent-card[data-status="working"] {
+  border-left-color: #68ddff;
+}
+
+.agent-card[data-status="completed"] {
+  border-left-color: #7feb9b;
+}
+
+.agent-card[data-status="idle"] {
+  border-left-color: #8fb0bf;
+}
+
+.agent-card[data-status="error"] {
+  border-left-color: #ff665e;
+}
+
+.agent-card-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-avatar-wrapper {
+  position: relative;
+}
+
+.agent-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.agent-avatar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(255, 255, 255, 0.1) 100%);
+}
+
+.working-indicator {
+  position: absolute;
+  -webkit-filter: drop-shadow(0 0 4px rgba(104, 221, 255, 0.8));
+  filter: drop-shadow(0 0 4px rgba(104, 221, 255, 0.8));
+  bottom: -2px;
+  right: -2px;
+}
+
+.pulse-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  background: #68ddff;
+  border-radius: 50%;
+  animation: agentPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes agentPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.6;
+  }
+}
+
+.agent-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #edfaff;
+}
+
+.agent-type-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: rgba(111, 218, 255, 0.12);
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  border-radius: 12px;
+  font-size: 11px;
+  color: #68ddff;
+  width: fit-content;
+}
+
+.agent-card-center {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+
+.agent-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.agent-status-text {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.agent-task-info,
+.agent-completed-info,
+.agent-idle-info {
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border: 1px solid rgba(111, 218, 255, 0.12);
+}
+
+.task-label {
+  font-size: 11px;
+  color: #8fb0bf;
+  margin-bottom: 4px;
+}
+
+.task-name {
+  font-size: 13px;
+  color: #edfaff;
+  margin-bottom: 8px;
+}
+
+.task-progress-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(104, 221, 255, 0.16);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #68ddff, #4a9db8);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+  animation: progressGlow 2s ease-in-out infinite;
+}
+
+@keyframes progressGlow {
+  0%, 100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.3);
+  }
+}
+
+.progress-percent {
+  font-size: 12px;
+  color: #68ddff;
+  font-weight: 600;
+  min-width: 40px;
+  text-align: right;
+}
+
+.agent-completed-info {
+  font-size: 13px;
+  color: #7feb9b;
+  font-weight: 500;
+}
+
+.agent-idle-info {
+  font-size: 13px;
+  color: #8fb0bf;
+  font-style: italic;
+}
+
+.agent-card-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.agent-last-activity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.activity-label {
+  font-size: 11px;
+  color: #8fb0bf;
+}
+
+.activity-time {
+  font-size: 12px;
+  color: #d7eef8;
+}
+
+.agent-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.assign-btn {
+  background: linear-gradient(135deg, #68ddff 0%, #4a9db8 100%);
+  color: #03111d;
+}
+
+.assign-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(104, 221, 255, 0.4);
+}
+
+.pause-btn {
+  background: rgba(255, 102, 94, 0.16);
+  color: #ff665e;
+  border: 1px solid rgba(255, 102, 94, 0.32);
+}
+
+.pause-btn:hover {
+  background: rgba(255, 102, 94, 0.24);
+  border-color: rgba(255, 102, 94, 0.48);
+}
+
+.panel-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.panel-content::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.panel-content::-webkit-scrollbar-thumb {
+  background: rgba(111, 218, 255, 0.24);
+  border-radius: 3px;
+}
+
+.panel-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(111, 218, 255, 0.4);
+}
