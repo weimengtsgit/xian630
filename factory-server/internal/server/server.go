@@ -204,6 +204,8 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/apps/:id/rebuild", s.rebuildApp)
 
 	r.Handle("GET", "/api/agents", s.listAgents)
+	r.Handle("POST", "/api/agents", s.createAgent)
+	r.Handle("POST", "/api/agents/create", s.createAgent)
 	r.Handle("PATCH", "/api/agents/:id", s.updateAgent)
 	r.Handle("GET", "/api/agents/:id/runs", s.agentRuns)
 

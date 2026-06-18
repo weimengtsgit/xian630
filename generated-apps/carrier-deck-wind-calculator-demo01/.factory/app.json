@@ -1,0 +1,31 @@
+{
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "description": "航母活动区域甲板风条件评估看板",
+  "docker": {
+    "context": ".",
+    "dockerfile": "Dockerfile",
+    "enabled": true,
+    "runtimePort": 80
+  },
+  "entry": "static-vite",
+  "name": "甲板风实时计算器demo01",
+  "path": "generated-apps/carrier-deck-wind-calculator-demo01",
+  "runtime": {
+    "defaultPort": 5173,
+    "devCommand": "npm run dev"
+  },
+  "schemaVersion": 1,
+  "slug": "carrier-deck-wind-calculator-demo01",
+  "source": "generated",
+  "tags": [
+    "maritime",
+    "dashboard",
+    "wind",
+    "carrier",
+    "deck"
+  ],
+  "type": "command-dashboard"
+}

@@ -30,6 +30,17 @@ ON CONFLICT(id) DO UPDATE SET
 	return err
 }
 
+// CreateAgent inserts a new user-defined agent. It intentionally does not
+// upsert: duplicate ids or keys should surface to the caller.
+func (s *Store) CreateAgent(ctx context.Context, a model.Agent) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO agents(id, key, name, role, description, claude_agent_name, skills_json, enabled, sort_order)
+VALUES(?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.Key, a.Name, a.Role, a.Description,
+		a.ClaudeAgentName, a.SkillsJSON, boolToInt(a.Enabled), a.SortOrder)
+	return err
+}
+
 // ListAgents returns every known agent ordered by sort_order ascending.
 func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	rows, err := s.db.QueryContext(ctx, `

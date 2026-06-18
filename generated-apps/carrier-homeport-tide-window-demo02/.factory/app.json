@@ -1,0 +1,31 @@
+{
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "description": "四大航母母港潮汐窗口状态看板",
+  "docker": {
+    "context": ".",
+    "dockerfile": "Dockerfile",
+    "enabled": true,
+    "runtimePort": 80
+  },
+  "entry": "static-vite",
+  "name": "航母母港潮汐窗口计算器demo02",
+  "path": "generated-apps/carrier-homeport-tide-window-demo02",
+  "runtime": {
+    "defaultPort": 5173,
+    "devCommand": "npm run dev"
+  },
+  "schemaVersion": 1,
+  "slug": "carrier-homeport-tide-window-demo02",
+  "source": "generated",
+  "tags": [
+    "maritime",
+    "dashboard",
+    "tide",
+    "carrier",
+    "homeport"
+  ],
+  "type": "command-dashboard"
+}

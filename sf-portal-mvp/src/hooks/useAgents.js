@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { factoryApi } from '../api/client'
+import { appendCreatedAgentForDisplay } from './agentList'
 
 export function useAgents() {
   const [agents, setAgents] = useState([])
@@ -23,6 +24,13 @@ export function useAgents() {
     refresh()
   }, [refresh])
 
+  const createAgent = useCallback(async agent => {
+    setError(null)
+    const created = await factoryApi.createAgent(agent)
+    setAgents(current => appendCreatedAgentForDisplay(current, created))
+    return created
+  }, [])
+
   // No-op stubs kept for legacy component compatibility; Task 15 reworks the UI.
   const getWorkingAgents = useCallback(
     () => agents.filter(a => a.status === 'working'),
@@ -36,6 +44,7 @@ export function useAgents() {
     loading,
     error,
     refresh,
+    createAgent,
     getWorkingAgents,
     assignTask,
     stopAgent,

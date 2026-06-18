@@ -2,7 +2,8 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  max-height: 220px;
+  min-height: 320px;
+  max-height: none;
   background: rgba(11, 29, 44, 0.85);
   border: 1px solid rgba(111, 218, 255, 0.24);
   border-radius: 8px;
@@ -17,7 +18,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 120px;
 }
 
 .chat-dock-messages::-webkit-scrollbar {

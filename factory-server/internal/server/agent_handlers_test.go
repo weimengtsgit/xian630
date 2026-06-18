@@ -71,6 +71,114 @@ func TestListAgents(t *testing.T) {
 	}
 }
 
+func TestCreateAgent(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{
+		"key":"review-agent",
+		"name":"评审智能体",
+		"role":"reviewer",
+		"description":"审查需求和设计输出",
+		"claude_agent_name":"review-agent",
+		"skills_json":"[\"review\"]",
+		"enabled":true
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var got model.Agent
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != "agent_review_agent" {
+		t.Fatalf("id = %q, want agent_review_agent", got.ID)
+	}
+	if got.Key != "review-agent" || got.Name != "评审智能体" || got.Role != "reviewer" {
+		t.Fatalf("created agent mismatch: %+v", got)
+	}
+	if got.SortOrder != 6 {
+		t.Fatalf("sort_order = %d, want 6", got.SortOrder)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	listRec := httptest.NewRecorder()
+	r.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", listRec.Code)
+	}
+	var all []model.Agent
+	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(all) != 6 {
+		t.Fatalf("len = %d, want 6", len(all))
+	}
+	if all[5].Key != "review-agent" {
+		t.Fatalf("last key = %q, want review-agent", all[5].Key)
+	}
+}
+
+func TestCreateAgentCreateAliasRoute(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{"key":"audit-agent","name":"审计智能体","role":"auditor"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/create", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateAgentMissingRequiredField(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{"key":"review-agent","name":"评审智能体"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestCreateAgentInvalidSkillsJSON(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{"key":"review-agent","name":"评审智能体","role":"reviewer","skills_json":"not-json"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestCreateAgentDuplicateKey(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{"key":"tester","name":"重复测试","role":"tester"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
 func TestUpdateAgentEnabled(t *testing.T) {
 	_, r := newAgentTestServer(t)
 

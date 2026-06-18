@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test:logic": "node scripts/check-job-selection.mjs && node scripts/check-application-ordering.mjs",
+    "test:logic": "node scripts/check-job-selection.mjs && node scripts/check-application-ordering.mjs && node scripts/check-agent-creation.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
