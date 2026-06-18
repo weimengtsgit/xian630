@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'
+const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || ''
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -22,6 +22,8 @@ export const factoryApi = {
   listJobs: () => request('/api/jobs'),
   getJob: id => request(`/api/jobs/${id}`),
   getJobSteps: id => request(`/api/jobs/${id}/steps`),
+  getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
+  artifactContentUrl: id => `${API_BASE_URL}/api/artifacts/${id}/content`,
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),

@@ -6,6 +6,8 @@ import { selectDisplayJob } from './jobSelection'
 export function useJobs() {
   const [jobs, setJobs] = useState([])
   const [activeJob, setActiveJob] = useState(null)
+  const [selectedJobId, setSelectedJobId] = useState(null)
+  const [closedJobIds, setClosedJobIds] = useState([])
   const [steps, setSteps] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -17,10 +19,13 @@ export function useJobs() {
     try {
       const data = await factoryApi.listJobs()
       const list = Array.isArray(data) ? data : (data.jobs || [])
+      const visibleList = list.filter(job => !closedJobIds.includes(job.id))
       if (!mountedRef.current) return
-      setJobs(list)
+      setJobs(visibleList)
 
-      const active = selectDisplayJob(list)
+      // 用户点击任务标签后优先展示该任务；若任务不存在则回退到默认展示规则。
+      const selected = selectedJobId ? visibleList.find(j => j.id === selectedJobId) : null
+      const active = selected || selectDisplayJob(visibleList)
       setActiveJob(active || null)
 
       if (active) {
@@ -40,7 +45,7 @@ export function useJobs() {
     } finally {
       if (mountedRef.current) setLoading(false)
     }
-  }, [])
+  }, [closedJobIds, selectedJobId])
 
   const createJob = useCallback(async prompt => {
     setError(null)
@@ -84,6 +89,15 @@ export function useJobs() {
     }
   }, [refresh])
 
+  const selectJob = useCallback(id => {
+    setSelectedJobId(id)
+  }, [])
+
+  const closeJob = useCallback(id => {
+    setClosedJobIds(prev => (prev.includes(id) ? prev : [...prev, id]))
+    setSelectedJobId(prev => (prev === id ? null : prev))
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     refresh()
@@ -102,6 +116,7 @@ export function useJobs() {
   return {
     jobs,
     activeJob,
+    selectedJobId,
     steps,
     loading,
     error,
@@ -109,6 +124,8 @@ export function useJobs() {
     createJob,
     cancelJob,
     answerJob,
+    selectJob,
+    closeJob,
     retryCurrentStep,
   }
 }

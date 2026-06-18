@@ -47,9 +47,12 @@ function App() {
 
         <div className="wb-col wb-center">
           <JobCenter
+            jobs={jobs.jobs}
             activeJob={jobs.activeJob}
             steps={jobs.steps}
             loading={jobs.loading}
+            onSelectJob={jobs.selectJob}
+            onCloseJob={jobs.closeJob}
             onCancel={jobs.cancelJob}
             onRetry={jobs.retryCurrentStep}
           />

@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'
+const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || ''
 
 export function subscribeFactoryEvents(onEvent) {
   const source = new EventSource(`${API_BASE_URL}/api/events`)
