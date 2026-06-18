@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,10 @@ type CommandResult struct {
 // exec.Command; tests supply a fake.
 type CommandRunner interface {
 	Run(ctx context.Context, dir string, name string, args ...string) (CommandResult, error)
+}
+
+type inputCommandRunner interface {
+	RunWithInput(ctx context.Context, dir string, input string, name string, args ...string) (CommandResult, error)
 }
 
 // ClaudeRunner drives one `claude --print` invocation per step attempt and the
@@ -77,8 +82,11 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 		return fmt.Errorf("write %s: %w", ws.PromptPath(), err)
 	}
 
-	args := append(claudeArgv(codegen), prompt)
-	res, err := r.Runner.Run(ctx, ws.Dir(), r.binary(), args...)
+	inputRunner, ok := r.Runner.(inputCommandRunner)
+	if !ok {
+		return fmt.Errorf("claude runner does not support stdin")
+	}
+	res, err := inputRunner.RunWithInput(ctx, ws.Dir(), prompt, r.binary(), claudeArgv(codegen)...)
 	// Capture whatever we got, even on failure, for audit/debugging.
 	_ = os.WriteFile(ws.StdoutPath(), []byte(res.Stdout), 0o644)
 	_ = os.WriteFile(ws.StderrPath(), []byte(res.Stderr), 0o644)
@@ -87,6 +95,11 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 	}
 	if res.ExitCode != 0 {
 		return fmt.Errorf("claude exit %d: %w", res.ExitCode, ErrRunnerExitNonzero)
+	}
+	if strings.TrimSpace(res.Stdout) != "" {
+		if _, statErr := os.Stat(ws.OutputPath()); errors.Is(statErr, os.ErrNotExist) {
+			_ = os.WriteFile(ws.OutputPath(), []byte(res.Stdout), 0o644)
+		}
 	}
 	return nil
 }

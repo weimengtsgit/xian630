@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -124,10 +125,22 @@ type OSRunner struct{}
 // Run executes name with args in dir (empty dir = inherit cwd). stdout and
 // stderr are captured separately. The duration is measured wall-clock.
 func (OSRunner) Run(ctx context.Context, dir, name string, args ...string) (CommandResult, error) {
+	return runOSCommand(ctx, dir, "", name, args...)
+}
+
+// RunWithInput executes name with args and writes input to stdin.
+func (OSRunner) RunWithInput(ctx context.Context, dir, input, name string, args ...string) (CommandResult, error) {
+	return runOSCommand(ctx, dir, input, name, args...)
+}
+
+func runOSCommand(ctx context.Context, dir, input, name string, args ...string) (CommandResult, error) {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, name, args...)
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

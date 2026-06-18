@@ -64,6 +64,27 @@ func (a claudeCommandAdapter) Run(ctx context.Context, dir, name string, args ..
 	}, err
 }
 
+type deployInputCommandRunner interface {
+	RunWithInput(ctx context.Context, dir string, input string, name string, args ...string) (deploy.CommandResult, error)
+}
+
+func (a claudeCommandAdapter) RunWithInput(ctx context.Context, dir, input, name string, args ...string) (runner.CommandResult, error) {
+	if dir == "" {
+		dir = a.defaultDir
+	}
+	inputRunner, ok := a.runner.(deployInputCommandRunner)
+	if !ok {
+		return runner.CommandResult{ExitCode: 1}, runner.ErrRunnerExitNonzero
+	}
+	res, err := inputRunner.RunWithInput(ctx, dir, input, name, args...)
+	return runner.CommandResult{
+		Stdout:     res.Stdout,
+		Stderr:     res.Stderr,
+		ExitCode:   res.ExitCode,
+		DurationMs: res.DurationMs,
+	}, err
+}
+
 // New constructs a Server with its dependencies: the resolved config, the
 // SQLite store, and the manifest scanner. The SSE hub and deploy runtime are
 // owned by the server (initialized here) so callers don't need to supply them.
@@ -105,7 +126,6 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 			Store:        st,
 			Workspace:    cfg.WorkspaceRoot,
 			ArtifactRoot: cfg.ArtifactRoot,
-			Slug:         "factory-demo",
 		}
 		log.Printf("FACTORY_FAKE_CLAUDE=1: claude steps use the deterministic FakeClaudeRunner")
 	}

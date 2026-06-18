@@ -217,7 +217,7 @@ function DetailPanel({ record }) {
             <span className="tag customer">客户口径</span> 选择航向自合成甲板风：
           </div>
           <div className="rule-text" style={{ marginTop: 6 }}>
-            <span className="formula">lo = max(0, W − {CARRIER_MAX_SPEED_KT})</span>
+            <span className="formula">lo = |W − {CARRIER_MAX_SPEED_KT}|</span>
             <span style={{ margin: "0 6px" }}>→</span>
             <b>{lo.toFixed(1)}</b> 节
           </div>

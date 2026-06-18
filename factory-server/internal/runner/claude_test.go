@@ -17,6 +17,7 @@ type fakeRunner struct {
 	argv        []string
 	dir         string
 	name        string
+	stdin       string
 	stdout      string
 	exitCode    int
 	err         error
@@ -26,10 +27,19 @@ type fakeRunner struct {
 }
 
 func (f *fakeRunner) Run(ctx context.Context, dir string, name string, args ...string) (CommandResult, error) {
+	return f.run(ctx, dir, "", name, args...)
+}
+
+func (f *fakeRunner) RunWithInput(ctx context.Context, dir string, input string, name string, args ...string) (CommandResult, error) {
+	return f.run(ctx, dir, input, name, args...)
+}
+
+func (f *fakeRunner) run(_ context.Context, dir string, input string, name string, args ...string) (CommandResult, error) {
 	rec := append([]string{name}, args...)
 	f.records = append(f.records, rec)
 	f.dirs = append(f.dirs, dir)
 	f.name = name
+	f.stdin = input
 	f.argv = args
 	res := CommandResult{Stdout: f.stdout, ExitCode: f.exitCode}
 	if f.err != nil {
@@ -64,13 +74,10 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 	if fr.name != "claude" {
 		t.Errorf("name = %q, want claude", fr.name)
 	}
-	if len(fr.argv) == 0 {
-		t.Fatal("argv is empty")
+	if fr.stdin != prompt {
+		t.Fatalf("stdin = %q, want prompt %q", fr.stdin, prompt)
 	}
-	if fr.argv[len(fr.argv)-1] != prompt {
-		t.Fatalf("last argv = %q, want prompt %q", fr.argv[len(fr.argv)-1], prompt)
-	}
-	got := joinArgs(fr.argv[:len(fr.argv)-1])
+	got := joinArgs(fr.argv)
 	wantRo := "--print --permission-mode plan --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write"
 	if got != wantRo {
 		t.Errorf("read-only argv =\n got: %q\nwant: %q", got, wantRo)
@@ -115,13 +122,10 @@ func TestClaudeRunCodegenArgv(t *testing.T) {
 	if err := r.Run(context.Background(), ws, prompt, nil, true); err != nil {
 		t.Fatalf("Run err = %v", err)
 	}
-	if len(fr.argv) == 0 {
-		t.Fatal("argv is empty")
+	if fr.stdin != prompt {
+		t.Fatalf("stdin = %q, want prompt %q", fr.stdin, prompt)
 	}
-	if fr.argv[len(fr.argv)-1] != prompt {
-		t.Fatalf("last argv = %q, want prompt %q", fr.argv[len(fr.argv)-1], prompt)
-	}
-	got := joinArgs(fr.argv[:len(fr.argv)-1])
+	got := joinArgs(fr.argv)
 	wantCg := "--print --permission-mode plan --allowedTools Read,Grep,Glob,Edit,Write --disallowedTools Bash"
 	if got != wantCg {
 		t.Errorf("codegen argv =\n got: %q\nwant: %q", got, wantCg)
@@ -140,6 +144,24 @@ func TestClaudeRunNonzeroExit(t *testing.T) {
 	// even on failure stdout/stderr must be captured for audit
 	if _, e := os.Stat(ws.StdoutPath()); e != nil {
 		t.Errorf("stdout.log not written on nonzero exit: %v", e)
+	}
+}
+
+func TestClaudeRunWritesStdoutToOutputWhenMissing(t *testing.T) {
+	fr := &fakeRunner{stdout: `{"needsUserInput":false,"questions":[]}`}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	if err := r.Run(context.Background(), ws, "P", nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(ws.OutputPath())
+	if err != nil {
+		t.Fatalf("read output.json: %v", err)
+	}
+	if string(raw) != fr.stdout {
+		t.Fatalf("output.json = %q, want stdout %q", string(raw), fr.stdout)
 	}
 }
 

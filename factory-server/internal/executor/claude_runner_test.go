@@ -20,6 +20,14 @@ type fakeClaudeCommand struct {
 }
 
 func (f fakeClaudeCommand) Run(_ context.Context, dir string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f fakeClaudeCommand) RunWithInput(_ context.Context, dir string, _ string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f fakeClaudeCommand) run(dir string, name string, args ...string) (runner.CommandResult, error) {
 	if name == "git" {
 		return runner.CommandResult{ExitCode: 0}, nil
 	}

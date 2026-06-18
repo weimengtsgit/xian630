@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,68 @@ type FakeClaudeRunner struct {
 	Workspace    string // cfg.WorkspaceRoot; generated app is written under <Workspace>/generated-apps/<Slug>
 	ArtifactRoot string // cfg.ArtifactRoot; claude step output.json lives under here
 	Slug         string // generated-app slug; defaults to "factory-demo" when empty
+}
+
+type fakeSceneTemplate struct {
+	TemplateSlug string
+	Name         string
+	Type         string
+	Description  string
+	Keywords     []string
+}
+
+type fakeGenerationPlan struct {
+	Slug         string
+	Name         string
+	Type         string
+	Description  string
+	TemplateSlug string
+	Legacy       bool
+}
+
+var fakeSceneTemplates = []fakeSceneTemplate{
+	{
+		TemplateSlug: "carrier-homeport-tide-window",
+		Name:         "航母母港潮汐窗口计算器",
+		Type:         "command-dashboard",
+		Description:  "四大航母母港潮汐窗口状态看板",
+		Keywords:     []string{"航母母港潮汐窗口计算器", "潮汐", "诺福克", "圣迭戈", "布雷默顿", "横须贺", "12.8", "可出港时间窗"},
+	},
+	{
+		TemplateSlug: "carrier-deck-wind-calculator",
+		Name:         "甲板风实时计算器",
+		Type:         "command-dashboard",
+		Description:  "航母活动区域甲板风条件评估看板",
+		Keywords:     []string{"甲板风实时计算器", "甲板风", "格点风场", "10 米", "20 节", "30 节", "无弹射器辅助", "安全着舰"},
+	},
+	{
+		TemplateSlug: "merchant-density-grid-alert",
+		Name:         "海域网格商船密度异常告警器",
+		Type:         "command-dashboard",
+		Description:  "AIS 商船密度网格异常告警",
+		Keywords:     []string{"AIS", "50 海里", "30 天滑动平均", "商船密度", "商船数量", "70%", "50%", "数量曲线"},
+	},
+	{
+		TemplateSlug: "social-sighting-cluster-alert",
+		Name:         "海域网格商船密度异常告警器",
+		Type:         "command-dashboard",
+		Description:  "社媒海上目击聚合告警地图",
+		Keywords:     []string{"社交媒体", "推特", "Instagram", "公开搜索", "GPS", "EXIF", "散点图", "目击潮", "新帖子"},
+	},
+	{
+		TemplateSlug: "carrier-formation-replay",
+		Name:         "航母编队月度航迹复盘",
+		Type:         "timeline-replay",
+		Description:  "展示航母编队近一个月日级航迹、伴随舰队形、事件点和复盘时间轴。",
+		Keywords:     []string{"航母编队月度航迹复盘", "近一个月", "日级航迹", "航行路线", "伴随舰队形", "关键事件点", "时间轴"},
+	},
+	{
+		TemplateSlug: "east-sea-situation",
+		Name:         "东海目标态势演示",
+		Type:         "map-dashboard",
+		Description:  "基于东海卫星地图展示目标列表、轨迹、警戒区、事件时间线和融合态势面板。",
+		Keywords:     []string{"东海目标态势演示", "东海方向", "目标列表", "目标轨迹", "警戒区", "融合态势", "目标态势"},
+	},
 }
 
 // Run dispatches one claude-mode step. Any non-claude kind fails fast.
@@ -54,6 +118,85 @@ func (f *FakeClaudeRunner) slug() string {
 	return "factory-demo"
 }
 
+func (f *FakeClaudeRunner) plan(ctx context.Context, prompt string) fakeGenerationPlan {
+	if f.Slug != "" {
+		slug := f.slug()
+		return fakeGenerationPlan{
+			Slug:        slug,
+			Name:        fakeGeneratedAppName(prompt),
+			Type:        "timeline-replay",
+			Description: fakeGeneratedAppDescription(prompt),
+			Legacy:      true,
+		}
+	}
+	scene := matchFakeSceneTemplate(prompt)
+	index := f.nextDemoIndex(ctx, scene.TemplateSlug)
+	suffix := fmt.Sprintf("demo%02d", index)
+	return fakeGenerationPlan{
+		Slug:         scene.TemplateSlug + "-" + suffix,
+		Name:         scene.Name + suffix,
+		Type:         scene.Type,
+		Description:  scene.Description,
+		TemplateSlug: scene.TemplateSlug,
+	}
+}
+
+func matchFakeSceneTemplate(prompt string) fakeSceneTemplate {
+	best := fakeSceneTemplates[0]
+	bestScore := -1
+	for _, scene := range fakeSceneTemplates {
+		score := 0
+		for _, keyword := range scene.Keywords {
+			if strings.Contains(prompt, keyword) {
+				score++
+			}
+		}
+		if score > bestScore {
+			best = scene
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func (f *FakeClaudeRunner) nextDemoIndex(ctx context.Context, baseSlug string) int {
+	used := map[int]bool{}
+	if f.Store != nil {
+		if apps, err := f.Store.ListApplications(ctx); err == nil {
+			for _, app := range apps {
+				if index, ok := parseDemoIndex(baseSlug, app.Slug); ok {
+					used[index] = true
+				}
+			}
+		}
+	}
+	generatedRoot := filepath.Join(f.Workspace, "generated-apps")
+	if entries, err := os.ReadDir(generatedRoot); err == nil {
+		for _, entry := range entries {
+			if index, ok := parseDemoIndex(baseSlug, entry.Name()); ok {
+				used[index] = true
+			}
+		}
+	}
+	for i := 1; ; i++ {
+		if !used[i] {
+			return i
+		}
+	}
+}
+
+func parseDemoIndex(baseSlug string, slug string) (int, bool) {
+	prefix := baseSlug + "-demo"
+	if !strings.HasPrefix(slug, prefix) {
+		return 0, false
+	}
+	index, err := strconv.Atoi(slug[len(prefix):])
+	if err != nil || index <= 0 {
+		return 0, false
+	}
+	return index, true
+}
+
 // writeOutput serialises v to the step's attempt workspace output.json path.
 func (f *FakeClaudeRunner) writeOutput(job model.Job, step model.JobStep, v any) error {
 	w := runner.AttemptWorkspace{Root: f.ArtifactRoot, JobID: job.ID, StepKind: step.Kind, Attempt: step.Attempt}
@@ -70,10 +213,11 @@ func (f *FakeClaudeRunner) writeOutput(job model.Job, step model.JobStep, v any)
 	return nil
 }
 
-func (f *FakeClaudeRunner) runRequirementAnalysis(_ context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (f *FakeClaudeRunner) runRequirementAnalysis(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+	plan := f.plan(ctx, job.UserPrompt)
 	out := map[string]any{
-		"summary":        "Fake-claude requirement analysis for the local MVP loop.",
-		"appType":        "timeline-replay",
+		"summary":        "Fake-claude requirement analysis for " + plan.Name + ".",
+		"appType":        plan.Type,
 		"needsUserInput": false,
 		"questions":      []any{},
 	}
@@ -83,19 +227,18 @@ func (f *FakeClaudeRunner) runRequirementAnalysis(_ context.Context, job model.J
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
-func (f *FakeClaudeRunner) runSolutionDesign(_ context.Context, job model.Job, step model.JobStep) (StepResult, error) {
-	slug := f.slug()
-	name := fakeGeneratedAppName(job.UserPrompt)
+func (f *FakeClaudeRunner) runSolutionDesign(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+	plan := f.plan(ctx, job.UserPrompt)
 	out := map[string]any{
 		"app": map[string]any{
-			"slug":   slug,
-			"name":   name,
-			"type":   "timeline-replay",
+			"slug":   plan.Slug,
+			"name":   plan.Name,
+			"type":   plan.Type,
 			"source": "generated",
 		},
 		"artifactPlan": map[string]any{
-			"projectDir":   "generated-apps/" + slug,
-			"manifestPath": "generated-apps/" + slug + "/.factory/app.json",
+			"projectDir":   "generated-apps/" + plan.Slug,
+			"manifestPath": "generated-apps/" + plan.Slug + "/.factory/app.json",
 		},
 		"needsUserInput": false,
 	}
@@ -106,11 +249,9 @@ func (f *FakeClaudeRunner) runSolutionDesign(_ context.Context, job model.Job, s
 }
 
 func (f *FakeClaudeRunner) runCodeGeneration(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
-	slug := f.slug()
-	name := fakeGeneratedAppName(job.UserPrompt)
-	description := fakeGeneratedAppDescription(job.UserPrompt)
+	plan := f.plan(ctx, job.UserPrompt)
 	out := map[string]any{
-		"projectDir":     "generated-apps/" + slug,
+		"projectDir":     "generated-apps/" + plan.Slug,
 		"createdFiles":   []string{"package.json", "vite.config.js", "index.html", "src/main.jsx", "src/App.jsx", "src/style.css", ".factory/app.json", "Dockerfile", "nginx.conf"},
 		"needsUserInput": false,
 	}
@@ -119,8 +260,12 @@ func (f *FakeClaudeRunner) runCodeGeneration(ctx context.Context, job model.Job,
 	}
 
 	// Emit a minimal but genuinely buildable Vite + React generated app.
-	appDir := filepath.Join(f.Workspace, "generated-apps", slug)
-	if err := f.writeGeneratedApp(appDir, slug, name, description); err != nil {
+	appDir := filepath.Join(f.Workspace, "generated-apps", plan.Slug)
+	if plan.Legacy {
+		if err := f.writeGeneratedApp(appDir, plan.Slug, plan.Name, plan.Description); err != nil {
+			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
+		}
+	} else if err := f.copySceneTemplate(appDir, plan); err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
 	}
 
@@ -128,14 +273,14 @@ func (f *FakeClaudeRunner) runCodeGeneration(ctx context.Context, job model.Job,
 	// via CreatedAppID.
 	now := time.Now()
 	app := model.Application{
-		ID:           "app-" + slug,
-		Slug:         slug,
-		Name:         name,
-		Type:         "timeline-replay",
+		ID:           "app-" + plan.Slug,
+		Slug:         plan.Slug,
+		Name:         plan.Name,
+		Type:         plan.Type,
 		Source:       model.AppSourceGenerated,
-		Description:  description,
-		Path:         "generated-apps/" + slug,
-		ManifestPath: "generated-apps/" + slug + "/.factory/app.json",
+		Description:  plan.Description,
+		Path:         "generated-apps/" + plan.Slug,
+		ManifestPath: "generated-apps/" + plan.Slug + "/.factory/app.json",
 		Status:       model.AppStatusStopped,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -147,6 +292,110 @@ func (f *FakeClaudeRunner) runCodeGeneration(ctx context.Context, job model.Job,
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("link job app: %v", err)}, nil
 	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+func (f *FakeClaudeRunner) copySceneTemplate(appDir string, plan fakeGenerationPlan) error {
+	src := filepath.Join(f.Workspace, "scene", plan.TemplateSlug)
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("scene template %s: %w", src, err)
+	}
+	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		base := entry.Name()
+		if entry.IsDir() && (base == "node_modules" || base == "dist") {
+			return filepath.SkipDir
+		}
+		dst := filepath.Join(appDir, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		content, err := transformTemplateFile(filepath.ToSlash(rel), raw, plan)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(dst, content, info.Mode())
+	})
+}
+
+func transformTemplateFile(rel string, raw []byte, plan fakeGenerationPlan) ([]byte, error) {
+	switch rel {
+	case ".factory/app.json":
+		return transformManifest(raw, plan)
+	case "package.json":
+		return transformPackageJSON(raw, plan.Slug)
+	case "package-lock.json":
+		return transformPackageLockJSON(raw, plan.Slug)
+	case "index.html":
+		return []byte(replaceHTMLTitle(string(raw), plan.Name)), nil
+	default:
+		return raw, nil
+	}
+}
+
+func transformManifest(raw []byte, plan fakeGenerationPlan) ([]byte, error) {
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, fmt.Errorf("parse template manifest: %w", err)
+	}
+	manifest["slug"] = plan.Slug
+	manifest["name"] = plan.Name
+	manifest["type"] = plan.Type
+	manifest["source"] = string(model.AppSourceGenerated)
+	manifest["description"] = plan.Description
+	manifest["path"] = "generated-apps/" + plan.Slug
+	return json.MarshalIndent(manifest, "", "  ")
+}
+
+func transformPackageJSON(raw []byte, slug string) ([]byte, error) {
+	var pkg map[string]any
+	if err := json.Unmarshal(raw, &pkg); err != nil {
+		return nil, fmt.Errorf("parse package.json: %w", err)
+	}
+	pkg["name"] = slug
+	return json.MarshalIndent(pkg, "", "  ")
+}
+
+func transformPackageLockJSON(raw []byte, slug string) ([]byte, error) {
+	var lock map[string]any
+	if err := json.Unmarshal(raw, &lock); err != nil {
+		return nil, fmt.Errorf("parse package-lock.json: %w", err)
+	}
+	lock["name"] = slug
+	if packages, ok := lock["packages"].(map[string]any); ok {
+		if root, ok := packages[""].(map[string]any); ok {
+			root["name"] = slug
+		}
+	}
+	return json.MarshalIndent(lock, "", "  ")
+}
+
+func replaceHTMLTitle(html string, title string) string {
+	start := strings.Index(html, "<title>")
+	end := strings.Index(html, "</title>")
+	if start < 0 || end < 0 || end < start {
+		return html
+	}
+	return html[:start+len("<title>")] + title + html[end:]
 }
 
 // writeGeneratedApp lays down the files for a minimal Vite + React app that

@@ -183,9 +183,9 @@ func (c *ClaudeStepRunner) recordArtifact(ctx context.Context, jobID string, ste
 func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
-		return "你是软件工厂的需求分析 agent。读取 input.json，基于用户需求输出 output.json。格式必须包含 summary、appType、needsUserInput、questions。可以在 output.md 写可审计的需求分析摘要，不要输出隐藏推理链。\n用户需求：" + job.UserPrompt
+		return "你是软件工厂的需求分析 agent。读取 input.json，基于用户需求进行需求分析。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 summary、appType、needsUserInput、questions；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n用户需求：" + job.UserPrompt
 	case model.StepSolutionDesign:
-		return "你是软件工厂的方案设计 agent。读取 input.json，输出 output.json，必须包含 needsUserInput、questions，可包含 app 和 artifactPlan。可以在 output.md 写方案摘要，不要输出隐藏推理链。\n用户需求：" + job.UserPrompt
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions，可包含 app 和 artifactPlan；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n用户需求：" + job.UserPrompt
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。读取 input.json，在仓库 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json。output.json 必须包含 projectDir、createdFiles、needsUserInput、questions。createdFiles 使用仓库相对路径。可以在 output.md 写生成摘要，不要输出隐藏推理链。output.json 路径：" + ws.OutputPath()
 	default:
