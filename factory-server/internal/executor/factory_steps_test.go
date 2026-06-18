@@ -93,6 +93,15 @@ func (f *fakeCmdRunner) names() []string {
 	return out
 }
 
+func containsCommand(commands []string, want string) bool {
+	for _, got := range commands {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
 // seedFactoryWorkspace writes a generated-app workspace under a temp dir and
 // returns the workspace root. It writes the manifest, package.json, optional
 // package-lock.json, and dist/index.html.
@@ -359,6 +368,169 @@ func TestDeploymentRunsContainerHealthchecks(t *testing.T) {
 	}
 	if app.Status != model.AppStatusRunning {
 		t.Fatalf("app status = %s, want running", app.Status)
+	}
+}
+
+func TestDeploymentSkipsPortsUsedByOtherRunningApps(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	now := time.Now()
+	other := model.Application{
+		ID:         "app-other",
+		Slug:       "other",
+		Name:       "Other",
+		Type:       "static",
+		Source:     model.AppSourcePreset,
+		Path:       "scene/other",
+		Status:     model.AppStatusRunning,
+		RuntimeURL: "http://127.0.0.1:18000",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := st.UpsertApplication(context.Background(), other); err != nil {
+		t.Fatalf("upsert other app: %v", err)
+	}
+	if err := st.CreateDeployment(context.Background(), model.Deployment{
+		ID:            "dep_other",
+		AppID:         other.ID,
+		ImageName:     "localhost/software-factory/other",
+		ImageTag:      "preset",
+		ContainerName: "sf-other-live",
+		HostPort:      18000,
+		ContainerPort: 80,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}); err != nil {
+		t.Fatalf("create other deployment: %v", err)
+	}
+	r, _ := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	dep, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil {
+		t.Fatalf("GetActiveDeployment: %v", err)
+	}
+	if dep == nil {
+		t.Fatalf("no active deployment for app-demo")
+	}
+	if dep.HostPort != 18001 {
+		t.Fatalf("host port = %d, want 18001 because 18000 is used by another app", dep.HostPort)
+	}
+}
+
+func TestDeploymentStopsPreviousRunningDeploymentForSameAppAfterSuccess(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	now := time.Now()
+	old := model.Deployment{
+		ID:            "dep_old",
+		AppID:         "app-demo",
+		ImageName:     "localhost/software-factory/demo",
+		ImageTag:      "old",
+		ContainerName: "sf-demo-old",
+		HostPort:      18000,
+		ContainerPort: 8080,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now.Add(-time.Minute),
+		StartedAt:     &now,
+	}
+	if err := st.CreateDeployment(context.Background(), old); err != nil {
+		t.Fatalf("create old deployment: %v", err)
+	}
+	if err := st.SetAppRuntime(context.Background(), "app-demo", string(model.AppStatusRunning), old.URL); err != nil {
+		t.Fatalf("set app runtime: %v", err)
+	}
+	r, cmds := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	if !containsCommand(cmds.names(), "podman stop sf-demo-old") || !containsCommand(cmds.names(), "podman rm sf-demo-old") {
+		t.Fatalf("old deployment should be stopped and removed; calls=%v", cmds.names())
+	}
+	gotOld, err := st.GetDeployment(context.Background(), old.ID)
+	if err != nil || gotOld == nil {
+		t.Fatalf("get old deployment: %#v %v", gotOld, err)
+	}
+	if gotOld.Status != "stopped" {
+		t.Fatalf("old deployment status = %q, want stopped", gotOld.Status)
+	}
+	active, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || active == nil {
+		t.Fatalf("get active deployment: %#v %v", active, err)
+	}
+	if active.ID == old.ID || active.HostPort != 18001 {
+		t.Fatalf("active deployment = %#v, want new deployment on 18001", active)
+	}
+}
+
+func TestDeploymentSkipsAllRunningDeploymentsForSameApp(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	now := time.Now()
+	for _, dep := range []model.Deployment{
+		{
+			ID:            "dep_old_18000",
+			AppID:         "app-demo",
+			ImageName:     "localhost/software-factory/demo",
+			ImageTag:      "old",
+			ContainerName: "sf-demo-old-18000",
+			HostPort:      18000,
+			ContainerPort: 8080,
+			URL:           "http://127.0.0.1:18000",
+			Status:        "running",
+			CreatedAt:     now.Add(-2 * time.Minute),
+			StartedAt:     &now,
+		},
+		{
+			ID:            "dep_old_18002",
+			AppID:         "app-demo",
+			ImageName:     "localhost/software-factory/demo",
+			ImageTag:      "old",
+			ContainerName: "sf-demo-old-18002",
+			HostPort:      18002,
+			ContainerPort: 8080,
+			URL:           "http://127.0.0.1:18002",
+			Status:        "running",
+			CreatedAt:     now.Add(-time.Minute),
+			StartedAt:     &now,
+		},
+	} {
+		if err := st.CreateDeployment(context.Background(), dep); err != nil {
+			t.Fatalf("create deployment %s: %v", dep.ID, err)
+		}
+	}
+	r, _ := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	active, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || active == nil {
+		t.Fatalf("get active deployment: %#v %v", active, err)
+	}
+	if active.HostPort != 18001 {
+		t.Fatalf("host port = %d, want 18001 because 18000 and 18002 are already running", active.HostPort)
 	}
 }
 

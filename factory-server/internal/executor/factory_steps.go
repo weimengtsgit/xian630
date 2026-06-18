@@ -219,19 +219,10 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		containerPort = 80
 	}
 
-	// Allocate a host port: isUsed scans all deployments for the app.
-	host, err := f.Alloc.Choose(func(port int) bool {
-		deps, derr := f.Store.ListDeploymentsByApp(ctx, app.ID)
-		if derr != nil {
-			return false
-		}
-		for _, d := range deps {
-			if d.HostPort == port && d.Status == "running" {
-				return true
-			}
-		}
-		return false
-	})
+	// Allocate a host port across the whole factory runtime. Generated jobs and
+	// preset-app starts share the same 18000-18999 pool, so checking only this
+	// app would collide with another running app.
+	host, err := f.Alloc.Choose(f.portInUse(ctx))
 	if err != nil {
 		if errors.Is(err, deploy.ErrPortUnavailable) {
 			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPortUnavailable, ErrorMessage: err.Error()}, nil
@@ -243,6 +234,9 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	container, res, err := podman.RunContainer(ctx, image, app.Slug, host, containerPort)
 	f.writeLogs(job, step, res)
 	if err != nil || res.ExitCode != 0 {
+		if container.Name != "" {
+			_, _ = podman.RemoveContainer(ctx, container.Name)
+		}
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPodmanRunFailed, ErrorMessage: fmt.Sprintf("podman run failed: %v", err)}, nil
 	}
 
@@ -275,7 +269,7 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 
 	// Success: record a running deployment + flip app to running.
 	now := time.Now()
-	_ = f.Store.CreateDeployment(ctx, model.Deployment{
+	dep := model.Deployment{
 		ID:            "dep_" + id.New(),
 		AppID:         app.ID,
 		JobID:         job.ID,
@@ -288,7 +282,45 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		Status:        "running",
 		CreatedAt:     now,
 		StartedAt:     &now,
-	})
+	}
+	_ = f.Store.CreateDeployment(ctx, dep)
 	_ = f.Store.SetAppRuntime(ctx, app.ID, string(model.AppStatusRunning), url)
+	f.stopPreviousDeployments(ctx, podman, app.ID, dep.ID)
 	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
+	return func(port int) bool {
+		apps, err := f.Store.ListApplications(ctx)
+		if err != nil {
+			return false
+		}
+		for _, app := range apps {
+			deps, derr := f.Store.ListDeploymentsByApp(ctx, app.ID)
+			if derr != nil {
+				continue
+			}
+			for _, dep := range deps {
+				if dep.Status == "running" && dep.HostPort == port {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, podman *deploy.Podman, appID, keepID string) {
+	deps, err := f.Store.ListDeploymentsByApp(ctx, appID)
+	if err != nil {
+		return
+	}
+	for _, dep := range deps {
+		if dep.ID == keepID || dep.Status != "running" {
+			continue
+		}
+		_, _ = podman.StopContainer(ctx, dep.ContainerName)
+		_, _ = podman.RemoveContainer(ctx, dep.ContainerName)
+		_ = f.Store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
+	}
 }

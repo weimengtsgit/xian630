@@ -59,3 +59,6 @@ bin/
 *.db-shm
 *.sqlite
 *.sqlite3
+
+# Software factory runtime artifacts
+/factory-server/.factory-runs/
