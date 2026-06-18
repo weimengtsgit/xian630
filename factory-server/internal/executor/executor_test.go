@@ -195,6 +195,38 @@ func TestExecutorCompletesAllSteps(t *testing.T) {
 	}
 }
 
+func TestExecutorNotifiesWhenStepAndJobStateChange(t *testing.T) {
+	runner := &fakeRunner{}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	var updatesMu sync.Mutex
+	var updates []ExecutionUpdate
+	e.OnUpdate = func(_ context.Context, update ExecutionUpdate) {
+		updatesMu.Lock()
+		defer updatesMu.Unlock()
+		updates = append(updates, update)
+	}
+
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	updatesMu.Lock()
+	defer updatesMu.Unlock()
+	if len(updates) < 2 {
+		t.Fatalf("updates = %#v, want at least running and finalized updates", updates)
+	}
+	for i, update := range updates {
+		if update.JobID != id {
+			t.Fatalf("update[%d].JobID = %q, want %q", i, update.JobID, id)
+		}
+		if update.StepID == "" {
+			t.Fatalf("update[%d].StepID is empty", i)
+		}
+	}
+}
+
 // TestExecutorFailureMarksJobFailed fails step 2 (solution_design) and asserts
 // the job is failed, step 2 is failed with the given error, and steps 3-6 stay
 // pending.

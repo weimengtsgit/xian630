@@ -1,16 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { factoryApi } from '../api/client'
 import { subscribeFactoryEvents } from '../api/events'
-
-const TERMINAL_STATUSES = ['completed', 'canceled', 'cancelled']
-
-function isActiveJob(job) {
-  if (!job) return false
-  if (TERMINAL_STATUSES.includes(job.status)) return false
-  if (job.status === 'failed') return false // failed is terminal from the jobs-UI perspective
-  // active states: running, queued, waiting_user, and any unknown non-terminal
-  return ['running', 'queued', 'waiting_user', 'waiting'].includes(job.status)
-}
+import { selectDisplayJob } from './jobSelection'
 
 export function useJobs() {
   const [jobs, setJobs] = useState([])
@@ -29,11 +20,7 @@ export function useJobs() {
       if (!mountedRef.current) return
       setJobs(list)
 
-      // Pick active job: prefer a non-terminal job, most recent first.
-      const active =
-        list.find(isActiveJob) ||
-        list.find(j => !TERMINAL_STATUSES.includes(j.status) && j.status !== 'failed') ||
-        null
+      const active = selectDisplayJob(list)
       setActiveJob(active || null)
 
       if (active) {
@@ -62,6 +49,7 @@ export function useJobs() {
       await refresh()
     } catch (err) {
       setError(err.message || String(err))
+      throw err
     }
   }, [refresh])
 
@@ -82,6 +70,17 @@ export function useJobs() {
       await refresh()
     } catch (err) {
       setError(err.message || String(err))
+    }
+  }, [refresh])
+
+  const answerJob = useCallback(async (id, answer) => {
+    setError(null)
+    try {
+      await factoryApi.answerJob(id, answer)
+      await refresh()
+    } catch (err) {
+      setError(err.message || String(err))
+      throw err
     }
   }, [refresh])
 
@@ -109,6 +108,7 @@ export function useJobs() {
     refresh,
     createJob,
     cancelJob,
+    answerJob,
     retryCurrentStep,
   }
 }

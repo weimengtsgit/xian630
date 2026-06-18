@@ -24,8 +24,14 @@ ON CONFLICT(id) DO UPDATE SET
   description  = excluded.description,
   path         = excluded.path,
   manifest_path = excluded.manifest_path,
-  status       = excluded.status,
-  runtime_url  = excluded.runtime_url,
+  status       = CASE
+                   WHEN applications.status = 'running' THEN applications.status
+                   ELSE excluded.status
+                 END,
+  runtime_url  = CASE
+                   WHEN applications.status = 'running' THEN applications.runtime_url
+                   ELSE excluded.runtime_url
+                 END,
   updated_at   = excluded.updated_at`,
 		app.ID, app.Slug, app.Name, app.Type, string(app.Source),
 		app.Description, app.Path, app.ManifestPath, string(app.Status),

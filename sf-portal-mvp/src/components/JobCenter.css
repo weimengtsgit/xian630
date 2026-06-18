@@ -134,6 +134,14 @@
   transition: border-color 0.2s;
 }
 
+.jc-step-error {
+  grid-column: 2 / 4;
+  color: #ff9b95;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .jc-step-index {
   display: flex;
   align-items: center;

@@ -82,3 +82,39 @@ func TestSyncApplicationsEmptyScanDoesNotWipe(t *testing.T) {
 		t.Fatalf("app-keep status = %q, want stopped (must not be marked missing)", got)
 	}
 }
+
+func TestSyncApplicationsPreservesRunningRuntime(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	app := appNow("app-running", "running", "scene/running/.factory/app.json", model.AppSourcePreset)
+	app.Path = "scene/running"
+	if err := st.UpsertApplication(ctx, app); err != nil {
+		t.Fatalf("seed running: %v", err)
+	}
+	if err := st.SetAppRuntime(ctx, app.ID, string(model.AppStatusRunning), "http://127.0.0.1:18080"); err != nil {
+		t.Fatalf("set runtime: %v", err)
+	}
+
+	scanned := app
+	scanned.Name = "running updated"
+	scanned.Status = model.AppStatusStopped
+	scanned.RuntimeURL = ""
+	if err := st.SyncApplications(ctx, []model.Application{scanned}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	got, err := st.GetApplication(ctx, app.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get app: %#v %v", got, err)
+	}
+	if got.Name != "running updated" {
+		t.Fatalf("name = %q, want scanned metadata refresh", got.Name)
+	}
+	if got.Status != model.AppStatusRunning {
+		t.Fatalf("status = %q, want running preserved", got.Status)
+	}
+	if got.RuntimeURL != "http://127.0.0.1:18080" {
+		t.Fatalf("runtime_url = %q, want preserved", got.RuntimeURL)
+	}
+}

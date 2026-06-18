@@ -1,0 +1,14 @@
+{
+  "createdFiles": [
+    "package.json",
+    "vite.config.js",
+    "index.html",
+    "src/main.jsx",
+    "src/App.jsx",
+    ".factory/app.json",
+    "Dockerfile",
+    "nginx.conf"
+  ],
+  "needsUserInput": false,
+  "projectDir": "generated-apps/factory-demo"
+}

@@ -11,6 +11,7 @@ import {
   Ban,
 } from 'lucide-react'
 import { factoryApi } from '../api/client'
+import { displayJobTitle } from '../hooks/jobSelection'
 import './JobCenter.css'
 
 // Fixed ordered step kinds (design §4)
@@ -123,7 +124,7 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
       <header className="jc-header">
         <div className="jc-title-block">
           <span className="jc-label">当前任务</span>
-          <h2 className="jc-prompt">{activeJob.prompt || activeJob.title || '未命名任务'}</h2>
+          <h2 className="jc-prompt">{displayJobTitle(activeJob)}</h2>
         </div>
         <div className="jc-header-right">
           <span className={`jc-status-badge jc-status-${jobStatus}`}>
@@ -160,6 +161,9 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
                 <StepIcon status={status} />
                 {STEP_STATUS_LABEL[status] || status}
               </span>
+              {step && step.error_message ? (
+                <span className="jc-step-error">{step.error_message}</span>
+              ) : null}
             </div>
           )
         })}

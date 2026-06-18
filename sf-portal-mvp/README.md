@@ -31,7 +31,7 @@ npm run build
 ## 项目结构
 
 ```
-sf-portal/
+sf-portal-mvp/
 ├── index.html
 ├── package.json
 ├── vite.config.js
@@ -42,6 +42,10 @@ sf-portal/
     ├── App.css
     ├── index.css
     └── components/
+        ├── ApplicationsPanel.jsx
+        ├── AgentsPanel.jsx
+        ├── ChatDialog.jsx
+        ├── JobCenter.jsx
         ├── TopBar.jsx
         └── LeftToolbar.jsx
 ```
@@ -50,7 +54,7 @@ sf-portal/
 
 - **TopBar**: 顶部状态栏，包含主菜单、系统标题、状态信息
 - **LeftToolbar**: 左侧功能菜单，提供快捷导航
-- **PortalContent**: 主内容区域，可扩展具体业务组件
+- **ApplicationsPanel / JobCenter / ChatDialog / AgentsPanel**: 应用列表、任务运行态、对话入口和 Agent 列表
 
 ## 后端 API 对接
 

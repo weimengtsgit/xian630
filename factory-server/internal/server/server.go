@@ -16,7 +16,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
-	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
 )
@@ -46,17 +46,22 @@ type Server struct {
 	cc *ccstatus.Client
 }
 
-// unimplementedRunner is the production StepRunner until Tasks 11/12 wire the
-// real Claude and factory runners. Every step fails fast with ErrorUnknown so
-// the server compiles and runs but no job silently hangs.
-type unimplementedRunner struct{}
+type claudeCommandAdapter struct {
+	runner     deploy.CommandRunner
+	defaultDir string
+}
 
-func (unimplementedRunner) Run(ctx context.Context, _ model.Job, _ model.JobStep) (executor.StepResult, error) {
-	return executor.StepResult{
-		Status:       model.StepStatusFailed,
-		ErrorCode:    model.ErrorUnknown,
-		ErrorMessage: "step runners not wired until Tasks 11-12",
-	}, nil
+func (a claudeCommandAdapter) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	if dir == "" {
+		dir = a.defaultDir
+	}
+	res, err := a.runner.Run(ctx, dir, name, args...)
+	return runner.CommandResult{
+		Stdout:     res.Stdout,
+		Stderr:     res.Stderr,
+		ExitCode:   res.ExitCode,
+		DurationMs: res.DurationMs,
+	}, err
 }
 
 // New constructs a Server with its dependencies: the resolved config, the
@@ -76,11 +81,9 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers
 	}
 	// Factory steps → FactoryRunner (npm + podman via the shared OSRunner).
-	// Claude steps → a claude slot. Real Claude CLI integration is deferred; in
-	// its absence the slot is the unimplemented stub (every claude step fails
-	// ErrorUnknown). When FACTORY_FAKE_CLAUDE is truthy the slot is the
-	// deterministic FakeClaudeRunner so the full pipeline can run end-to-end
-	// locally for the MVP loop (design Task 16). The Dispatcher routes by mode.
+	// Claude steps → ClaudeStepRunner by default. When FACTORY_FAKE_CLAUDE is
+	// truthy the slot is the deterministic FakeClaudeRunner so the full pipeline
+	// can run end-to-end locally for the MVP loop.
 	factory := &executor.FactoryRunner{
 		Store:        st,
 		Cmds:         s.runner,
@@ -89,7 +92,14 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		Workspace:    cfg.WorkspaceRoot,
 		ArtifactRoot: cfg.ArtifactRoot,
 	}
-	var claude executor.StepRunner = unimplementedRunner{}
+	claudeCmd := claudeCommandAdapter{runner: s.runner, defaultDir: cfg.WorkspaceRoot}
+	var claude executor.StepRunner = &executor.ClaudeStepRunner{
+		Store:        st,
+		Workspace:    cfg.WorkspaceRoot,
+		ArtifactRoot: cfg.ArtifactRoot,
+		Claude:       &runner.ClaudeRunner{Runner: claudeCmd},
+		AuditRunner:  claudeCmd,
+	}
 	if truthy(os.Getenv("FACTORY_FAKE_CLAUDE")) {
 		claude = &executor.FakeClaudeRunner{
 			Store:        st,
@@ -101,6 +111,10 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	}
 	dispatch := executor.NewDispatcher(factory, claude)
 	s.exec = executor.NewExecutor(st, dispatch, execBusy)
+	s.exec.OnUpdate = func(ctx context.Context, update executor.ExecutionUpdate) {
+		s.publishStepUpdated(ctx, update.StepID)
+		s.publishJobUpdated(ctx, update.JobID)
+	}
 	return s
 }
 

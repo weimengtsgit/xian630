@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -49,6 +50,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	job := model.Job{
 		ID:              jobID,
 		UserPrompt:      body.Prompt,
+		AppName:         deriveJobDisplayName(body.Prompt),
 		Status:          model.JobStatusQueued,
 		CurrentStepKind: model.StepRequirementAnalysis,
 		CreatedAt:       now,
@@ -93,6 +95,22 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	s.exec.Signal()
 
 	writeJSON(w, http.StatusCreated, job)
+}
+
+func deriveJobDisplayName(prompt string) string {
+	title := strings.TrimSpace(prompt)
+	for _, prefix := range []string{"请帮我", "帮我", "生成一个", "生成", "做一个", "创建一个", "创建"} {
+		title = strings.TrimSpace(strings.TrimPrefix(title, prefix))
+	}
+	if title == "" {
+		return "未命名任务"
+	}
+	const maxRunes = 32
+	runes := []rune(title)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return title
 }
 
 // listJobs handles GET /api/jobs with an optional ?status= filter.
@@ -234,6 +252,30 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.AddConversation(r.Context(), msg); err != nil {
 		writeError(w, http.StatusInternalServerError, "add conversation")
 		return
+	}
+	if job.Status == model.JobStatusWaitingUser {
+		step, err := s.store.GetStepByKind(r.Context(), id, job.CurrentStepKind)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get step")
+			return
+		}
+		if step != nil {
+			if err := s.store.ResetStepToPending(r.Context(), step.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "reset step")
+				return
+			}
+			s.publishStepUpdated(r.Context(), step.ID)
+		}
+		if err := s.store.MarkJobQueued(r.Context(), id); err != nil {
+			writeError(w, http.StatusInternalServerError, "queue job")
+			return
+		}
+		s.exec.Signal()
+		job, err = s.store.GetJob(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get job")
+			return
+		}
 	}
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)

@@ -36,9 +36,10 @@ export function ChatDialog({ activeJob, jobError, onSubmit }) {
         ...prev,
         {
           role: 'assistant',
-          content: activeJob
-            ? '需求已提交，已加入任务流程。'
-            : '已创建生成任务，请查看中间任务区。',
+          content:
+            activeJob && activeJob.status === 'waiting_user'
+              ? '澄清已提交，任务将继续执行。'
+              : '已创建生成任务，请查看中间任务区。',
         },
       ])
     } catch (e) {

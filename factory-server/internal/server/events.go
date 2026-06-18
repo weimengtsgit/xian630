@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -126,4 +127,44 @@ func writeSSE(w http.ResponseWriter, ev Event) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *Server) publishAppUpdated(ctx context.Context, appID string) {
+	if s.hub == nil || s.store == nil {
+		return
+	}
+	app, err := s.store.GetApplication(ctx, appID)
+	if err != nil || app == nil {
+		return
+	}
+	s.hub.Publish(Event{Type: "app.updated", Data: app})
+}
+
+func (s *Server) publishDeploymentUpdated(ctx context.Context, deploymentID string) {
+	if s.hub == nil || s.store == nil {
+		return
+	}
+	dep, err := s.store.GetDeployment(ctx, deploymentID)
+	if err != nil || dep == nil {
+		return
+	}
+	s.hub.Publish(Event{Type: "deployment.updated", Data: dep})
+}
+
+func (s *Server) publishJobUpdated(ctx context.Context, jobID string) {
+	if s.hub == nil || s.store == nil {
+		return
+	}
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil || job == nil {
+		return
+	}
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+}
+
+func (s *Server) publishStepUpdated(_ context.Context, stepID string) {
+	if s.hub == nil || stepID == "" {
+		return
+	}
+	s.hub.Publish(Event{Type: "step.updated", Data: map[string]string{"id": stepID}})
 }

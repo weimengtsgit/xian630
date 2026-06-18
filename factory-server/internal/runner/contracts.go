@@ -90,6 +90,8 @@ func ValidateRequirementAnalysis(path string) (StepOutput, error) {
 type solutionDesignOutput struct {
 	NeedsUserInput bool       `json:"needsUserInput"`
 	Questions      []Question `json:"questions"`
+	App            any        `json:"app,omitempty"`
+	ArtifactPlan   any        `json:"artifactPlan,omitempty"`
 }
 
 // ValidateSolutionDesign decodes a solution_design attempt's output.json.
@@ -104,6 +106,7 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 // codeGenerationOutput mirrors design §5.3.
 type codeGenerationOutput struct {
 	ProjectDir     string     `json:"projectDir"`
+	CreatedFiles   []string   `json:"createdFiles"`
 	NeedsUserInput bool       `json:"needsUserInput"`
 	Questions      []Question `json:"questions"`
 }

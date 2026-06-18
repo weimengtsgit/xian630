@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,10 +76,35 @@ func newOpsServer(t *testing.T, fr *srvRunner) (*Server, *Router) {
 		t.Fatalf("seed app: %v", err)
 	}
 
-	srv := New(config.Config{}, st, scanner.Scanner{})
+	srv := New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
 	srv.runner = fr
 	srv.healthCheck = func(context.Context, string, time.Duration) error { return nil }
 	return srv, srv.routes()
+}
+
+func findCall(calls []srvCall, name string, firstArg string) *srvCall {
+	for i := range calls {
+		c := &calls[i]
+		if c.name == name && len(c.args) > 0 && c.args[0] == firstArg {
+			return c
+		}
+	}
+	return nil
+}
+
+func expectEvent(t *testing.T, ch <-chan Event, want string) Event {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == want {
+				return ev
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for event %q", want)
+		}
+	}
 }
 
 func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
@@ -96,6 +122,14 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	// argv assertions: build then run with the expected shape.
 	if !hasCall(fr.calls, "podman", "build", "-t", "localhost/software-factory/east-sea-situation:preset", ".") {
 		t.Errorf("missing build call; calls=%v", fr.calls)
+	}
+	buildCall := findCall(fr.calls, "podman", "build")
+	if buildCall == nil {
+		t.Fatalf("missing podman build call; calls=%v", fr.calls)
+	}
+	wantBuildDir := filepath.Join(srv.cfg.WorkspaceRoot, "scene", "east-sea-situation")
+	if buildCall.dir != wantBuildDir {
+		t.Fatalf("podman build dir = %q, want workspace-rooted %q", buildCall.dir, wantBuildDir)
 	}
 	if !hasCall(fr.calls, "podman", "run", "-d", "--name sf-east-sea-situation-", "-p ", ":80") {
 		t.Errorf("missing run call; calls=%v", fr.calls)
@@ -129,6 +163,117 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	}
 	if app.RuntimeURL != wantURL {
 		t.Errorf("app runtime_url = %q, want %q", app.RuntimeURL, wantURL)
+	}
+}
+
+func TestStartPublishesAppAndDeploymentEvents(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/start", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	expectEvent(t, ch, "deployment.updated")
+	expectEvent(t, ch, "app.updated")
+}
+
+func TestStartExistingHealthyDeploymentSynchronizesAppRuntime(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	now := time.Now()
+	seed := model.Deployment{
+		ID:            "dep_active",
+		AppID:         "app-east-sea-situation",
+		ImageName:     "localhost/software-factory/east-sea-situation",
+		ImageTag:      "preset",
+		ContainerName: "sf-east-sea-situation-live",
+		HostPort:      18000,
+		ContainerPort: 80,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}
+	if err := srv.store.CreateDeployment(context.Background(), seed); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+	if err := srv.store.SetAppRuntime(context.Background(), "app-east-sea-situation", string(model.AppStatusStopped), ""); err != nil {
+		t.Fatalf("seed stopped app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/start", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if hasCall(fr.calls, "podman", "build") || hasCall(fr.calls, "podman", "run") {
+		t.Fatalf("healthy active deployment should not rebuild/run; calls=%v", fr.calls)
+	}
+	app, err := srv.store.GetApplication(context.Background(), "app-east-sea-situation")
+	if err != nil || app == nil {
+		t.Fatalf("get app: %#v %v", app, err)
+	}
+	if app.Status != model.AppStatusRunning || app.RuntimeURL != seed.URL {
+		t.Fatalf("app runtime = %s/%q, want running/%q", app.Status, app.RuntimeURL, seed.URL)
+	}
+}
+
+func TestStartStaleActiveDeploymentIsClearedAndRecreated(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	now := time.Now()
+	seed := model.Deployment{
+		ID:            "dep_stale",
+		AppID:         "app-east-sea-situation",
+		ImageName:     "localhost/software-factory/east-sea-situation",
+		ImageTag:      "preset",
+		ContainerName: "sf-east-sea-situation-stale",
+		HostPort:      18000,
+		ContainerPort: 80,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}
+	if err := srv.store.CreateDeployment(context.Background(), seed); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+	healthCalls := 0
+	srv.healthCheck = func(context.Context, string, time.Duration) error {
+		healthCalls++
+		if healthCalls == 1 {
+			return errHealthFailed
+		}
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/start", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !hasCall(fr.calls, "podman", "stop", seed.ContainerName) || !hasCall(fr.calls, "podman", "rm", seed.ContainerName) {
+		t.Fatalf("stale deployment should be stopped and removed; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "podman", "build") || !hasCall(fr.calls, "podman", "run") {
+		t.Fatalf("stale deployment should be recreated; calls=%v", fr.calls)
+	}
+	old, err := srv.store.GetDeployment(context.Background(), seed.ID)
+	if err != nil || old == nil {
+		t.Fatalf("get old deployment: %#v %v", old, err)
+	}
+	if old.Status != "stopped" {
+		t.Fatalf("old deployment status = %q, want stopped", old.Status)
 	}
 }
 
@@ -275,7 +420,7 @@ func TestRebuildReturnsConflictWhenExecutorBusy(t *testing.T) {
 
 func TestRebuildBuildsImageAndReturnsBuilt(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
-	_, r := newOpsServer(t, fr)
+	srv, r := newOpsServer(t, fr)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rebuild", nil)
 	rec := httptest.NewRecorder()
@@ -294,6 +439,14 @@ func TestRebuildBuildsImageAndReturnsBuilt(t *testing.T) {
 	}
 	if !hasCall(fr.calls, "podman", "build", "-t", "localhost/software-factory/east-sea-situation:preset", ".") {
 		t.Errorf("missing build call; calls=%v", fr.calls)
+	}
+	buildCall := findCall(fr.calls, "podman", "build")
+	if buildCall == nil {
+		t.Fatalf("missing podman build call; calls=%v", fr.calls)
+	}
+	wantBuildDir := filepath.Join(srv.cfg.WorkspaceRoot, "scene", "east-sea-situation")
+	if buildCall.dir != wantBuildDir {
+		t.Fatalf("podman build dir = %q, want workspace-rooted %q", buildCall.dir, wantBuildDir)
 	}
 	// Rebuild must NOT run a container.
 	if hasCall(fr.calls, "podman", "run") {

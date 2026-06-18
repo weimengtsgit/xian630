@@ -13,6 +13,18 @@ function App() {
   const apps = useApplications()
   const agents = useAgents()
   const jobs = useJobs()
+  const regenerateApplication = app => {
+    const name = app.name || app.slug || app.id
+    jobs
+      .createJob(`基于已有应用「${name}」重新生成一个更完整的版本，保留原有主题和运行形态，并改进页面效果与交互。`)
+      .catch(() => {})
+  }
+  const submitChat = prompt => {
+    if (jobs.activeJob && jobs.activeJob.status === 'waiting_user') {
+      return jobs.answerJob(jobs.activeJob.id, prompt)
+    }
+    return jobs.createJob(prompt)
+  }
 
   return (
     <main className="portal-shell">
@@ -24,9 +36,11 @@ function App() {
             apps={apps.apps}
             loading={apps.loading}
             error={apps.error}
+            actionById={apps.actionById}
             onStart={apps.startApplication}
             onStop={apps.stopApplication}
             onRebuild={apps.restartApplication}
+            onRegenerate={regenerateApplication}
             onRefresh={apps.refresh}
           />
         </div>
@@ -42,7 +56,7 @@ function App() {
           <ChatDialog
             activeJob={jobs.activeJob}
             jobError={jobs.error}
-            onSubmit={jobs.createJob}
+            onSubmit={submitChat}
           />
         </div>
 

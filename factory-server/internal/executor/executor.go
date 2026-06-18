@@ -37,9 +37,16 @@ type Executor struct {
 
 	signal chan struct{}
 
+	OnUpdate func(context.Context, ExecutionUpdate)
+
 	// cancel of the currently-running step (if any), so Cancel can kill it.
 	currentCancel atomic.Value // func()
 	currentJobID  atomic.Value // string
+}
+
+type ExecutionUpdate struct {
+	JobID  string
+	StepID string
 }
 
 // NewExecutor builds an Executor over st using runner and sharing busy with the
@@ -138,6 +145,7 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	if err := e.store.MarkStepRunning(ctx, step.ID); err != nil {
 		return fmt.Errorf("mark step running: %w", err)
 	}
+	e.notify(ctx, job.ID, step.ID)
 	current, err := e.store.GetJob(ctx, job.ID)
 	if err != nil || current == nil {
 		if err == nil {
@@ -184,23 +192,39 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 			return err
 		}
 		// Find the succeeded step's kind to decide advance vs complete.
-		return e.advanceOrComplete(ctx, jobID)
+		if err := e.advanceOrComplete(ctx, jobID); err != nil {
+			return err
+		}
+		e.notify(ctx, jobID, stepID)
+		return nil
 	case model.StepStatusFailed:
 		if err := e.store.MarkStepFailed(ctx, stepID, res.ErrorCode, res.ErrorMessage); err != nil {
 			return err
 		}
-		return e.store.MarkJobFailed(ctx, jobID)
+		if err := e.store.MarkJobFailed(ctx, jobID); err != nil {
+			return err
+		}
+		e.notify(ctx, jobID, stepID)
+		return nil
 	case model.StepStatusWaitingUser:
 		if err := e.store.MarkStepWaitingUser(ctx, stepID); err != nil {
 			return err
 		}
-		return e.store.MarkJobWaitingUser(ctx, jobID)
+		if err := e.store.MarkJobWaitingUser(ctx, jobID); err != nil {
+			return err
+		}
+		e.notify(ctx, jobID, stepID)
+		return nil
 	default:
 		// Treat an unexpected status as unknown failure.
 		if err := e.store.MarkStepFailed(ctx, stepID, model.ErrorUnknown, fmt.Sprintf("runner returned status %s", res.Status)); err != nil {
 			return err
 		}
-		return e.store.MarkJobFailed(ctx, jobID)
+		if err := e.store.MarkJobFailed(ctx, jobID); err != nil {
+			return err
+		}
+		e.notify(ctx, jobID, stepID)
+		return nil
 	}
 }
 
@@ -209,7 +233,11 @@ func (e *Executor) finalizeCanceled(ctx context.Context, jobID, stepID string) e
 	if err := e.store.MarkStepCanceled(ctx, stepID); err != nil {
 		return err
 	}
-	return e.store.MarkJobCanceled(ctx, jobID)
+	if err := e.store.MarkJobCanceled(ctx, jobID); err != nil {
+		return err
+	}
+	e.notify(ctx, jobID, stepID)
+	return nil
 }
 
 // advanceOrComplete moves the job to the next step or to completed, based on
@@ -318,6 +346,13 @@ func (e *Executor) Cancel(ctx context.Context, jobID string) error {
 // an atomic.Value; storing a typed nil CancelFunc would surprise Load.
 func cancelFunc(f context.CancelFunc) func() {
 	return func() { f() }
+}
+
+func (e *Executor) notify(ctx context.Context, jobID, stepID string) {
+	if e.OnUpdate == nil {
+		return
+	}
+	e.OnUpdate(ctx, ExecutionUpdate{JobID: jobID, StepID: stepID})
 }
 
 // Dispatcher routes one step to the right StepRunner by step mode. Factory steps

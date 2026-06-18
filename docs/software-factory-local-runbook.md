@@ -2,14 +2,14 @@
 
 End-to-end local bring-up of the intelligent software factory MVP: the
 **cc-status** observation service, the **factory-server** orchestration API, and
-the **sf-portal** front end. Verified commands for a clean checkout.
+the **sf-portal-mvp** front end. Verified commands for a clean checkout.
 
 ## Architecture (local)
 
 ```
 cc-status (:8765)   ──observes──◀   claude CLI hooks
-factory-server (:8787) ──orchestrates──▶  npm + podman (workspace)
-sf-portal (:3001, Vite) ──HTTP/SSE──▶  factory-server  (CORS enabled)
+factory-server (:8787) ──orchestrates──▶  claude CLI + npm + podman (workspace)
+sf-portal-mvp (:3001, Vite) ──HTTP/SSE──▶  factory-server  (CORS enabled)
 ```
 
 `factory-server` serves the REST + SSE API the portal consumes. CORS headers
@@ -62,13 +62,14 @@ minimal but genuinely buildable Vite + React app under
 `podman` against that generated app — that is intentional.
 
 Leave `FACTORY_FAKE_CLAUDE` unset to use the real Claude CLI (requires local
-`claude` auth); until that integration is wired the claude steps fail fast with
-`unknown` and only the factory steps exercise npm/podman.
+`claude` auth). In real mode the three claude-mode steps run through the local
+CLI, validate each step's `output.json`, and register the generated app before
+the factory npm/podman steps continue.
 
-## 3. sf-portal (front end)
+## 3. sf-portal-mvp (front end)
 
 ```bash
-cd ../sf-portal
+cd ../sf-portal-mvp
 npm install
 npm run dev                                # http://localhost:3001
 ```
@@ -125,7 +126,7 @@ deployment succeeds.
 ## Notes / known constraints
 
 - Podman must be running for `image_build` and `deployment` to succeed.
-- Real-Claude generation (unset `FACTORY_FAKE_CLAUDE`) is deferred; the claude
-  slot fails fast with `unknown` until the Claude CLI runner lands.
+- Real-Claude generation requires an authenticated local `claude` CLI and may
+  pause in `waiting_user` when the agent asks clarification questions.
 - The repository may carry unrelated dirty/staged files; do not run broad
   `git add .`.

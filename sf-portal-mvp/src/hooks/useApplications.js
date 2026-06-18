@@ -6,6 +6,7 @@ export function useApplications() {
   const [apps, setApps] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [actionById, setActionById] = useState({})
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -25,7 +26,12 @@ export function useApplications() {
     refresh()
     const unsubscribe = subscribeFactoryEvents(type => {
       if (!mounted) return
-      if (type === 'app.updated' || type === 'deployment.updated') {
+      if (
+        type === 'app.updated' ||
+        type === 'deployment.updated' ||
+        type === 'job.updated' ||
+        type === 'step.updated'
+      ) {
         refresh()
       }
     })
@@ -35,20 +41,26 @@ export function useApplications() {
     }
   }, [refresh])
 
-  // Delegate start/stop/rebuild to the API; components that call these will
-  // rely on SSE app.updated to reflect state changes, but we also refresh.
-  const startApplication = useCallback(async id => {
-    try { await factoryApi.startApp(id) } catch (e) { setError(e.message) }
-    refresh()
+  const runAction = useCallback(async (id, action, label) => {
+    setActionById(prev => ({ ...prev, [id]: label }))
+    setError(null)
+    try {
+      await action(id)
+      await refresh()
+    } catch (e) {
+      setError(e.message || String(e))
+    } finally {
+      setActionById(prev => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    }
   }, [refresh])
-  const stopApplication = useCallback(async id => {
-    try { await factoryApi.stopApp(id) } catch (e) { setError(e.message) }
-    refresh()
-  }, [refresh])
-  const restartApplication = useCallback(async id => {
-    try { await factoryApi.rebuildApp(id) } catch (e) { setError(e.message) }
-    refresh()
-  }, [refresh])
+
+  const startApplication = useCallback(id => runAction(id, factoryApi.startApp, 'start'), [runAction])
+  const stopApplication = useCallback(id => runAction(id, factoryApi.stopApp, 'stop'), [runAction])
+  const restartApplication = useCallback(id => runAction(id, factoryApi.rebuildApp, 'rebuild'), [runAction])
 
   // Keep `applications` alias so the existing ApplicationsPanel destructure works.
   return {
@@ -56,6 +68,7 @@ export function useApplications() {
     applications: apps,
     loading,
     error,
+    actionById,
     refresh,
     startApplication,
     stopApplication,

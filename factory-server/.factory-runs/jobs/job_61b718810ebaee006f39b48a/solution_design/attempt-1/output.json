@@ -1,0 +1,13 @@
+{
+  "app": {
+    "name": "Factory Demo",
+    "slug": "factory-demo",
+    "source": "generated",
+    "type": "timeline-replay"
+  },
+  "artifactPlan": {
+    "manifestPath": "generated-apps/factory-demo/.factory/app.json",
+    "projectDir": "generated-apps/factory-demo"
+  },
+  "needsUserInput": false
+}

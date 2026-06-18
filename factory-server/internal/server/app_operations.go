@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -17,6 +18,8 @@ const defaultContainerPort = 80
 
 // healthCheckTimeout caps the post-start readiness probe (design §5.6: 10s).
 const healthCheckTimeout = 10 * time.Second
+
+const activeDeploymentProbeTimeout = 1500 * time.Millisecond
 
 // errResponse pairs an HTTP status with a structured error_code, written as
 // {"error": <message>, "error_code": <code>}.
@@ -55,18 +58,35 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Idempotent fast path: an already-running deployment is returned as-is.
-	if active, _ := s.store.GetActiveDeployment(r.Context(), appID); active != nil {
-		writeJSON(w, http.StatusOK, active)
-		return
-	}
-
 	ctx := r.Context()
 	pod := deploy.NewPodman(s.runner)
+	// Idempotent fast path, but only after confirming the recorded deployment is
+	// reachable. The DB can be stale after a manual podman stop or a server
+	// restart, so a blind return would show "running" while nothing is usable.
+	if active, _ := s.store.GetActiveDeployment(ctx, appID); active != nil {
+		if err := s.healthCheck(ctx, active.URL, activeDeploymentProbeTimeout); err == nil {
+			if err := s.store.SetAppRuntime(ctx, appID, string(model.AppStatusRunning), active.URL); err != nil {
+				writeError(w, http.StatusInternalServerError, "set app runtime")
+				return
+			}
+			s.publishDeploymentUpdated(ctx, active.ID)
+			s.publishAppUpdated(ctx, appID)
+			writeJSON(w, http.StatusOK, active)
+			return
+		}
+		_, _ = pod.StopContainer(ctx, active.ContainerName)
+		_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+		_ = s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped")
+		_ = s.store.SetAppRuntime(ctx, appID, string(model.AppStatusStopped), "")
+		s.publishDeploymentUpdated(ctx, active.ID)
+		s.publishAppUpdated(ctx, appID)
+	}
+
 	tag := string(app.Source)
+	buildApp := s.workspaceApp(*app)
 
 	// 1. Build image.
-	img, _, err := pod.BuildImage(ctx, *app, tag)
+	img, _, err := pod.BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
@@ -97,7 +117,7 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		_, _ = pod.StopContainer(ctx, cr.Name)
 		_, _ = pod.RemoveContainer(ctx, cr.Name)
 		now := time.Now()
-		_ = s.store.CreateDeployment(ctx, model.Deployment{
+		failedDep := model.Deployment{
 			ID:            "dep_" + idpkg.New(),
 			AppID:         appID,
 			ImageName:     stripTag(img.FullName, tag),
@@ -108,7 +128,9 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 			URL:           url,
 			Status:        "failed",
 			CreatedAt:     now,
-		})
+		}
+		_ = s.store.CreateDeployment(ctx, failedDep)
+		s.publishDeploymentUpdated(ctx, failedDep.ID)
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "health check failed"}.write(w)
 		return
@@ -137,6 +159,8 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "set app runtime")
 		return
 	}
+	s.publishDeploymentUpdated(ctx, dep.ID)
+	s.publishAppUpdated(ctx, appID)
 
 	writeJSON(w, http.StatusOK, dep)
 }
@@ -191,6 +215,8 @@ func (s *Server) stopApp(w http.ResponseWriter, r *http.Request) {
 
 	// Re-read so the response reflects the stopped timestamp.
 	dep, _ := s.store.GetDeployment(ctx, active.ID)
+	s.publishDeploymentUpdated(ctx, active.ID)
+	s.publishAppUpdated(ctx, appID)
 	writeJSON(w, http.StatusOK, dep)
 }
 
@@ -226,13 +252,15 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	tag := string(app.Source)
-	img, _, err := deploy.NewPodman(s.runner).BuildImage(ctx, *app, tag)
+	buildApp := s.workspaceApp(*app)
+	img, _, err := deploy.NewPodman(s.runner).BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
 		return
 	}
 
+	s.publishAppUpdated(ctx, appID)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "built", "image": img.FullName})
 }
 
@@ -241,6 +269,18 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 // failure for diagnostics).
 func (s *Server) markAppError(ctx context.Context, appID string) {
 	_ = s.store.SetAppRuntime(ctx, appID, string(model.AppStatusError), "")
+	s.publishAppUpdated(ctx, appID)
+}
+
+func (s *Server) workspaceApp(app model.Application) model.Application {
+	if app.Path != "" && !filepath.IsAbs(app.Path) {
+		root := s.cfg.WorkspaceRoot
+		if root == "" {
+			root = "."
+		}
+		app.Path = filepath.Join(root, app.Path)
+	}
+	return app
 }
 
 // portInUse returns an isUsed predicate for the port Allocator that reports a

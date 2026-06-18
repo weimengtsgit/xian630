@@ -239,6 +239,48 @@ func TestGetJobCCStatusNil(t *testing.T) {
 	}
 }
 
+func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+
+	create := doJSON(t, r, http.MethodPost, "/api/jobs", map[string]string{"prompt": "p"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", create.Code)
+	}
+	var job model.Job
+	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	step, err := st.GetStepByKind(context.Background(), job.ID, model.StepRequirementAnalysis)
+	if err != nil || step == nil {
+		t.Fatalf("get step: %#v %v", step, err)
+	}
+	if err := st.MarkStepWaitingUser(context.Background(), step.ID); err != nil {
+		t.Fatalf("mark step waiting: %v", err)
+	}
+	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/answer", map[string]string{"answer": "确认按近一个月"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var updated model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated job: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued {
+		t.Fatalf("job status = %s, want queued", updated.Status)
+	}
+	updatedStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepRequirementAnalysis)
+	if err != nil || updatedStep == nil {
+		t.Fatalf("get updated step: %#v %v", updatedStep, err)
+	}
+	if updatedStep.Status != model.StepStatusPending || updatedStep.NeedsUserInput {
+		t.Fatalf("step after answer = %#v, want pending without needs_user_input", updatedStep)
+	}
+}
+
 // TestListJobsStatusFilter verifies the optional status filter narrows results.
 func TestListJobsStatusFilter(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})

@@ -207,6 +207,12 @@
   filter: brightness(1.1);
 }
 
+.card-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+  filter: none;
+}
+
 .primary-btn {
   background: rgba(104, 221, 255, 0.16);
   color: #68ddff;

@@ -1,0 +1,6 @@
+{
+  "appType": "timeline-replay",
+  "needsUserInput": false,
+  "questions": [],
+  "summary": "Fake-claude requirement analysis for the local MVP loop."
+}

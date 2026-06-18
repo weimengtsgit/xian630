@@ -6,6 +6,7 @@ import {
   Server,
   RefreshCw,
   Sparkles,
+  Loader2,
 } from 'lucide-react'
 import './ApplicationsPanel.css'
 
@@ -21,7 +22,24 @@ function isGenerated(app) {
   return app.source === 'generated' || app.source === 'generated-apps'
 }
 
-export function ApplicationsPanel({ apps, loading, error, onStart, onStop, onRebuild, onRefresh }) {
+const ACTION_TEXT = {
+  start: '启动中',
+  stop: '停止中',
+  rebuild: '重建中',
+  regenerate: '创建中',
+}
+
+export function ApplicationsPanel({
+  apps,
+  loading,
+  error,
+  actionById,
+  onStart,
+  onStop,
+  onRebuild,
+  onRegenerate,
+  onRefresh,
+}) {
   const list = Array.isArray(apps) ? apps : []
 
   return (
@@ -55,6 +73,8 @@ export function ApplicationsPanel({ apps, loading, error, onStart, onStop, onReb
             {list.map(app => {
               const status = app.status || 'stopped'
               const url = app.runtime_url || app.url
+              const action = actionById && actionById[app.id]
+              const busy = Boolean(action)
               return (
                 <div key={app.id} className={`app-card app-status-${status}`}>
                   <div className="app-card-header">
@@ -88,6 +108,7 @@ export function ApplicationsPanel({ apps, loading, error, onStart, onStop, onReb
                         className="card-btn primary-btn"
                         onClick={() => window.open(url, '_blank', 'noopener')}
                         title={url}
+                        disabled={busy}
                       >
                         <ExternalLink size={14} /> 打开
                       </button>
@@ -97,8 +118,10 @@ export function ApplicationsPanel({ apps, loading, error, onStart, onStop, onReb
                         type="button"
                         className="card-btn success-btn"
                         onClick={() => onStart && onStart(app.id)}
+                        disabled={busy}
                       >
-                        <Play size={14} /> 启动
+                        {action === 'start' ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+                        {action === 'start' ? ACTION_TEXT[action] : '启动'}
                       </button>
                     )}
                     {status === 'running' && (
@@ -106,27 +129,33 @@ export function ApplicationsPanel({ apps, loading, error, onStart, onStop, onReb
                         type="button"
                         className="card-btn danger-btn"
                         onClick={() => onStop && onStop(app.id)}
+                        disabled={busy}
                       >
-                        <Square size={14} /> 停止
+                        {action === 'stop' ? <Loader2 size={14} className="spin" /> : <Square size={14} />}
+                        {action === 'stop' ? ACTION_TEXT[action] : '停止'}
                       </button>
                     )}
-                    {(status === 'error' || status === 'building' || status === 'missing') && (
+                    {(status === 'error' || status === 'building' || status === 'missing' || status === 'stopped') && (
                       <button
                         type="button"
                         className="card-btn warning-btn"
                         onClick={() => onRebuild && onRebuild(app.id)}
+                        disabled={busy}
                       >
-                        <RotateCcw size={14} /> 重建
+                        {action === 'rebuild' ? <Loader2 size={14} className="spin" /> : <RotateCcw size={14} />}
+                        {action === 'rebuild' ? ACTION_TEXT[action] : '重建镜像'}
                       </button>
                     )}
                     {isGenerated(app) && (
                       <button
                         type="button"
                         className="card-btn ghost-btn"
-                        onClick={() => onRebuild && onRebuild(app.id)}
+                        onClick={() => onRegenerate && onRegenerate(app)}
                         title="基于该应用重新生成"
+                        disabled={busy}
                       >
-                        <Sparkles size={14} /> 重新生成
+                        {action === 'regenerate' ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+                        {action === 'regenerate' ? ACTION_TEXT[action] : '重新生成'}
                       </button>
                     )}
                   </div>

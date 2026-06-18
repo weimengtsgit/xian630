@@ -1,0 +1,13 @@
+{
+  "app": {
+    "name": "航母编队月度航迹复盘",
+    "slug": "factory-demo",
+    "source": "generated",
+    "type": "timeline-replay"
+  },
+  "artifactPlan": {
+    "manifestPath": "generated-apps/factory-demo/.factory/app.json",
+    "projectDir": "generated-apps/factory-demo"
+  },
+  "needsUserInput": false
+}

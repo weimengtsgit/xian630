@@ -1,0 +1,1 @@
+{"schemaVersion":1,"slug":"factory-demo","name":"航母编队月度航迹复盘","type":"timeline-replay","source":"generated","description":"展示航母编队近一个月在东海方向的航行轨迹、关键时间点事件和阶段性态势摘要。","entry":"static-vite","path":"generated-apps/factory-demo","build":{"command":"npm run build","outputDir":"dist"},"docker":{"enabled":true,"dockerfile":"Dockerfile","context":".","runtimePort":80}}
