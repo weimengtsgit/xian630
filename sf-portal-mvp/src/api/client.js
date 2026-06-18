@@ -12,6 +12,15 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+async function requestText(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`)
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`${response.status} ${body}`)
+  }
+  return response.text()
+}
+
 export const factoryApi = {
   listApps: () => request('/api/apps'),
   startApp: id => request(`/api/apps/${id}/start`, { method: 'POST' }),
@@ -23,6 +32,7 @@ export const factoryApi = {
   getJob: id => request(`/api/jobs/${id}`),
   getJobSteps: id => request(`/api/jobs/${id}/steps`),
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
+  getArtifactContent: id => requestText(`/api/artifacts/${id}/content`),
   artifactContentUrl: id => `${API_BASE_URL}/api/artifacts/${id}/content`,
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),

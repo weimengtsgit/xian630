@@ -9,8 +9,6 @@ import {
   ExternalLink,
   RotateCcw,
   Ban,
-  FileText,
-  TerminalSquare,
   X,
 } from 'lucide-react'
 import { factoryApi } from '../api/client'
@@ -55,41 +53,6 @@ const AGENT_PROFILE = {
   'code-generator': { name: '代码生成智能体', role: '生成项目代码和 manifest' },
   tester: { name: '测试验证智能体', role: '执行构建检查和诊断验证' },
   deployer: { name: '构建部署智能体', role: '镜像构建、容器启动和部署' },
-}
-
-const ACTIVE_STEP_STATUSES = new Set(['failed', 'running', 'waiting_user'])
-
-const STEP_DETAIL = {
-  requirement_analysis: {
-    action: '已完成需求拆解',
-    output: 'PRD / 验收点',
-    summary: '已完成需求边界、用户目标和验收条件整理。',
-  },
-  solution_design: {
-    action: '等待确认构建策略',
-    output: '方案草案 / 风险清单',
-    summary: '已完成模块边界、数据流和关键风险整理，等待下一步确认。',
-  },
-  code_generation: {
-    action: '已接收方案上下文',
-    output: '源码准备 / manifest 待生成',
-    summary: '代码生成智能体已准备接收方案产物并生成项目文件。',
-  },
-  test_verification: {
-    action: '等待代码产物',
-    output: '测试计划 / 覆盖目标',
-    summary: '测试验证智能体等待代码产物后执行构建与诊断验证。',
-  },
-  image_build: {
-    action: '镜像构建诊断中',
-    output: '镜像构建 / 部署配置',
-    summary: '当前阻塞在镜像构建阶段，需要处理构建命令或容器环境问题。',
-  },
-  deployment: {
-    action: '等待测试通过',
-    output: '服务启动 / 健康检查',
-    summary: '部署智能体等待前置阶段通过后启动服务并检查访问地址。',
-  },
 }
 
 function statusToken(status) {
@@ -183,6 +146,7 @@ function StepIcon({ status }) {
 export function JobCenter({ jobs: jobList, activeJob, steps, onSelectJob, onCloseJob, onCancel, onRetry, loading }) {
   const [detail, setDetail] = useState(null)
   const [artifacts, setArtifacts] = useState([])
+  const [artifactContents, setArtifactContents] = useState({})
   const [selectedStepKind, setSelectedStepKind] = useState(null)
 
   // For waiting_user we try to fetch job detail to surface a clarifying
@@ -207,6 +171,7 @@ export function JobCenter({ jobs: jobList, activeJob, steps, onSelectJob, onClos
   useEffect(() => {
     let cancelled = false
     setArtifacts([])
+    setArtifactContents({})
     if (!activeJob) return undefined
     factoryApi
       .getJobArtifacts(activeJob.id)
@@ -221,6 +186,31 @@ export function JobCenter({ jobs: jobList, activeJob, steps, onSelectJob, onClos
       cancelled = true
     }
   }, [activeJob && activeJob.id, loading])
+
+  useEffect(() => {
+    let cancelled = false
+    const outputArtifacts = artifacts.filter(artifact =>
+      ['output_markdown', 'output_json'].includes(artifact.kind),
+    )
+    setArtifactContents({})
+    if (outputArtifacts.length === 0) return undefined
+
+    Promise.all(
+      outputArtifacts.map(artifact =>
+        factoryApi
+          .getArtifactContent(artifact.id)
+          .then(content => [artifact.id, content])
+          .catch(() => [artifact.id, '']),
+      ),
+    ).then(entries => {
+      if (cancelled) return
+      setArtifactContents(Object.fromEntries(entries))
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [artifacts])
 
   // 将后端步骤按 kind 补齐到固定六阶段，未开始的阶段用 pending 兜底。
   const stepByKind = {}
@@ -253,32 +243,61 @@ export function JobCenter({ jobs: jobList, activeJob, steps, onSelectJob, onClos
       detail.waiting_questions ||
       detail.questions)
   const artifactsByStep = groupArtifactsByStep(artifacts)
-  const selectedStep =
-    resolvedSteps.find(step => step.kind === selectedStepKind) || resolvedSteps[0]
-  const selectedAgent = agentProfile(selectedStep && selectedStep.agent_key)
-  const selectedArtifacts = selectedStep ? artifactsByStep[selectedStep.id] || [] : []
-  const completedStepCount = resolvedSteps.filter(step => step.status === 'succeeded').length
-  const activeAgentCount = new Set(resolvedSteps.filter(step => step.agent_key).map(step => step.agent_key)).size
-  const blockedStepCount = resolvedSteps.filter(step => step.status === 'failed' || step.status === 'waiting_user').length
-  const retryCount = resolvedSteps.reduce((sum, step) => sum + Math.max(0, (step.attempt || 0) - 1), 0)
-  const totalAttempts = resolvedSteps.reduce((sum, step) => sum + (step.attempt || 0), 0)
-  const healthScore = Math.max(
-    0,
-    Math.min(100, Math.round((completedStepCount / resolvedSteps.length) * 100 + (jobStatus === 'running' ? 15 : 0) - blockedStepCount * 10)),
-  )
-  const selectedCopy = selectedStep ? STEP_DETAIL[selectedStep.kind] || {} : {}
-  const selectedTone = selectedStep ? statusClass(selectedStep.status) : 'idle'
   const visibleJobs = Array.isArray(jobList) ? jobList.slice(0, 8) : []
+
+  const renderStepDetail = step => {
+    const stepArtifacts = step ? artifactsByStep[step.id] || [] : []
+    // 展开区只展示真实的智能体返回内容，避免继续堆无用状态指标。
+    const outputArtifacts = stepArtifacts
+      .filter(artifact => ['output_markdown', 'output_json'].includes(artifact.kind))
+      .sort((a, b) => {
+        const rank = { output_markdown: 0, output_json: 1 }
+        return (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9)
+      })
+
+    return (
+      <div className={`jc-agent-detail jc-agent-detail-${step.status}`}>
+        <div className="jc-agent-detail-head">
+          <div>
+            <span className="jc-label">AI 返回内容</span>
+          </div>
+        </div>
+
+        <div className="jc-agent-output-list">
+          {step.error_message ? (
+            <article className="jc-agent-output jc-agent-output-error">
+              <strong>{step.error_code || '执行失败'}</strong>
+              <pre>{step.error_message}</pre>
+            </article>
+          ) : null}
+
+          {outputArtifacts.length > 0 ? (
+            outputArtifacts.map(artifact => (
+              <article key={artifact.id} className="jc-agent-output">
+                <header>
+                  <strong>{artifact.kind === 'output_markdown' ? 'output.md' : 'output.json'}</strong>
+                  <span>{artifact.summary || '智能体返回内容'}</span>
+                </header>
+                <pre>{artifactContents[artifact.id] || '正在读取智能体返回内容...'}</pre>
+              </article>
+            ))
+          ) : (
+            <p className="jc-agent-output-empty">
+              智能体已进入该阶段，正在等待写入 output.md / output.json。
+            </p>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   useEffect(() => {
     if (!activeJob) {
       setSelectedStepKind(null)
       return
     }
-    // 默认聚焦失败、运行或等待用户的智能体，便于用户第一眼看到阻塞点。
-    const activeStep = resolvedSteps.find(step => ACTIVE_STEP_STATUSES.has(step.status))
-    setSelectedStepKind((activeStep || resolvedSteps.find(step => step.kind === activeJob.current_step_kind) || resolvedSteps[0])?.kind || null)
-  }, [activeJob && activeJob.id, activeJob && activeJob.status, activeJob && activeJob.current_step_kind, steps])
+    setSelectedStepKind(null)
+  }, [activeJob && activeJob.id])
 
   if (!activeJob) {
     return (
@@ -384,114 +403,33 @@ export function JobCenter({ jobs: jobList, activeJob, steps, onSelectJob, onClos
           <div className="jc-agent-list" role="list" aria-label="智能体协同流程">
             {resolvedSteps.map((step, idx) => {
               const status = step.status
-              const isSelected = selectedStep && selectedStep.kind === step.kind
+              const isSelected = selectedStepKind === step.kind
               const agent = agentProfile(step.agent_key)
               return (
-                <button
-                  key={step.kind}
-                  type="button"
-                  className={`jc-agent-node jc-agent-node-${status} jc-agent-tone-${statusClass(status)} ${isSelected ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedStepKind(step.kind)}
-                  aria-expanded={isSelected}
-                >
-                  <span className="jc-agent-index">{String(idx + 1).padStart(2, '0')}</span>
-                  <span className="jc-agent-main">
-                    <span className="jc-agent-name">{agent.name}</span>
-                    <span className="jc-agent-meta">
-                      {step.label} · {step.agent_key || 'pending'} · {formatStepDuration(step.started_at, step.ended_at)}
+                <div key={step.kind} className="jc-agent-row" role="listitem">
+                  <button
+                    type="button"
+                    className={`jc-agent-node jc-agent-node-${status} jc-agent-tone-${statusClass(status)} ${isSelected ? 'is-selected' : ''}`}
+                    onClick={() => setSelectedStepKind(current => (current === step.kind ? null : step.kind))}
+                    aria-expanded={isSelected}
+                  >
+                    <span className="jc-agent-index">{String(idx + 1).padStart(2, '0')}</span>
+                    <span className="jc-agent-main">
+                      <span className="jc-agent-name">{agent.name}</span>
+                      <span className="jc-agent-meta">
+                        {step.label} · {step.agent_key || 'pending'} · {formatStepDuration(step.started_at, step.ended_at)}
+                      </span>
                     </span>
-                    <span className="jc-agent-action">{(STEP_DETAIL[step.kind] || {}).action || '等待调度'}</span>
-                  </span>
-                  <span className={`jc-agent-token jc-agent-token-${statusClass(status)}`}>
-                    {statusToken(status)}
-                  </span>
-                </button>
+                    <span className={`jc-agent-token jc-agent-token-${statusClass(status)}`}>
+                      {statusToken(status)}
+                    </span>
+                  </button>
+                  {isSelected ? renderStepDetail(step) : null}
+                </div>
               )
             })}
           </div>
 
-          {selectedStep && (
-            <div className={`jc-agent-detail jc-agent-detail-${selectedStep.status}`}>
-              <div className="jc-agent-detail-head">
-                <div>
-                  <span className="jc-label">智能体执行详情</span>
-                  <h3>{selectedAgent.name}</h3>
-                  <p>{selectedStep.label} · {selectedStep.agent_key || 'pending'}</p>
-                </div>
-                <span className={`jc-agent-token jc-agent-token-${selectedTone}`}>
-                  {statusToken(selectedStep.status)}
-                </span>
-              </div>
-
-              <dl className="jc-agent-metrics">
-                <div>
-                  <dt>负责阶段</dt>
-                  <dd>{selectedStep.label}</dd>
-                </div>
-                <div>
-                  <dt>尝试次数</dt>
-                  <dd>{selectedStep.attempt || 0}</dd>
-                </div>
-                <div>
-                  <dt>开始时间</dt>
-                  <dd>{formatDateTime(selectedStep.started_at)}</dd>
-                </div>
-                <div>
-                  <dt>结束时间</dt>
-                  <dd>{formatDateTime(selectedStep.ended_at)}</dd>
-                </div>
-                <div>
-                  <dt>执行耗时</dt>
-                  <dd>{formatStepDuration(selectedStep.started_at, selectedStep.ended_at)}</dd>
-                </div>
-                <div>
-                  <dt>会话标识</dt>
-                  <dd>{selectedStep.claude_session_id || selectedStep.cc_status_session_id || '—'}</dd>
-                </div>
-              </dl>
-
-              <div className="jc-status-summary">
-                <strong>当前状态摘要</strong>
-                <p>{selectedCopy.summary || selectedAgent.role}</p>
-                <p>下一步：{selectedStep.status === 'failed' ? '处理阻塞原因后重试当前阶段。' : selectedCopy.action || '等待调度。'}</p>
-              </div>
-
-              {selectedStep.error_message ? (
-                <div className="jc-agent-error">
-                  <TerminalSquare size={15} />
-                  <div>
-                    <strong>{selectedStep.error_code || '执行失败'}</strong>
-                    <p>{selectedStep.error_message}</p>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="jc-agent-artifacts">
-                <div className="jc-agent-artifacts-title">
-                  <FileText size={15} />
-                  <span>阶段产物</span>
-                </div>
-                {selectedArtifacts.length > 0 ? (
-                  <div className="jc-artifact-list">
-                    {selectedArtifacts.map(artifact => (
-                      <a
-                        key={artifact.id}
-                        className="jc-artifact"
-                        href={factoryApi.artifactContentUrl(artifact.id)}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <span>{artifact.summary || artifact.kind || artifact.path}</span>
-                        <ExternalLink size={13} />
-                      </a>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="jc-artifacts-empty">当前阶段还没有可查看的产物。</p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
