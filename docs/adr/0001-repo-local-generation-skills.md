@@ -1,0 +1,3 @@
+# Use repo-local generation skills selected by requirement profiles
+
+The factory uses project-local Claude Code skills under `.claude/skills/` and selects them through the confirmed requirement's `generationProfile`, instead of relying on user-global skills or letting Claude Code freely choose its own generation guidance. This keeps generated applications reproducible across machines while still allowing template-constrained free generation for different military-domain application types. Factory remains responsible for hard validation, path constraints, build checks, and deployment checks; skills improve generation quality but are not trusted as enforcement.

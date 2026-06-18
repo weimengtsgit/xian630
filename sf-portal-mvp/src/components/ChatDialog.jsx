@@ -64,7 +64,7 @@ export function ChatDialog({ activeJob, jobError, onSubmit }) {
       <div className="chat-dock-messages" ref={scrollRef}>
         {history.length === 0 && (
           <div className="chat-dock-empty">
-            描述你想要生成的应用，例如：“做一个待办事项管理页面”。
+            描述你想要生成的应用，例如：“请生成一个应用，名称为「航母母港潮汐窗口计算器」。”。
           </div>
         )}
         {history.map((msg, i) => (

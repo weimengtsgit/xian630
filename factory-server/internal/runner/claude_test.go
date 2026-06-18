@@ -54,8 +54,9 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 	fr := &fakeRunner{stdout: "hello stdout"}
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
 	ws := newWS(t)
+	prompt := "PROMPT\n第二行"
 
-	if err := r.Run(context.Background(), ws, "PROMPT", []byte(`{"x":1}`), false); err != nil {
+	if err := r.Run(context.Background(), ws, prompt, []byte(`{"x":1}`), false); err != nil {
 		t.Fatalf("Run err = %v", err)
 	}
 
@@ -63,7 +64,13 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 	if fr.name != "claude" {
 		t.Errorf("name = %q, want claude", fr.name)
 	}
-	got := joinArgs(fr.argv)
+	if len(fr.argv) == 0 {
+		t.Fatal("argv is empty")
+	}
+	if fr.argv[len(fr.argv)-1] != prompt {
+		t.Fatalf("last argv = %q, want prompt %q", fr.argv[len(fr.argv)-1], prompt)
+	}
+	got := joinArgs(fr.argv[:len(fr.argv)-1])
 	wantRo := "--print --permission-mode plan --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write"
 	if got != wantRo {
 		t.Errorf("read-only argv =\n got: %q\nwant: %q", got, wantRo)
@@ -81,8 +88,8 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read prompt.md: %v", err)
 	}
-	if string(pr) != "PROMPT" {
-		t.Errorf("prompt.md = %q, want PROMPT", string(pr))
+	if string(pr) != prompt {
+		t.Errorf("prompt.md = %q, want %q", string(pr), prompt)
 	}
 	// stdout.log captured
 	out, err := os.ReadFile(ws.StdoutPath())
@@ -103,11 +110,18 @@ func TestClaudeRunCodegenArgv(t *testing.T) {
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
 	ws := newWS(t)
 	ws.StepKind = model.StepCodeGeneration
+	prompt := "P\n生成应用"
 
-	if err := r.Run(context.Background(), ws, "P", nil, true); err != nil {
+	if err := r.Run(context.Background(), ws, prompt, nil, true); err != nil {
 		t.Fatalf("Run err = %v", err)
 	}
-	got := joinArgs(fr.argv)
+	if len(fr.argv) == 0 {
+		t.Fatal("argv is empty")
+	}
+	if fr.argv[len(fr.argv)-1] != prompt {
+		t.Fatalf("last argv = %q, want prompt %q", fr.argv[len(fr.argv)-1], prompt)
+	}
+	got := joinArgs(fr.argv[:len(fr.argv)-1])
 	wantCg := "--print --permission-mode plan --allowedTools Read,Grep,Glob,Edit,Write --disallowedTools Bash"
 	if got != wantCg {
 		t.Errorf("codegen argv =\n got: %q\nwant: %q", got, wantCg)

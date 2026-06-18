@@ -1,0 +1,3 @@
+# Add maritime alert dashboard generation skill
+
+The factory will add a `maritime-alert-dashboard` generation skill for customer scenarios that monitor ports, sea areas, grids, thresholds, refresh cadence, and alert state. We will keep `command-dashboard` as the generic command-post pattern, but use this more specific skill when a requirement needs maritime spatial objects, mock external-feed contracts, countdown windows, map/grid overlays, or aggregation-based alerts; otherwise future generated applications would have to rediscover these recurring maritime monitoring conventions from each prompt.

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "slug": "social-sighting-cluster-alert",
+  "name": "海域网格商船密度异常告警器",
+  "type": "command-dashboard",
+  "source": "preset",
+  "description": "社媒海上目击聚合告警地图",
+  "entry": "static-vite",
+  "path": "scene/social-sighting-cluster-alert",
+  "tags": ["maritime", "dashboard", "social", "sighting", "cluster", "osint"],
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "runtime": {
+    "devCommand": "npm run dev",
+    "defaultPort": 5173
+  },
+  "docker": {
+    "enabled": true,
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "runtimePort": 80
+  }
+}

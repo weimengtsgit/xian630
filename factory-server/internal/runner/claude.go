@@ -77,7 +77,8 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 		return fmt.Errorf("write %s: %w", ws.PromptPath(), err)
 	}
 
-	res, err := r.Runner.Run(ctx, ws.Dir(), r.binary(), claudeArgv(codegen)...)
+	args := append(claudeArgv(codegen), prompt)
+	res, err := r.Runner.Run(ctx, ws.Dir(), r.binary(), args...)
 	// Capture whatever we got, even on failure, for audit/debugging.
 	_ = os.WriteFile(ws.StdoutPath(), []byte(res.Stdout), 0o644)
 	_ = os.WriteFile(ws.StderrPath(), []byte(res.Stderr), 0o644)

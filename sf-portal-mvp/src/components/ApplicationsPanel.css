@@ -152,6 +152,15 @@
   text-overflow: ellipsis;
 }
 
+.app-sub {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #8fb0bf;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .app-meta {
   display: flex;
   flex-direction: column;

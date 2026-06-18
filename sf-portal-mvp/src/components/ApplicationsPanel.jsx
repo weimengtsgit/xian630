@@ -8,6 +8,7 @@ import {
   Sparkles,
   Loader2,
 } from 'lucide-react'
+import { orderApplicationsForDisplay } from '../hooks/applicationOrdering'
 import './ApplicationsPanel.css'
 
 const STATUS_TEXT = {
@@ -40,7 +41,7 @@ export function ApplicationsPanel({
   onRegenerate,
   onRefresh,
 }) {
-  const list = Array.isArray(apps) ? apps : []
+  const list = orderApplicationsForDisplay(apps)
 
   return (
     <div className="applications-panel">
@@ -90,6 +91,10 @@ export function ApplicationsPanel({
                     <h3 className="app-name" title={app.name || app.slug}>
                       {app.name || app.slug || app.id}
                     </h3>
+                    {(() => {
+                      const sub = app.description || app.slug || ''
+                      return sub ? <p className="app-sub" title={sub}>{sub}</p> : null
+                    })()}
                     <div className="app-meta">
                       <span className="meta-item">
                         <span className="meta-label">类型</span>
