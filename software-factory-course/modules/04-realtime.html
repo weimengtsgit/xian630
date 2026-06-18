@@ -1,0 +1,113 @@
+<section class="module" id="module-4" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">04</span>
+      <h1 class="module-title">实时状态同步</h1>
+      <p class="module-subtitle">理解为什么任务进度和应用状态可以自动更新，而不用手动刷新页面。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">门户像机场公告板</h2>
+        <p>普通 <span class="term" data-definition="REST 是一种常见 API 风格：前端发一次请求，后端回一次结果。适合读取当前状态。">REST</span> 请求像去柜台问一次航班状态。<span class="term" data-definition="SSE 是 Server-Sent Events，浏览器打开一条长连接，服务器以后可以持续推送事件。适合状态更新提醒。">SSE</span> 更像机场公告板：一有变化，屏幕自动更新。</p>
+        <div class="callout callout-info">
+          <div class="callout-icon">i</div>
+          <div class="callout-content">
+            <strong class="callout-title">两种通信一起用</strong>
+            <p>这个项目用 REST 拿完整列表，用 SSE 听变化通知。收到通知后，Hook 再刷新列表。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">浏览器打开一条事件订阅</h2>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">export function subscribeFactoryEvents(onEvent) {</span>
+<span class="code-line">  const source = new EventSource(`${API_BASE_URL}/api/events`)</span>
+<span class="code-line">  const types = ['app.updated', 'job.created', 'job.updated', 'step.updated', 'artifact.created', 'deployment.updated']</span>
+<span class="code-line">  types.forEach(type =&gt; {</span>
+<span class="code-line">    source.addEventListener(type, event =&gt; {</span>
+<span class="code-line">      onEvent(type, JSON.parse(event.data))</span>
+<span class="code-line">    })</span>
+<span class="code-line">  })</span>
+<span class="code-line">  return () =&gt; source.close()</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">创建一个 EventSource，连接到后端 `/api/events`。</p>
+              <p class="tl">声明前端关心的事件类型：应用、任务、步骤、产物、部署。</p>
+              <p class="tl">每种事件都注册一个监听器。</p>
+              <p class="tl">事件到达时，把 JSON 字符串解析成对象，再交给调用方。</p>
+              <p class="tl">返回一个清理函数，组件卸载时关闭连接，避免留下旧订阅。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">事件从后端广播到面板</h2>
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-m4-actor-1","label":"Executor 改变 Job 或 Step 状态"},
+          {"highlight":"flow-m4-actor-2","label":"Hub 发布 job.updated 或 step.updated","packet":true,"from":"m4-actor-1","to":"m4-actor-2"},
+          {"highlight":"flow-m4-actor-3","label":"浏览器 EventSource 收到事件","packet":true,"from":"m4-actor-2","to":"m4-actor-3"},
+          {"highlight":"flow-m4-actor-4","label":"useJobs 调用 refresh 重新读取最新状态","packet":true,"from":"m4-actor-3","to":"m4-actor-4"},
+          {"highlight":"flow-m4-actor-5","label":"JobCenter 显示新的进度","packet":true,"from":"m4-actor-4","to":"m4-actor-5"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-m4-actor-1"><div class="flow-actor-icon">E</div><span>Executor</span></div>
+            <div class="flow-actor" id="flow-m4-actor-2"><div class="flow-actor-icon">H</div><span>Hub</span></div>
+            <div class="flow-actor" id="flow-m4-actor-3"><div class="flow-actor-icon">S</div><span>EventSource</span></div>
+            <div class="flow-actor" id="flow-m4-actor-4"><div class="flow-actor-icon">Hook</div><span>useJobs</span></div>
+            <div class="flow-actor" id="flow-m4-actor-5"><div class="flow-actor-icon">UI</div><span>JobCenter</span></div>
+          </div>
+          <div class="flow-packet" id="flow-packet-m4"></div>
+          <div class="flow-step-label">点击 Next Step 看一次状态刷新</div>
+          <div class="flow-controls">
+            <button class="btn flow-next-btn">Next Step</button>
+            <button class="btn flow-reset-btn">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">调试“页面不刷新”</h2>
+        <div class="quiz-container" id="quiz-module4">
+          <div class="quiz-question-block" data-correct="events" data-explanation-right="对。SSE 订阅失败时，页面通常还能手动刷新，但不会自动更新。" data-explanation-wrong="如果手动刷新能拿到新数据，问题更可能在事件订阅链路。">
+            <h3 class="quiz-question">用户说手动刷新后状态正确，但页面不会自动变。你优先检查？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="events" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`/api/events` 和 `subscribeFactoryEvents`</span></button>
+              <button class="quiz-option" data-value="schema" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>SQLite schema 是否缺表</span></button>
+              <button class="quiz-option" data-value="podman" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Podman 是否能 build image</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="refresh" data-explanation-right="对。事件本身只是提醒，Hook 需要重新拉完整数据。" data-explanation-wrong="事件通知和状态查询是两段逻辑，收到通知后仍要刷新数据。">
+            <h3 class="quiz-question">前端收到 `job.updated`，但 UI 仍显示旧 Step。最可能漏了什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="refresh" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Hook 没有在事件后调用 refresh</span></button>
+              <button class="quiz-option" data-value="font" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>字体大小不对</span></button>
+              <button class="quiz-option" data-value="docker" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Dockerfile 少了 EXPOSE</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="best-effort" data-explanation-right="对。后端 Hub 对慢订阅者会丢事件，保护主流程不被 UI 卡住。" data-explanation-wrong="实时系统通常要避免慢客户端拖住发布方。这个项目选择了 best-effort。">
+            <h3 class="quiz-question">如果某个浏览器标签页很慢，后端应该为了它阻塞所有事件发布吗？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="block" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>应该，不能丢任何事件</span></button>
+              <button class="quiz-option" data-value="best-effort" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>不应该，慢订阅者可丢事件，之后再刷新补状态</span></button>
+              <button class="quiz-option" data-value="remove-rest" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>删除 REST，只保留 SSE</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

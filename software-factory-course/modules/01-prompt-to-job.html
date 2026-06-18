@@ -1,0 +1,114 @@
+<section class="module" id="module-1" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">01</span>
+      <h1 class="module-title">从一句话到任务</h1>
+      <p class="module-subtitle">看懂用户输入需求后，门户如何把它变成后端可执行的 Job。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">先从你熟悉的动作开始</h2>
+        <p>你在底部对话框输入“生成一个态势看板”，按下发送按钮。这个动作不会直接生成代码，而是先通过一个 <span class="term" data-definition="API 是前端和后端约定好的通信入口。你可以把它理解成窗口：前端把请求递进去，后端按约定给结果。">API</span> 创建一张任务单。</p>
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-m1-actor-1","label":"用户写下一句自然语言需求"},
+          {"highlight":"flow-m1-actor-2","label":"ChatDialog 收集输入内容","packet":true,"from":"m1-actor-1","to":"m1-actor-2"},
+          {"highlight":"flow-m1-actor-3","label":"factoryApi 把内容包装成 POST 请求","packet":true,"from":"m1-actor-2","to":"m1-actor-3"},
+          {"highlight":"flow-m1-actor-4","label":"factory-server 接收请求并创建 Job","packet":true,"from":"m1-actor-3","to":"m1-actor-4"},
+          {"highlight":"flow-m1-actor-5","label":"SQLite 记住任务和初始步骤","packet":true,"from":"m1-actor-4","to":"m1-actor-5"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-m1-actor-1"><div class="flow-actor-icon">人</div><span>用户</span></div>
+            <div class="flow-actor" id="flow-m1-actor-2"><div class="flow-actor-icon">聊</div><span>ChatDialog</span></div>
+            <div class="flow-actor" id="flow-m1-actor-3"><div class="flow-actor-icon">网</div><span>factoryApi</span></div>
+            <div class="flow-actor" id="flow-m1-actor-4"><div class="flow-actor-icon">厂</div><span>factory-server</span></div>
+            <div class="flow-actor" id="flow-m1-actor-5"><div class="flow-actor-icon">库</div><span>SQLite</span></div>
+          </div>
+          <div class="flow-packet" id="flow-packet-m1"></div>
+          <div class="flow-step-label">点击 Next Step 追踪这张任务单</div>
+          <div class="flow-controls">
+            <button class="btn flow-next-btn">Next Step</button>
+            <button class="btn flow-reset-btn">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">门户把“人话”变成网络请求</h2>
+        <p>这里的比喻是快递面单：用户写内容，前端贴上地址、格式和错误处理，再交给后端。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'</span>
+<span class="code-line"></span>
+<span class="code-line">async function request(path, options = {}) {</span>
+<span class="code-line">  const response = await fetch(`${API_BASE_URL}${path}`, {</span>
+<span class="code-line">    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },</span>
+<span class="code-line">    ...options,</span>
+<span class="code-line">  })</span>
+<span class="code-line">  if (!response.ok) {</span>
+<span class="code-line">    const body = await response.text()</span>
+<span class="code-line">    throw new Error(`${response.status} ${body}`)</span>
+<span class="code-line">  }</span>
+<span class="code-line">  return response.json()</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">默认把请求送到本机的工厂后端，也允许用环境变量换地址。</p>
+              <p class="tl">`request` 是统一寄件柜：所有前端请求都走这里。</p>
+              <p class="tl">`fetch` 是浏览器发网络请求的工具；这里会把 path 拼到后端地址后面。</p>
+              <p class="tl">请求默认声明自己发送的是 <span class="term" data-definition="JSON 是一种常见的数据格式，长得像带引号的对象。前后端经常用它传递结构化信息。">JSON</span>，也允许调用方补充更多选项。</p>
+              <p class="tl">如果后端返回错误，代码先读出错误正文，再抛出一个可显示的错误。</p>
+              <p class="tl">如果成功，就把响应正文解析成 JavaScript 可以使用的数据。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">你要能判断坏在哪一段</h2>
+        <div class="callout callout-accent">
+          <div class="callout-icon">!</div>
+          <div class="callout-content">
+            <strong class="callout-title">关键直觉</strong>
+            <p>前端失败不一定是后端坏了。先问：按钮有没有触发？请求有没有发出？后端有没有返回非 2xx？数据库有没有记录 Job？</p>
+          </div>
+        </div>
+        <div class="quiz-container" id="quiz-module1">
+          <div class="quiz-question-block" data-correct="api" data-explanation-right="对。用户能输入但没有任务，先看 `factoryApi.createJob` 和 `/api/jobs` 请求。" data-explanation-wrong="还不到那一步。任务没有创建时，先看从 UI 到 API 的提交链路。">
+            <h3 class="quiz-question">用户按发送后，任务中心仍然空白。你让 AI 第一优先检查哪里？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="podman" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Podman 容器是否启动</span></button>
+              <button class="quiz-option" data-value="api" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>浏览器是否向 `/api/jobs` 发出了请求</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>卡片颜色是否正确</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="json" data-explanation-right="对。后端期望结构化 JSON，这样才能读到 prompt 字段。" data-explanation-wrong="这里不是自然语言直接丢给后端解析，而是包装成 JSON 请求体。">
+            <h3 class="quiz-question">如果要新增一个“优先级”字段，最合理的请求形态是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="text" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>把优先级拼进 prompt 文本里</span></button>
+              <button class="quiz-option" data-value="json" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>在 POST 的 JSON body 里加入 priority</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>写进 CSS class 名称</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="base" data-explanation-right="对。这个项目通过 `VITE_FACTORY_API_BASE_URL` 改前端连接的后端地址。" data-explanation-wrong="端口连错属于配置问题，先看 API base URL，而不是重写业务逻辑。">
+            <h3 class="quiz-question">门户在 3001，后端临时换到 9999。你会让 AI 改什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="base" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>设置 `VITE_FACTORY_API_BASE_URL`</span></button>
+              <button class="quiz-option" data-value="steps" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>删除六个 Step</span></button>
+              <button class="quiz-option" data-value="sqlite" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>重建 SQLite 表结构</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module1')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module1')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

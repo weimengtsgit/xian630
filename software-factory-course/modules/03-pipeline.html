@@ -1,0 +1,120 @@
+<section class="module" id="module-3" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">六阶段流水线</h1>
+      <p class="module-subtitle">理解 Job 如何一步一步从需求分析走到部署完成。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">一个任务不是一次大爆炸</h2>
+        <p>这里的比喻是传送带。每个 <span class="term" data-definition="Step 是一个任务里的小阶段。把大任务拆成 Step，系统就能知道当前卡在第几步。">Step</span> 只处理一个明确动作：先理解需求，再设计，再生成代码，再测试、构建、部署。</p>
+        <div class="flow-steps">
+          <div class="flow-step"><div class="flow-step-num">1</div><p>需求分析</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">2</div><p>方案设计</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">3</div><p>代码生成</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">4</div><p>测试验证</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">5</div><p>镜像构建</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">6</div><p>部署</p></div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">固定步骤写在代码里</h2>
+        <p>这段是工厂的“工位清单”。<span class="term" data-definition="状态机是把系统允许的状态和跳转规则写清楚。它能防止任务随意跳步或进入无法解释的状态。">状态机</span> 的好处是：失败、重试、取消都有明确位置。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">func FixedSteps() []StepDefinition {</span>
+<span class="code-line">	return []StepDefinition{</span>
+<span class="code-line">		{Kind: model.StepRequirementAnalysis, Seq: 1, AgentKey: "requirement-analyst", Mode: ModeClaude},</span>
+<span class="code-line">		{Kind: model.StepSolutionDesign, Seq: 2, AgentKey: "solution-designer", Mode: ModeClaude},</span>
+<span class="code-line">		{Kind: model.StepCodeGeneration, Seq: 3, AgentKey: "code-generator", Mode: ModeClaude},</span>
+<span class="code-line">		{Kind: model.StepTestVerification, Seq: 4, AgentKey: "tester", Mode: ModeFactoryWithOptionalClaudeAnalysis},</span>
+<span class="code-line">		{Kind: model.StepImageBuild, Seq: 5, AgentKey: "deployer", Mode: ModeFactory},</span>
+<span class="code-line">		{Kind: model.StepDeployment, Seq: 6, AgentKey: "deployer", Mode: ModeFactory},</span>
+<span class="code-line">	}</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">函数返回唯一权威的六步流程。</p>
+              <p class="tl">前三步交给 Claude 模式：需求、设计、代码。</p>
+              <p class="tl">测试验证是工厂执行为主，必要时可让 Claude 分析日志。</p>
+              <p class="tl">镜像构建和部署完全由工厂控制，避免 AI 自由拼 shell 命令。</p>
+              <p class="tl">`Seq` 是顺序，`AgentKey` 是 UI 和审计归属。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Executor 像传送带控制器</h2>
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-m3-actor-1","label":"队列里出现 queued Job"},
+          {"highlight":"flow-m3-actor-2","label":"Executor 抢到单任务执行锁","packet":true,"from":"m3-actor-1","to":"m3-actor-2"},
+          {"highlight":"flow-m3-actor-3","label":"按 Step 模式选择 Claude 或 Factory runner","packet":true,"from":"m3-actor-2","to":"m3-actor-3"},
+          {"highlight":"flow-m3-actor-4","label":"Store 记录 running、succeeded、failed 等状态","packet":true,"from":"m3-actor-3","to":"m3-actor-4"},
+          {"highlight":"flow-m3-actor-5","label":"成功后把 Job 指到下一步","packet":true,"from":"m3-actor-4","to":"m3-actor-5"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-m3-actor-1"><div class="flow-actor-icon">Q</div><span>Queue</span></div>
+            <div class="flow-actor" id="flow-m3-actor-2"><div class="flow-actor-icon">E</div><span>Executor</span></div>
+            <div class="flow-actor" id="flow-m3-actor-3"><div class="flow-actor-icon">R</div><span>Runner</span></div>
+            <div class="flow-actor" id="flow-m3-actor-4"><div class="flow-actor-icon">DB</div><span>Store</span></div>
+            <div class="flow-actor" id="flow-m3-actor-5"><div class="flow-actor-icon">→</div><span>Next Step</span></div>
+          </div>
+          <div class="flow-packet" id="flow-packet-m3"></div>
+          <div class="flow-step-label">点击 Next Step 看 Job 如何前进</div>
+          <div class="flow-controls">
+            <button class="btn flow-next-btn">Next Step</button>
+            <button class="btn flow-reset-btn">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">用流水线思维指导 AI</h2>
+        <div class="quiz-container" id="quiz-module3">
+          <div class="quiz-question-block" data-correct="factory" data-explanation-right="对。npm 构建和 Podman 部署应由 Factory 固定执行，Claude 不应自由拼命令。" data-explanation-wrong="这会削弱边界。代码生成可以写文件，但构建部署应由工厂控制。">
+            <h3 class="quiz-question">AI 提议在 code_generation 阶段直接运行 `podman run`。你应该怎么回应？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="accept" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>接受，因为一步完成更快</span></button>
+              <button class="quiz-option" data-value="factory" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>要求保持边界，把部署留给 deployment Step</span></button>
+              <button class="quiz-option" data-value="ui" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>只改前端进度条文案</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="step" data-explanation-right="对。新增强校验通常是新增或扩展一个明确 Step，而不是塞进任意位置。" data-explanation-wrong="如果检查影响流水线结果，应该成为状态机中的明确责任。">
+            <h3 class="quiz-question">你想加入“安全扫描”。最稳的设计方式是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="prompt" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>在用户 prompt 里提醒 AI 自觉扫描</span></button>
+              <button class="quiz-option" data-value="step" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>在固定流水线中加入独立扫描阶段或扩展测试阶段</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>给失败状态换成红色</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="store" data-explanation-right="对。任务刷新依赖持久化状态，先查 Store 里的 JobStep 状态是否推进。" data-explanation-wrong="UI 只是展示。先确认后端是否记录了正确状态。">
+            <h3 class="quiz-question">页面显示一直卡在“测试验证”，你第一批证据应是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="store" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>JobStep 在数据库里的 status、attempt、error_code</span></button>
+              <button class="quiz-option" data-value="font" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>字体是否加载成功</span></button>
+              <button class="quiz-option" data-value="agent" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>智能体头像颜色</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

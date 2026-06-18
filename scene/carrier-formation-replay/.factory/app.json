@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "slug": "carrier-formation-replay",
+  "name": "航母编队月度航迹复盘",
+  "type": "timeline-replay",
+  "source": "preset",
+  "description": "展示航母编队近一个月日级航迹、伴随舰队形、事件点和复盘时间轴。",
+  "entry": "static-vite",
+  "path": "scene/carrier-formation-replay",
+  "tags": ["map", "carrier", "timeline", "replay"],
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "runtime": {
+    "devCommand": "npm run dev",
+    "defaultPort": 5175
+  },
+  "docker": {
+    "enabled": true,
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "runtimePort": 80
+  }
+}

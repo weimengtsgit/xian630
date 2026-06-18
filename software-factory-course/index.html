@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>软件工厂代码库互动课</title>
+
+  <!-- Google Fonts: Bricolage Grotesque · DM Sans · JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <style>
+    :root {
+      --color-accent:       #2A7B9B;
+      --color-accent-hover: #1F6280;
+      --color-accent-light: #E4F2F7;
+      --color-accent-muted: #5A9DB8;
+    }
+  </style>
+
+  <script src="main.js" defer></script>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">软件工厂代码库互动课</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="module-1" data-tooltip="从一句话到任务" role="tab" aria-label="Module 1: 从一句话到任务"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="认识工厂角色" role="tab" aria-label="Module 2: 认识工厂角色"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="六阶段流水线" role="tab" aria-label="Module 3: 六阶段流水线"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="实时状态同步" role="tab" aria-label="Module 4: 实时状态同步"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="应用身份证与部署" role="tab" aria-label="Module 5: 应用身份证与部署"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="出错时看哪里" role="tab" aria-label="Module 6: 出错时看哪里"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+<section class="module" id="module-1" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">01</span>
+      <h1 class="module-title">从一句话到任务</h1>
+      <p class="module-subtitle">看懂用户输入需求后，门户如何把它变成后端可执行的 Job。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">先从你熟悉的动作开始</h2>
+        <p>你在底部对话框输入“生成一个态势看板”，按下发送按钮。这个动作不会直接生成代码，而是先通过一个 <span class="term" data-definition="API 是前端和后端约定好的通信入口。你可以把它理解成窗口：前端把请求递进去，后端按约定给结果。">API</span> 创建一张任务单。</p>
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-m1-actor-1","label":"用户写下一句自然语言需求"},
+          {"highlight":"flow-m1-actor-2","label":"ChatDialog 收集输入内容","packet":true,"from":"m1-actor-1","to":"m1-actor-2"},
+          {"highlight":"flow-m1-actor-3","label":"factoryApi 把内容包装成 POST 请求","packet":true,"from":"m1-actor-2","to":"m1-actor-3"},
+          {"highlight":"flow-m1-actor-4","label":"factory-server 接收请求并创建 Job","packet":true,"from":"m1-actor-3","to":"m1-actor-4"},
+          {"highlight":"flow-m1-actor-5","label":"SQLite 记住任务和初始步骤","packet":true,"from":"m1-actor-4","to":"m1-actor-5"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-m1-actor-1"><div class="flow-actor-icon">人</div><span>用户</span></div>
+            <div class="flow-actor" id="flow-m1-actor-2"><div class="flow-actor-icon">聊</div><span>ChatDialog</span></div>
+            <div class="flow-actor" id="flow-m1-actor-3"><div class="flow-actor-icon">网</div><span>factoryApi</span></div>
+            <div class="flow-actor" id="flow-m1-actor-4"><div class="flow-actor-icon">厂</div><span>factory-server</span></div>
+            <div class="flow-actor" id="flow-m1-actor-5"><div class="flow-actor-icon">库</div><span>SQLite</span></div>
+          </div>
+          <div class="flow-packet" id="flow-packet-m1"></div>
+          <div class="flow-step-label">点击 Next Step 追踪这张任务单</div>
+          <div class="flow-controls">
+            <button class="btn flow-next-btn">Next Step</button>
+            <button class="btn flow-reset-btn">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">门户把“人话”变成网络请求</h2>
+        <p>这里的比喻是快递面单：用户写内容，前端贴上地址、格式和错误处理，再交给后端。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'</span>
+<span class="code-line"></span>
+<span class="code-line">async function request(path, options = {}) {</span>
+<span class="code-line">  const response = await fetch(`${API_BASE_URL}${path}`, {</span>
+<span class="code-line">    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },</span>
+<span class="code-line">    ...options,</span>
+<span class="code-line">  })</span>
+<span class="code-line">  if (!response.ok) {</span>
+<span class="code-line">    const body = await response.text()</span>
+<span class="code-line">    throw new Error(`${response.status} ${body}`)</span>
+<span class="code-line">  }</span>
+<span class="code-line">  return response.json()</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">默认把请求送到本机的工厂后端，也允许用环境变量换地址。</p>
+              <p class="tl">`request` 是统一寄件柜：所有前端请求都走这里。</p>
+              <p class="tl">`fetch` 是浏览器发网络请求的工具；这里会把 path 拼到后端地址后面。</p>
+              <p class="tl">请求默认声明自己发送的是 <span class="term" data-definition="JSON 是一种常见的数据格式，长得像带引号的对象。前后端经常用它传递结构化信息。">JSON</span>，也允许调用方补充更多选项。</p>
+              <p class="tl">如果后端返回错误，代码先读出错误正文，再抛出一个可显示的错误。</p>
+              <p class="tl">如果成功，就把响应正文解析成 JavaScript 可以使用的数据。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">你要能判断坏在哪一段</h2>
+        <div class="callout callout-accent">
+          <div class="callout-icon">!</div>
+          <div class="callout-content">
+            <strong class="callout-title">关键直觉</strong>
+            <p>前端失败不一定是后端坏了。先问：按钮有没有触发？请求有没有发出？后端有没有返回非 2xx？数据库有没有记录 Job？</p>
+          </div>
+        </div>
+        <div class="quiz-container" id="quiz-module1">
+          <div class="quiz-question-block" data-correct="api" data-explanation-right="对。用户能输入但没有任务，先看 `factoryApi.createJob` 和 `/api/jobs` 请求。" data-explanation-wrong="还不到那一步。任务没有创建时，先看从 UI 到 API 的提交链路。">
+            <h3 class="quiz-question">用户按发送后，任务中心仍然空白。你让 AI 第一优先检查哪里？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="podman" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Podman 容器是否启动</span></button>
+              <button class="quiz-option" data-value="api" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>浏览器是否向 `/api/jobs` 发出了请求</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>卡片颜色是否正确</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="json" data-explanation-right="对。后端期望结构化 JSON，这样才能读到 prompt 字段。" data-explanation-wrong="这里不是自然语言直接丢给后端解析，而是包装成 JSON 请求体。">
+            <h3 class="quiz-question">如果要新增一个“优先级”字段，最合理的请求形态是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="text" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>把优先级拼进 prompt 文本里</span></button>
+              <button class="quiz-option" data-value="json" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>在 POST 的 JSON body 里加入 priority</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>写进 CSS class 名称</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="base" data-explanation-right="对。这个项目通过 `VITE_FACTORY_API_BASE_URL` 改前端连接的后端地址。" data-explanation-wrong="端口连错属于配置问题，先看 API base URL，而不是重写业务逻辑。">
+            <h3 class="quiz-question">门户在 3001，后端临时换到 9999。你会让 AI 改什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="base" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>设置 `VITE_FACTORY_API_BASE_URL`</span></button>
+              <button class="quiz-option" data-value="steps" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>删除六个 Step</span></button>
+              <button class="quiz-option" data-value="sqlite" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>重建 SQLite 表结构</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module1')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module1')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-2" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">02</span>
+      <h1 class="module-title">认识工厂角色</h1>
+      <p class="module-subtitle">把 monorepo 里的服务、面板和智能体当成一组分工明确的角色。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">这不是一坨代码，是一张分工表</h2>
+        <p><span class="term" data-definition="monorepo 是把多个相关项目放在同一个代码仓库里。好处是它们能一起演进，坏处是新手容易迷路。">monorepo</span> 里有前端、后端、观测服务和多个场景应用。像剧组一样，导演、摄影、剪辑各做各的事，合起来才是一部片子。</p>
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">UI</div>
+            <h4 class="pattern-title">sf-portal</h4>
+            <p class="pattern-desc">用户入口：显示应用、任务、智能体，并提交需求。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">GO</div>
+            <h4 class="pattern-title">factory-server</h4>
+            <p class="pattern-desc">编排系统：排队、推进步骤、构建、部署、存状态。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">CC</div>
+            <h4 class="pattern-title">cc-status</h4>
+            <p class="pattern-desc">观测系统：记录 Claude session、subagent 和 skill 状态。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">APP</div>
+            <h4 class="pattern-title">scene / generated-apps</h4>
+            <p class="pattern-desc">可运行应用：预置示例和将来生成出来的新应用。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">智能体也是注册出来的角色</h2>
+        <p>右侧“智能体”面板不是从 UI 硬编码出来的。后端启动时把固定 <span class="term" data-definition="registry 是注册表，保存系统承认的角色或能力清单。让 AI 改功能时，可以说“更新 agent registry”。">registry</span> 写入数据库，门户再读取。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">func DefaultRegistry() []model.Agent {</span>
+<span class="code-line">	return []model.Agent{</span>
+<span class="code-line">		{</span>
+<span class="code-line">			ID:              "agent_requirement_analyst",</span>
+<span class="code-line">			Key:             "requirement-analyst",</span>
+<span class="code-line">			Name:            "需求分析",</span>
+<span class="code-line">			Role:            "requirement_analysis",</span>
+<span class="code-line">			Description:     "把用户自然语言需求整理为生成应用的明确需求",</span>
+<span class="code-line">			ClaudeAgentName: "requirement-analyst",</span>
+<span class="code-line">			SkillsJSON:      "",</span>
+<span class="code-line">			Enabled:         true,</span>
+<span class="code-line">			SortOrder:       1,</span>
+<span class="code-line">		},</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">这个函数返回系统内置的一组智能体。</p>
+              <p class="tl">第一位角色的稳定 ID 是 `agent_requirement_analyst`。</p>
+              <p class="tl">`Key` 是机器用的名字，后续 Step 会用它匹配执行归属。</p>
+              <p class="tl">`Name` 和 `Description` 是给人看的中文说明。</p>
+              <p class="tl">`ClaudeAgentName` 预留给真正的 Claude CLI subagent 对接。</p>
+              <p class="tl">`Enabled` 和 `SortOrder` 决定这个角色是否启用，以及面板里的顺序。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">组件聊天：谁找谁办事</h2>
+        <div class="chat-window" id="chat-module2">
+          <div class="chat-messages">
+            <div class="chat-message" data-msg="0" data-sender="portal" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-1)">门</div>
+              <div class="chat-bubble"><span class="chat-sender" style="color: var(--color-actor-1)">sf-portal</span><p>我负责接收用户需求，也负责展示应用和任务状态。</p></div>
+            </div>
+            <div class="chat-message" data-msg="1" data-sender="factory" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-2)">厂</div>
+              <div class="chat-bubble"><span class="chat-sender" style="color: var(--color-actor-2)">factory-server</span><p>把需求交给我。我会创建 Job，推进六个 Step，并记录结果。</p></div>
+            </div>
+            <div class="chat-message" data-msg="2" data-sender="cc" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-3)">观</div>
+              <div class="chat-bubble"><span class="chat-sender" style="color: var(--color-actor-3)">cc-status</span><p>我不编排任务，只观察 Claude 的 session、subagent 和 skill 生命周期。</p></div>
+            </div>
+            <div class="chat-message" data-msg="3" data-sender="app" style="display:none">
+              <div class="chat-avatar" style="background: var(--color-actor-4)">应</div>
+              <div class="chat-bubble"><span class="chat-sender" style="color: var(--color-actor-4)">应用目录</span><p>我通过 `.factory/app.json` 告诉工厂自己怎么构建和运行。</p></div>
+            </div>
+          </div>
+          <div class="chat-typing" style="display:none">
+            <div class="chat-avatar" id="chat-module2-typing-avatar">?</div>
+            <div class="chat-typing-dots"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>
+          </div>
+          <div class="chat-controls">
+            <button class="btn chat-next-btn">Next Message</button>
+            <button class="btn chat-all-btn">Play All</button>
+            <button class="btn chat-reset-btn">Replay</button>
+            <span class="chat-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">角色边界就是调试地图</h2>
+        <div class="quiz-container" id="quiz-module2">
+          <div class="quiz-question-block" data-correct="portal" data-explanation-right="对。按钮、卡片、面板属于 `sf-portal` 的组件职责。" data-explanation-wrong="这个改动不需要碰后端状态机，先在门户组件里找。">
+            <h3 class="quiz-question">想给应用卡片加一个“复制链接”按钮，应优先改哪里？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="portal" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`sf-portal/src/components/ApplicationsPanel.jsx`</span></button>
+              <button class="quiz-option" data-value="cc" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`cc-status/internal/hook/parse.go`</span></button>
+              <button class="quiz-option" data-value="deploy" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`factory-server/internal/deploy/ports.go`</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="factory" data-explanation-right="对。任务生命周期、Job、Step 都是 factory-server 的边界。" data-explanation-wrong="cc-status 只观察 Claude，不决定 Job 状态。">
+            <h3 class="quiz-question">要新增 Job 状态 `paused`，最应该从哪层开始？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="scene" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>某个 scene 应用</span></button>
+              <button class="quiz-option" data-value="factory" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`factory-server/internal/model` 和状态转移</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>只改 CSS 标签文字</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="ccstatus" data-explanation-right="对。Claude 运行可见性属于 cc-status 的观测边界。" data-explanation-wrong="如果问题是 Claude session 是否被观察到，应先看 cc-status，不是应用部署代码。">
+            <h3 class="quiz-question">用户说“看不到 Claude subagent 运行详情”。你先让 AI 查哪个服务？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="ccstatus" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>cc-status</span></button>
+              <button class="quiz-option" data-value="vite" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Vite dev server</span></button>
+              <button class="quiz-option" data-value="nginx" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Nginx 静态服务</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module2')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module2')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-3" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">六阶段流水线</h1>
+      <p class="module-subtitle">理解 Job 如何一步一步从需求分析走到部署完成。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">一个任务不是一次大爆炸</h2>
+        <p>这里的比喻是传送带。每个 <span class="term" data-definition="Step 是一个任务里的小阶段。把大任务拆成 Step，系统就能知道当前卡在第几步。">Step</span> 只处理一个明确动作：先理解需求，再设计，再生成代码，再测试、构建、部署。</p>
+        <div class="flow-steps">
+          <div class="flow-step"><div class="flow-step-num">1</div><p>需求分析</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">2</div><p>方案设计</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">3</div><p>代码生成</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">4</div><p>测试验证</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">5</div><p>镜像构建</p></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="flow-step-num">6</div><p>部署</p></div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">固定步骤写在代码里</h2>
+        <p>这段是工厂的“工位清单”。<span class="term" data-definition="状态机是把系统允许的状态和跳转规则写清楚。它能防止任务随意跳步或进入无法解释的状态。">状态机</span> 的好处是：失败、重试、取消都有明确位置。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">func FixedSteps() []StepDefinition {</span>
+<span class="code-line">	return []StepDefinition{</span>
+<span class="code-line">		{Kind: model.StepRequirementAnalysis, Seq: 1, AgentKey: "requirement-analyst", Mode: ModeClaude},</span>
+<span class="code-line">		{Kind: model.StepSolutionDesign, Seq: 2, AgentKey: "solution-designer", Mode: ModeClaude},</span>
+<span class="code-line">		{Kind: model.StepCodeGeneration, Seq: 3, AgentKey: "code-generator", Mode: ModeClaude},</span>
+<span class="code-line">		{Kind: model.StepTestVerification, Seq: 4, AgentKey: "tester", Mode: ModeFactoryWithOptionalClaudeAnalysis},</span>
+<span class="code-line">		{Kind: model.StepImageBuild, Seq: 5, AgentKey: "deployer", Mode: ModeFactory},</span>
+<span class="code-line">		{Kind: model.StepDeployment, Seq: 6, AgentKey: "deployer", Mode: ModeFactory},</span>
+<span class="code-line">	}</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">函数返回唯一权威的六步流程。</p>
+              <p class="tl">前三步交给 Claude 模式：需求、设计、代码。</p>
+              <p class="tl">测试验证是工厂执行为主，必要时可让 Claude 分析日志。</p>
+              <p class="tl">镜像构建和部署完全由工厂控制，避免 AI 自由拼 shell 命令。</p>
+              <p class="tl">`Seq` 是顺序，`AgentKey` 是 UI 和审计归属。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Executor 像传送带控制器</h2>
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-m3-actor-1","label":"队列里出现 queued Job"},
+          {"highlight":"flow-m3-actor-2","label":"Executor 抢到单任务执行锁","packet":true,"from":"m3-actor-1","to":"m3-actor-2"},
+          {"highlight":"flow-m3-actor-3","label":"按 Step 模式选择 Claude 或 Factory runner","packet":true,"from":"m3-actor-2","to":"m3-actor-3"},
+          {"highlight":"flow-m3-actor-4","label":"Store 记录 running、succeeded、failed 等状态","packet":true,"from":"m3-actor-3","to":"m3-actor-4"},
+          {"highlight":"flow-m3-actor-5","label":"成功后把 Job 指到下一步","packet":true,"from":"m3-actor-4","to":"m3-actor-5"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-m3-actor-1"><div class="flow-actor-icon">Q</div><span>Queue</span></div>
+            <div class="flow-actor" id="flow-m3-actor-2"><div class="flow-actor-icon">E</div><span>Executor</span></div>
+            <div class="flow-actor" id="flow-m3-actor-3"><div class="flow-actor-icon">R</div><span>Runner</span></div>
+            <div class="flow-actor" id="flow-m3-actor-4"><div class="flow-actor-icon">DB</div><span>Store</span></div>
+            <div class="flow-actor" id="flow-m3-actor-5"><div class="flow-actor-icon">→</div><span>Next Step</span></div>
+          </div>
+          <div class="flow-packet" id="flow-packet-m3"></div>
+          <div class="flow-step-label">点击 Next Step 看 Job 如何前进</div>
+          <div class="flow-controls">
+            <button class="btn flow-next-btn">Next Step</button>
+            <button class="btn flow-reset-btn">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">用流水线思维指导 AI</h2>
+        <div class="quiz-container" id="quiz-module3">
+          <div class="quiz-question-block" data-correct="factory" data-explanation-right="对。npm 构建和 Podman 部署应由 Factory 固定执行，Claude 不应自由拼命令。" data-explanation-wrong="这会削弱边界。代码生成可以写文件，但构建部署应由工厂控制。">
+            <h3 class="quiz-question">AI 提议在 code_generation 阶段直接运行 `podman run`。你应该怎么回应？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="accept" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>接受，因为一步完成更快</span></button>
+              <button class="quiz-option" data-value="factory" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>要求保持边界，把部署留给 deployment Step</span></button>
+              <button class="quiz-option" data-value="ui" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>只改前端进度条文案</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="step" data-explanation-right="对。新增强校验通常是新增或扩展一个明确 Step，而不是塞进任意位置。" data-explanation-wrong="如果检查影响流水线结果，应该成为状态机中的明确责任。">
+            <h3 class="quiz-question">你想加入“安全扫描”。最稳的设计方式是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="prompt" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>在用户 prompt 里提醒 AI 自觉扫描</span></button>
+              <button class="quiz-option" data-value="step" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>在固定流水线中加入独立扫描阶段或扩展测试阶段</span></button>
+              <button class="quiz-option" data-value="css" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>给失败状态换成红色</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="store" data-explanation-right="对。任务刷新依赖持久化状态，先查 Store 里的 JobStep 状态是否推进。" data-explanation-wrong="UI 只是展示。先确认后端是否记录了正确状态。">
+            <h3 class="quiz-question">页面显示一直卡在“测试验证”，你第一批证据应是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="store" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>JobStep 在数据库里的 status、attempt、error_code</span></button>
+              <button class="quiz-option" data-value="font" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>字体是否加载成功</span></button>
+              <button class="quiz-option" data-value="agent" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>智能体头像颜色</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-4" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">04</span>
+      <h1 class="module-title">实时状态同步</h1>
+      <p class="module-subtitle">理解为什么任务进度和应用状态可以自动更新，而不用手动刷新页面。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">门户像机场公告板</h2>
+        <p>普通 <span class="term" data-definition="REST 是一种常见 API 风格：前端发一次请求，后端回一次结果。适合读取当前状态。">REST</span> 请求像去柜台问一次航班状态。<span class="term" data-definition="SSE 是 Server-Sent Events，浏览器打开一条长连接，服务器以后可以持续推送事件。适合状态更新提醒。">SSE</span> 更像机场公告板：一有变化，屏幕自动更新。</p>
+        <div class="callout callout-info">
+          <div class="callout-icon">i</div>
+          <div class="callout-content">
+            <strong class="callout-title">两种通信一起用</strong>
+            <p>这个项目用 REST 拿完整列表，用 SSE 听变化通知。收到通知后，Hook 再刷新列表。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">浏览器打开一条事件订阅</h2>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">export function subscribeFactoryEvents(onEvent) {</span>
+<span class="code-line">  const source = new EventSource(`${API_BASE_URL}/api/events`)</span>
+<span class="code-line">  const types = ['app.updated', 'job.created', 'job.updated', 'step.updated', 'artifact.created', 'deployment.updated']</span>
+<span class="code-line">  types.forEach(type =&gt; {</span>
+<span class="code-line">    source.addEventListener(type, event =&gt; {</span>
+<span class="code-line">      onEvent(type, JSON.parse(event.data))</span>
+<span class="code-line">    })</span>
+<span class="code-line">  })</span>
+<span class="code-line">  return () =&gt; source.close()</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">创建一个 EventSource，连接到后端 `/api/events`。</p>
+              <p class="tl">声明前端关心的事件类型：应用、任务、步骤、产物、部署。</p>
+              <p class="tl">每种事件都注册一个监听器。</p>
+              <p class="tl">事件到达时，把 JSON 字符串解析成对象，再交给调用方。</p>
+              <p class="tl">返回一个清理函数，组件卸载时关闭连接，避免留下旧订阅。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">事件从后端广播到面板</h2>
+        <div class="flow-animation" data-steps='[
+          {"highlight":"flow-m4-actor-1","label":"Executor 改变 Job 或 Step 状态"},
+          {"highlight":"flow-m4-actor-2","label":"Hub 发布 job.updated 或 step.updated","packet":true,"from":"m4-actor-1","to":"m4-actor-2"},
+          {"highlight":"flow-m4-actor-3","label":"浏览器 EventSource 收到事件","packet":true,"from":"m4-actor-2","to":"m4-actor-3"},
+          {"highlight":"flow-m4-actor-4","label":"useJobs 调用 refresh 重新读取最新状态","packet":true,"from":"m4-actor-3","to":"m4-actor-4"},
+          {"highlight":"flow-m4-actor-5","label":"JobCenter 显示新的进度","packet":true,"from":"m4-actor-4","to":"m4-actor-5"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-m4-actor-1"><div class="flow-actor-icon">E</div><span>Executor</span></div>
+            <div class="flow-actor" id="flow-m4-actor-2"><div class="flow-actor-icon">H</div><span>Hub</span></div>
+            <div class="flow-actor" id="flow-m4-actor-3"><div class="flow-actor-icon">S</div><span>EventSource</span></div>
+            <div class="flow-actor" id="flow-m4-actor-4"><div class="flow-actor-icon">Hook</div><span>useJobs</span></div>
+            <div class="flow-actor" id="flow-m4-actor-5"><div class="flow-actor-icon">UI</div><span>JobCenter</span></div>
+          </div>
+          <div class="flow-packet" id="flow-packet-m4"></div>
+          <div class="flow-step-label">点击 Next Step 看一次状态刷新</div>
+          <div class="flow-controls">
+            <button class="btn flow-next-btn">Next Step</button>
+            <button class="btn flow-reset-btn">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">调试“页面不刷新”</h2>
+        <div class="quiz-container" id="quiz-module4">
+          <div class="quiz-question-block" data-correct="events" data-explanation-right="对。SSE 订阅失败时，页面通常还能手动刷新，但不会自动更新。" data-explanation-wrong="如果手动刷新能拿到新数据，问题更可能在事件订阅链路。">
+            <h3 class="quiz-question">用户说手动刷新后状态正确，但页面不会自动变。你优先检查？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="events" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`/api/events` 和 `subscribeFactoryEvents`</span></button>
+              <button class="quiz-option" data-value="schema" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>SQLite schema 是否缺表</span></button>
+              <button class="quiz-option" data-value="podman" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Podman 是否能 build image</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="refresh" data-explanation-right="对。事件本身只是提醒，Hook 需要重新拉完整数据。" data-explanation-wrong="事件通知和状态查询是两段逻辑，收到通知后仍要刷新数据。">
+            <h3 class="quiz-question">前端收到 `job.updated`，但 UI 仍显示旧 Step。最可能漏了什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="refresh" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Hook 没有在事件后调用 refresh</span></button>
+              <button class="quiz-option" data-value="font" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>字体大小不对</span></button>
+              <button class="quiz-option" data-value="docker" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Dockerfile 少了 EXPOSE</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="best-effort" data-explanation-right="对。后端 Hub 对慢订阅者会丢事件，保护主流程不被 UI 卡住。" data-explanation-wrong="实时系统通常要避免慢客户端拖住发布方。这个项目选择了 best-effort。">
+            <h3 class="quiz-question">如果某个浏览器标签页很慢，后端应该为了它阻塞所有事件发布吗？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="block" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>应该，不能丢任何事件</span></button>
+              <button class="quiz-option" data-value="best-effort" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>不应该，慢订阅者可丢事件，之后再刷新补状态</span></button>
+              <button class="quiz-option" data-value="remove-rest" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>删除 REST，只保留 SSE</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-5" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">05</span>
+      <h1 class="module-title">应用身份证与部署</h1>
+      <p class="module-subtitle">看懂 `.factory/app.json`、npm build、Podman 容器和健康检查如何连成运行应用。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">manifest 像应用的护照</h2>
+        <p><span class="term" data-definition="manifest 是一个描述文件，告诉系统这个应用是谁、在哪里、怎么构建、怎么运行。">manifest</span> 让工厂不用猜目录结构。预置应用放在 `scene/`，生成应用放在 `generated-apps/`，都用 `.factory/app.json` 报到。</p>
+        <div class="arch-diagram">
+          <div class="arch-zone arch-zone-browser">
+            <h4 class="arch-zone-label">Discovery</h4>
+            <div class="arch-component" data-desc="Scanner 扫描 scene/* 和 generated-apps/* 下的 .factory/app.json。">
+              <div class="arch-icon">scan</div><span>Scanner</span>
+            </div>
+            <div class="arch-component" data-desc="Manifest 描述 slug、name、source、build、runtime 和 docker 字段。">
+              <div class="arch-icon">id</div><span>.factory/app.json</span>
+            </div>
+          </div>
+          <div class="arch-zone arch-zone-server">
+            <h4 class="arch-zone-label">Factory</h4>
+            <div class="arch-component" data-desc="Store 把扫描出的应用保存成 applications 表里的行。">
+              <div class="arch-icon">db</div><span>SQLite Store</span>
+            </div>
+            <div class="arch-component" data-desc="FactoryRunner 执行 npm install、npm run build、podman build、podman run。">
+              <div class="arch-icon">run</div><span>FactoryRunner</span>
+            </div>
+          </div>
+          <div class="arch-zone arch-zone-external">
+            <h4 class="arch-zone-label">Runtime</h4>
+            <div class="arch-component" data-desc="Podman 在本机启动容器，健康检查通过后返回 runtime_url。">
+              <div class="arch-icon">box</div><span>Podman</span>
+            </div>
+          </div>
+          <div class="arch-description">点击任意组件查看它负责什么。</div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">工厂会先安装依赖，再构建</h2>
+        <p><span class="term" data-definition="依赖是项目运行或构建需要的第三方包，比如 React、Vite。Node 项目通常用 npm 安装依赖。">依赖</span> 安装策略不是随便选：有 lockfile 时用 `npm ci`，没有时用 `npm install`。这能兼顾可重复构建和新生成项目。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">	// 1. Dependency install: npm ci when a lockfile is present, else npm install.</span>
+<span class="code-line">	if _, err := os.Stat(filepath.Join(projectDir, "package-lock.json")); err == nil {</span>
+<span class="code-line">		if _, ok := f.runCmd(ctx, job, step, projectDir, "npm", "ci"); !ok {</span>
+<span class="code-line">			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorDependencyInstallFailed, ErrorMessage: "npm ci failed"}, nil</span>
+<span class="code-line">		}</span>
+<span class="code-line">	} else {</span>
+<span class="code-line">		if _, ok := f.runCmd(ctx, job, step, projectDir, "npm", "install"); !ok {</span>
+<span class="code-line">			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorDependencyInstallFailed, ErrorMessage: "npm install failed"}, nil</span>
+<span class="code-line">		}</span>
+<span class="code-line">	}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">先看项目里有没有 `package-lock.json`。</p>
+              <p class="tl">有 lockfile 就用 `npm ci`，按锁定版本安装，结果更稳定。</p>
+              <p class="tl">如果安装失败，Step 失败并写入 `dependency_install_failed`。</p>
+              <p class="tl">没有 lockfile 就用 `npm install`，适合刚生成出来的项目。</p>
+              <p class="tl">这段代码把“怎么装依赖”固定在 Factory，而不是交给 AI 临场决定。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">部署不是只有“启动容器”</h2>
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">01</div>
+            <h4 class="pattern-title">Build</h4>
+            <p class="pattern-desc">按 manifest 的 build command 生成 `dist/index.html`。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">02</div>
+            <h4 class="pattern-title">Image</h4>
+            <p class="pattern-desc">用 Podman 把静态前端打包成本地镜像。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">03</div>
+            <h4 class="pattern-title">Port</h4>
+            <p class="pattern-desc">从 18000-18999 里挑一个未占用端口。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">04</div>
+            <h4 class="pattern-title">Health</h4>
+            <p class="pattern-desc">访问运行 URL，确认容器真的能响应。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">让 AI 生成应用时要盯住 manifest</h2>
+        <div class="quiz-container" id="quiz-module5">
+          <div class="quiz-question-block" data-correct="manifest" data-explanation-right="对。没有 manifest，scanner 不会把应用登记进 applications 表。" data-explanation-wrong="构建前先要被发现。缺 `.factory/app.json` 时，应用通常不会出现在门户。">
+            <h3 class="quiz-question">生成目录存在，但应用列表没出现。第一检查项是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="manifest" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>`generated-apps/&lt;slug&gt;/.factory/app.json` 是否存在且合法</span></button>
+              <button class="quiz-option" data-value="color" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>按钮是否使用绿色</span></button>
+              <button class="quiz-option" data-value="chat" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>ChatDialog 是否有历史消息</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="output" data-explanation-right="对。构建命令成功还不够，Factory 还要确认输出目录里有 index.html。" data-explanation-wrong="静态前端最终要能被 Nginx 服务，`dist/index.html` 是关键产物。">
+            <h3 class="quiz-question">`npm run build` 返回 0，但部署前仍失败。你接着查什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="output" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>manifest 的 outputDir 里是否有 `index.html`</span></button>
+              <button class="quiz-option" data-value="agent-name" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>智能体中文名是否好看</span></button>
+              <button class="quiz-option" data-value="sse" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>SSE ping 间隔是否 15 秒</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="health" data-explanation-right="对。容器启动成功不代表应用可访问，健康检查负责兜底。" data-explanation-wrong="`podman run` 成功只是进程启动，服务是否可用还要 HTTP 检查。">
+            <h3 class="quiz-question">Podman 容器启动了，但门户打开 URL 空白。哪个步骤最能暴露这个问题？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="health" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>deployment 阶段的 HTTP health check</span></button>
+              <button class="quiz-option" data-value="registry" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>agent registry 排序</span></button>
+              <button class="quiz-option" data-value="tooltip" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>tooltip 定义是否完整</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-6" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">06</span>
+      <h1 class="module-title">出错时看哪里</h1>
+      <p class="module-subtitle">用 error_code、output.json、attempt artifact 和重试入口摆脱“AI 反复猜”的循环。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">失败不是一句“坏了”</h2>
+        <p>这个项目把失败当成黑匣子记录：每个阶段都要产出结构化 <span class="term" data-definition="output.json 是每个阶段写出的结构化结果文件。后端读取它，而不是靠读自然语言判断阶段是否成功。">output.json</span>，并把失败归到机器可读的 <span class="term" data-definition="error_code 是固定错误码，例如 build_failed。它让人和 AI 都能准确讨论失败类型。">error_code</span>。</p>
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">M</div>
+            <h4 class="pattern-title">output_missing</h4>
+            <p class="pattern-desc">阶段没有写出 `output.json`。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">J</div>
+            <h4 class="pattern-title">output_invalid_json</h4>
+            <p class="pattern-desc">文件存在，但不是后端能解析的 JSON。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">B</div>
+            <h4 class="pattern-title">build_failed</h4>
+            <p class="pattern-desc">npm 构建失败，先看 stdout.log 和 stderr.log。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">H</div>
+            <h4 class="pattern-title">health_check_failed</h4>
+            <p class="pattern-desc">容器启动后 HTTP 探活没有通过。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">后端严格读取阶段结果</h2>
+        <p>这里像海关查验文件：不是“看起来差不多”就放行，而是必须能严格解码。<span class="term" data-definition="strict decode 表示解析时不接受意料之外的字段或格式。它能更早发现 AI 输出漂移。">strict decode</span> 会让格式漂移早点暴露。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">func readAndDecode(path string, target any) error {</span>
+<span class="code-line">	f, err := os.Open(path)</span>
+<span class="code-line">	if err != nil {</span>
+<span class="code-line">		if errors.Is(err, os.ErrNotExist) {</span>
+<span class="code-line">			return fmt.Errorf("%s: %w", path, ErrOutputMissing)</span>
+<span class="code-line">		}</span>
+<span class="code-line">		return fmt.Errorf("open %s: %w", path, err)</span>
+<span class="code-line">	}</span>
+<span class="code-line">	defer f.Close()</span>
+<span class="code-line">	dec := json.NewDecoder(f)</span>
+<span class="code-line">	dec.DisallowUnknownFields()</span>
+<span class="code-line">	if err := dec.Decode(target); err != nil {</span>
+<span class="code-line">		return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)</span>
+<span class="code-line">	}</span>
+<span class="code-line">	return nil</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">打开指定路径的结果文件。</p>
+              <p class="tl">文件不存在时，包装成 `output_missing`。</p>
+              <p class="tl">确保文件最后会被关闭。</p>
+              <p class="tl">创建 JSON 解码器，并拒绝未知字段。</p>
+              <p class="tl">如果解析失败，包装成 `output_invalid_json`。</p>
+              <p class="tl">成功时返回 nil，表示这个基础契约通过。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">排查顺序：先证据，后猜测</h2>
+        <div class="step-cards">
+          <div class="step-card">
+            <div class="step-num">1</div>
+            <div class="step-body"><strong>定位 Job 和当前 Step</strong><p>确认状态是 running、failed、waiting_user 还是 canceled。</p></div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">2</div>
+            <div class="step-body"><strong>读取 error_code</strong><p>先区分是 runner、schema、npm、Podman、端口还是健康检查。</p></div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">3</div>
+            <div class="step-body"><strong>打开 attempt artifact</strong><p>查看 `output.json`、`stdout.log`、`stderr.log`，不要只看 UI 文案。</p></div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">4</div>
+            <div class="step-body"><strong>只重试当前阶段</strong><p>失败后用 retry-current-step，避免整单重跑掩盖问题。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">把问题问得更像工程师</h2>
+        <div class="quiz-container" id="quiz-module6">
+          <div class="quiz-question-block" data-correct="artifact" data-explanation-right="对。`build_failed` 时先看 npm 输出日志，那里有真正的错误。" data-explanation-wrong="失败类型已经告诉你是构建失败，先读构建日志，不要盲改 UI。">
+            <h3 class="quiz-question">Job 在 `test_verification` 失败，error_code 是 `build_failed`。你让 AI 先拿什么证据？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="artifact" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>该 attempt 的 `stdout.log` 和 `stderr.log`</span></button>
+              <button class="quiz-option" data-value="colors" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>门户主题色</span></button>
+              <button class="quiz-option" data-value="registry" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>智能体排序</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="json" data-explanation-right="对。`output_invalid_json` 说明阶段输出文件无法按契约解析。" data-explanation-wrong="Podman 还没轮到。先修阶段输出契约。">
+            <h3 class="quiz-question">`requirement_analysis` 报 `output_invalid_json`，你最可能改哪里？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="json" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Claude 阶段写出的 `output.json` 格式</span></button>
+              <button class="quiz-option" data-value="podman" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Podman 镜像标签</span></button>
+              <button class="quiz-option" data-value="port" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>端口分配范围</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="retry" data-explanation-right="对。系统支持重试当前失败阶段，这比整单重跑更可控。" data-explanation-wrong="整单重跑会丢失定位上下文；当前阶段重试更符合这个状态机设计。">
+            <h3 class="quiz-question">修复 manifest 后，最合适的恢复动作是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="delete" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>删除数据库重新开始</span></button>
+              <button class="quiz-option" data-value="retry" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>调用 retry-current-step 重试当前失败阶段</span></button>
+              <button class="quiz-option" data-value="ignore" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>忽略错误，让 UI 显示 completed</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+  </main>
+
+</body>
+</html>

@@ -1,0 +1,132 @@
+<section class="module" id="module-6" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">06</span>
+      <h1 class="module-title">出错时看哪里</h1>
+      <p class="module-subtitle">用 error_code、output.json、attempt artifact 和重试入口摆脱“AI 反复猜”的循环。</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">失败不是一句“坏了”</h2>
+        <p>这个项目把失败当成黑匣子记录：每个阶段都要产出结构化 <span class="term" data-definition="output.json 是每个阶段写出的结构化结果文件。后端读取它，而不是靠读自然语言判断阶段是否成功。">output.json</span>，并把失败归到机器可读的 <span class="term" data-definition="error_code 是固定错误码，例如 build_failed。它让人和 AI 都能准确讨论失败类型。">error_code</span>。</p>
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">M</div>
+            <h4 class="pattern-title">output_missing</h4>
+            <p class="pattern-desc">阶段没有写出 `output.json`。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-error)">
+            <div class="pattern-icon" style="background: var(--color-error)">J</div>
+            <h4 class="pattern-title">output_invalid_json</h4>
+            <p class="pattern-desc">文件存在，但不是后端能解析的 JSON。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-4)">
+            <div class="pattern-icon" style="background: var(--color-actor-4)">B</div>
+            <h4 class="pattern-title">build_failed</h4>
+            <p class="pattern-desc">npm 构建失败，先看 stdout.log 和 stderr.log。</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">H</div>
+            <h4 class="pattern-title">health_check_failed</h4>
+            <p class="pattern-desc">容器启动后 HTTP 探活没有通过。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">后端严格读取阶段结果</h2>
+        <p>这里像海关查验文件：不是“看起来差不多”就放行，而是必须能严格解码。<span class="term" data-definition="strict decode 表示解析时不接受意料之外的字段或格式。它能更早发现 AI 输出漂移。">strict decode</span> 会让格式漂移早点暴露。</p>
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code><span class="code-line">func readAndDecode(path string, target any) error {</span>
+<span class="code-line">	f, err := os.Open(path)</span>
+<span class="code-line">	if err != nil {</span>
+<span class="code-line">		if errors.Is(err, os.ErrNotExist) {</span>
+<span class="code-line">			return fmt.Errorf("%s: %w", path, ErrOutputMissing)</span>
+<span class="code-line">		}</span>
+<span class="code-line">		return fmt.Errorf("open %s: %w", path, err)</span>
+<span class="code-line">	}</span>
+<span class="code-line">	defer f.Close()</span>
+<span class="code-line">	dec := json.NewDecoder(f)</span>
+<span class="code-line">	dec.DisallowUnknownFields()</span>
+<span class="code-line">	if err := dec.Decode(target); err != nil {</span>
+<span class="code-line">		return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)</span>
+<span class="code-line">	}</span>
+<span class="code-line">	return nil</span>
+<span class="code-line">}</span></code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">打开指定路径的结果文件。</p>
+              <p class="tl">文件不存在时，包装成 `output_missing`。</p>
+              <p class="tl">确保文件最后会被关闭。</p>
+              <p class="tl">创建 JSON 解码器，并拒绝未知字段。</p>
+              <p class="tl">如果解析失败，包装成 `output_invalid_json`。</p>
+              <p class="tl">成功时返回 nil，表示这个基础契约通过。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">排查顺序：先证据，后猜测</h2>
+        <div class="step-cards">
+          <div class="step-card">
+            <div class="step-num">1</div>
+            <div class="step-body"><strong>定位 Job 和当前 Step</strong><p>确认状态是 running、failed、waiting_user 还是 canceled。</p></div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">2</div>
+            <div class="step-body"><strong>读取 error_code</strong><p>先区分是 runner、schema、npm、Podman、端口还是健康检查。</p></div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">3</div>
+            <div class="step-body"><strong>打开 attempt artifact</strong><p>查看 `output.json`、`stdout.log`、`stderr.log`，不要只看 UI 文案。</p></div>
+          </div>
+          <div class="step-card">
+            <div class="step-num">4</div>
+            <div class="step-body"><strong>只重试当前阶段</strong><p>失败后用 retry-current-step，避免整单重跑掩盖问题。</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">把问题问得更像工程师</h2>
+        <div class="quiz-container" id="quiz-module6">
+          <div class="quiz-question-block" data-correct="artifact" data-explanation-right="对。`build_failed` 时先看 npm 输出日志，那里有真正的错误。" data-explanation-wrong="失败类型已经告诉你是构建失败，先读构建日志，不要盲改 UI。">
+            <h3 class="quiz-question">Job 在 `test_verification` 失败，error_code 是 `build_failed`。你让 AI 先拿什么证据？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="artifact" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>该 attempt 的 `stdout.log` 和 `stderr.log`</span></button>
+              <button class="quiz-option" data-value="colors" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>门户主题色</span></button>
+              <button class="quiz-option" data-value="registry" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>智能体排序</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="json" data-explanation-right="对。`output_invalid_json` 说明阶段输出文件无法按契约解析。" data-explanation-wrong="Podman 还没轮到。先修阶段输出契约。">
+            <h3 class="quiz-question">`requirement_analysis` 报 `output_invalid_json`，你最可能改哪里？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="json" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Claude 阶段写出的 `output.json` 格式</span></button>
+              <button class="quiz-option" data-value="podman" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Podman 镜像标签</span></button>
+              <button class="quiz-option" data-value="port" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>端口分配范围</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <div class="quiz-question-block" data-correct="retry" data-explanation-right="对。系统支持重试当前失败阶段，这比整单重跑更可控。" data-explanation-wrong="整单重跑会丢失定位上下文；当前阶段重试更符合这个状态机设计。">
+            <h3 class="quiz-question">修复 manifest 后，最合适的恢复动作是什么？</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="delete" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>删除数据库重新开始</span></button>
+              <button class="quiz-option" data-value="retry" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>调用 retry-current-step 重试当前失败阶段</span></button>
+              <button class="quiz-option" data-value="ignore" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>忽略错误，让 UI 显示 completed</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

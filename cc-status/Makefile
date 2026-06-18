@@ -6,6 +6,13 @@ LDFLAGS  := -X main.version=$(VERSION)
 
 GOFLAGS  := -trimpath
 
+# Drop stale/mismatched GOROOT and GOPATH from the environment so the go binary
+# uses its own built-in GOROOT (e.g. brew's Cellar) and the default GOPATH
+# ($HOME/go, where the module cache lives). A leftover GOROOT pointing at an old
+# Go tree breaks compilation ("version does not match") even after an upgrade,
+# because the value is inherited from the parent shell.
+unexport GOROOT GOPATH
+
 .PHONY: all build run serve test vet tidy fmt clean install-local
 
 all: build
