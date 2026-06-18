@@ -201,6 +201,18 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 		if err := e.store.MarkStepFailed(ctx, stepID, res.ErrorCode, res.ErrorMessage); err != nil {
 			return err
 		}
+		if next, ok, err := e.nextFailureHandlerStepKind(ctx, jobID, stepID); err != nil {
+			return err
+		} else if ok {
+			if err := e.store.AdvanceJobStep(ctx, jobID, next); err != nil {
+				return err
+			}
+			if err := e.store.MarkJobQueued(ctx, jobID); err != nil {
+				return err
+			}
+			e.notify(ctx, jobID, stepID)
+			return nil
+		}
 		if err := e.store.MarkJobFailed(ctx, jobID); err != nil {
 			return err
 		}
@@ -252,12 +264,18 @@ func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	if job == nil {
 		return fmt.Errorf("job %s vanished after step success", jobID)
 	}
-	if job.CurrentStepKind == model.StepDeployment {
-		return e.store.MarkJobCompleted(ctx, jobID)
+	next, ok, err := e.nextStepKind(ctx, jobID, job.CurrentStepKind)
+	if err != nil {
+		return err
 	}
-	next, ok := nextStepKind(job.CurrentStepKind)
 	if !ok {
-		// Current step is somehow beyond deployment — complete defensively.
+		failed, err := e.hasFailedStep(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if failed {
+			return e.store.MarkJobFailed(ctx, jobID)
+		}
 		return e.store.MarkJobCompleted(ctx, jobID)
 	}
 	if err := e.store.AdvanceJobStep(ctx, jobID, next); err != nil {
@@ -268,16 +286,80 @@ func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	return e.store.MarkJobQueued(ctx, jobID)
 }
 
+func (e *Executor) nextFailureHandlerStepKind(ctx context.Context, jobID, failedStepID string) (model.StepKind, bool, error) {
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return "", false, err
+	}
+	var failedSeq int
+	for _, step := range steps {
+		if step.ID == failedStepID {
+			if !isFixedStepKind(step.Kind) {
+				return "", false, nil
+			}
+			failedSeq = step.Seq
+			break
+		}
+	}
+	if failedSeq == 0 {
+		return "", false, nil
+	}
+	for _, step := range steps {
+		if step.Seq > failedSeq && !isFixedStepKind(step.Kind) && step.Status == model.StepStatusPending {
+			return step.Kind, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (e *Executor) nextStepKind(ctx context.Context, jobID string, current model.StepKind) (model.StepKind, bool, error) {
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return "", false, err
+	}
+	for i, step := range steps {
+		if step.Kind == current {
+			if i+1 < len(steps) {
+				return steps[i+1].Kind, true, nil
+			}
+			return "", false, nil
+		}
+	}
+	return nextStepKind(current)
+}
+
+func (e *Executor) hasFailedStep(ctx context.Context, jobID string) (bool, error) {
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return false, err
+	}
+	for _, step := range steps {
+		if step.Status == model.StepStatusFailed {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // nextStepKind returns the step kind that follows k in FixedSteps order, or
 // (kind, false) if k is the last step.
-func nextStepKind(k model.StepKind) (model.StepKind, bool) {
+func nextStepKind(k model.StepKind) (model.StepKind, bool, error) {
 	steps := FixedSteps()
 	for i, s := range steps {
 		if s.Kind == k && i+1 < len(steps) {
-			return steps[i+1].Kind, true
+			return steps[i+1].Kind, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
+}
+
+func isFixedStepKind(k model.StepKind) bool {
+	for _, step := range FixedSteps() {
+		if step.Kind == k {
+			return true
+		}
+	}
+	return false
 }
 
 // RetryCurrentStep resets the job's current failed step to pending and re-queues

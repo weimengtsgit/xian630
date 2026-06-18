@@ -166,3 +166,34 @@ func TestClaudeStepRunnerReturnsWaitingUserWhenOutputAsksClarification(t *testin
 		t.Fatalf("result = %#v, want waiting_user with needs input", res)
 	}
 }
+
+func TestClaudeStepRunnerRunsCustomAgentStep(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"summary":        "日志分析完成",
+			"needsUserInput": false,
+			"questions":      []any{},
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepKind("log_analysis"))
+	step.AgentKey = "log-analyst"
+
+	res, err := r.Run(context.Background(), job, step)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("result = %#v, want succeeded", res)
+	}
+}

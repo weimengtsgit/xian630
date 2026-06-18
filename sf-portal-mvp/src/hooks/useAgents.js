@@ -19,6 +19,17 @@ export function useAgents() {
     }
   }, [])
 
+  const createAgent = useCallback(async agent => {
+    setError(null)
+    const created = await factoryApi.createAgent(agent)
+    setAgents(current => {
+      const next = [...current, created]
+      next.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+      return next
+    })
+    return created
+  }, [])
+
   useEffect(() => {
     refresh()
   }, [refresh])
@@ -36,6 +47,7 @@ export function useAgents() {
     loading,
     error,
     refresh,
+    createAgent,
     getWorkingAgents,
     assignTask,
     stopAgent,

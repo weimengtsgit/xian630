@@ -3,8 +3,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/ccstatus"
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
 // listAgents handles GET /api/agents — returns every known agent ordered by
@@ -16,6 +18,103 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agents)
+}
+
+type agentCreateBody struct {
+	Key             string `json:"key"`
+	Name            string `json:"name"`
+	Role            string `json:"role"`
+	Description     string `json:"description"`
+	ClaudeAgentName string `json:"claude_agent_name"`
+	SkillsJSON      string `json:"skills_json"`
+	Enabled         *bool  `json:"enabled"`
+}
+
+// createAgent handles POST /api/agents — creates a user-defined agent and
+// appends it after the current registry order.
+func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
+	var body agentCreateBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	key := strings.TrimSpace(body.Key)
+	name := strings.TrimSpace(body.Name)
+	role := strings.TrimSpace(body.Role)
+	if key == "" || name == "" || role == "" {
+		writeError(w, http.StatusBadRequest, "key, name, and role are required")
+		return
+	}
+
+	skillsJSON := strings.TrimSpace(body.SkillsJSON)
+	if skillsJSON == "" {
+		skillsJSON = "[]"
+	}
+	if !json.Valid([]byte(skillsJSON)) {
+		writeError(w, http.StatusBadRequest, "skills_json must be valid json")
+		return
+	}
+
+	existing, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list agents")
+		return
+	}
+	id := agentIDFromKey(key)
+	sortOrder := 1
+	for _, a := range existing {
+		if a.SortOrder >= sortOrder {
+			sortOrder = a.SortOrder + 1
+		}
+		if a.ID == id || a.Key == key {
+			writeError(w, http.StatusConflict, "agent already exists")
+			return
+		}
+	}
+
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	claudeAgentName := strings.TrimSpace(body.ClaudeAgentName)
+	if claudeAgentName == "" {
+		claudeAgentName = key
+	}
+
+	agent := model.Agent{
+		ID:              id,
+		Key:             key,
+		Name:            name,
+		Role:            role,
+		Description:     strings.TrimSpace(body.Description),
+		ClaudeAgentName: claudeAgentName,
+		SkillsJSON:      skillsJSON,
+		Enabled:         enabled,
+		SortOrder:       sortOrder,
+	}
+	if err := s.store.CreateAgent(r.Context(), agent); err != nil {
+		writeError(w, http.StatusInternalServerError, "create agent")
+		return
+	}
+	writeJSON(w, http.StatusCreated, agent)
+}
+
+func agentIDFromKey(key string) string {
+	var b strings.Builder
+	b.WriteString("agent_")
+	lastUnderscore := false
+	for _, r := range strings.ToLower(key) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastUnderscore = false
+		case !lastUnderscore:
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.TrimRight(b.String(), "_")
 }
 
 // agentPatchBody is the subset of the Agent resource that PATCH /api/agents/:id

@@ -38,12 +38,14 @@ func (f *FakeClaudeRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		return f.runSolutionDesign(ctx, job, step)
 	case model.StepCodeGeneration:
 		return f.runCodeGeneration(ctx, job, step)
-	default:
+	case model.StepTestVerification, model.StepImageBuild, model.StepDeployment:
 		return StepResult{
 			Status:       model.StepStatusFailed,
 			ErrorCode:    model.ErrorUnknown,
-			ErrorMessage: "fake claude: unhandled step " + string(step.Kind),
+			ErrorMessage: "fake claude: unhandled factory step " + string(step.Kind),
 		}, nil
+	default:
+		return f.runGenericAgentStep(ctx, job, step)
 	}
 }
 
@@ -74,6 +76,18 @@ func (f *FakeClaudeRunner) runRequirementAnalysis(_ context.Context, job model.J
 	out := map[string]any{
 		"summary":        "Fake-claude requirement analysis for the local MVP loop.",
 		"appType":        "timeline-replay",
+		"needsUserInput": false,
+		"questions":      []any{},
+	}
+	if err := f.writeOutput(job, step, out); err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
+	}
+	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+func (f *FakeClaudeRunner) runGenericAgentStep(_ context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+	out := map[string]any{
+		"summary":        "Fake-claude custom agent " + step.AgentKey + " completed.",
 		"needsUserInput": false,
 		"questions":      []any{},
 	}

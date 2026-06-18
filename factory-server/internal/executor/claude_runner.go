@@ -32,12 +32,13 @@ type codeGenerationStepOutput struct {
 	Questions      []runner.Question `json:"questions"`
 }
 
+type genericAgentStepOutput struct {
+	Summary        string            `json:"summary"`
+	NeedsUserInput bool              `json:"needsUserInput"`
+	Questions      []runner.Question `json:"questions"`
+}
+
 func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
-	switch step.Kind {
-	case model.StepRequirementAnalysis, model.StepSolutionDesign, model.StepCodeGeneration:
-	default:
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "claude runner cannot handle " + string(step.Kind)}, nil
-	}
 	if c.Claude == nil || c.Claude.Runner == nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "claude runner not configured"}, nil
 	}
@@ -69,8 +70,19 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	case model.StepCodeGeneration:
 		return c.finishCodeGeneration(ctx, job, step, ws.OutputPath()), nil
 	default:
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "unsupported claude step"}, nil
+		return c.finishGenericAgentStep(ws.OutputPath()), nil
 	}
+}
+
+func (c *ClaudeStepRunner) finishGenericAgentStep(outputPath string) StepResult {
+	var out genericAgentStepOutput
+	if err := decodeStrict(outputPath, &out); err != nil {
+		return c.failureFromError(err)
+	}
+	if out.NeedsUserInput {
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
+	}
+	return StepResult{Status: model.StepStatusSucceeded}
 }
 
 func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, job model.Job, step model.JobStep, outputPath string) StepResult {
@@ -189,7 +201,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。读取 input.json，在仓库 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json。output.json 必须包含 projectDir、createdFiles、needsUserInput、questions。createdFiles 使用仓库相对路径。可以在 output.md 写生成摘要，不要输出隐藏推理链。output.json 路径：" + ws.OutputPath()
 	default:
-		return job.UserPrompt
+		return "你是软件工厂的自定义 agent（agent_key: " + step.AgentKey + "，step_kind: " + string(step.Kind) + "）。读取 input.json，完成该智能体职责并输出 output.json。格式必须包含 summary、needsUserInput、questions。可以在 output.md 写可审计摘要，不要输出隐藏推理链。\n用户需求：" + job.UserPrompt
 	}
 }
 

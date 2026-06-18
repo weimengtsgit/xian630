@@ -14,10 +14,12 @@ import (
 // stepPlan is the fixed six-step pipeline seeded for every new job, in order.
 // kind → agent_key follows design §4. Both code-generator/requirement-analyst
 // style keys are owned by the agents table (Task 2 seeds the registry).
-var stepPlan = []struct {
+type stepPlanEntry struct {
 	kind     model.StepKind
 	agentKey string
-}{
+}
+
+var stepPlan = []stepPlanEntry{
 	{model.StepRequirementAnalysis, "requirement-analyst"},
 	{model.StepSolutionDesign, "solution-designer"},
 	{model.StepCodeGeneration, "code-generator"},
@@ -61,7 +63,12 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for i, sp := range stepPlan {
+	plan, err := s.jobStepPlan(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list agents")
+		return
+	}
+	for i, sp := range plan {
 		step := model.JobStep{
 			ID:       "step_" + idpkg.New(),
 			JobID:    jobID,
@@ -95,6 +102,33 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	s.exec.Signal()
 
 	writeJSON(w, http.StatusCreated, job)
+}
+
+func (s *Server) jobStepPlan(ctx context.Context) ([]stepPlanEntry, error) {
+	plan := append([]stepPlanEntry{}, stepPlan...)
+	fixed := map[string]bool{}
+	for _, sp := range stepPlan {
+		fixed[sp.agentKey] = true
+	}
+
+	agents, err := s.store.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, agent := range agents {
+		if !agent.Enabled || fixed[agent.Key] {
+			continue
+		}
+		kind := strings.TrimSpace(agent.Role)
+		if kind == "" {
+			kind = agent.Key
+		}
+		plan = append(plan, stepPlanEntry{
+			kind:     model.StepKind(kind),
+			agentKey: agent.Key,
+		})
+	}
+	return plan, nil
 }
 
 func deriveJobDisplayName(prompt string) string {

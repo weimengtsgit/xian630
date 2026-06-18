@@ -61,7 +61,12 @@ function App() {
         </div>
 
         <div className="wb-col wb-right">
-          <AgentsPanel agents={agents.agents} loading={agents.loading} error={agents.error} />
+          <AgentsPanel
+            agents={agents.agents}
+            loading={agents.loading}
+            error={agents.error}
+            onCreateAgent={agents.createAgent}
+          />
         </div>
       </div>
     </main>

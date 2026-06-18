@@ -18,6 +18,7 @@ export const factoryApi = {
   stopApp: id => request(`/api/apps/${id}/stop`, { method: 'POST' }),
   rebuildApp: id => request(`/api/apps/${id}/rebuild`, { method: 'POST' }),
   listAgents: () => request('/api/agents'),
+  createAgent: agent => request('/api/agents/create', { method: 'POST', body: JSON.stringify(agent) }),
   createJob: prompt => request('/api/jobs', { method: 'POST', body: JSON.stringify({ prompt }) }),
   listJobs: () => request('/api/jobs'),
   getJob: id => request(`/api/jobs/${id}`),

@@ -122,6 +122,73 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	}
 }
 
+func TestCreateJobAppendsEnabledCustomAgents(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	ctx := context.Background()
+	if err := st.CreateAgent(ctx, model.Agent{
+		ID:              "agent_log_analyst",
+		Key:             "log-analyst",
+		Name:            "错误日志分析",
+		Role:            "log_analysis",
+		Description:     "分析阶段失败日志",
+		ClaudeAgentName: "log-analyst",
+		SkillsJSON:      "[]",
+		Enabled:         true,
+		SortOrder:       6,
+	}); err != nil {
+		t.Fatalf("create custom agent: %v", err)
+	}
+	if err := st.CreateAgent(ctx, model.Agent{
+		ID:              "agent_disabled",
+		Key:             "disabled-agent",
+		Name:            "停用智能体",
+		Role:            "disabled_analysis",
+		Description:     "should not run",
+		ClaudeAgentName: "disabled-agent",
+		SkillsJSON:      "[]",
+		Enabled:         false,
+		SortOrder:       7,
+	}); err != nil {
+		t.Fatalf("create disabled agent: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs", map[string]string{"prompt": "生成航母编队月度航迹复盘"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+
+	stepsRec := doJSON(t, r, http.MethodGet, "/api/jobs/"+job.ID+"/steps", nil)
+	if stepsRec.Code != http.StatusOK {
+		t.Fatalf("steps status = %d, want 200", stepsRec.Code)
+	}
+	var steps []model.JobStep
+	if err := json.NewDecoder(stepsRec.Body).Decode(&steps); err != nil {
+		t.Fatalf("decode steps: %v", err)
+	}
+	if len(steps) != 7 {
+		t.Fatalf("len(steps) = %d, want 7", len(steps))
+	}
+	custom := steps[6]
+	if custom.Seq != 7 {
+		t.Fatalf("custom seq = %d, want 7", custom.Seq)
+	}
+	if custom.Kind != model.StepKind("log_analysis") {
+		t.Fatalf("custom kind = %q, want log_analysis", custom.Kind)
+	}
+	if custom.AgentKey != "log-analyst" {
+		t.Fatalf("custom agent_key = %q, want log-analyst", custom.AgentKey)
+	}
+	for _, step := range steps {
+		if step.AgentKey == "disabled-agent" {
+			t.Fatalf("disabled agent should not be added to job steps")
+		}
+	}
+}
+
 // TestCreateJobMissingPrompt verifies the 400 path.
 func TestCreateJobMissingPrompt(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})

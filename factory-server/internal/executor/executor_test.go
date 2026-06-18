@@ -92,6 +92,24 @@ func seedJob(t *testing.T, st *store.Store) string {
 	return jobID
 }
 
+func seedJobWithCustomStep(t *testing.T, st *store.Store) string {
+	t.Helper()
+	jobID := seedJob(t, st)
+	step := model.JobStep{
+		ID:       "step_test_log_analysis_" + itoa(int(randCounter.Add(1))),
+		JobID:    jobID,
+		Kind:     model.StepKind("log_analysis"),
+		Seq:      7,
+		AgentKey: "log-analyst",
+		Status:   model.StepStatusPending,
+		Attempt:  0,
+	}
+	if err := st.CreateJobStep(context.Background(), step); err != nil {
+		t.Fatalf("create custom step: %v", err)
+	}
+	return jobID
+}
+
 // randCounter keeps test ids unique within a process.
 var randCounter atomic.Int64
 
@@ -195,6 +213,30 @@ func TestExecutorCompletesAllSteps(t *testing.T) {
 	}
 }
 
+func TestExecutorCompletesCustomStepAfterFixedPipeline(t *testing.T) {
+	runner := &fakeRunner{}
+	e, st := newTestExecutor(t, runner)
+	id := seedJobWithCustomStep(t, st)
+
+	drain(t, context.Background(), e)
+
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusCompleted {
+		t.Fatalf("job status = %s, want completed", job.Status)
+	}
+	if job.CurrentStepKind != model.StepKind("log_analysis") {
+		t.Fatalf("current step = %s, want log_analysis", job.CurrentStepKind)
+	}
+	steps := mustSteps(t, st, id)
+	if len(steps) != 7 {
+		t.Fatalf("len steps = %d, want 7", len(steps))
+	}
+	custom := stepByKind(t, steps, model.StepKind("log_analysis"))
+	if custom.Status != model.StepStatusSucceeded {
+		t.Fatalf("custom step status = %s, want succeeded", custom.Status)
+	}
+}
+
 func TestExecutorNotifiesWhenStepAndJobStateChange(t *testing.T) {
 	runner := &fakeRunner{}
 	e, st := newTestExecutor(t, runner)
@@ -263,6 +305,33 @@ func TestExecutorFailureMarksJobFailed(t *testing.T) {
 		if s := stepByKind(t, steps, k); s.Status != model.StepStatusPending {
 			t.Fatalf("step %s = %s, want pending", k, s.Status)
 		}
+	}
+}
+
+func TestExecutorRunsCustomStepAfterFixedStepFailure(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepRequirementAnalysis: {Status: model.StepStatusFailed, ErrorCode: model.ErrorRunnerExitNonzero, ErrorMessage: "boom"},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJobWithCustomStep(t, st)
+
+	drain(t, context.Background(), e)
+
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusFailed {
+		t.Fatalf("job status = %s, want failed after diagnostic custom step", job.Status)
+	}
+	if job.CurrentStepKind != model.StepKind("log_analysis") {
+		t.Fatalf("current step = %s, want log_analysis", job.CurrentStepKind)
+	}
+	steps := mustSteps(t, st, id)
+	failed := stepByKind(t, steps, model.StepRequirementAnalysis)
+	if failed.Status != model.StepStatusFailed {
+		t.Fatalf("requirement step status = %s, want failed", failed.Status)
+	}
+	custom := stepByKind(t, steps, model.StepKind("log_analysis"))
+	if custom.Status != model.StepStatusSucceeded {
+		t.Fatalf("custom step status = %s, want succeeded", custom.Status)
 	}
 }
 

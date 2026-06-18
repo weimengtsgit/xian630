@@ -87,6 +87,31 @@ func TestFakeClaudeRequirementAnalysisWritesOutput(t *testing.T) {
 	}
 }
 
+func TestFakeClaudeCustomAgentWritesOutput(t *testing.T) {
+	st := newFakeClaudeTestStore(t)
+	ws := t.TempDir()
+	art := filepath.Join(ws, ".factory-runs")
+	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: art, Slug: "factory-demo"}
+
+	job, step := fakeClaudeJobStep(model.StepKind("log_analysis"))
+	step.AgentKey = "log-analyst"
+	res, err := r.Run(context.Background(), job, step)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
+	}
+	var out map[string]any
+	readOutputJSON(t, art, job, step, &out)
+	if out["needsUserInput"] != false {
+		t.Fatalf("needsUserInput = %v, want false", out["needsUserInput"])
+	}
+	if out["summary"] == "" {
+		t.Fatalf("summary is empty")
+	}
+}
+
 // TestFakeClaudeSolutionDesignWritesOutput: solution_design writes output.json
 // declaring the generated app slug/type/source and returns succeeded.
 func TestFakeClaudeSolutionDesignWritesOutput(t *testing.T) {

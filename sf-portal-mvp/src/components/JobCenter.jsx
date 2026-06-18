@@ -24,6 +24,11 @@ const FIXED_STEPS = [
   { kind: 'deployment', label: '部署' },
 ]
 
+const FIXED_STEP_LABELS = FIXED_STEPS.reduce((acc, step) => {
+  acc[step.kind] = step.label
+  return acc
+}, {})
+
 const JOB_STATUS_LABEL = {
   draft: '草稿',
   queued: '排队中',
@@ -65,6 +70,12 @@ function StepIcon({ status }) {
   }
 }
 
+function displayStepLabel(step) {
+  const kind = step.kind || step.step || step.name
+  if (FIXED_STEP_LABELS[kind]) return FIXED_STEP_LABELS[kind]
+  return step.agent_key || kind || '自定义智能体'
+}
+
 export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
   const [detail, setDetail] = useState(null)
 
@@ -101,12 +112,32 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
 
   // Map returned steps by kind; not-yet-started steps fall back to pending.
   const stepByKind = {}
+  const extraSteps = []
   if (Array.isArray(steps)) {
     steps.forEach(s => {
       const key = s.kind || s.step || s.name
-      if (key) stepByKind[key] = s
+      if (!key) return
+      stepByKind[key] = s
+      if (!FIXED_STEP_LABELS[key]) {
+        extraSteps.push(s)
+      }
     })
   }
+  extraSteps.sort((a, b) => (a.seq || 0) - (b.seq || 0))
+  const visibleSteps = [
+    ...FIXED_STEPS.map((fixed, idx) => ({
+      kind: fixed.kind,
+      label: fixed.label,
+      index: idx + 1,
+      step: stepByKind[fixed.kind],
+    })),
+    ...extraSteps.map((step, idx) => ({
+      kind: step.kind || step.step || step.name,
+      label: displayStepLabel(step),
+      index: FIXED_STEPS.length + idx + 1,
+      step,
+    })),
+  ]
 
   const jobStatus = activeJob.status || 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
@@ -150,13 +181,13 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
       ) : null}
 
       <div className="jc-steps">
-        {FIXED_STEPS.map((fixed, idx) => {
-          const step = stepByKind[fixed.kind]
+        {visibleSteps.map(item => {
+          const step = item.step
           const status = (step && (step.status || step.state)) || 'pending'
           return (
-            <div key={fixed.kind} className={`jc-step jc-step-${status}`}>
-              <span className="jc-step-index">{idx + 1}</span>
-              <span className="jc-step-label">{fixed.label}</span>
+            <div key={item.kind} className={`jc-step jc-step-${status}`}>
+              <span className="jc-step-index">{item.index}</span>
+              <span className="jc-step-label">{item.label}</span>
               <span className={`jc-step-status jc-step-status-${status}`}>
                 <StepIcon status={status} />
                 {STEP_STATUS_LABEL[status] || status}
