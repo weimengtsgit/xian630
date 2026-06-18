@@ -104,6 +104,9 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	// 3. Run container.
 	cr, _, err := pod.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
 	if err != nil {
+		if cr.Name != "" {
+			_, _ = pod.RemoveContainer(ctx, cr.Name)
+		}
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "podman run failed"}.write(w)
 		return

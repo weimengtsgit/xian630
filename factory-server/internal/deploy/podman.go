@@ -88,7 +88,7 @@ func (p *Podman) RunContainer(ctx context.Context, image ImageRef, appSlug strin
 		if err == nil {
 			err = fmt.Errorf("%w: podman run exited %d", ErrRunnerFailed, res.ExitCode)
 		}
-		return ContainerRef{}, res, err
+		return ContainerRef{Name: name}, res, err
 	}
 	return ContainerRef{Name: name}, res, nil
 }

@@ -138,6 +138,22 @@ func TestRunContainerCommand(t *testing.T) {
 	}
 }
 
+func TestRunContainerReturnsNameOnFailure(t *testing.T) {
+	fr := &fakeRunner{results: []CommandResult{{ExitCode: 126, Stderr: "bind: address already in use"}}}
+	p := NewPodman(fr)
+
+	cr, _, err := p.RunContainer(context.Background(), ImageRef{FullName: "localhost/software-factory/demo:job"}, "demo", 18000, 80)
+	if err == nil {
+		t.Fatalf("err = nil, want podman run failure")
+	}
+	if cr.Name == "" {
+		t.Fatalf("container name is empty; caller cannot clean up created container")
+	}
+	if !strings.HasPrefix(cr.Name, "sf-demo-") {
+		t.Fatalf("container name = %q, want sf-demo-*", cr.Name)
+	}
+}
+
 func TestStopContainerCommand(t *testing.T) {
 	fr := &fakeRunner{}
 	p := NewPodman(fr)
