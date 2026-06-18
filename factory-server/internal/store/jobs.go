@@ -1,0 +1,443 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+)
+
+// CreateJob inserts a new job row.
+func (s *Store) CreateJob(ctx context.Context, job model.Job) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
+		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
+		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt))
+	return err
+}
+
+// CreateJobStep inserts a new job step row.
+func (s *Store) CreateJobStep(ctx context.Context, step model.JobStep) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
+		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
+		boolToInt(step.NeedsUserInput), step.UserPrompt, string(step.ErrorCode), step.ErrorMessage,
+		step.ClaudeSessionID, step.CCStatusSessionID)
+	return err
+}
+
+// ListJobSteps returns the steps for a job ordered by sequence.
+func (s *Store) ListJobSteps(ctx context.Context, jobID string) ([]model.JobStep, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id
+FROM job_steps
+WHERE job_id = ?
+ORDER BY seq`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]model.JobStep, 0)
+	for rows.Next() {
+		var st model.JobStep
+		var kind, status, errorCode string
+		var started, ended sql.NullInt64
+		var needsUserInput int
+		if err := rows.Scan(&st.ID, &st.JobID, &kind, &st.Seq, &st.AgentKey,
+			&status, &st.Attempt, &started, &ended, &needsUserInput,
+			&st.UserPrompt, &errorCode, &st.ErrorMessage,
+			&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
+			return nil, err
+		}
+		st.Kind = model.StepKind(kind)
+		st.Status = model.StepStatus(status)
+		st.ErrorCode = model.ErrorCode(errorCode)
+		st.StartedAt = ptrFromMs(started)
+		st.EndedAt = ptrFromMs(ended)
+		st.NeedsUserInput = needsUserInput != 0
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// scanJob reads a jobs row into *model.Job, handling the nullable
+// started_at/ended_at columns. It works for both sql.Row and sql.Rows.
+func scanJob(sc scanner) (*model.Job, error) {
+	var j model.Job
+	var status, stepKind string
+	var createdMs, updatedMs int64
+	var started, ended sql.NullInt64
+	if err := sc.Scan(&j.ID, &j.UserPrompt, &j.NormalizedPrompt, &j.AppSlug, &j.AppName,
+		&status, &stepKind, &j.CreatedAppID, &j.LockOwner,
+		&createdMs, &started, &ended, &updatedMs); err != nil {
+		return nil, err
+	}
+	j.Status = model.JobStatus(status)
+	j.CurrentStepKind = model.StepKind(stepKind)
+	j.CreatedAt = time.UnixMilli(createdMs)
+	j.UpdatedAt = time.UnixMilli(updatedMs)
+	j.StartedAt = ptrFromMs(started)
+	j.EndedAt = ptrFromMs(ended)
+	return &j, nil
+}
+
+// jobSelectCols lists the jobs columns in scan order, shared by GetJob and
+// ListJobs to keep the SELECT and scanJob in sync.
+const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at`
+
+// GetJob returns the job with the given id. It returns (nil, nil) on a miss —
+// a missing row is not an error — mirroring GetApplication/GetAgent.
+func (s *Store) GetJob(ctx context.Context, id string) (*model.Job, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobSelectCols+` FROM jobs WHERE id = ?`, id)
+	j, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return j, nil
+}
+
+// ListJobs returns jobs ordered newest-first. When status is non-empty the
+// result is restricted to jobs in that status.
+func (s *Store) ListJobs(ctx context.Context, status string) ([]model.Job, error) {
+	q := `SELECT ` + jobSelectCols + ` FROM jobs`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if status != "" {
+		rows, err = s.db.QueryContext(ctx, q+` WHERE status = ? ORDER BY created_at DESC`, status)
+	} else {
+		rows, err = s.db.QueryContext(ctx, q+` ORDER BY created_at DESC`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]model.Job, 0)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *j)
+	}
+	return out, rows.Err()
+}
+
+// CancelJob marks a job as canceled (status=canceled, ended_at=now,
+// updated_at=now) and cancels the step currently pointed at by the job's
+// current_step_kind, provided that step is not already in a terminal state
+// (succeeded or canceled). A no-op when the job does not exist.
+func (s *Store) CancelJob(ctx context.Context, jobID string) error {
+	now := ms(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Read the job's current step kind so we only cancel the in-flight step.
+	var currentStep string
+	switch err := tx.QueryRowContext(ctx, `SELECT current_step_kind FROM jobs WHERE id = ?`, jobID).Scan(&currentStep); {
+	case err == sql.ErrNoRows:
+		// Job missing: nothing to cancel, but commit the no-op transaction.
+		return tx.Commit()
+	case err != nil:
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs
+SET status = ?, ended_at = ?, updated_at = ?
+WHERE id = ?`, string(model.JobStatusCanceled), now, now, jobID); err != nil {
+		return err
+	}
+
+	if currentStep != "" {
+		// Cancel the in-flight step, leaving already-terminal steps (succeeded /
+		// canceled) untouched.
+		if _, err := tx.ExecContext(ctx, `
+UPDATE job_steps
+SET status = ?, ended_at = ?
+WHERE job_id = ? AND kind = ? AND status NOT IN (?, ?)`,
+			string(model.StepStatusCanceled), now, jobID, currentStep,
+			string(model.StepStatusSucceeded), string(model.StepStatusCanceled)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetOldestQueuedJob returns the oldest job (lowest created_at) still in the
+// queued state — the next job the executor should run. It returns (nil, nil)
+// when no queued job exists.
+func (s *Store) GetOldestQueuedJob(ctx context.Context) (*model.Job, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobSelectCols+` FROM jobs WHERE status = ? ORDER BY created_at ASC LIMIT 1`, string(model.JobStatusQueued))
+	j, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return j, nil
+}
+
+// MarkJobRunning flips a job to running, sets lock_owner, stamps started_at the
+// first time the job runs, and bumps updated_at.
+func (s *Store) MarkJobRunning(ctx context.Context, jobID, lockOwner string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs
+SET status = ?, lock_owner = ?, started_at = COALESCE(started_at, ?), updated_at = ?
+WHERE id = ?`,
+		string(model.JobStatusRunning), lockOwner, now, now, jobID)
+	return err
+}
+
+// AdvanceJobStep moves the job's current_step_kind pointer to nextKind and
+// bumps updated_at. Called after a step succeeds and is not the final step.
+func (s *Store) AdvanceJobStep(ctx context.Context, jobID string, nextKind model.StepKind) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET current_step_kind = ?, updated_at = ? WHERE id = ?`,
+		string(nextKind), now, jobID)
+	return err
+}
+
+// MarkJobCompleted sets a job to its terminal completed state with ended_at.
+func (s *Store) MarkJobCompleted(ctx context.Context, jobID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?`,
+		string(model.JobStatusCompleted), now, now, jobID)
+	return err
+}
+
+// MarkJobFailed sets a job to its terminal failed state with ended_at.
+func (s *Store) MarkJobFailed(ctx context.Context, jobID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?`,
+		string(model.JobStatusFailed), now, now, jobID)
+	return err
+}
+
+// MarkJobQueued flips a job back to queued (used on retry). updated_at bumped.
+func (s *Store) MarkJobQueued(ctx context.Context, jobID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
+		string(model.JobStatusQueued), now, jobID)
+	return err
+}
+
+// MarkJobCanceled sets a job to the terminal canceled state with ended_at. Used
+// by the executor when an in-flight step's ctx is cancelled.
+func (s *Store) MarkJobCanceled(ctx context.Context, jobID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?`,
+		string(model.JobStatusCanceled), now, now, jobID)
+	return err
+}
+func (s *Store) MarkJobWaitingUser(ctx context.Context, jobID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
+		string(model.JobStatusWaitingUser), now, jobID)
+	return err
+}
+
+// SetJobCreatedApp links a job to the application its code_generation step
+// produced: it stamps created_app_id, app_slug and app_name and bumps updated_at.
+// It is called by the fake-claude (and, later, the real claude) runner after it
+// registers the generated app, so the factory steps can resolve the app via
+// CreatedAppID instead of relying on the slug alone.
+func (s *Store) SetJobCreatedApp(ctx context.Context, jobID, appID, slug, name string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET created_app_id = ?, app_slug = ?, app_name = ?, updated_at = ? WHERE id = ?`,
+		appID, slug, name, now, jobID)
+	return err
+}
+
+// MarkStepRunning flips a step to running, bumps attempt, and stamps started_at
+// on its first attempt. updated via started_at set + the attempt counter.
+func (s *Store) MarkStepRunning(ctx context.Context, stepID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps
+SET status = ?, started_at = COALESCE(started_at, ?), ended_at = NULL,
+    error_code = '', error_message = '', needs_user_input = 0
+WHERE id = ?`,
+		string(model.StepStatusRunning), now, stepID)
+	return err
+}
+
+// IncrementStepAttempt atomically bumps the step's attempt counter.
+func (s *Store) IncrementStepAttempt(ctx context.Context, stepID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE job_steps SET attempt = attempt + 1 WHERE id = ?`, stepID)
+	return err
+}
+
+// MarkStepSucceeded flips a step to succeeded with ended_at.
+func (s *Store) MarkStepSucceeded(ctx context.Context, stepID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
+		string(model.StepStatusSucceeded), now, stepID)
+	return err
+}
+
+// MarkStepFailed flips a step to failed with ended_at + the error details.
+func (s *Store) MarkStepFailed(ctx context.Context, stepID string, code model.ErrorCode, msg string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps SET status = ?, ended_at = ?, error_code = ?, error_message = ? WHERE id = ?`,
+		string(model.StepStatusFailed), now, string(code), msg, stepID)
+	return err
+}
+
+// MarkStepWaitingUser flips a step to waiting_user, recording whether the
+// runner asked for user input.
+func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps SET status = ?, needs_user_input = 1, ended_at = NULL WHERE id = ?`,
+		string(model.StepStatusWaitingUser), stepID)
+	return err
+}
+
+// MarkStepCanceled flips a step to canceled with ended_at.
+func (s *Store) MarkStepCanceled(ctx context.Context, stepID string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
+		string(model.StepStatusCanceled), now, stepID)
+	return err
+}
+
+// GetStepByKind returns the step for the given job whose kind matches, or
+// (nil, nil) if there is no such step.
+func (s *Store) GetStepByKind(ctx context.Context, jobID string, kind model.StepKind) (*model.JobStep, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id
+FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
+	var st model.JobStep
+	var kstatus, errorCode, kkind string
+	var started, ended sql.NullInt64
+	var needsUserInput int
+	if err := row.Scan(&st.ID, &st.JobID, &kkind, &st.Seq, &st.AgentKey,
+		&kstatus, &st.Attempt, &started, &ended, &needsUserInput,
+		&st.UserPrompt, &errorCode, &st.ErrorMessage,
+		&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	st.Kind = model.StepKind(kkind)
+	st.Status = model.StepStatus(kstatus)
+	st.ErrorCode = model.ErrorCode(errorCode)
+	st.StartedAt = ptrFromMs(started)
+	st.EndedAt = ptrFromMs(ended)
+	st.NeedsUserInput = needsUserInput != 0
+	return &st, nil
+}
+
+// ResetStepToPending flips a step back to pending (clearing ended_at and error
+// fields) so it can be re-run on retry. The attempt counter is intentionally
+// NOT reset here — IncrementStepAttempt is called again when the step next
+// moves to running, so retries are visible as attempt+1.
+func (s *Store) ResetStepToPending(ctx context.Context, stepID string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps
+SET status = ?, ended_at = NULL, error_code = '', error_message = '', needs_user_input = 0, started_at = NULL
+WHERE id = ?`,
+		string(model.StepStatusPending), stepID)
+	return err
+}
+
+// AddConversation inserts a conversation message row.
+func (s *Store) AddConversation(ctx context.Context, msg model.ConversationMessage) error {
+	var jobID any
+	if msg.JobID != "" {
+		jobID = msg.JobID
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO conversations(id, job_id, role, content, metadata_json, created_at)
+VALUES(?,?,?,?,?,?)`,
+		msg.ID, jobID, msg.Role, msg.Content, msg.MetadataJSON, ms(msg.CreatedAt))
+	return err
+}
+
+// ListArtifactsByJob returns artifacts for a job ordered by created_at.
+func (s *Store) ListArtifactsByJob(ctx context.Context, jobID string) ([]model.Artifact, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, job_id, step_id, attempt, kind, path, summary, created_at
+FROM artifacts
+WHERE job_id = ?
+ORDER BY created_at`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]model.Artifact, 0)
+	for rows.Next() {
+		var a model.Artifact
+		var createdMs int64
+		if err := rows.Scan(&a.ID, &a.JobID, &a.StepID, &a.Attempt, &a.Kind, &a.Path, &a.Summary, &createdMs); err != nil {
+			return nil, err
+		}
+		a.CreatedAt = time.UnixMilli(createdMs)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// GetArtifact returns the artifact with the given id. It returns (nil, nil) on
+// a miss — a missing row is not an error.
+func (s *Store) GetArtifact(ctx context.Context, id string) (*model.Artifact, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, job_id, step_id, attempt, kind, path, summary, created_at
+FROM artifacts
+WHERE id = ?`, id)
+	var a model.Artifact
+	var createdMs int64
+	if err := row.Scan(&a.ID, &a.JobID, &a.StepID, &a.Attempt, &a.Kind, &a.Path, &a.Summary, &createdMs); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	a.CreatedAt = time.UnixMilli(createdMs)
+	return &a, nil
+}
+
+// CreateArtifact inserts a new artifact row. It is used by the content route's
+// tests and (later) by the executor when it records step outputs.
+func (s *Store) CreateArtifact(ctx context.Context, a model.Artifact) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO artifacts(id, job_id, step_id, attempt, kind, path, summary, created_at)
+VALUES(?,?,?,?,?,?,?,?)`,
+		a.ID, a.JobID, a.StepID, a.Attempt, a.Kind, a.Path, a.Summary, ms(a.CreatedAt))
+	return err
+}
