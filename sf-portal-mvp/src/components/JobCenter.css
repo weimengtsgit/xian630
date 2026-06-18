@@ -1336,8 +1336,44 @@
   height: 18px;
 }
 
+/* 移除重复的外层监控框，内部卡片自行承载结构边界。 */
+.jc-task-tabbar {
+  margin: 0 0 -1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.jc-agent-board {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.jc-agent-board-head {
+  padding: 18px 24px;
+}
+
+.jc-agent-layout {
+  gap: 18px;
+}
+
+.jc-agent-node {
+  min-height: 94px;
+  padding: 14px;
+}
+
+.jc-agent-detail {
+  padding: 24px;
+}
+
 .jc-task-tab.is-active::after {
-  background: rgba(9, 35, 54, 0.95);
+  /* 外层监控框已移除，不再需要用伪元素遮住标签页底边。 */
+  content: none;
 }
 
 .jc-agent-main {
