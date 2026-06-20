@@ -31,6 +31,7 @@ type Server struct {
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
 	runner      deploy.CommandRunner                                               // default: &deploy.OSRunner{}
+	runtime     deploy.ContainerRuntime                                             // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
 	execBusy    *atomic.Bool                                                       // global executor lock (Task 10 holds it during jobs)
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
@@ -80,13 +81,27 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		execBusy:    execBusy,
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers
 	}
-	// Factory steps → FactoryRunner (npm + podman via the shared OSRunner).
+	// Factory steps → FactoryRunner (npm + container runtime via the shared OSRunner).
 	// Claude steps → ClaudeStepRunner by default. When FACTORY_FAKE_CLAUDE is
 	// truthy the slot is the deterministic FakeClaudeRunner so the full pipeline
 	// can run end-to-end locally for the MVP loop.
+
+	// Select container runtime based on configuration
+	var runtime deploy.ContainerRuntime
+	switch cfg.ContainerRuntime {
+	case "docker":
+		runtime = deploy.NewDocker(s.runner)
+		log.Printf("Container runtime: docker")
+	default: // "podman" or any invalid value (fallback to podman)
+		runtime = deploy.NewPodman(s.runner)
+		log.Printf("Container runtime: podman")
+	}
+	s.runtime = runtime
+
 	factory := &executor.FactoryRunner{
 		Store:        st,
-		Cmds:         s.runner,
+		Runtime:      runtime,
+		Cmds:         s.runner, // Keep for npm commands
 		Alloc:        deploy.DefaultAllocator(),
 		Health:       deploy.CheckHTTP,
 		Workspace:    cfg.WorkspaceRoot,

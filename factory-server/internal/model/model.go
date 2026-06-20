@@ -67,6 +67,7 @@ const (
 	ErrorBuildFailed             ErrorCode = "build_failed"
 	ErrorImageBuildFailed        ErrorCode = "image_build_failed"
 	ErrorPodmanRunFailed         ErrorCode = "podman_run_failed"
+	ErrorContainerRunFailed      ErrorCode = "container_run_failed"
 	ErrorPortUnavailable         ErrorCode = "port_unavailable"
 	ErrorHealthCheckFailed       ErrorCode = "health_check_failed"
 	ErrorCCStatusUnavailable     ErrorCode = "cc_status_unavailable"

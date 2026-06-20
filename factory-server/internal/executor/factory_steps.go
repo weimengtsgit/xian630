@@ -25,7 +25,8 @@ import (
 // with ErrorUnknown rather than attempting npm/podman work.
 type FactoryRunner struct {
 	Store        *store.Store
-	Cmds         deploy.CommandRunner // used for both npm and podman (via deploy.NewPodman)
+	Runtime      deploy.ContainerRuntime // container runtime (Podman or Docker)
+	Cmds         deploy.CommandRunner    // used for npm commands
 	Alloc        deploy.Allocator
 	Health       func(ctx context.Context, url string, timeout time.Duration) error // default deploy.CheckHTTP
 	Workspace    string                                                             // workspace root (cfg.WorkspaceRoot)
@@ -184,8 +185,7 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 		return fail, nil
 	}
 	tag := "job-" + job.ID
-	podman := deploy.NewPodman(f.Cmds)
-	// BuildImage runs `podman build .` with dir = app.Path. app.Path is a
+	// BuildImage runs `runtime build .` with dir = app.Path. app.Path is a
 	// relative path against the workspace root (e.g. "generated-apps/demo"),
 	// so resolve it to a workspace-rooted dir — mirroring what the npm steps
 	// do — before handing it to BuildImage. In production the server's cwd is
@@ -193,10 +193,10 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	// resolve against the wrong directory and the build would fail.
 	buildApp := app
 	buildApp.Path = filepath.Join(f.Workspace, app.Path)
-	_, res, err := podman.BuildImage(ctx, buildApp, tag)
+	_, res, err := f.Runtime.BuildImage(ctx, buildApp, tag)
 	f.writeLogs(job, step, res)
 	if err != nil || res.ExitCode != 0 {
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorImageBuildFailed, ErrorMessage: fmt.Sprintf("podman build failed: %v", err)}, nil
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorImageBuildFailed, ErrorMessage: fmt.Sprintf("%s build failed: %v", f.Runtime.Name(), err)}, nil
 	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
@@ -230,14 +230,13 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("allocate port: %v", err)}, nil
 	}
 
-	podman := deploy.NewPodman(f.Cmds)
-	container, res, err := podman.RunContainer(ctx, image, app.Slug, host, containerPort)
+	container, res, err := f.Runtime.RunContainer(ctx, image, app.Slug, host, containerPort)
 	f.writeLogs(job, step, res)
 	if err != nil || res.ExitCode != 0 {
 		if container.Name != "" {
-			_, _ = podman.RemoveContainer(ctx, container.Name)
+			_, _ = f.Runtime.RemoveContainer(ctx, container.Name)
 		}
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPodmanRunFailed, ErrorMessage: fmt.Sprintf("podman run failed: %v", err)}, nil
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorContainerRunFailed, ErrorMessage: fmt.Sprintf("%s run failed: %v", f.Runtime.Name(), err)}, nil
 	}
 
 	// Health check; on failure stop+remove (best-effort), mark deployment failed,
@@ -248,8 +247,8 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		health = deploy.CheckHTTP
 	}
 	if herr := health(ctx, url, 10*time.Second); herr != nil {
-		_, _ = podman.StopContainer(ctx, container.Name)
-		_, _ = podman.RemoveContainer(ctx, container.Name)
+		_, _ = f.Runtime.StopContainer(ctx, container.Name)
+		_, _ = f.Runtime.RemoveContainer(ctx, container.Name)
 		_ = f.Store.CreateDeployment(ctx, model.Deployment{
 			ID:            "dep_" + id.New(),
 			AppID:         app.ID,
@@ -285,7 +284,7 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	}
 	_ = f.Store.CreateDeployment(ctx, dep)
 	_ = f.Store.SetAppRuntime(ctx, app.ID, string(model.AppStatusRunning), url)
-	f.stopPreviousDeployments(ctx, podman, app.ID, dep.ID)
+	f.stopPreviousDeployments(ctx, f.Runtime, app.ID, dep.ID)
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
@@ -310,7 +309,7 @@ func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
 	}
 }
 
-func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, podman *deploy.Podman, appID, keepID string) {
+func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, runtime deploy.ContainerRuntime, appID, keepID string) {
 	deps, err := f.Store.ListDeploymentsByApp(ctx, appID)
 	if err != nil {
 		return
@@ -319,8 +318,8 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, podman *dep
 		if dep.ID == keepID || dep.Status != "running" {
 			continue
 		}
-		_, _ = podman.StopContainer(ctx, dep.ContainerName)
-		_, _ = podman.RemoveContainer(ctx, dep.ContainerName)
+		_, _ = runtime.StopContainer(ctx, dep.ContainerName)
+		_, _ = runtime.RemoveContainer(ctx, dep.ContainerName)
 		_ = f.Store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
 	}
 }

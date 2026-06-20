@@ -59,7 +59,6 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	pod := deploy.NewPodman(s.runner)
 	// Idempotent fast path, but only after confirming the recorded deployment is
 	// reachable. The DB can be stale after a manual podman stop or a server
 	// restart, so a blind return would show "running" while nothing is usable.
@@ -74,8 +73,8 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, active)
 			return
 		}
-		_, _ = pod.StopContainer(ctx, active.ContainerName)
-		_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+		_, _ = s.runtime.StopContainer(ctx, active.ContainerName)
+		_, _ = s.runtime.RemoveContainer(ctx, active.ContainerName)
 		_ = s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped")
 		_ = s.store.SetAppRuntime(ctx, appID, string(model.AppStatusStopped), "")
 		s.publishDeploymentUpdated(ctx, active.ID)
@@ -86,7 +85,7 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	buildApp := s.workspaceApp(*app)
 
 	// 1. Build image.
-	img, _, err := pod.BuildImage(ctx, buildApp, tag)
+	img, _, err := s.runtime.BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
@@ -102,13 +101,13 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Run container.
-	cr, _, err := pod.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
+	cr, _, err := s.runtime.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
 	if err != nil {
 		if cr.Name != "" {
-			_, _ = pod.RemoveContainer(ctx, cr.Name)
+			_, _ = s.runtime.RemoveContainer(ctx, cr.Name)
 		}
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "podman run failed"}.write(w)
+		errResponse{http.StatusBadGateway, model.ErrorContainerRunFailed, s.runtime.Name() + " run failed"}.write(w)
 		return
 	}
 
@@ -117,8 +116,8 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
 	if err := s.healthCheck(ctx, url, healthCheckTimeout); err != nil {
-		_, _ = pod.StopContainer(ctx, cr.Name)
-		_, _ = pod.RemoveContainer(ctx, cr.Name)
+		_, _ = s.runtime.StopContainer(ctx, cr.Name)
+		_, _ = s.runtime.RemoveContainer(ctx, cr.Name)
 		now := time.Now()
 		failedDep := model.Deployment{
 			ID:            "dep_" + idpkg.New(),
@@ -202,10 +201,9 @@ func (s *Server) stopApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pod := deploy.NewPodman(s.runner)
 	// Best-effort cleanup: a missing container must not fail the stop.
-	_, _ = pod.StopContainer(ctx, active.ContainerName)
-	_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+	_, _ = s.runtime.StopContainer(ctx, active.ContainerName)
+	_, _ = s.runtime.RemoveContainer(ctx, active.ContainerName)
 
 	if err := s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped"); err != nil {
 		writeError(w, http.StatusInternalServerError, "update deployment")
@@ -256,7 +254,7 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
-	img, _, err := deploy.NewPodman(s.runner).BuildImage(ctx, buildApp, tag)
+	img, _, err := s.runtime.BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
