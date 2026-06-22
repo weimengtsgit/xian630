@@ -61,4 +61,8 @@ bin/
 *.sqlite3
 
 # Software factory runtime artifacts
+.factory-runs/
+.agents/
 /factory-server/.factory-runs/
+/factory-server/factory-server.exe
+/factory-server/cc-status/cc-status.exe
