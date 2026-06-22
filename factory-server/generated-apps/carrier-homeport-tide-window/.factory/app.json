@@ -1,0 +1,18 @@
+{
+  "name": "航母母港潮汐窗口计算器",
+  "slug": "carrier-homeport-tide-window",
+  "version": "1.0.0",
+  "type": "command_dashboard",
+  "source": "generated",
+  "generatedAt": "2026-06-20T20:12:30+08:00",
+  "jobId": "job_8b316e1e93fe8d3f506425b1",
+  "description": "实时监控四大航母母港潮汐窗口状态，计算12.8米吃水阈值下的可出港时间窗",
+  "ports": {
+    "http": 8080
+  },
+  "deployment": {
+    "container": "podman",
+    "buildCommand": "npm run build",
+    "startCommand": "nginx -g 'daemon off;'"
+  }
+}

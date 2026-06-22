@@ -1,0 +1,13 @@
+{
+  "name": "航母母港潮汐窗口计算器",
+  "slug": "carrier-homeport-tide-calculator",
+  "version": "1.0.0",
+  "source": "generated",
+  "type": "command_dashboard",
+  "description": "航母出港时机决策支持：实时监控四大母港潮汐条件，自动计算满足12.8米吃水阈值的可出港时间窗",
+  "ports": {
+    "http": 80
+  },
+  "buildCommand": "npm run build",
+  "outputDir": "dist"
+}

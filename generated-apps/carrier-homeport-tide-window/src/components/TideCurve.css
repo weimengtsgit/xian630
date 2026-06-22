@@ -1,0 +1,85 @@
+.tide-curve {
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.tide-curve svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.tide-curve-empty {
+  padding: 2rem;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+/* Legend */
+.curve-legend {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #2a3142;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #9ca3af;
+}
+
+.legend-color {
+  width: 20px;
+  height: 3px;
+  border-radius: 1px;
+}
+
+.legend-color.tide {
+  background: #60a5fa;
+  height: 3px;
+}
+
+.legend-color.threshold {
+  background: #fbbf24;
+  height: 3px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #fbbf24,
+    #fbbf24 4px,
+    transparent 4px,
+    transparent 8px
+  );
+}
+
+.legend-color.window {
+  background: rgba(34, 197, 94, 0.3);
+  height: 12px;
+  width: 20px;
+  border: 1px solid rgba(34, 197, 94, 0.5);
+}
+
+.legend-color.current {
+  background: #ef4444;
+  height: 3px;
+  width: 3px;
+  border-radius: 50%;
+  box-shadow: 0 0 4px #ef4444;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .curve-legend {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .legend-item {
+    font-size: 0.75rem;
+  }
+}
