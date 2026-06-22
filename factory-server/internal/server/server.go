@@ -315,6 +315,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)
 	r.Handle("POST", "/api/apps/:id/rebuild", s.rebuildApp)
+	r.Handle("DELETE", "/api/apps/:id", s.deleteApp)
 
 	r.Handle("GET", "/api/agents", s.listAgents)
 	r.Handle("POST", "/api/agents", s.createAgent)

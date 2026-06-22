@@ -47,6 +47,7 @@ function App() {
             onStop={apps.stopApplication}
             onRebuild={apps.restartApplication}
             onRegenerate={regenerateApplication}
+            onDelete={apps.deleteApplication}
             onRefresh={apps.refresh}
           />
         </div>

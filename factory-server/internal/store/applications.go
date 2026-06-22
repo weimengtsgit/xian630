@@ -39,6 +39,12 @@ ON CONFLICT(id) DO UPDATE SET
 	return err
 }
 
+// DeleteApplication deletes an application row by id.
+func (s *Store) DeleteApplication(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM applications WHERE id = ?`, id)
+	return err
+}
+
 // ListApplications returns every known application ordered by slug.
 func (s *Store) ListApplications(ctx context.Context) ([]model.Application, error) {
 	rows, err := s.db.QueryContext(ctx, `

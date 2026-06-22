@@ -73,4 +73,11 @@ assert.match(workbenchJsx, /历史会话/, 'ConversationWorkbench must expose hi
 assert.match(workbenchJsx, /新建会话/, 'ConversationWorkbench must expose new session action')
 assert.match(workbenchJsx, /模型分析过程/, 'ConversationWorkbench must label user-facing model analysis process')
 
+const appsPanelJsx = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
+const useApplicationsJs = readFileSync(new URL('../src/hooks/useApplications.js', import.meta.url), 'utf8')
+assert.match(appsPanelJsx, /Trash2/, 'ApplicationsPanel must use a delete icon')
+assert.match(appsPanelJsx, /isGenerated\(app\)[\s\S]*删除/, 'delete control must be gated to generated apps')
+assert.match(useApplicationsJs, /deleteApplication/, 'useApplications must expose deleteApplication')
+assert.match(useApplicationsJs, /app\.deleted/, 'useApplications must refresh on app.deleted')
+
 console.log('check-conversation-workbench: OK')

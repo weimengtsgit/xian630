@@ -80,6 +80,12 @@ ORDER BY created_at DESC`, appID)
 	return out, rows.Err()
 }
 
+// DeleteDeploymentsByApp deletes all deployment rows for an app.
+func (s *Store) DeleteDeploymentsByApp(ctx context.Context, appID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM deployments WHERE app_id = ?`, appID)
+	return err
+}
+
 // UpdateDeploymentStatus flips a deployment's status and stamps the matching
 // timestamp: running → started_at=now; stopped/failed → stopped_at=now.
 func (s *Store) UpdateDeploymentStatus(ctx context.Context, id, status string) error {

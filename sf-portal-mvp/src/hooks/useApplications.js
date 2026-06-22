@@ -28,6 +28,7 @@ export function useApplications() {
       if (!mounted) return
       if (
         type === 'app.updated' ||
+        type === 'app.deleted' ||
         type === 'deployment.updated' ||
         type === 'job.updated' ||
         type === 'step.updated'
@@ -61,6 +62,7 @@ export function useApplications() {
   const startApplication = useCallback(id => runAction(id, factoryApi.startApp, 'start'), [runAction])
   const stopApplication = useCallback(id => runAction(id, factoryApi.stopApp, 'stop'), [runAction])
   const restartApplication = useCallback(id => runAction(id, factoryApi.rebuildApp, 'rebuild'), [runAction])
+  const deleteApplication = useCallback(id => runAction(id, factoryApi.deleteApp, 'delete'), [runAction])
 
   // Keep `applications` alias so the existing ApplicationsPanel destructure works.
   return {
@@ -73,5 +75,6 @@ export function useApplications() {
     startApplication,
     stopApplication,
     restartApplication,
+    deleteApplication,
   }
 }

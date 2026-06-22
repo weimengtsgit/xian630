@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
@@ -311,4 +314,132 @@ func stripTag(fullName, tag string) string {
 		return fullName[:len(fullName)-len(suffix)]
 	}
 	return fullName
+}
+
+// deleteApp handles DELETE /api/apps/:id for generated apps only. It removes the
+// container, tombstones the app directory under the artifact root (so audit
+// records survive), then deletes the deployment and application rows. The
+// directory is moved-aside first and only removed after the DB rows are gone,
+// so a DB failure rolls the directory back to its original location.
+func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
+	appID := Param(r, "id")
+	if !s.appLock(appID).TryLock() {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "app busy"})
+		return
+	}
+	defer s.appLock(appID).Unlock()
+
+	app, err := s.store.GetApplication(r.Context(), appID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get app")
+		return
+	}
+	if app == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if app.Source != model.AppSourceGenerated {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "only generated apps can be deleted"})
+		return
+	}
+	appDir, err := s.safeGeneratedAppDir(*app)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	ctx := r.Context()
+	deps, err := s.store.ListDeploymentsByApp(ctx, appID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list deployments")
+		return
+	}
+	pod := deploy.NewPodman(s.runner)
+	for _, dep := range deps {
+		if dep.ContainerName == "" {
+			continue
+		}
+		_, _ = pod.StopContainer(ctx, dep.ContainerName)
+		_, _ = pod.RemoveContainer(ctx, dep.ContainerName)
+	}
+
+	tombstone := ""
+	if _, err := os.Stat(appDir); err == nil {
+		tombstone = filepath.Join(s.cfg.ArtifactRoot, "deleted-apps", app.ID+"-"+app.Slug)
+		if !filepath.IsAbs(tombstone) {
+			tombstone = filepath.Join(s.cfg.WorkspaceRoot, tombstone)
+		}
+		_ = os.RemoveAll(tombstone)
+		if err := os.MkdirAll(filepath.Dir(tombstone), 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "prepare tombstone")
+			return
+		}
+		if err := os.Rename(appDir, tombstone); err != nil {
+			writeError(w, http.StatusInternalServerError, "move app directory")
+			return
+		}
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusInternalServerError, "stat app directory")
+		return
+	}
+
+	if err := s.store.DeleteDeploymentsByApp(ctx, appID); err != nil {
+		restoreTombstone(tombstone, appDir)
+		writeError(w, http.StatusInternalServerError, "delete deployments")
+		return
+	}
+	if err := s.store.DeleteApplication(ctx, appID); err != nil {
+		restoreTombstone(tombstone, appDir)
+		writeError(w, http.StatusInternalServerError, "delete app")
+		return
+	}
+	if tombstone != "" {
+		_ = os.RemoveAll(tombstone)
+	}
+	s.hub.Publish(Event{Type: "app.deleted", Data: map[string]string{"id": app.ID, "slug": app.Slug}})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": app.ID, "slug": app.Slug})
+}
+
+// safeGeneratedAppDir resolves an app's workspace-relative path to an absolute
+// directory under <WorkspaceRoot>/generated-apps and rejects anything that
+// escapes that root (absolute paths, parent traversal, or a slug/path mismatch).
+func (s *Server) safeGeneratedAppDir(app model.Application) (string, error) {
+	root := s.cfg.WorkspaceRoot
+	if root == "" {
+		root = "."
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	path := app.Path
+	if path == "" {
+		path = filepath.Join("generated-apps", app.Slug)
+	}
+	if filepath.IsAbs(path) {
+		return "", errors.New("generated app path must be workspace-relative")
+	}
+	cleanRel := filepath.Clean(path)
+	wantRel := filepath.Join("generated-apps", app.Slug)
+	if cleanRel != wantRel {
+		return "", errors.New("generated app path does not match generated-apps slug")
+	}
+	absDir, err := filepath.Abs(filepath.Join(absRoot, cleanRel))
+	if err != nil {
+		return "", err
+	}
+	prefix := filepath.Join(absRoot, "generated-apps") + string(os.PathSeparator)
+	if !strings.HasPrefix(absDir+string(os.PathSeparator), prefix) {
+		return "", errors.New("generated app path escapes generated-apps root")
+	}
+	return absDir, nil
+}
+
+// restoreTombstone moves a tombstoned directory back to its original location on
+// DB-delete failure so the filesystem and DB stay consistent. Best-effort.
+func restoreTombstone(tombstone, appDir string) {
+	if tombstone == "" || appDir == "" {
+		return
+	}
+	_ = os.Rename(tombstone, appDir)
 }
