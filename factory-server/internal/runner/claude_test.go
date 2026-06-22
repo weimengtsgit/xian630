@@ -78,10 +78,11 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 		t.Fatalf("stdin = %q, want prompt %q", fr.stdin, prompt)
 	}
 	got := joinArgs(fr.argv)
-	// Task 3: every stage now appends stream-json flags so the runner can parse
-	// tool_use events into activity records as they happen. plan mode +
-	// Read/Grep/Glob + Bash/Edit/Write disallow are unchanged.
-	wantRo := "--print --permission-mode plan --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write --output-format stream-json --include-partial-messages --verbose"
+	// Task 3: every stage appends stream-json flags so the runner can parse
+	// tool_use events into activity records. Read-only stages now avoid plan
+	// mode because some Claude-compatible providers turn it into an approval
+	// loop and emit prose instead of the required JSON contract.
+	wantRo := "--print --permission-mode acceptEdits --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write --output-format stream-json --include-partial-messages --verbose"
 	if got != wantRo {
 		t.Errorf("read-only argv =\n got: %q\nwant: %q", got, wantRo)
 	}

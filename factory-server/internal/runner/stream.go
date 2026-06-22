@@ -185,8 +185,6 @@ func emitStreamLine(ctx context.Context, emit StepRecordEmitter, line string) {
 	}
 	for _, b := range ev.Message.Content {
 		switch b.Type {
-		case "thinking":
-			emitThinking(ctx, emit, b.Thinking)
 		case "tool_use":
 			switch b.Name {
 			case "Write", "Edit":
