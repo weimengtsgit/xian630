@@ -45,7 +45,7 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 	return false
 }
 
-// TestStreamClaudeEventsIgnoresThinkingAndCapturesFileDeltas feeds the parser a REAL
+// TestStreamClaudeEventsEmitsThinkingAndCapturesFileDeltas feeds the parser a REAL
 // CLI stream-json shape (verified against a live code_generation capture: each
 // event is a top-level NDJSON object; content blocks are NESTED inside
 // assistant.message.content[]) and asserts 方案 B behavior:
@@ -53,7 +53,7 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 //   - Write/Edit tool_use blocks become file_delta records (+N / +A -B);
 //   - Read/Grep/Glob become activity records with a redacted RELATIVE path;
 //   - non-allowlisted tools (WebSearch) and system events are ignored.
-func TestStreamClaudeEventsIgnoresThinkingAndCapturesFileDeltas(t *testing.T) {
+func TestStreamClaudeEventsEmitsThinkingAndCapturesFileDeltas(t *testing.T) {
 	emit := &recordEmitter{}
 	stream := strings.Join([]string{
 		// 1. system init — ignored (not an assistant turn).
@@ -75,12 +75,12 @@ func TestStreamClaudeEventsIgnoresThinkingAndCapturesFileDeltas(t *testing.T) {
 	}, "\n")
 	streamClaudeEvents(context.Background(), emit, stream)
 
-	// Hidden reasoning must not surface as records.
-	if emit.hasKind(model.ExecutionRecordThinking) {
-		t.Fatalf("thinking record should not be emitted; records=%#v", emit.records)
+	// Thinking records ARE emitted to the portal (not hidden).
+	if !emit.hasKind(model.ExecutionRecordThinking) {
+		t.Fatalf("thinking record should be emitted; records=%#v", emit.records)
 	}
-	if emit.contentContaining("THINKING_CANARY") {
-		t.Errorf("thinking text leaked into records=%#v", emit.records)
+	if !emit.contentContaining("THINKING_CANARY") {
+		t.Errorf("thinking text missing from records=%#v", emit.records)
 	}
 
 	// Write → file_delta with +N, no " -" minus marker.

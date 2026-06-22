@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os/exec"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
@@ -20,6 +22,27 @@ const defaultContainerPort = 80
 const healthCheckTimeout = 10 * time.Second
 
 const activeDeploymentProbeTimeout = 1500 * time.Millisecond
+
+// containerHealthURL builds the health-check URL for a container's host port.
+// On Windows+WSL2, port forwarding through wslrelay is unreliable (IPv6-only
+// on some installs, HTTP-broken on others), so we prefer the WSL VM IP.
+func containerHealthURL(hostPort int) string {
+	ip := wslVMIP()
+	return fmt.Sprintf("http://%s:%d", ip, hostPort)
+}
+
+// wslVMIP returns the WSL VM's IPv4 address, falling back to ::1 then 127.0.0.1.
+func wslVMIP() string {
+	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
+		"ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\\s)\\d+\\.\\d+\\.\\d+\\.\\d+'").Output()
+	if err == nil {
+		ip := strings.TrimSpace(string(out))
+		if ip != "" {
+			return ip
+		}
+	}
+	return "127.0.0.1"
+}
 
 // errResponse pairs an HTTP status with a structured error_code, written as
 // {"error": <message>, "error_code": <code>}.
@@ -112,7 +135,7 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url := "http://127.0.0.1:" + strconv.Itoa(hostPort)
+	url := containerHealthURL(hostPort)
 
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
