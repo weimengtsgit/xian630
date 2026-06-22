@@ -806,6 +806,54 @@
   word-break: break-word;
 }
 
+/* 方案 B: thinking records — visible but visually muted/italic so the model's
+   reasoning reads distinctly from tool + command output. */
+.sed-thinking-text {
+  color: #7e9aa8;
+  font-style: italic;
+  border-left: 2px solid rgba(111, 218, 255, 0.22);
+  padding-left: 8px;
+}
+
+/* file_delta records — a compact chip like an agent IDE's file progress. */
+.sed-filedelta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.sed-filedelta-verb {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(104, 221, 255, 0.12);
+  color: #68ddff;
+}
+.sed-filedelta-编辑 {
+  background: rgba(243, 199, 97, 0.16);
+  color: #f3c761;
+}
+.sed-filedelta-path {
+  color: #cfe6f1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  min-width: 0;
+}
+.sed-filedelta-added {
+  flex-shrink: 0;
+  color: #7feb9b;
+  font-weight: 600;
+}
+.sed-filedelta-removed {
+  flex-shrink: 0;
+  color: #ff665e;
+  font-weight: 600;
+}
+
 .sed-empty {
   margin: 0;
   font-size: 12px;

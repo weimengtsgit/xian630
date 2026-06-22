@@ -88,6 +88,17 @@ const (
 	ExecutionRecordCommandStdout ExecutionRecordKind = "command_stdout"
 	ExecutionRecordCommandStderr ExecutionRecordKind = "command_stderr"
 	ExecutionRecordError         ExecutionRecordKind = "error"
+	// ExecutionRecordThinking carries the model's reasoning/thinking (方案 B:
+	// constraint #5 is relaxed so hidden reasoning IS shown). It still passes
+	// through the stepEmitter redaction chokepoint, so any credential echoed in
+	// a thought is masked before persist+SSE. Chunked to ≤4 KiB per record.
+	ExecutionRecordThinking ExecutionRecordKind = "thinking"
+	// ExecutionRecordFileDelta carries a single file's generation delta during
+	// code_generation: which file was Written/Edited and the +added/-removed line
+	// counts, so the drawer can show the live "agent writing src/App.jsx (+142)"
+	// progress like Claude Code / Codex. Computed from the Edit/Write tool_use
+	// input (content / old_string / new_string).
+	ExecutionRecordFileDelta ExecutionRecordKind = "file_delta"
 )
 
 // StepExecutionRecord is one durable, immutable line of a step's audit trail:

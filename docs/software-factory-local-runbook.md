@@ -284,15 +284,26 @@ protected); only artifact ids registered to the job resolve.
 ### What operators see vs. what is hidden
 
 Claude stages (`requirement_analysis`, `solution_design`, `code_generation`)
-record only **auditable** activity:
+record **auditable** activity (parsed from the real Claude Code CLI
+`--output-format stream-json` output — each line is a top-level NDJSON event;
+content blocks live nested under `assistant.message.content[]`):
 
-- safe tool use (`Read`/`Grep`/`Glob`/`Edit`/`Write`) → an `activity` record
-  carrying a **redacted relative path**;
-- explicit **public** `workLog` / structured conclusions → a `summary` record.
+- safe tool use (`Read`/`Grep`/`Glob`) → an `activity` record carrying a
+  **redacted relative path**;
+- `Write`/`Edit` tool use → a `file_delta` record (`新建/编辑 <path> +N -M`)
+  so the drawer shows the live per-file code-generation progress;
+- explicit **public** `workLog` / structured conclusions → a `summary` record;
+- the model's **`thinking`/reasoning blocks → `thinking` records** (方案 B: the
+  original "never show hidden reasoning" boundary is relaxed). Thinking is still
+  redacted for credentials (→ `[REDACTED]`) at the persistence chokepoint and
+  chunked to ≤4 KiB.
 
-Hidden `thinking`, `reasoning`, and chain-of-thought content is **never**
-recorded or streamed. If an operator expects to see model reasoning in the
-drawer, it is intentionally absent — that is the security boundary, not a bug.
+These `thinking` / `file_delta` records appear **only in real-CLI mode**
+(`FACTORY_FAKE_CLAUDE` unset); `FakeClaudeRunner` does not produce them.
+
+A live capture also showed the model sometimes wraps its final JSON answer in a
+markdown code fence (` ```json … ``` `); the runner strips such a fence before
+writing `output.json` so stage validation still passes.
 
 Command stages (`test_verification`, `image_build`, `deployment`) record the
 **real** `command_stdout` / `command_stderr`, streamed live (batched when a
