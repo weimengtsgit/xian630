@@ -11,6 +11,7 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
   const source = new EventSource(`${API_BASE_URL}/api/events`)
   const types = [
     'app.updated',
+    'app.deleted',
     'job.created',
     'job.updated',
     'step.updated',

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   buildTimelineFromMessages,
   initialConversationState,
@@ -59,5 +60,17 @@ state = applyConversationEvent(state, 'clarification.question.created', {
 })
 assert.equal(state.questions.length, 1)
 assert.equal(state.timeline.at(-1).type, 'question_group')
+
+const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+const appCss = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+
+assert.match(appJsx, /<ConversationWorkbench/, 'App must render ConversationWorkbench')
+assert.doesNotMatch(appJsx, /<ClarificationPanel/, 'App must not render the old ClarificationPanel')
+assert.doesNotMatch(appJsx, /<ChatDialog/, 'App must not render the old ChatDialog')
+assert.match(appCss, /\.wb-center\s*>\s*\.conversation-workbench/, 'center column must allocate space to ConversationWorkbench')
+assert.match(workbenchJsx, /历史会话/, 'ConversationWorkbench must expose historical sessions')
+assert.match(workbenchJsx, /新建会话/, 'ConversationWorkbench must expose new session action')
+assert.match(workbenchJsx, /模型分析过程/, 'ConversationWorkbench must label user-facing model analysis process')
 
 console.log('check-conversation-workbench: OK')

@@ -227,19 +227,9 @@ body,
   max-height: 30%;
 }
 
-.wb-center > .clar-panel {
-  flex: 1.5 1 0;
-  min-height: 260px;
-}
-
-.wb-center > .chat-dock {
-  flex: 0 0 auto;
-  min-height: 0;
-}
-
-.wb-center > .chat-dock.chat-dock-has-history {
-  flex: 0.8 1 220px;
-  min-height: 220px;
+.wb-center > .conversation-workbench {
+  flex: 1 1 0;
+  min-height: 360px;
 }
 
 @media (max-width: 1200px) {
