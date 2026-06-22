@@ -66,7 +66,7 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 	ws := newWS(t)
 	prompt := "PROMPT\n第二行"
 
-	if err := r.Run(context.Background(), ws, prompt, []byte(`{"x":1}`), false); err != nil {
+	if err := r.Run(context.Background(), ws, prompt, []byte(`{"x":1}`), false, nil); err != nil {
 		t.Fatalf("Run err = %v", err)
 	}
 
@@ -78,7 +78,10 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 		t.Fatalf("stdin = %q, want prompt %q", fr.stdin, prompt)
 	}
 	got := joinArgs(fr.argv)
-	wantRo := "--print --permission-mode plan --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write"
+	// Task 3: every stage now appends stream-json flags so the runner can parse
+	// tool_use events into activity records as they happen. plan mode +
+	// Read/Grep/Glob + Bash/Edit/Write disallow are unchanged.
+	wantRo := "--print --permission-mode plan --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write --output-format stream-json --include-partial-messages --verbose"
 	if got != wantRo {
 		t.Errorf("read-only argv =\n got: %q\nwant: %q", got, wantRo)
 	}
@@ -114,21 +117,36 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 
 func TestClaudeRunCodegenArgv(t *testing.T) {
 	fr := &fakeRunner{stdout: "ok"}
-	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	workspace := t.TempDir()
+	r := ClaudeRunner{Runner: fr, Binary: "claude", WorkDir: workspace}
 	ws := newWS(t)
 	ws.StepKind = model.StepCodeGeneration
 	prompt := "P\n生成应用"
 
-	if err := r.Run(context.Background(), ws, prompt, nil, true); err != nil {
+	if err := r.Run(context.Background(), ws, prompt, nil, true, nil); err != nil {
 		t.Fatalf("Run err = %v", err)
 	}
 	if fr.stdin != prompt {
 		t.Fatalf("stdin = %q, want prompt %q", fr.stdin, prompt)
 	}
 	got := joinArgs(fr.argv)
-	wantCg := "--print --permission-mode plan --allowedTools Read,Grep,Glob,Edit,Write --disallowedTools Bash"
+	// code_generation must NOT run in plan mode: plan mode blocks ALL Edit/Write
+	// regardless of --allowedTools, so the agent could neither generate app files
+	// nor write output.json (real failure: glm-5.1 emitted prose instead of code
+	// → output_invalid_json). acceptEdits auto-approves file writes in headless
+	// --print while --disallowedTools Bash still forbids shell.
+	wantCg := "--print --permission-mode acceptEdits --allowedTools Read,Grep,Glob,Edit,Write --disallowedTools Bash --output-format stream-json --include-partial-messages --verbose"
 	if got != wantCg {
 		t.Errorf("codegen argv =\n got: %q\nwant: %q", got, wantCg)
+	}
+	if got := fr.dirs[len(fr.dirs)-1]; got != workspace {
+		t.Fatalf("codegen run dir = %q, want workspace %q", got, workspace)
+	}
+	if _, err := os.Stat(ws.InputPath()); err != nil {
+		t.Fatalf("input artifact missing: %v", err)
+	}
+	if _, err := os.Stat(ws.PromptPath()); err != nil {
+		t.Fatalf("prompt artifact missing: %v", err)
 	}
 }
 
@@ -137,7 +155,7 @@ func TestClaudeRunNonzeroExit(t *testing.T) {
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
 	ws := newWS(t)
 
-	err := r.Run(context.Background(), ws, "P", nil, false)
+	err := r.Run(context.Background(), ws, "P", nil, false, nil)
 	if !errors.Is(err, ErrRunnerExitNonzero) {
 		t.Fatalf("err = %v, want ErrRunnerExitNonzero", err)
 	}
@@ -147,12 +165,24 @@ func TestClaudeRunNonzeroExit(t *testing.T) {
 	}
 }
 
-func TestClaudeRunWritesStdoutToOutputWhenMissing(t *testing.T) {
-	fr := &fakeRunner{stdout: `{"needsUserInput":false,"questions":[]}`}
+// TestClaudeRunWritesStreamResultToOutputWhenMissing (F2): with stream-json
+// flags, stdout is NDJSON. When output.json is absent (read-only stages cannot
+// write it themselves), ClaudeRunner.Run must extract the final type=result
+// event's `result` string and write THAT — not the raw stream (which would make
+// validation grab the first event envelope and fail).
+func TestClaudeRunWritesStreamResultToOutputWhenMissing(t *testing.T) {
+	contract := `{"needsUserInput":false,"questions":[]}`
+	stdout := strings.Join([]string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"thinking","thinking":"hidden"}`,
+		`{"type":"result","subtype":"success","result":` + jsonString(contract) + `}`,
+		"",
+	}, "\n")
+	fr := &fakeRunner{stdout: stdout}
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
 	ws := newWS(t)
 
-	if err := r.Run(context.Background(), ws, "P", nil, false); err != nil {
+	if err := r.Run(context.Background(), ws, "P", nil, false, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,8 +190,8 @@ func TestClaudeRunWritesStdoutToOutputWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read output.json: %v", err)
 	}
-	if string(raw) != fr.stdout {
-		t.Fatalf("output.json = %q, want stdout %q", string(raw), fr.stdout)
+	if string(raw) != contract {
+		t.Fatalf("output.json = %q, want the extracted result %q", string(raw), contract)
 	}
 }
 
@@ -172,7 +202,7 @@ func TestClaudeRunDefaultBinary(t *testing.T) {
 		t.Fatalf("binary() = %q, want claude", r.binary())
 	}
 	ws := newWS(t)
-	if err := r.Run(context.Background(), ws, "P", nil, false); err != nil {
+	if err := r.Run(context.Background(), ws, "P", nil, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if fr.name != "claude" {
@@ -196,27 +226,27 @@ func TestAuditRejectsProtectedPath(t *testing.T) {
 
 	// 1) scene/ modified -> rejected
 	ar := &auditRunner{stdout: " M scene/foo.go\n"}
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil); !errors.Is(err, ErrFileConstraintViolated) {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil, nil); !errors.Is(err, ErrFileConstraintViolated) {
 		t.Errorf("scene change: err = %v, want ErrFileConstraintViolated", err)
 	}
 	// 2) factory-server/ -> rejected
 	ar = &auditRunner{stdout: "?? factory-server/x\n"}
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil); !errors.Is(err, ErrFileConstraintViolated) {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil, nil); !errors.Is(err, ErrFileConstraintViolated) {
 		t.Errorf("factory-server change: err = %v, want ErrFileConstraintViolated", err)
 	}
 	// 3) cc-status/ -> rejected
 	ar = &auditRunner{stdout: " M cc-status/main.go\n"}
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil); !errors.Is(err, ErrFileConstraintViolated) {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil, nil); !errors.Is(err, ErrFileConstraintViolated) {
 		t.Errorf("cc-status change: err = %v, want ErrFileConstraintViolated", err)
 	}
 	// 4) .git/ -> rejected
 	ar = &auditRunner{stdout: " M .git/config\n"}
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil); !errors.Is(err, ErrFileConstraintViolated) {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", nil, nil); !errors.Is(err, ErrFileConstraintViolated) {
 		t.Errorf(".git change: err = %v, want ErrFileConstraintViolated", err)
 	}
 	// 5) clean status -> nil
 	ar = &auditRunner{stdout: ""}
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"generated-apps/slug/src/a.tsx", ".factory-runs/jobs/job_1/output.json"}); err != nil {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"generated-apps/slug/src/a.tsx", ".factory-runs/jobs/job_1/output.json"}, nil); err != nil {
 		t.Errorf("clean: err = %v, want nil", err)
 	}
 }
@@ -227,19 +257,50 @@ func TestAuditRejectsDeclaredFileOutsideAllowed(t *testing.T) {
 	ar := &auditRunner{stdout: ""} // clean git status
 
 	// declared file outside allowed roots -> rejected
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"somewhere/else.txt"}); !errors.Is(err, ErrFileConstraintViolated) {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"somewhere/else.txt"}, nil); !errors.Is(err, ErrFileConstraintViolated) {
 		t.Errorf("outside declared: err = %v, want ErrFileConstraintViolated", err)
 	}
 	// absolute path -> rejected
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"/etc/passwd"}); !errors.Is(err, ErrFileConstraintViolated) {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"/etc/passwd"}, nil); !errors.Is(err, ErrFileConstraintViolated) {
 		t.Errorf("/etc/passwd: err = %v, want ErrFileConstraintViolated", err)
 	}
 	// file under generated-apps/<slug>/... -> ok
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"generated-apps/slug/src/a.tsx"}); err != nil {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{"generated-apps/slug/src/a.tsx"}, nil); err != nil {
 		t.Errorf("under generated-apps/<slug>: err = %v, want nil", err)
 	}
 	// file under .factory-runs/jobs/<jobID>/... -> ok
-	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{".factory-runs/jobs/job_1/output.json"}); err != nil {
+	if err := r.AuditFiles(ctx, ar, "job_1", "slug", []string{".factory-runs/jobs/job_1/output.json"}, nil); err != nil {
 		t.Errorf("under .factory-runs/jobs/<id>: err = %v, want nil", err)
+	}
+}
+
+// TestAuditIgnoresPreExistingDirtyProtectedPath locks in the fix for the
+// file_constraint_violated false positive: git status --porcelain reports the
+// WHOLE working tree, so a developer's in-progress dirty files under protected
+// prefixes (32 of them in the real repo) were blamed on every code_generation
+// run even though the agent never touched them. BaselineStatus captures the
+// pre-run dirty set; AuditFiles must skip those paths and only flag protected
+// changes that appeared DURING the run.
+func TestAuditIgnoresPreExistingDirtyProtectedPath(t *testing.T) {
+	r := ClaudeRunner{Binary: "claude"}
+	ctx := context.Background()
+
+	// Pre-run baseline: the developer's already-dirty protected-path files.
+	baseline := r.BaselineStatus(ctx, &auditRunner{stdout: " M cc-status/README.md\n M factory-server/internal/runner/claude.go\n"})
+	if len(baseline) != 2 {
+		t.Fatalf("baseline = %v, want 2 paths", baseline)
+	}
+
+	// After run: SAME dirty files (agent didn't touch them) + a legit generated
+	// file under an allowed root. Must PASS.
+	after := &auditRunner{stdout: " M cc-status/README.md\n M factory-server/internal/runner/claude.go\n?? generated-apps/slug/src/App.jsx\n"}
+	if err := r.AuditFiles(ctx, after, "job_1", "slug", []string{"generated-apps/slug/src/App.jsx"}, baseline); err != nil {
+		t.Errorf("pre-existing dirty: err = %v, want nil (agent did not modify them)", err)
+	}
+
+	// But a NEW protected-path change not in the baseline -> still rejected.
+	afterNew := &auditRunner{stdout: " M cc-status/README.md\n M scene/blueprint.md\n"}
+	if err := r.AuditFiles(ctx, afterNew, "job_1", "slug", nil, baseline); !errors.Is(err, ErrFileConstraintViolated) {
+		t.Errorf("new protected change: err = %v, want ErrFileConstraintViolated", err)
 	}
 }

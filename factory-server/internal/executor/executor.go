@@ -5,18 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/runlog"
+	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
 )
 
 // StepRunner executes a single pipeline step. Implementations live outside the
 // executor package: the Claude runner (Task 11) and the factory build/deploy
 // runner (Task 12). Until then the server injects an unimplemented stub.
+//
+// The emitter is a scoped reporter: the runner forwards safe activity/summary/
+// command records through it, and the executor persists them with a
+// job/step/attempt/sequence stamped on each. Runners must NEVER touch the store
+// or compute sequence themselves.
 type StepRunner interface {
 	// Run executes one step. ctx is cancelled if the user cancels the job.
-	Run(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error)
+	Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error)
 }
 
 // StepResult is what a StepRunner returns for one step.
@@ -38,6 +48,11 @@ type Executor struct {
 	signal chan struct{}
 
 	OnUpdate func(context.Context, ExecutionUpdate)
+	// OnRecord is invoked AFTER a step_execution_record is successfully
+	// appended to the store, carrying the fully-populated record (with the
+	// executor-assigned attempt+sequence). Task 4 wires it to the SSE fan-out.
+	OnRecord func(context.Context, runner.ExecutionRecordUpdate)
+	RunLog   *runlog.Logger
 
 	// cancel of the currently-running step (if any), so Cancel can kill it.
 	currentCancel atomic.Value // func()
@@ -48,6 +63,144 @@ type ExecutionUpdate struct {
 	JobID  string
 	StepID string
 }
+
+// stepEmitter is the runner.StepRecordEmitter handed to one step attempt. It is
+// the ONLY component that assigns (attempt, sequence) and persists records, so
+// concurrent stdout/stderr callbacks from a streaming runner cannot duplicate or
+// reorder sequences. Emit holds s.mu across sequence assignment, the store
+// append, AND the OnRecord fan-out, so all three are one atomic-ordered
+// critical section: records persist and publish in strictly ascending sequence
+// order, and the first-error slot stays consistent with what was published.
+//
+// First-error policy: the FIRST append error is stored and later surfaced by the
+// runner via ErrExecutionRecordPersistenceFailed; subsequent errors are dropped
+// (we keep the first because it is the most diagnostic — the constraint that
+// failed, the disk-full, etc.). Emit never returns an error to the runner
+// mid-stream (that would abort the run on a transient DB blip); the runner keeps
+// streaming and the executor inspects FirstError() after the child exits.
+// recordAppender is the persistence seam the stepEmitter depends on. *store.Store
+// satisfies it in production; tests substitute an instrumented appender to
+// assert ordering invariants without depending on SQLite timing.
+type recordAppender interface {
+	AppendStepExecutionRecord(ctx context.Context, rec model.StepExecutionRecord) error
+}
+
+type stepEmitter struct {
+	store    recordAppender
+	onRecord func(context.Context, runner.ExecutionRecordUpdate)
+
+	jobID  string
+	stepID string
+
+	mu       sync.Mutex
+	attempt  int
+	nextSeq  int
+	firstErr error
+}
+
+// newStepEmitter builds a scoped emitter for one (job, step, attempt). attempt
+// is the step's CURRENT attempt number (already incremented by the executor
+// before the runner runs), so records are tagged with the same attempt the
+// job_steps row carries.
+func (e *Executor) newStepEmitter(jobID, stepID string, attempt int) *stepEmitter {
+	return &stepEmitter{
+		store:    e.store,
+		onRecord: e.OnRecord,
+		jobID:    jobID,
+		stepID:   stepID,
+		attempt:  attempt,
+		nextSeq:  1,
+	}
+}
+
+// Emit assigns the next sequence, appends the record to the store, and (on
+// success) fires the OnRecord callback — ALL under s.mu. Holding the lock across
+// the append AND the publish makes sequence assignment, persistence, and
+// fan-out one atomic-ordered critical section: concurrent stdout/stderr
+// callbacks therefore persist and publish records in strictly ascending
+// sequence order, never 2-then-1. Volume per step is low (stdout/stderr lines),
+// so serializing emits is acceptable.
+//
+// First-error policy: the FIRST append error is stored and later surfaced via
+// FirstError(); subsequent errors are dropped. Emit never returns an error
+// mid-stream (that would abort the run on a transient DB blip); the runner
+// keeps streaming and the executor inspects FirstError() after the child exits.
+//
+// Redaction chokepoint: credentials in the content are masked HERE, before the
+// record is built, so the SAME redacted content reaches BOTH the persisted store
+// row and the OnRecord (SSE) payload. This is the single point every record —
+// command_stdout, command_stderr, activity, summary, system lifecycle — passes
+// through before persistence, which is exactly where the design ("写入执行记录前
+// 脱敏") and runbook ("Before any record or artifact is persisted") require it.
+// Redaction is content-based (regex on api_key/token/secret/password/authorization
+// values), so it never alters fixed status strings or non-secret prose. Asserted
+// by TestStepEmitterEmitRedactsBeforePersistAndPublish.
+func (s *stepEmitter) Emit(ctx context.Context, kind model.ExecutionRecordKind, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// If an earlier emit already failed persisting, do not keep hammering the
+	// store — the run will be marked execution_record_persistence_failed at the
+	// end. We still return nil so the runner keeps streaming.
+	if s.firstErr != nil {
+		return nil
+	}
+	// Mask credentials before persist+publish (design: redact before writing the
+	// record). Single chokepoint — callers (factory stream batcher, Claude stderr
+	// callback, system lifecycle, activity parser) all hand raw content here and
+	// cannot leak a secret into the DB or the SSE fan-out.
+	content = redactExecutionText(content)
+	seq := s.nextSeq
+	s.nextSeq++
+	rec := model.StepExecutionRecord{
+		ID:        "rec_" + id.New(),
+		JobID:     s.jobID,
+		StepID:    s.stepID,
+		Attempt:   s.attempt,
+		Sequence:  seq,
+		Kind:      kind,
+		Content:   content,
+		CreatedAt: time.Now(),
+	}
+	if err := s.store.AppendStepExecutionRecord(ctx, rec); err != nil {
+		if s.firstErr == nil {
+			s.firstErr = err
+		}
+		return nil
+	}
+	if s.onRecord != nil {
+		s.onRecord(ctx, runner.ExecutionRecordUpdate{Record: rec})
+	}
+	return nil
+}
+
+// FirstError returns the first store-append error observed during this attempt,
+// or nil if every record persisted. The executor checks it after the runner
+// returns to decide success vs execution_record_persistence_failed.
+func (s *stepEmitter) FirstError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstErr
+}
+
+// emit is a helper that runs under the executor's own (non-scoped) system
+// lifecycle path — system records are emitted by the executor itself, not by
+// the runner, so they use the same stepEmitter the runner used. This keeps
+// system records interleaved correctly with activity records by sequence.
+func (s *stepEmitter) emit(ctx context.Context, kind model.ExecutionRecordKind, content string) {
+	_ = s.Emit(ctx, kind, content)
+}
+
+// System lifecycle record contents. The completed-step content is verbatim
+// "步骤已完成" (asserted by TestExecutorWritesStartedAndFinishedRecords); the
+// others are short, consistent Chinese strings.
+const (
+	systemRecordStarted     = "步骤已开始"
+	systemRecordCompleted   = "步骤已完成"
+	systemRecordFailed      = "步骤执行失败"
+	systemRecordWaitingUser = "步骤等待用户输入"
+	systemRecordCanceled    = "步骤已取消"
+	systemRecordRetry       = "步骤已重试"
+)
 
 // NewExecutor builds an Executor over st using runner and sharing busy with the
 // server. The Executor is idle until Start is called (or RunOnce is driven by a
@@ -156,6 +309,12 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	currentStep := *step
 	currentStep.Status = model.StepStatusRunning
 	currentStep.Attempt = step.Attempt + 1
+	e.logEvent("step_started", map[string]any{
+		"job_id":    job.ID,
+		"step_id":   step.ID,
+		"step_kind": string(job.CurrentStepKind),
+		"attempt":   currentStep.Attempt,
+	})
 
 	// Cancellable context for this run, stored so Cancel can interrupt it.
 	runCtx, cancel := context.WithCancel(ctx)
@@ -166,11 +325,26 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 		e.currentJobID.Store("")
 	}()
 
-	res, runErr := e.runner.Run(runCtx, *current, currentStep)
+	// Build the scoped reporter for this attempt. The executor owns sequence +
+	// persistence; the runner only forwards safe records through it. System
+	// lifecycle records are emitted through the same emitter so they interleave
+	// with activity records by sequence.
+	emitter := e.newStepEmitter(job.ID, step.ID, currentStep.Attempt)
+	emitter.emit(runCtx, model.ExecutionRecordSystem, systemRecordStarted)
+
+	res, runErr := e.runner.Run(runCtx, *current, currentStep, emitter)
 
 	// Cancellation during Run wins over any result.
 	switch {
 	case errors.Is(runErr, context.Canceled), errors.Is(runErr, context.DeadlineExceeded):
+		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordCanceled)
+		e.logEvent("step_finished", map[string]any{
+			"job_id":    job.ID,
+			"step_id":   step.ID,
+			"step_kind": string(job.CurrentStepKind),
+			"attempt":   currentStep.Attempt,
+			"status":    string(model.StepStatusCanceled),
+		})
 		return e.finalizeCanceled(ctx, job.ID, step.ID)
 	case runErr != nil && res.Status == "":
 		// Non-result error with no status → unknown failure.
@@ -180,6 +354,38 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 			ErrorMessage: runErr.Error(),
 		}
 	}
+
+	// If the runner's record persistence failed, the audit trail is incomplete —
+	// surface that as execution_record_persistence_failed rather than claiming a
+	// fully-auditable success. The step's own outcome (succeeded/failed) is still
+	// recorded on the job_steps row; this error code is additive diagnostics.
+	if perr := emitter.FirstError(); perr != nil && res.Status == model.StepStatusSucceeded {
+		res = StepResult{
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorExecutionRecordPersistenceFailed,
+			ErrorMessage: fmt.Sprintf("execution record persistence failed: %v", perr),
+		}
+	}
+
+	// Emit the terminal system record matching the step outcome.
+	switch res.Status {
+	case model.StepStatusSucceeded:
+		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordCompleted)
+	case model.StepStatusFailed:
+		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordFailed)
+	case model.StepStatusWaitingUser:
+		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordWaitingUser)
+	}
+
+	e.logEvent("step_finished", map[string]any{
+		"job_id":        job.ID,
+		"step_id":       step.ID,
+		"step_kind":     string(job.CurrentStepKind),
+		"attempt":       currentStep.Attempt,
+		"status":        string(res.Status),
+		"error_code":    string(res.ErrorCode),
+		"error_message": res.ErrorMessage,
+	})
 
 	return e.finalize(ctx, job.ID, step.ID, res)
 }
@@ -307,6 +513,13 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	if err := e.store.MarkJobQueued(ctx, jobID); err != nil {
 		return model.Job{}, fmt.Errorf("requeue job: %w", err)
 	}
+	// Emit a retry system record on the step's prior attempt so the audit trail
+	// shows the retry decision inline. Best-effort: a failure here does not block
+	// the retry (the job is already re-queued).
+	if step != nil {
+		emitter := e.newStepEmitter(jobID, step.ID, step.Attempt)
+		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
+	}
 	updated, err := e.store.GetJob(ctx, jobID)
 	if err != nil || updated == nil {
 		if err == nil {
@@ -355,6 +568,12 @@ func (e *Executor) notify(ctx context.Context, jobID, stepID string) {
 	e.OnUpdate(ctx, ExecutionUpdate{JobID: jobID, StepID: stepID})
 }
 
+func (e *Executor) logEvent(name string, fields map[string]any) {
+	if e.RunLog != nil {
+		e.RunLog.Event(name, fields)
+	}
+}
+
 // Dispatcher routes one step to the right StepRunner by step mode. Factory steps
 // go to the factory runner; claude steps go to the claude fallback (Task 16
 // wires the real claude runner; until then the fallback returns a failed
@@ -373,16 +592,16 @@ func NewDispatcher(factory, claude StepRunner) StepRunner {
 // (requirement_analysis / solution_design / code_generation) → claude; the
 // factory steps (test_verification / image_build / deployment) and the
 // factory_with_optional_claude_analysis step → factory.
-func (d *Dispatcher) Run(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (d *Dispatcher) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	mode := modeForKind(step.Kind)
 	switch mode {
 	case ModeFactory, ModeFactoryWithOptionalClaudeAnalysis:
 		if d.factory != nil {
-			return d.factory.Run(ctx, job, step)
+			return d.factory.Run(ctx, job, step, emit)
 		}
 	case ModeClaude:
 		if d.claude != nil {
-			return d.claude.Run(ctx, job, step)
+			return d.claude.Run(ctx, job, step, emit)
 		}
 	}
 	return StepResult{

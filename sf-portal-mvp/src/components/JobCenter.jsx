@@ -1,10 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
-  Loader2,
-  Clock,
+  AlertTriangle,
   CheckCircle2,
   XCircle,
-  AlertTriangle,
   HelpCircle,
   ExternalLink,
   RotateCcw,
@@ -12,9 +10,12 @@ import {
 } from 'lucide-react'
 import { factoryApi } from '../api/client'
 import { displayJobTitle } from '../hooks/jobSelection'
+import { StepCard, STAGE_LABELS } from './StepCard'
+import { StepExecutionDrawer } from './StepExecutionDrawer'
+import { buildStepCardView } from '../hooks/executionRecordState'
 import './JobCenter.css'
 
-// Fixed ordered step kinds (design §4)
+// Fixed ordered step kinds (design §4). Same six stages, fixed order.
 const FIXED_STEPS = [
   { kind: 'requirement_analysis', label: '需求分析' },
   { kind: 'solution_design', label: '方案设计' },
@@ -35,38 +36,27 @@ const JOB_STATUS_LABEL = {
   cancelled: '已取消',
 }
 
-const STEP_STATUS_LABEL = {
-  pending: '等待中',
-  running: '进行中',
-  waiting_user: '等待用户',
-  succeeded: '已完成',
-  failed: '已失败',
-  skipped: '已跳过',
-  canceled: '已取消',
-  cancelled: '已取消',
-}
-
-function StepIcon({ status }) {
-  switch (status) {
-    case 'running':
-      return <Loader2 size={14} className="spin" />
-    case 'succeeded':
-      return <CheckCircle2 size={14} />
-    case 'failed':
-      return <XCircle size={14} />
-    case 'waiting_user':
-      return <HelpCircle size={14} />
-    case 'skipped':
-    case 'canceled':
-    case 'cancelled':
-      return <Ban size={14} />
-    default:
-      return <Clock size={14} />
-  }
-}
-
-export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
+export function JobCenter({
+  activeJob,
+  steps,
+  onCancel,
+  onRetry,
+  loading,
+  // Task 6 state surface from useJobs:
+  summary,
+  artifacts,
+  selectedStepId,
+  selectedAttempt,
+  selectStepAttempt,
+  getRecords,
+  getUnreadCount,
+  loadStepRecords,
+  getArtifactContent,
+}) {
   const [detail, setDetail] = useState(null)
+  // Local drawer tab is owned by the drawer; JobCenter only owns whether the
+  // drawer is open (driven by selectedStepId).
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   // For waiting_user we try to fetch job detail to surface a clarifying
   // question if present; keep defensive — failures just hide the area.
@@ -87,6 +77,115 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
     }
   }, [activeJob && activeJob.id, activeJob && activeJob.status])
 
+  // Resolve each fixed step kind to its REAL job_steps.id, then join its
+  // summary. The backend execution-summary is keyed by step_id (NOT kind), so
+  // we must never index summaries by kind — a kind has no summary entry.
+  const cardView = useMemo(
+    () => buildStepCardView(steps, summary, FIXED_STEPS),
+    [steps, summary],
+  )
+  const stepByKind = useMemo(() => {
+    const map = {}
+    cardView.forEach(v => {
+      if (v.kind && v.step) map[v.kind] = v.step
+    })
+    return map
+  }, [cardView])
+  // Summaries keyed by REAL step_id (the backend key), never by kind.
+  const summaryByStepId = useMemo(() => {
+    const map = {}
+    if (Array.isArray(summary)) {
+      summary.forEach(s => {
+        if (s && s.step_id != null && !map[s.step_id]) map[s.step_id] = s
+      })
+    }
+    return map
+  }, [summary])
+
+  const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
+  const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
+  const canCancelHeader = activeJob && !isTerminal
+  const waitingQuestions =
+    detail &&
+    (detail.pending_questions ||
+      detail.clarify_questions ||
+      detail.waiting_questions ||
+      detail.questions)
+
+  // --- Drawer wiring ------------------------------------------------------
+  // Opening a card resolves the REAL stepId (from stepByKind / cardView) and
+  // passes that to selectStepAttempt(stepId, attempt). The backend records
+  // endpoint REQUIRES the real job_steps.id; a kind like "requirement_analysis"
+  // would 404. `selectedStepId` always holds a real step_id end-to-end.
+  const openDrawerFor = kind => {
+    const step = stepByKind[kind]
+    const stepId = step && step.id
+    if (!stepId) return
+    const sm = summaryByStepId[stepId]
+    const attempt =
+      (sm && (sm.attempt ?? sm.latest_attempt)) ??
+      (step && (step.attempt ?? step.latest_attempt)) ??
+      1
+    setDrawerOpen(true)
+    if (selectStepAttempt) selectStepAttempt(stepId, attempt)
+  }
+
+  const closeDrawer = () => {
+    setDrawerOpen(false)
+    if (selectStepAttempt) selectStepAttempt(null, null)
+  }
+
+  // Lookups key off the real step_id (selectedStepId), not the kind.
+  const selectedStep = useMemo(() => {
+    if (!selectedStepId) return null
+    return (Array.isArray(steps) ? steps : []).find(s => s && s.id === selectedStepId) || null
+  }, [steps, selectedStepId])
+  const selectedSummary = selectedStepId ? summaryByStepId[selectedStepId] : null
+  const selectedStageLabel = selectedStepId
+    ? (() => {
+        const entry = cardView.find(v => v.stepId === selectedStepId)
+        if (entry && entry.label) return entry.label
+        if (entry && entry.kind) return STAGE_LABELS[entry.kind] || entry.kind
+        return null
+      })()
+    : null
+
+  const selectedAttempts = useMemo(() => {
+    if (!selectedStepId) return []
+    const sm = summaryByStepId[selectedStepId]
+    const latest =
+      sm && Number.isFinite(sm.latest_attempt) && sm.latest_attempt >= 1
+        ? sm.latest_attempt
+        : 0
+    if (latest >= 1) {
+      return Array.from({ length: latest }, (_, i) => latest - i)
+    }
+    if (selectedAttempt != null) return [selectedAttempt]
+    return []
+  }, [summaryByStepId, selectedStepId, selectedAttempt])
+
+  // Records view (REST page + live SSE tail merged ascending) for the open
+  // step+attempt. Memoized so the drawer's follow-effect deps are stable.
+  const recordsView = useMemo(() => {
+    if (!selectedStepId || selectedAttempt == null || !getRecords) return []
+    return getRecords(selectedStepId, selectedAttempt)
+  }, [selectedStepId, selectedAttempt, getRecords])
+
+  // Older-page support: when the drawer asks for older records, compute the
+  // smallest sequence currently shown and page before it.
+  const oldestSeq = recordsView.length > 0
+    ? recordsView.reduce((m, r) => Math.min(m, r.sequence || 0), Infinity)
+    : 0
+  const hasOlder = recordsView.length >= 200 || oldestSeq > 1
+  const loadOlder = () => {
+    if (!loadStepRecords || !selectedStepId || selectedAttempt == null) return
+    loadStepRecords(selectedStepId, selectedAttempt, Number.isFinite(oldestSeq) ? oldestSeq : 0)
+  }
+
+  const onSelectAttempt = attempt => {
+    if (selectStepAttempt && selectedStepId) selectStepAttempt(selectedStepId, attempt)
+  }
+
   if (!activeJob) {
     return (
       <section className="job-center job-center-empty">
@@ -99,26 +198,6 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
     )
   }
 
-  // Map returned steps by kind; not-yet-started steps fall back to pending.
-  const stepByKind = {}
-  if (Array.isArray(steps)) {
-    steps.forEach(s => {
-      const key = s.kind || s.step || s.name
-      if (key) stepByKind[key] = s
-    })
-  }
-
-  const jobStatus = activeJob.status || 'queued'
-  const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
-  const canCancel = !isTerminal
-  const canRetry = jobStatus === 'failed'
-  const waitingQuestions =
-    detail &&
-    (detail.pending_questions ||
-      detail.clarify_questions ||
-      detail.waiting_questions ||
-      detail.questions)
-
   return (
     <section className={`job-center job-status-${jobStatus}`}>
       <header className="jc-header">
@@ -130,7 +209,7 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
           <span className={`jc-status-badge jc-status-${jobStatus}`}>
             {JOB_STATUS_LABEL[jobStatus] || jobStatus}
           </span>
-          {canCancel && (
+          {canCancelHeader && (
             <button
               type="button"
               className="jc-action jc-cancel"
@@ -149,22 +228,27 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
         </div>
       ) : null}
 
-      <div className="jc-steps">
-        {FIXED_STEPS.map((fixed, idx) => {
-          const step = stepByKind[fixed.kind]
-          const status = (step && (step.status || step.state)) || 'pending'
+      {/* 3x2 matrix of the six fixed stages. Replaces the old vertical list. */}
+      <div className="jc-step-matrix">
+        {cardView.map(view => {
+          const { kind, label, stepId, step, summary: sm } = view
+          const attempt =
+            (sm && (sm.attempt ?? sm.latest_attempt)) ??
+            (step && (step.attempt ?? step.latest_attempt)) ??
+            null
+          // Unread and selected both key off the REAL step_id.
+          const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
           return (
-            <div key={fixed.kind} className={`jc-step jc-step-${status}`}>
-              <span className="jc-step-index">{idx + 1}</span>
-              <span className="jc-step-label">{fixed.label}</span>
-              <span className={`jc-step-status jc-step-status-${status}`}>
-                <StepIcon status={status} />
-                {STEP_STATUS_LABEL[status] || status}
-              </span>
-              {step && step.error_message ? (
-                <span className="jc-step-error">{step.error_message}</span>
-              ) : null}
-            </div>
+            <StepCard
+              key={kind}
+              kind={kind}
+              label={label}
+              step={step}
+              summary={sm}
+              selected={!!stepId && selectedStepId === stepId}
+              unreadCount={unread}
+              onSelect={openDrawerFor}
+            />
           )
         })}
       </div>
@@ -217,6 +301,27 @@ export function JobCenter({ activeJob, steps, onCancel, onRetry, loading }) {
       )}
 
       {loading && <div className="jc-loading-hint">同步任务状态中...</div>}
+
+      {/* Right-side overlay drawer. Does NOT consume center-column space; it
+          overlays the agent-list region. */}
+      <StepExecutionDrawer
+        open={drawerOpen && !!selectedStepId}
+        onClose={closeDrawer}
+        step={selectedStep}
+        summary={selectedSummary}
+        stageLabel={selectedStageLabel}
+        attempts={selectedAttempts}
+        selectedAttempt={selectedAttempt}
+        onSelectAttempt={onSelectAttempt}
+        records={recordsView}
+        onLoadOlder={loadOlder}
+        hasOlder={hasOlder}
+        loadingOlder={false}
+        onCancel={() => onCancel && onCancel(activeJob.id)}
+        onRetry={() => onRetry && onRetry(activeJob.id)}
+        artifacts={artifacts || []}
+        getArtifactContent={getArtifactContent}
+      />
     </section>
   )
 }

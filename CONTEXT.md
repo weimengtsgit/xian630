@@ -28,6 +28,10 @@ _Avoid_: 分析工作日志, 原始思考过程
 A user-facing, model-generated, structured explanation of what the requirement analysis agent identified, why it recommends a choice, and what still needs confirmation.
 _Avoid_: 原始思考过程, 思维链, 系统状态日志
 
+**步骤执行记录**:
+The auditable record for one generation-task pipeline step, combining system status logs, user-facing analysis work logs where applicable, execution output, and linked artifacts without treating raw model reasoning as product content.
+_Avoid_: 智能体思维链, 原始推理, 单纯运行日志
+
 **确认需求摘要**:
 The structured requirement record confirmed by the user after clarification and used as the input for creating a generation task.
 _Avoid_: 初始需求, 聊天记录, 分析工作日志

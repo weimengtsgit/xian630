@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -27,6 +28,12 @@ type Config struct {
 	RetainInterval time.Duration `json:"retain_interval"`
 	// IngestPath is the HTTP path the hook CLI posts events to.
 	IngestPath string `json:"ingest_path"`
+	// LogPath is the JSONL runtime event log.
+	LogPath string `json:"log_path"`
+	// LogMaxBytes rotates LogPath once it grows beyond this size.
+	LogMaxBytes int64 `json:"log_max_bytes"`
+	// LogMaxBackups is the number of rotated logs kept as .1, .2, ...
+	LogMaxBackups int `json:"log_max_backups"`
 }
 
 // Default returns the built-in defaults.
@@ -44,6 +51,9 @@ func Default() Config {
 		ReaperInterval: 30 * time.Second,
 		RetainInterval: 10 * time.Minute,
 		IngestPath:     "/api/v1/events/ingest",
+		LogPath:        filepath.Join(home, ".cc-status", "events.jsonl"),
+		LogMaxBytes:    10 * 1024 * 1024,
+		LogMaxBackups:  5,
 	}
 }
 
@@ -69,6 +79,19 @@ func Load() Config {
 	if v := os.Getenv("CC_STATUS_SCAN_INTERVAL"); v != "" {
 		if d, ok := time.ParseDuration(v); ok == nil {
 			c.ScanInterval = d
+		}
+	}
+	if v := os.Getenv("CC_STATUS_LOG_PATH"); v != "" {
+		c.LogPath = v
+	}
+	if v := os.Getenv("CC_STATUS_LOG_MAX_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.LogMaxBytes = n
+		}
+	}
+	if v := os.Getenv("CC_STATUS_LOG_MAX_BACKUPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.LogMaxBackups = n
 		}
 	}
 	return c

@@ -11,11 +11,12 @@ import (
 // CreateJob inserts a new job row.
 func (s *Store) CreateJob(ctx context.Context, job model.Job) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
 		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
-		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt))
+		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON)
 	return err
 }
 
@@ -82,7 +83,8 @@ func scanJob(sc scanner) (*model.Job, error) {
 	var started, ended sql.NullInt64
 	if err := sc.Scan(&j.ID, &j.UserPrompt, &j.NormalizedPrompt, &j.AppSlug, &j.AppName,
 		&status, &stepKind, &j.CreatedAppID, &j.LockOwner,
-		&createdMs, &started, &ended, &updatedMs); err != nil {
+		&createdMs, &started, &ended, &updatedMs,
+		&j.ClarificationSessionID, &j.ConfirmedRequirementJSON); err != nil {
 		return nil, err
 	}
 	j.Status = model.JobStatus(status)
@@ -96,7 +98,7 @@ func scanJob(sc scanner) (*model.Job, error) {
 
 // jobSelectCols lists the jobs columns in scan order, shared by GetJob and
 // ListJobs to keep the SELECT and scanJob in sync.
-const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at`
+const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json`
 
 // GetJob returns the job with the given id. It returns (nil, nil) on a miss —
 // a missing row is not an error — mirroring GetApplication/GetAgent.

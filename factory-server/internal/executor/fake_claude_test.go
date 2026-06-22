@@ -114,7 +114,7 @@ func TestFakeClaudeRequirementAnalysisWritesOutput(t *testing.T) {
 	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: art, Slug: "factory-demo"}
 
 	job, step := fakeClaudeJobStep(model.StepRequirementAnalysis)
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -126,11 +126,25 @@ func TestFakeClaudeRequirementAnalysisWritesOutput(t *testing.T) {
 	if out["appType"] != "timeline-replay" {
 		t.Fatalf("appType = %v, want timeline-replay", out["appType"])
 	}
-	if _, ok := out["questions"]; !ok {
-		t.Fatalf("output missing questions field")
+	if out["appName"] == nil {
+		t.Fatalf("output missing appName field (frozen requirement shape)")
 	}
-	if out["needsUserInput"] != false {
-		t.Fatalf("needsUserInput = %v, want false", out["needsUserInput"])
+	// Task 5: the freeze step emits a validation block, NOT needsUserInput.
+	if _, ok := out["needsUserInput"]; ok {
+		t.Fatalf("output must not carry needsUserInput (no clarification in the freeze step)")
+	}
+	if _, ok := out["questions"]; ok {
+		t.Fatalf("output must not carry questions (no clarification in the freeze step)")
+	}
+	validation, ok := out["validation"].(map[string]any)
+	if !ok {
+		t.Fatalf("output missing validation block, got %v", out["validation"])
+	}
+	if validation["complete"] != true || validation["supported"] != true {
+		t.Fatalf("validation = %+v, want complete=true supported=true", validation)
+	}
+	if _, ok := out["generationProfile"].(map[string]any); !ok {
+		t.Fatalf("output missing generationProfile, got %v", out["generationProfile"])
 	}
 }
 
@@ -143,7 +157,7 @@ func TestFakeClaudeSolutionDesignWritesOutput(t *testing.T) {
 	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: art, Slug: "factory-demo"}
 
 	job, step := fakeClaudeJobStep(model.StepSolutionDesign)
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -155,6 +169,13 @@ func TestFakeClaudeSolutionDesignWritesOutput(t *testing.T) {
 	app, _ := out["app"].(map[string]any)
 	if app == nil || app["slug"] != "factory-demo" || app["type"] != "timeline-replay" || app["source"] != "generated" {
 		t.Fatalf("app block = %v, want slug=factory-demo type=timeline-replay source=generated", app)
+	}
+	// Task 6: the fake must emit a non-empty usedSkills (the skills it "followed")
+	// so the solution_design validator's usedSkills-required rule passes without
+	// the fake bypassing the validator.
+	used, _ := out["usedSkills"].([]any)
+	if len(used) == 0 {
+		t.Fatalf("usedSkills = %v, want non-empty (fake must report followed skills)", out["usedSkills"])
 	}
 }
 
@@ -174,7 +195,7 @@ func TestFakeClaudeCodeGenerationWritesApp(t *testing.T) {
 	if err := st.CreateJob(context.Background(), job); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -187,6 +208,12 @@ func TestFakeClaudeCodeGenerationWritesApp(t *testing.T) {
 	readOutputJSON(t, art, job, step, &out)
 	if out["projectDir"] != "generated-apps/factory-demo" {
 		t.Fatalf("projectDir = %v, want generated-apps/factory-demo", out["projectDir"])
+	}
+	// Task 6: the fake must emit a non-empty usedSkills so the code_generation
+	// validator's usedSkills-required rule passes without bypassing it.
+	used, _ := out["usedSkills"].([]any)
+	if len(used) == 0 {
+		t.Fatalf("usedSkills = %v, want non-empty (fake must report followed skills)", out["usedSkills"])
 	}
 
 	appDir := filepath.Join(ws, "generated-apps", "factory-demo")
@@ -255,7 +282,7 @@ func TestFakeClaudeCodeGenerationMatchesSceneTemplateAndIncrementsDemoSuffix(t *
 	if err := st.CreateJob(context.Background(), job1); err != nil {
 		t.Fatalf("create job1: %v", err)
 	}
-	res, err := r.Run(context.Background(), job1, step1)
+	res, err := r.Run(context.Background(), job1, step1, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run job1: %v", err)
 	}
@@ -267,7 +294,7 @@ func TestFakeClaudeCodeGenerationMatchesSceneTemplateAndIncrementsDemoSuffix(t *
 	if err := st.CreateJob(context.Background(), job2); err != nil {
 		t.Fatalf("create job2: %v", err)
 	}
-	res, err = r.Run(context.Background(), job2, step2)
+	res, err = r.Run(context.Background(), job2, step2, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run job2: %v", err)
 	}
@@ -355,7 +382,7 @@ func TestFakeClaudeCodeGenerationIsIdempotent(t *testing.T) {
 		t.Fatalf("create job: %v", err)
 	}
 	for i := 0; i < 2; i++ {
-		res, err := r.Run(context.Background(), job, step)
+		res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 		if err != nil {
 			t.Fatalf("Run %d: %v", i+1, err)
 		}
@@ -386,7 +413,7 @@ func TestFakeClaudeUnhandledStepFails(t *testing.T) {
 	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: filepath.Join(ws, ".factory-runs"), Slug: "factory-demo"}
 
 	job, step := fakeClaudeJobStep(model.StepDeployment) // a factory step kind
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -410,7 +437,7 @@ func TestFakeClaudeExplicitSlugUsesLegacyFactoryDemo(t *testing.T) {
 	if err := st.CreateJob(context.Background(), job); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -76,5 +77,39 @@ func TestJobWithSteps(t *testing.T) {
 	}
 	if len(steps) != 1 || steps[0].Kind != model.StepRequirementAnalysis {
 		t.Fatalf("steps = %#v", steps)
+	}
+}
+
+// TestOpenMigratesStepExecutionRecordsIdempotently proves the CREATE TABLE IF
+// NOT EXISTS migration is safe to run against an existing database that already
+// has the table (e.g. a real ~/.software-factory/state.db across versions).
+func TestOpenMigratesStepExecutionRecordsIdempotently(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	// First open: schema applied, table created.
+	st1, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	appendRecord(t, st1, "job_m", "step_m", 1, 1, "system", "seed")
+	if err := st1.Close(); err != nil {
+		t.Fatalf("close st1: %v", err)
+	}
+
+	// Second open against the SAME on-disk database: must not error and must
+	// preserve the seeded row.
+	st2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("second open (migration): %v", err)
+	}
+	t.Cleanup(func() { _ = st2.Close() })
+
+	got, err := st2.ListStepExecutionRecordPage(context.Background(), "job_m", "step_m", 1, 0, 200)
+	if err != nil {
+		t.Fatalf("list after reopen: %v", err)
+	}
+	if len(got) != 1 || got[0].Content != "seed" {
+		t.Fatalf("seed row lost across reopen: %#v", got)
 	}
 }

@@ -100,6 +100,19 @@ See `examples/query.sh`.
 | `CC_STATUS_GHOST_TIMEOUT`    | `5m`                       | running w/o update → stale       |
 | `CC_STATUS_TTL`              | `168h` (7d)                | completed/stale prune horizon    |
 | `CC_STATUS_SCAN_INTERVAL`    | `60s`                      | skill-name scan refresh          |
+| `CC_STATUS_LOG_PATH`         | `~/.cc-status/events.jsonl`| JSONL runtime event log          |
+| `CC_STATUS_LOG_MAX_BYTES`    | `10485760`                 | rotate log after this many bytes |
+| `CC_STATUS_LOG_MAX_BACKUPS`  | `5`                        | rotated `.N` files to keep       |
+
+## Logs
+
+`cc-status` appends lightweight JSONL events to `CC_STATUS_LOG_PATH` and rotates
+the file by size. The log intentionally excludes prompt content and tokens; full
+hook payloads remain in SQLite.
+
+```bash
+tail -f ~/.cc-status/events.jsonl
+```
 
 ## Design notes & limitations
 

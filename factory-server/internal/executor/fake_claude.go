@@ -94,7 +94,10 @@ var fakeSceneTemplates = []fakeSceneTemplate{
 }
 
 // Run dispatches one claude-mode step. Any non-claude kind fails fast.
-func (f *FakeClaudeRunner) Run(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (f *FakeClaudeRunner) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
+	if emit == nil {
+		emit = runner.NopEmitter{}
+	}
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
 		return f.runRequirementAnalysis(ctx, job, step)
@@ -116,6 +119,28 @@ func (f *FakeClaudeRunner) slug() string {
 		return f.Slug
 	}
 	return "factory-demo"
+}
+
+// workspace mirrors ClaudeStepRunner.workspace so the fake resolves skill paths
+// against the same root the real runner would.
+func (f *FakeClaudeRunner) workspace() string {
+	if f.Workspace == "" {
+		return "."
+	}
+	return f.Workspace
+}
+
+// profileForJob derives the generationProfile the fake should report as having
+// "followed". It prefers the profile carried on the job's confirmed requirement
+// (same source the real runner parses via parseGenerationProfile); when absent
+// (legacy/direct-created jobs, or requirement_analysis which hasn't frozen yet)
+// it falls back to the app-type-derived profile so the fake end-to-end pipeline
+// still emits a non-empty usedSkills and passes the Task-6 validator.
+func profileForJob(job model.Job, appType string) map[string][]string {
+	if profile, _ := parseGenerationProfile(json.RawMessage(job.ConfirmedRequirementJSON)); len(profile) > 0 {
+		return profile
+	}
+	return generationProfileForAppTypePublic(appType)
 }
 
 func (f *FakeClaudeRunner) plan(ctx context.Context, prompt string) fakeGenerationPlan {
@@ -215,11 +240,31 @@ func (f *FakeClaudeRunner) writeOutput(job model.Job, step model.JobStep, v any)
 
 func (f *FakeClaudeRunner) runRequirementAnalysis(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
 	plan := f.plan(ctx, job.UserPrompt)
+	// Task 5: requirement_analysis is now a FREEZE/AUDIT of the job's confirmed
+	// requirement, not a clarify step. Emit the frozen contract the real runner
+	// produces: the validated requirement plus a validation block that marks it
+	// complete+supported. The pipeline either SUCCEEDS here or fails; it never
+	// pauses for clarification.
 	out := map[string]any{
-		"summary":        "Fake-claude requirement analysis for " + plan.Name + ".",
-		"appType":        plan.Type,
-		"needsUserInput": false,
-		"questions":      []any{},
+		"confirmedRequirementId": job.ClarificationSessionID,
+		"summary":                "Fake-claude frozen requirement for " + plan.Name + ".",
+		"appType":                plan.Type,
+		"appName":                plan.Name,
+		"targetUsers":            []string{"fake-claude operator"},
+		"coreScenario":           "Fake-claude generated scenario",
+		"primaryView":            "map + timeline",
+		"mainEntities":           []string{"formation", "event"},
+		"dataPolicy":             "mock_data",
+		"acceptanceFocus":        []string{"track replay"},
+		"generationProfile":      generationProfileForAppTypePublic(plan.Type),
+		"constraints":            []string{"React + Vite"},
+		"risks":                  []string{"no real data"},
+		"validation": map[string]any{
+			"complete":            true,
+			"supported":           true,
+			"missingFields":       []string{},
+			"unsupportedRequests": []string{},
+		},
 	}
 	if err := f.writeOutput(job, step, out); err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -227,8 +272,44 @@ func (f *FakeClaudeRunner) runRequirementAnalysis(ctx context.Context, job model
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
+// generationProfileForAppTypePublic is the fake runner's local derivation of the
+// Factory generationProfile. It mirrors server.generationProfileForAppType but
+// lives in the executor package (the server helper is not exported and the fake
+// runner must not import the server package). Kept in sync deliberately.
+func generationProfileForAppTypePublic(appType string) map[string][]string {
+	switch appType {
+	case "situation_replay", "timeline-replay":
+		return map[string][]string{
+			"base":    {"software-factory-app"},
+			"domain":  {"defense-operations-ui"},
+			"pattern": {"map-timeline-replay"},
+		}
+	case "operations_management":
+		return map[string][]string{
+			"base":    {"software-factory-app"},
+			"domain":  {"defense-operations-ui"},
+			"pattern": {"operations-management-console"},
+		}
+	case "command_dashboard", "command-dashboard":
+		return map[string][]string{
+			"base":    {"software-factory-app"},
+			"domain":  {"defense-operations-ui"},
+			"pattern": {"command-dashboard"},
+		}
+	case "map-dashboard":
+		return map[string][]string{
+			"base":    {"software-factory-app"},
+			"domain":  {"defense-operations-ui"},
+			"pattern": {"map-timeline-replay"},
+		}
+	default:
+		return map[string][]string{"base": {"software-factory-app"}}
+	}
+}
+
 func (f *FakeClaudeRunner) runSolutionDesign(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
 	plan := f.plan(ctx, job.UserPrompt)
+	profile := profileForJob(job, plan.Type)
 	out := map[string]any{
 		"app": map[string]any{
 			"slug":   plan.Slug,
@@ -241,6 +322,8 @@ func (f *FakeClaudeRunner) runSolutionDesign(ctx context.Context, job model.Job,
 			"manifestPath": "generated-apps/" + plan.Slug + "/.factory/app.json",
 		},
 		"needsUserInput": false,
+		"usedSkills":     selectedSkillPaths(f.workspace(), profile),
+		"warnings":       []string{},
 	}
 	if err := f.writeOutput(job, step, out); err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -250,10 +333,13 @@ func (f *FakeClaudeRunner) runSolutionDesign(ctx context.Context, job model.Job,
 
 func (f *FakeClaudeRunner) runCodeGeneration(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
 	plan := f.plan(ctx, job.UserPrompt)
+	profile := profileForJob(job, plan.Type)
 	out := map[string]any{
 		"projectDir":     "generated-apps/" + plan.Slug,
 		"createdFiles":   []string{"package.json", "vite.config.js", "index.html", "src/main.jsx", "src/App.jsx", "src/style.css", ".factory/app.json", "Dockerfile", "nginx.conf"},
 		"needsUserInput": false,
+		"usedSkills":     selectedSkillPaths(f.workspace(), profile),
+		"warnings":       []string{},
 	}
 	if err := f.writeOutput(job, step, out); err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil

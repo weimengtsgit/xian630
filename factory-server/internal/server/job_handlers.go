@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,14 +27,23 @@ var stepPlan = []struct {
 	{model.StepDeployment, "deployer"},
 }
 
-// createJobBody is the request body accepted by POST /api/jobs.
+// createJobBody is the request body accepted by POST /api/jobs. As of Task 5,
+// jobs are created from a CONFIRMED clarification requirement, not from a bare
+// prompt: when a prompt is present the caller MUST also supply a
+// confirmed_requirement_json (the frozen requirement the requirement_analysis
+// step audits). The internal confirmClarification path creates jobs via
+// store.CreateJob directly and is unaffected by this gate.
 type createJobBody struct {
-	Prompt string `json:"prompt"`
+	Prompt                   string `json:"prompt"`
+	ClarificationSessionID   string `json:"clarification_session_id"`
+	ConfirmedRequirementJSON string `json:"confirmed_requirement_json"`
 }
 
 // createJob handles POST /api/jobs. It enqueues a job at the first pipeline
 // step (requirement_analysis) and seeds all six steps as pending, then records
-// the user's prompt as the first conversation message.
+// the user's prompt as the first conversation message. A prompt without a
+// confirmed requirement is rejected with 400 confirmed_requirement_required —
+// callers must run a clarification session to /confirm first.
 func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	var body createJobBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -44,17 +54,26 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing prompt")
 		return
 	}
+	if body.ConfirmedRequirementJSON == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":      "jobs must be created from confirmed clarification requirements",
+			"error_code": "confirmed_requirement_required",
+		})
+		return
+	}
 
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
 	job := model.Job{
-		ID:              jobID,
-		UserPrompt:      body.Prompt,
-		AppName:         deriveJobDisplayName(body.Prompt),
-		Status:          model.JobStatusQueued,
-		CurrentStepKind: model.StepRequirementAnalysis,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                       jobID,
+		UserPrompt:               body.Prompt,
+		AppName:                  deriveJobDisplayName(body.Prompt),
+		Status:                   model.JobStatusQueued,
+		CurrentStepKind:          model.StepRequirementAnalysis,
+		ClarificationSessionID:   body.ClarificationSessionID,
+		ConfirmedRequirementJSON: body.ConfirmedRequirementJSON,
+		CreatedAt:                now,
+		UpdatedAt:                now,
 	}
 	if err := s.store.CreateJob(r.Context(), job); err != nil {
 		writeError(w, http.StatusInternalServerError, "create job")
@@ -90,6 +109,13 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.hub.Publish(Event{Type: "job.created", Data: job})
+	s.logEvent("job_queued", map[string]any{
+		"job_id":                   job.ID,
+		"app_name":                 job.AppName,
+		"current_step_kind":        string(job.CurrentStepKind),
+		"clarification_session_id": job.ClarificationSessionID,
+		"source":                   "api",
+	})
 
 	// Wake the executor's drain loop so it picks up the new queued job.
 	s.exec.Signal()
@@ -171,6 +197,116 @@ func (s *Server) jobSteps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, steps)
+}
+
+// jobExecutionSummary handles GET /api/jobs/:id/execution-summary — the six-card
+// hydration snapshot. It returns one StepExecutionSummary per step (latest
+// attempt + latest record). A missing job is 404.
+func (s *Server) jobExecutionSummary(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get job")
+		return
+	}
+	if job == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	summaries, err := s.store.ListStepExecutionSummaries(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list summaries")
+		return
+	}
+	writeJSON(w, http.StatusOK, summaries)
+}
+
+// jobStepExecutionRecords handles GET
+// /api/jobs/:id/steps/:stepID/execution-records — the drawer pagination snapshot.
+// It is scoped to one (job, step, attempt) tuple. attempt defaults to the step's
+// latest attempt when absent; before_sequence (0/absent = newest page) and limit
+// (store caps at 200) drive backwards pagination. Both the job and the step must
+// exist and the step must belong to the requested job (else 404).
+func (s *Server) jobStepExecutionRecords(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	stepID := Param(r, "stepID")
+
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get job")
+		return
+	}
+	if job == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	// Validate the step exists AND belongs to this job. ListJobSteps is the
+	// existing API that returns the job's steps; matching by id confirms both
+	// existence and ownership in one call.
+	steps, err := s.store.ListJobSteps(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list steps")
+		return
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		writeError(w, http.StatusNotFound, "step not found")
+		return
+	}
+
+	attempt := 0
+	if a := r.URL.Query().Get("attempt"); a != "" {
+		if n, err := strconv.Atoi(a); err == nil && n >= 1 {
+			attempt = n
+		}
+	}
+	if attempt == 0 {
+		// Default to the latest attempt that produced any record for this step.
+		// The job_steps.attempt counter only advances when the executor runs a
+		// step, so a freshly-seeded step still reads attempt=0 even when records
+		// exist for higher attempts — derive the default from the records
+		// themselves via the per-step summary rollup.
+		summaries, err := s.store.ListStepExecutionSummaries(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list summaries")
+			return
+		}
+		for _, sm := range summaries {
+			if sm.StepID == stepID && sm.LatestAttempt > attempt {
+				attempt = sm.LatestAttempt
+			}
+		}
+	}
+
+	beforeSequence := 0
+	if bs := r.URL.Query().Get("before_sequence"); bs != "" {
+		if n, err := strconv.Atoi(bs); err == nil && n > 0 {
+			beforeSequence = n
+		}
+	}
+	limit := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	records, err := s.store.ListStepExecutionRecordPage(r.Context(), id, stepID, attempt, beforeSequence, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list records")
+		return
+	}
+	if records == nil {
+		records = []model.StepExecutionRecord{}
+	}
+	writeJSON(w, http.StatusOK, records)
 }
 
 // jobArtifacts handles GET /api/jobs/:id/artifacts.

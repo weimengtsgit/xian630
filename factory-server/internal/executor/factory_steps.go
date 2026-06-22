@@ -24,8 +24,17 @@ import (
 // claude runner (Task 16); if a claude step reaches this runner it fails fast
 // with ErrorUnknown rather than attempting npm/podman work.
 type FactoryRunner struct {
-	Store        *store.Store
-	Cmds         deploy.CommandRunner // used for both npm and podman (via deploy.NewPodman)
+	Store *store.Store
+	Cmds  deploy.CommandRunner // used for both npm and podman (via deploy.NewPodman)
+	// StreamCmds is the OPTIONAL streaming capability. When non-nil, runCmd and
+	// the podman paths route each command through RunStreamWithInput and feed the
+	// per-line callbacks into a commandStreamBatcher that emits live
+	// command_stdout/command_stderr records. When nil (e.g. the non-streaming
+	// test fakes), the steps fall back to the non-streaming Run + writeLogs path
+	// unchanged, so every existing fake-based test keeps passing. Production
+	// sets this to the *deploy.OSRunner (server.go), which satisfies
+	// deploy.StreamCommandRunner.
+	StreamCmds   deploy.StreamCommandRunner
 	Alloc        deploy.Allocator
 	Health       func(ctx context.Context, url string, timeout time.Duration) error // default deploy.CheckHTTP
 	Workspace    string                                                             // workspace root (cfg.WorkspaceRoot)
@@ -34,14 +43,14 @@ type FactoryRunner struct {
 
 // Run dispatches one factory step. A claude-mode step returns a failed result
 // without touching the filesystem.
-func (f *FactoryRunner) Run(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (f *FactoryRunner) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	switch step.Kind {
 	case model.StepTestVerification:
-		return f.runTestVerification(ctx, job, step)
+		return f.runTestVerification(ctx, job, step, emit)
 	case model.StepImageBuild:
-		return f.runImageBuild(ctx, job, step)
+		return f.runImageBuild(ctx, job, step, emit)
 	case model.StepDeployment:
-		return f.runDeployment(ctx, job, step)
+		return f.runDeployment(ctx, job, step, emit)
 	default:
 		// claude-mode steps are owned by the claude runner (Task 16).
 		return StepResult{
@@ -107,19 +116,38 @@ func (f *FactoryRunner) readManifest(app model.Application) (scanner.Manifest, S
 	return m, StepResult{}, true
 }
 
-// writeLogs writes stdout.log/stderr.log into the attempt workspace (best-effort).
-func (f *FactoryRunner) writeLogs(job model.Job, step model.JobStep, res deploy.CommandResult) {
+// writeLogs writes redacted, capped stdout.log/stderr.log into the attempt
+// workspace and registers them as command_stdout/command_stderr artifacts
+// (best-effort). Command logs are audit-only — they are never operational
+// inputs to any validation — so they are written directly as redacted+capped
+// files rather than as separate audit copies of an intact operational file.
+func (f *FactoryRunner) writeLogs(ctx context.Context, job model.Job, step model.JobStep, res deploy.CommandResult) {
 	w := runner.AttemptWorkspace{Root: f.ArtifactRoot, JobID: job.ID, StepKind: step.Kind, Attempt: step.Attempt}
 	_ = os.MkdirAll(w.Dir(), 0o755)
-	_ = os.WriteFile(w.StdoutPath(), []byte(res.Stdout), 0o644)
-	_ = os.WriteFile(w.StderrPath(), []byte(res.Stderr), 0o644)
+	reg := &artifactRegistrar{store: f.Store, jobID: job.ID, step: step}
+	_ = reg.registerCappedLog(ctx, "command_stdout", w.StdoutPath(), []byte(res.Stdout), res.StdoutTruncated, "Factory command stdout (redacted, capped)")
+	_ = reg.registerCappedLog(ctx, "command_stderr", w.StderrPath(), []byte(res.Stderr), res.StderrTruncated, "Factory command stderr (redacted, capped)")
 }
 
-// runCmd runs name+args in dir, writes logs, and returns the result + ok=false on
-// a non-zero exit (caller maps to the right ErrorCode).
-func (f *FactoryRunner) runCmd(ctx context.Context, job model.Job, step model.JobStep, dir, name string, args ...string) (deploy.CommandResult, bool) {
-	res, err := f.Cmds.Run(ctx, dir, name, args...)
-	f.writeLogs(job, step, res)
+// runCmd runs name+args in dir, writes the capped (redacted) artifact, and
+// returns the result + ok=false on a non-zero exit (caller maps to the right
+// ErrorCode). When a streaming runner is configured it routes the command
+// through RunStreamWithInput and feeds stdout/stderr into a batcher that emits
+// live command_stdout/command_stderr records; otherwise it uses the plain Run
+// path. Either way the CommandResult (and thus the exit-code → error-code
+// mapping and the capped artifact) is identical.
+func (f *FactoryRunner) runCmd(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter, dir, name string, args ...string) (deploy.CommandResult, bool) {
+	var res deploy.CommandResult
+	var err error
+	if f.StreamCmds != nil {
+		b := newCommandStreamBatcher(ctx, emit)
+		b.start()
+		defer b.close()
+		res, err = f.StreamCmds.RunStreamWithInput(ctx, dir, "", b.addStdout, b.addStderr, name, args...)
+	} else {
+		res, err = f.Cmds.Run(ctx, dir, name, args...)
+	}
+	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
 		return res, false
 	}
@@ -127,7 +155,7 @@ func (f *FactoryRunner) runCmd(ctx context.Context, job model.Job, step model.Jo
 }
 
 // runTestVerification implements design §5.4.
-func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	app, fail, ok := f.resolveApp(ctx, job)
 	if !ok {
 		return fail, nil
@@ -140,11 +168,11 @@ func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, 
 
 	// 1. Dependency install: npm ci when a lockfile is present, else npm install.
 	if _, err := os.Stat(filepath.Join(projectDir, "package-lock.json")); err == nil {
-		if _, ok := f.runCmd(ctx, job, step, projectDir, "npm", "ci"); !ok {
+		if _, ok := f.runCmd(ctx, job, step, emit, projectDir, "npm", "ci"); !ok {
 			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorDependencyInstallFailed, ErrorMessage: "npm ci failed"}, nil
 		}
 	} else {
-		if _, ok := f.runCmd(ctx, job, step, projectDir, "npm", "install"); !ok {
+		if _, ok := f.runCmd(ctx, job, step, emit, projectDir, "npm", "install"); !ok {
 			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorDependencyInstallFailed, ErrorMessage: "npm install failed"}, nil
 		}
 	}
@@ -158,7 +186,7 @@ func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, 
 	if len(buildArgs) == 0 {
 		buildArgs = []string{"npm", "run", "build"}
 	}
-	if _, ok := f.runCmd(ctx, job, step, projectDir, buildArgs[0], buildArgs[1:]...); !ok {
+	if _, ok := f.runCmd(ctx, job, step, emit, projectDir, buildArgs[0], buildArgs[1:]...); !ok {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBuildFailed, ErrorMessage: "build command failed"}, nil
 	}
 
@@ -175,7 +203,7 @@ func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, 
 }
 
 // runImageBuild implements design §5.5.
-func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	app, fail, ok := f.resolveApp(ctx, job)
 	if !ok {
 		return fail, nil
@@ -193,8 +221,17 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	// resolve against the wrong directory and the build would fail.
 	buildApp := app
 	buildApp.Path = filepath.Join(f.Workspace, app.Path)
-	_, res, err := podman.BuildImage(ctx, buildApp, tag)
-	f.writeLogs(job, step, res)
+	var res deploy.CommandResult
+	var err error
+	if f.StreamCmds != nil {
+		b := newCommandStreamBatcher(ctx, emit)
+		b.start()
+		_, res, err = podman.BuildImageWithCallbacks(ctx, buildApp, tag, b.addStdout, b.addStderr)
+		b.close()
+	} else {
+		_, res, err = podman.BuildImage(ctx, buildApp, tag)
+	}
+	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorImageBuildFailed, ErrorMessage: fmt.Sprintf("podman build failed: %v", err)}, nil
 	}
@@ -202,7 +239,7 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 }
 
 // runDeployment implements design §5.6.
-func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
+func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	app, fail, ok := f.resolveApp(ctx, job)
 	if !ok {
 		return fail, nil
@@ -231,8 +268,17 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	}
 
 	podman := deploy.NewPodman(f.Cmds)
-	container, res, err := podman.RunContainer(ctx, image, app.Slug, host, containerPort)
-	f.writeLogs(job, step, res)
+	var container deploy.ContainerRef
+	var res deploy.CommandResult
+	if f.StreamCmds != nil {
+		b := newCommandStreamBatcher(ctx, emit)
+		b.start()
+		container, res, err = podman.RunContainerWithCallbacks(ctx, image, app.Slug, host, containerPort, b.addStdout, b.addStderr)
+		b.close()
+	} else {
+		container, res, err = podman.RunContainer(ctx, image, app.Slug, host, containerPort)
+	}
+	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
 		if container.Name != "" {
 			_, _ = podman.RemoveContainer(ctx, container.Name)

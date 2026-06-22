@@ -43,7 +43,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at        INTEGER NOT NULL,
     started_at        INTEGER,
     ended_at          INTEGER,
-    updated_at        INTEGER NOT NULL
+    updated_at        INTEGER NOT NULL,
+    -- Added in the clarification-runner task. Left unused by CreateJob/scanJob
+    -- until Job gains these fields; backfilled on existing DBs via
+    -- Store.ensureColumn in Open.
+    clarification_session_id  TEXT    NOT NULL DEFAULT '',
+    confirmed_requirement_json TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS job_steps (
@@ -99,3 +104,53 @@ CREATE TABLE IF NOT EXISTS conversations (
     metadata_json  TEXT    NOT NULL DEFAULT '',
     created_at     INTEGER NOT NULL
 );
+
+-- Clarification sessions: a multi-round requirement-clarification exchange
+-- that runs before a Job is created. See model.ClarificationSession.
+CREATE TABLE IF NOT EXISTS clarification_sessions (
+    id               TEXT    PRIMARY KEY,
+    status           TEXT    NOT NULL,
+    initial_prompt   TEXT    NOT NULL DEFAULT '',
+    round            INTEGER NOT NULL DEFAULT 0,
+    max_rounds       INTEGER NOT NULL DEFAULT 3,
+    requirement_json TEXT    NOT NULL DEFAULT '{}',
+    created_job_id   TEXT    NOT NULL DEFAULT '',
+    error_code       TEXT    NOT NULL DEFAULT '',
+    error_message    TEXT    NOT NULL DEFAULT '',
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    confirmed_at     INTEGER,
+    abandoned_at     INTEGER
+);
+
+-- Clarification messages: the agent/user message thread of a clarification
+-- session. See model.ClarificationMessage.
+CREATE TABLE IF NOT EXISTS clarification_messages (
+    id            TEXT    PRIMARY KEY,
+    session_id    TEXT    NOT NULL,
+    role          TEXT    NOT NULL,
+    kind          TEXT    NOT NULL,
+    content       TEXT    NOT NULL DEFAULT '',
+    metadata_json TEXT    NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL
+);
+
+-- Step execution records: the durable, immutable audit trail of a step attempt
+-- (lifecycle events, activity/summary blobs, captured command stdout/stderr,
+-- errors). sequence is per (step_id, attempt) and assigned by the executor-side
+-- reporter, not by the browser; the UNIQUE constraint enforces it. See
+-- model.StepExecutionRecord / ExecutionRecordKind.
+CREATE TABLE IF NOT EXISTS step_execution_records (
+    id         TEXT    PRIMARY KEY,
+    job_id     TEXT    NOT NULL,
+    step_id    TEXT    NOT NULL,
+    attempt    INTEGER NOT NULL,
+    sequence   INTEGER NOT NULL,
+    kind       TEXT    NOT NULL,
+    content    TEXT    NOT NULL DEFAULT '',
+    truncated  INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE(step_id, attempt, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_step_execution_records_job
+ON step_execution_records(job_id, step_id, attempt, sequence);

@@ -21,11 +21,19 @@ FACTORY_FAKE_CLAUDE=1 \
 ./bin/factory-server
 ```
 
-`FACTORY_FAKE_CLAUDE=1` routes the claude-mode steps through a deterministic
-fake runner that writes valid `output.json` artifacts and emits a buildable
-generated app; the factory steps still run real `npm` + `podman`. See
+`FACTORY_FAKE_CLAUDE=1` fakes the **generation pipeline steps**
+(`requirement_analysis`, `solution_design`, `code_generation`, …) through a
+deterministic fake runner that writes valid `output.json` artifacts and emits a
+buildable generated app; the factory steps still run real `npm` + `podman`.
+
+The requirement **clarification product path intentionally does NOT use the
+fake runner** — it uses the real local Claude Code CLI, so streaming,
+structured option cards, blueprint recommendations, and the requirement
+summary exercise the same runner shape used in production-like local runs.
+Tests inject a fake clarifier; the product path does not. Leave
+`FACTORY_FAKE_CLAUDE` unset when exercising clarification end-to-end (see
 [../docs/software-factory-local-runbook.md](../docs/software-factory-local-runbook.md)
-for the complete bring-up.
+→ "Requirement Clarification Flow").
 
 ## Environment variables
 
@@ -36,7 +44,20 @@ for the complete bring-up.
 | `FACTORY_WORKSPACE_ROOT` | `.` | workspace root (apps under `generated-apps/`, `scene/`) |
 | `FACTORY_CC_STATUS_BASE_URL` | `http://127.0.0.1:8765` | cc-status observation API |
 | `FACTORY_ARTIFACT_ROOT` | `.factory-runs` | job step artifacts (`output.json`, logs) |
+| `FACTORY_LOG_PATH` | `.factory-runs/factory-server.jsonl` | JSONL runtime event log |
+| `FACTORY_LOG_MAX_BYTES` | `10485760` | rotate log after this many bytes |
+| `FACTORY_LOG_MAX_BACKUPS` | `5` | rotated `.N` files to keep |
 | `FACTORY_FAKE_CLAUDE` | unset | `1`/`true`/`yes`/`on` → deterministic fake claude runner |
+
+## Logs
+
+`factory-server` appends lightweight JSONL runtime events to
+`FACTORY_LOG_PATH` and rotates the file by size. Large Claude stdout/stderr
+artifacts remain under `.factory-runs/jobs/<job-id>/<step>/attempt-<n>/`.
+
+```bash
+tail -f .factory-runs/factory-server.jsonl
+```
 
 ## API
 

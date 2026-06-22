@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -211,4 +212,142 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestRunStreamWithInputForwardsStdoutAndStderr verifies the streaming command
+// runner invokes the stdout and stderr callbacks for each line and still
+// returns the tail-capped full output. It uses a tiny shell script so it runs
+// without a real podman.
+func TestRunStreamWithInputForwardsStdoutAndStderr(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	var stdoutLines, stderrLines []string
+	var mu sync.Mutex
+	os := OSRunner{}
+	// A portable shell one-liner: print two stdout lines + two stderr lines.
+	res, err := os.RunStreamWithInput(
+		context.Background(), "", "",
+		func(line string) {
+			mu.Lock()
+			defer mu.Unlock()
+			stdoutLines = append(stdoutLines, line)
+		},
+		func(line string) {
+			mu.Lock()
+			defer mu.Unlock()
+			stderrLines = append(stderrLines, line)
+		},
+		"sh", "-c", "echo out1; echo out2; echo err1 1>&2; echo err2 1>&2",
+	)
+	if err != nil {
+		t.Fatalf("RunStreamWithInput: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d, want 0", res.ExitCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !contains(stdoutLines, "out1") || !contains(stdoutLines, "out2") {
+		t.Errorf("stdout callbacks = %v, want out1+out2", stdoutLines)
+	}
+	if !contains(stderrLines, "err1") || !contains(stderrLines, "err2") {
+		t.Errorf("stderr callbacks = %v, want err1+err2", stderrLines)
+	}
+	if !strings.Contains(res.Stdout, "out1") {
+		t.Errorf("res.Stdout = %q, missing out1", res.Stdout)
+	}
+	if !strings.Contains(res.Stderr, "err1") {
+		t.Errorf("res.Stderr = %q, missing err1", res.Stderr)
+	}
+}
+
+// TestRunStreamWithInputReturnsOutputOnNonZeroExit verifies the streaming runner
+// still returns captured stdout/stderr and a non-zero exit code when the command
+// fails — the factory steps rely on this to write the capped artifact even on a
+// failed npm/podman run.
+func TestRunStreamWithInputReturnsOutputOnNonZeroExit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a subprocess")
+	}
+	var stderrLines []string
+	os := OSRunner{}
+	res, err := os.RunStreamWithInput(
+		context.Background(), "", "",
+		func(line string) {},
+		func(line string) { stderrLines = append(stderrLines, line) },
+		"sh", "-c", "echo failing 1>&2; exit 3",
+	)
+	if err != nil {
+		t.Fatalf("RunStreamWithInput err = %v, want nil (non-zero exit reported via ExitCode)", err)
+	}
+	if res.ExitCode != 3 {
+		t.Fatalf("exit = %d, want 3", res.ExitCode)
+	}
+	if !strings.Contains(res.Stderr, "failing") {
+		t.Errorf("res.Stderr = %q, missing 'failing'", res.Stderr)
+	}
+	if !contains(stderrLines, "failing") {
+		t.Errorf("stderr callback = %v, want 'failing' forwarded", stderrLines)
+	}
+}
+
+func contains(s []string, want string) bool {
+	for _, v := range s {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestStreamTailBufferTracksTruncation is the F7 unit test for the truncation
+// flag: once the cap is exceeded the buffer latches truncated=true and keeps the
+// newest maxStreamTailBytes; content under the cap reports truncated=false.
+func TestStreamTailBufferTracksTruncation(t *testing.T) {
+	t.Run("under cap not truncated", func(t *testing.T) {
+		b := newStreamTailBuffer()
+		_, _ = b.Write([]byte("small payload"))
+		if b.Truncated() {
+			t.Fatalf("Truncated=true for under-cap write")
+		}
+		if b.String() != "small payload" {
+			t.Fatalf("String = %q, want verbatim", b.String())
+		}
+	})
+
+	t.Run("over cap latches truncated and keeps tail", func(t *testing.T) {
+		b := newStreamTailBuffer()
+		// Write >cap in one go: head discarded, tail kept, truncated latched.
+		big := make([]byte, maxStreamTailBytes+2048)
+		for i := range big {
+			big[i] = 'x'
+		}
+		// Stamp the very last bytes so we can confirm the tail is retained.
+		copy(big[len(big)-len("TAIL"):], "TAIL")
+		_, _ = b.Write(big)
+		if !b.Truncated() {
+			t.Fatalf("Truncated=false after over-cap write")
+		}
+		s := b.String()
+		if len(s) != maxStreamTailBytes {
+			t.Fatalf("retained len = %d, want %d", len(s), maxStreamTailBytes)
+		}
+		if !strings.HasSuffix(s, "TAIL") {
+			t.Fatalf("retained tail missing newest bytes: ...%q", s[len(s)-8:])
+		}
+	})
+
+	t.Run("truncation stays latched across further writes", func(t *testing.T) {
+		b := newStreamTailBuffer()
+		big := make([]byte, maxStreamTailBytes+1)
+		_, _ = b.Write(big)
+		if !b.Truncated() {
+			t.Fatalf("expected truncated after first over-cap write")
+		}
+		_, _ = b.Write([]byte("more"))
+		if !b.Truncated() {
+			t.Fatalf("truncated flag de-latched after further write")
+		}
+	})
 }

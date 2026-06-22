@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { Send, Loader2, AlertTriangle } from 'lucide-react'
+import { applyTextareaAutosize } from './chatTextareaAutosize'
 import './ChatDialog.css'
 
 const STATUS_HINT = {
@@ -13,12 +14,17 @@ export function ChatDialog({ activeJob, jobError, onSubmit }) {
   const [history, setHistory] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const scrollRef = useRef(null)
+  const textareaRef = useRef(null)
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [history, activeJob])
+
+  useLayoutEffect(() => {
+    applyTextareaAutosize(textareaRef.current)
+  }, [input])
 
   const statusHint = activeJob ? STATUS_HINT[activeJob.status] : null
 
@@ -60,8 +66,13 @@ export function ChatDialog({ activeJob, jobError, onSubmit }) {
   }
 
   return (
-    <div className="chat-dock">
-      <div className="chat-dock-messages" ref={scrollRef}>
+    <div className={`chat-dock ${history.length === 0 ? 'chat-dock-empty-mode' : 'chat-dock-has-history'}`}>
+      <div
+        className={`chat-dock-messages ${
+          history.length === 0 ? 'chat-dock-messages-empty' : 'chat-dock-messages-has-history'
+        }`}
+        ref={scrollRef}
+      >
         {history.length === 0 && (
           <div className="chat-dock-empty">
             描述你想要生成的应用，例如：“请生成一个应用，名称为「航母母港潮汐窗口计算器」。”。
@@ -83,6 +94,7 @@ export function ChatDialog({ activeJob, jobError, onSubmit }) {
 
       <div className="chat-dock-input">
         <textarea
+          ref={textareaRef}
           className="chat-dock-textarea"
           value={input}
           onChange={e => setInput(e.target.value)}

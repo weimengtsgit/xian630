@@ -46,7 +46,25 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	return &Store{db: db}, nil
+
+	s := &Store{db: db}
+	// schema.sql only runs CREATE TABLE IF NOT EXISTS, so columns added to a
+	// table that already exists on disk (e.g. ~/.software-factory/state.db)
+	// would never appear. Backfill them idempotently. A present column is a
+	// no-op; an ALTER failure on a missing column is a real error worth
+	// surfacing rather than swallowing.
+	ctx := context.Background()
+	if err := s.ensureColumn(ctx, "jobs", "clarification_session_id",
+		`ALTER TABLE jobs ADD COLUMN clarification_session_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.clarification_session_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "confirmed_requirement_json",
+		`ALTER TABLE jobs ADD COLUMN confirmed_requirement_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.confirmed_requirement_json: %w", err)
+	}
+	return s, nil
 }
 
 // Close closes the underlying connection pool.
@@ -91,4 +109,31 @@ func nullableMs(t *time.Time) any {
 		return nil
 	}
 	return ms(*t)
+}
+
+// ensureColumn makes column exist on table. It is the lightweight migration
+// helper used by Open to backfill columns that schema.sql (all CREATE TABLE IF
+// NOT EXISTS) cannot add to a pre-existing table. If the column is already
+// present it is a no-op; otherwise it runs ddl (typically an ALTER TABLE ADD
+// COLUMN). It is safe to call on every startup.
+func (s *Store) ensureColumn(ctx context.Context, table, column, ddl string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // already present
+		}
+	}
+	_, err = s.db.ExecContext(ctx, ddl)
+	return err
 }

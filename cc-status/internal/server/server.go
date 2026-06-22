@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"strconv"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/weimengtsgit/xian630/cc-status/internal/hook"
 	"github.com/weimengtsgit/xian630/cc-status/internal/ingest"
 	"github.com/weimengtsgit/xian630/cc-status/internal/model"
+	"github.com/weimengtsgit/xian630/cc-status/internal/runlog"
 	"github.com/weimengtsgit/xian630/cc-status/internal/skills"
 	"github.com/weimengtsgit/xian630/cc-status/internal/store"
 )
@@ -29,6 +31,7 @@ type Server struct {
 	skills  *skills.Scanner
 	hub     *Hub
 	srv     *http.Server
+	runLog  *runlog.Logger
 	Version string
 }
 
@@ -36,7 +39,14 @@ type Server struct {
 func New(cfg config.Config, st *store.Store, ig *ingest.Ingest, sc *skills.Scanner) *Server {
 	h := NewHub()
 	ig.Publish = h.Publish
-	return &Server{cfg: cfg, store: st, ingest: ig, skills: sc, hub: h}
+	return &Server{
+		cfg:    cfg,
+		store:  st,
+		ingest: ig,
+		skills: sc,
+		hub:    h,
+		runLog: runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups),
+	}
 }
 
 // Start runs the HTTP server and background loops until ctx is canceled.
@@ -54,6 +64,11 @@ func (s *Server) Start(ctx context.Context) error {
 		_ = s.srv.Shutdown(c)
 	}()
 
+	s.logEvent("server_started", map[string]any{
+		"pid":     os.Getpid(),
+		"addr":    s.cfg.Addr,
+		"db_path": s.cfg.DBPath,
+	})
 	log.Printf("cc-status listening on http://%s", s.cfg.Addr)
 	err := s.srv.ListenAndServe()
 	if err == http.ErrServerClosed {
@@ -143,7 +158,23 @@ func (s *Server) ingestEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.logEvent("hook_ingested", map[string]any{
+		"hook_event":      e.HookEventName,
+		"session_id":      e.SessionID,
+		"agent_id":        e.AgentID,
+		"agent_type":      e.AgentType,
+		"tool_name":       e.ToolName,
+		"tool_use_id":     e.ToolUseID,
+		"transcript_path": e.TranscriptPath,
+		"cwd":             e.Cwd,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) logEvent(name string, fields map[string]any) {
+	if s.runLog != nil {
+		s.runLog.Event(name, fields)
+	}
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {

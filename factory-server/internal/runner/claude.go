@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
 // CommandResult is the captured outcome of one CommandRunner.Run invocation.
@@ -31,8 +33,9 @@ type inputCommandRunner interface {
 // ClaudeRunner drives one `claude --print` invocation per step attempt and the
 // post-run file audit. It does not know about the executor or store.
 type ClaudeRunner struct {
-	Runner CommandRunner // invokes claude (and git, for AuditFiles)
-	Binary string        // claude binary name; defaults to "claude" at first use
+	Runner  CommandRunner // invokes claude (and git, for AuditFiles)
+	Binary  string        // claude binary name; defaults to "claude" at first use
+	WorkDir string        // workspace root for code_generation; other stages run in the attempt artifact directory
 }
 
 func (r *ClaudeRunner) binary() string {
@@ -43,35 +46,66 @@ func (r *ClaudeRunner) binary() string {
 }
 
 // argv builds the `claude --print` argument vector for one attempt. Read-only
-// steps (requirement_analysis, solution_design) get Read/Grep/Glob only; the
-// code_generation step additionally gets Edit/Write. Every stage forbids Bash,
-// because MVP never lets Claude run shell commands (design §9) — npm and
-// podman are executed by Factory itself.
+// steps (requirement_analysis, solution_design) get Read/Grep/Glob only and run
+// in plan mode. The code_generation step additionally gets Edit/Write and MUST
+// run in acceptEdits mode, NOT plan: plan mode blocks ALL file mutations
+// regardless of --allowedTools, so an agent in plan mode can neither generate
+// the app files nor write output.json — observed in production as glm-5.1
+// emitting a prose "I couldn't write files" essay instead of code, which then
+// failed validation as output_invalid_json. acceptEdits auto-approves Edit/Write
+// in headless --print; every stage still forbids Bash via --disallowedTools,
+// because MVP never lets Claude run shell commands (design §9) — npm and podman
+// are executed by Factory itself. Defense in depth is preserved by AuditFiles,
+// which rejects any change to protected paths (scene/, factory-server/, .git/)
+// and any declared file outside generated-apps/<slug>/.
+//
+// Task 3: every stage now runs with --output-format stream-json
+// --include-partial-messages --verbose so the runner can parse SAFE tool-use
+// events (Read/Grep/Glob/Edit/Write) into activity records as they happen,
+// rather than only after the agent exits. stream-json emits one JSON object per
+// line; the parser (streamClaudeEvents) ignores thinking/reasoning and every
+// other hidden provider field — only tool_use + the public workLog in the final
+// result become records.
 func claudeArgv(codegen bool) []string {
+	stream := []string{
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+	}
 	if codegen {
-		return []string{
+		return append([]string{
 			"--print",
-			"--permission-mode", "plan",
+			"--permission-mode", "acceptEdits",
 			"--allowedTools", "Read,Grep,Glob,Edit,Write",
 			"--disallowedTools", "Bash",
-		}
+		}, stream...)
 	}
-	return []string{
+	return append([]string{
 		"--print",
 		"--permission-mode", "plan",
 		"--allowedTools", "Read,Grep,Glob",
 		"--disallowedTools", "Bash,Edit,Write",
-	}
+	}, stream...)
 }
 
 // Run writes the attempt input.json and prompt.md, then invokes the claude
 // binary with stage-tightened tool permissions and captures stdout/stderr into
 // the attempt artifact dir. On a non-zero exit it returns an error wrapping
 // ErrRunnerExitNonzero. It does NOT validate output.json or run the file audit;
-// callers do those separately. The claude process runs with its working
-// directory set to the attempt dir so the agent can read input.json/prompt.md
-// and write output.json via relative paths.
-func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt string, inputData []byte, codegen bool) error {
+// callers do those separately. Read-only stages run in the attempt directory.
+// Code generation runs in WorkDir so generated-apps/<slug> resolves against the
+// configured workspace rather than the factory-server process directory. Its
+// prompt carries absolute artifact paths for input/output files.
+//
+// Task 3: emit receives SAFE activity records parsed from the stream-json
+// stdout — one activity record per tool_use (Read/Grep/Glob/Edit/Write) with a
+// redacted relative path. thinking/reasoning and every other hidden provider
+// field are ignored by streamClaudeEvents. A nil emit is treated as a no-op so
+// tests that don't care about records can pass nil.
+func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt string, inputData []byte, codegen bool, emit StepRecordEmitter) error {
+	if emit == nil {
+		emit = NopEmitter{}
+	}
 	if err := os.MkdirAll(ws.Dir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", ws.Dir(), err)
 	}
@@ -82,12 +116,85 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 		return fmt.Errorf("write %s: %w", ws.PromptPath(), err)
 	}
 
+	streamRunner, ok := r.Runner.(streamCommandRunner)
+	if ok {
+		return r.runStream(ctx, ws, prompt, codegen, emit, streamRunner)
+	}
 	inputRunner, ok := r.Runner.(inputCommandRunner)
 	if !ok {
 		return fmt.Errorf("claude runner does not support stdin")
 	}
-	res, err := inputRunner.RunWithInput(ctx, ws.Dir(), prompt, r.binary(), claudeArgv(codegen)...)
+	runDir := ws.Dir()
+	if codegen && r.WorkDir != "" {
+		runDir = r.WorkDir
+	}
+	res, err := inputRunner.RunWithInput(ctx, runDir, prompt, r.binary(), claudeArgv(codegen)...)
 	// Capture whatever we got, even on failure, for audit/debugging.
+	_ = os.WriteFile(ws.StdoutPath(), []byte(res.Stdout), 0o644)
+	_ = os.WriteFile(ws.StderrPath(), []byte(res.Stderr), 0o644)
+	// Even on the non-streaming path, parse the captured stdout for tool-use
+	// events so records are still emitted (the stream flags are in argv, so the
+	// stdout IS stream-json). This keeps the streaming-contract test honest when
+	// the fake runner is a plain RunWithInput fake.
+	streamClaudeEvents(ctx, emit, res.Stdout)
+	if err != nil {
+		return fmt.Errorf("claude run: %w", err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("claude exit %d: %w", res.ExitCode, ErrRunnerExitNonzero)
+	}
+	if strings.TrimSpace(res.Stdout) != "" {
+		if _, statErr := os.Stat(ws.OutputPath()); errors.Is(statErr, os.ErrNotExist) {
+			// F2: stdout is stream-json NDJSON, not the contract. Extract the
+			// final type=result event's `result` string (the agent's final public
+			// answer) and write THAT. Without this, the read-only stages (plan
+			// mode, cannot write output.json themselves) would get the raw stream
+			// envelope and fail validation. code_generation writes its own
+			// output.json so this branch is skipped via the absent-file guard.
+			if out := extractStreamResult(res.Stdout); out != "" {
+				_ = os.WriteFile(ws.OutputPath(), []byte(out), 0o644)
+			}
+		}
+	}
+	return nil
+}
+
+// streamCommandRunner is the optional interface a CommandRunner can implement to
+// stream stdout/stderr line-by-line as the process runs. The OSRunner
+// implements it; test fakes implement RunWithInput and fall through to the
+// non-streaming path (which still parses the captured stdout for events).
+type streamCommandRunner interface {
+	RunStreamWithInput(ctx context.Context, dir, input string, onStdout func(string), onStderr func(string), name string, args ...string) (CommandResult, error)
+}
+
+// runStream invokes claude via the streaming runner, forwarding each stdout
+// line to streamClaudeEvents (which emits activity records for safe tool_use
+// events and ignores thinking/reasoning) and each stderr line to a
+// command_stderr record. stdout/stderr are also captured in full for the audit
+// log + output.json fallback.
+func (r *ClaudeRunner) runStream(ctx context.Context, ws AttemptWorkspace, prompt string, codegen bool, emit StepRecordEmitter, sr streamCommandRunner) error {
+	runDir := ws.Dir()
+	if codegen && r.WorkDir != "" {
+		runDir = r.WorkDir
+	}
+	var stdoutBuf, stderrBuf strings.Builder
+	onStdout := func(line string) {
+		stdoutBuf.WriteString(line)
+		stdoutBuf.WriteByte('\n')
+		streamClaudeEvents(ctx, emit, line)
+	}
+	onStderr := func(line string) {
+		stderrBuf.WriteString(line)
+		stderrBuf.WriteByte('\n')
+		_ = emit.Emit(ctx, model.ExecutionRecordCommandStderr, line)
+	}
+	res, err := sr.RunStreamWithInput(ctx, runDir, prompt, onStdout, onStderr, r.binary(), claudeArgv(codegen)...)
+	if stdoutBuf.Len() > 0 && res.Stdout == "" {
+		res.Stdout = stdoutBuf.String()
+	}
+	if stderrBuf.Len() > 0 && res.Stderr == "" {
+		res.Stderr = stderrBuf.String()
+	}
 	_ = os.WriteFile(ws.StdoutPath(), []byte(res.Stdout), 0o644)
 	_ = os.WriteFile(ws.StderrPath(), []byte(res.Stderr), 0o644)
 	if err != nil {
@@ -98,7 +205,12 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 	}
 	if strings.TrimSpace(res.Stdout) != "" {
 		if _, statErr := os.Stat(ws.OutputPath()); errors.Is(statErr, os.ErrNotExist) {
-			_ = os.WriteFile(ws.OutputPath(), []byte(res.Stdout), 0o644)
+			// F2: stdout is stream-json NDJSON, not the contract. Extract the
+			// final type=result event's `result` string and write THAT (see Run
+			// for the full rationale).
+			if out := extractStreamResult(res.Stdout); out != "" {
+				_ = os.WriteFile(ws.OutputPath(), []byte(out), 0o644)
+			}
 		}
 	}
 	return nil
@@ -114,13 +226,54 @@ var protectedPrefixes = []string{
 	".git/",
 }
 
+// BaselineStatus returns the set of working-tree paths git reports as changed
+// BEFORE a step runs. Pass it to AuditFiles as the baseline so the audit ignores
+// pre-existing dirty paths (the developer's in-progress work under protected
+// prefixes) and only flags changes the agent made DURING the run. Without this,
+// `git status --porcelain` reports the whole tree and any already-dirty
+// protected file (e.g. cc-status/README.md, factory-server/*.go) is falsely
+// blamed on every code_generation run. Returns nil on git failure or a nil
+// runner — fail-open: a missing baseline degrades to the original whole-tree
+// audit rather than blocking the step.
+func (r *ClaudeRunner) BaselineStatus(ctx context.Context, runner CommandRunner) map[string]bool {
+	if runner == nil {
+		return nil
+	}
+	res, err := runner.Run(ctx, "", "git", "status", "--porcelain")
+	if err != nil || res.ExitCode != 0 {
+		return nil
+	}
+	return porcelainPathSet(res.Stdout)
+}
+
+// porcelainPathSet parses `git status --porcelain` stdout into the set of
+// changed paths (slash-normalised). Renames contribute their whole tail.
+func porcelainPathSet(stdout string) map[string]bool {
+	set := make(map[string]bool)
+	for _, line := range strings.Split(stdout, "\n") {
+		if p := porcelainPath(line); p != "" {
+			set[filepath.ToSlash(p)] = true
+		}
+	}
+	return set
+}
+
 // AuditFiles implements the post-run audit from design §9: parse
 // `git status --porcelain`, reject any change under a protected path, then
 // reject any declared output file that is not under generated-apps/<slug>/ or
 // .factory-runs/jobs/<jobID>/. runner is taken as a parameter (rather than
 // r.Runner) so callers can pass a distinct audit-time git runner if needed; in
 // practice it is the same instance.
-func (r *ClaudeRunner) AuditFiles(ctx context.Context, runner CommandRunner, jobID string, slug string, declaredFiles []string) error {
+//
+// baseline is the pre-run working-tree state captured by BaselineStatus. Paths
+// present in baseline are SKIPPED in the protected-path sweep — they are the
+// developer's pre-existing dirty files, not changes the agent made this run, so
+// flagging them is a false positive. A nil baseline preserves the original
+// whole-tree behavior. Limitation: if the agent modifies a file that was
+// ALREADY dirty (path in both sets), the path-match cannot distinguish the
+// agent's edit from the prior change; the declaredFiles check still gates the
+// agent's declared output regardless.
+func (r *ClaudeRunner) AuditFiles(ctx context.Context, runner CommandRunner, jobID string, slug string, declaredFiles []string, baseline map[string]bool) error {
 	// git status --porcelain runs at the repo root; the fake runner ignores dir.
 	res, err := runner.Run(ctx, "", "git", "status", "--porcelain")
 	if err != nil {
@@ -132,6 +285,9 @@ func (r *ClaudeRunner) AuditFiles(ctx context.Context, runner CommandRunner, job
 			continue
 		}
 		norm := filepath.ToSlash(path)
+		if baseline[norm] {
+			continue // pre-existing dirty, not the agent's change this run
+		}
 		for _, p := range protectedPrefixes {
 			if strings.HasPrefix(norm, p) {
 				return fmt.Errorf("protected path modified: %s: %w", norm, ErrFileConstraintViolated)

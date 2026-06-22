@@ -13,9 +13,11 @@ import (
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/agents"
 	"github.com/weimengtsgit/xian630/factory-server/internal/ccstatus"
+	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
+	"github.com/weimengtsgit/xian630/factory-server/internal/runlog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -44,6 +46,14 @@ type Server struct {
 	// degrade gracefully (record cc_status_unavailable) when this is nil or the
 	// service is unreachable. Injectable for tests.
 	cc *ccstatus.Client
+
+	// clarifier runs the multi-round requirement-clarification conversation via
+	// the real Claude Code CLI (Task 4). Product path is ALWAYS the real CLI —
+	// it is NOT gated on FACTORY_FAKE_CLAUDE (that flag only swaps the step
+	// pipeline's ClaudeStepRunner). Tests override this field with a fake
+	// runner.CommandRunner to avoid invoking claude.
+	clarifier clarification.Runner
+	runLog    *runlog.Logger
 }
 
 type claudeCommandAdapter struct {
@@ -68,6 +78,25 @@ type deployInputCommandRunner interface {
 	RunWithInput(ctx context.Context, dir string, input string, name string, args ...string) (deploy.CommandResult, error)
 }
 
+type deployStreamCommandRunner interface {
+	RunStream(ctx context.Context, dir string, name string, onStdoutLine func(string), args ...string) (deploy.CommandResult, error)
+}
+
+// deployStreamWithInputCommandRunner is the deploy-side streaming-with-stdin
+// capability that *deploy.OSRunner satisfies in production. It mirrors
+// deploy.StreamCommandRunner but is declared locally (next to
+// deployInputCommandRunner / deployStreamCommandRunner) so the adapter can
+// type-assert its underlying runner with the same delegation style as the
+// other methods. When the underlying runner does NOT satisfy it (e.g. a
+// non-streaming test fake), RunStreamWithInput returns a non-zero result so
+// ClaudeRunner.Run's caller sees a clear failure rather than a panic — and
+// ClaudeRunner.Run itself never reaches this method with such a runner
+// because its own streamCommandRunner assertion would already have failed,
+// routing to the RunWithInput + post-hoc-parse fallback.
+type deployStreamWithInputCommandRunner interface {
+	RunStreamWithInput(ctx context.Context, dir, input string, onStdout func(string), onStderr func(string), name string, args ...string) (deploy.CommandResult, error)
+}
+
 func (a claudeCommandAdapter) RunWithInput(ctx context.Context, dir, input, name string, args ...string) (runner.CommandResult, error) {
 	if dir == "" {
 		dir = a.defaultDir
@@ -85,21 +114,71 @@ func (a claudeCommandAdapter) RunWithInput(ctx context.Context, dir, input, name
 	}, err
 }
 
+func (a claudeCommandAdapter) RunStream(ctx context.Context, dir, name string, onStdoutLine func(string), args ...string) (runner.CommandResult, error) {
+	if dir == "" {
+		dir = a.defaultDir
+	}
+	streamRunner, ok := a.runner.(deployStreamCommandRunner)
+	if !ok {
+		return runner.CommandResult{ExitCode: 1}, runner.ErrRunnerExitNonzero
+	}
+	res, err := streamRunner.RunStream(ctx, dir, name, onStdoutLine, args...)
+	return runner.CommandResult{
+		Stdout:     res.Stdout,
+		Stderr:     res.Stderr,
+		ExitCode:   res.ExitCode,
+		DurationMs: res.DurationMs,
+	}, err
+}
+
+// RunStreamWithInput is the streaming-with-stdin variant. It is the method
+// runner.streamCommandRunner requires, so implementing it makes the production
+// claudeCommandAdapter (whose runner is *deploy.OSRunner) satisfy that
+// interface — which means ClaudeRunner.Run's streamCommandRunner assertion
+// SUCCEEDS in production and Claude tool activity (activity records) streams
+// LIVE as tool calls happen, instead of only after the agent exits.
+//
+// onStdout / onStderr are forwarded verbatim so ClaudeRunner.runStream
+// receives each stream-json line in real time. The fallback (underlying runner
+// is not a deployStreamWithInputCommandRunner) returns a non-zero result,
+// matching the existing RunStream/RunWithInput fallback style; in practice
+// this branch is unreachable for the production adapter because *deploy.OSRunner
+// always satisfies the interface.
+func (a claudeCommandAdapter) RunStreamWithInput(ctx context.Context, dir, input string, onStdout func(string), onStderr func(string), name string, args ...string) (runner.CommandResult, error) {
+	if dir == "" {
+		dir = a.defaultDir
+	}
+	streamRunner, ok := a.runner.(deployStreamWithInputCommandRunner)
+	if !ok {
+		return runner.CommandResult{ExitCode: 1}, runner.ErrRunnerExitNonzero
+	}
+	res, err := streamRunner.RunStreamWithInput(ctx, dir, input, onStdout, onStderr, name, args...)
+	return runner.CommandResult{
+		Stdout:     res.Stdout,
+		Stderr:     res.Stderr,
+		ExitCode:   res.ExitCode,
+		DurationMs: res.DurationMs,
+	}, err
+}
+
 // New constructs a Server with its dependencies: the resolved config, the
 // SQLite store, and the manifest scanner. The SSE hub and deploy runtime are
 // owned by the server (initialized here) so callers don't need to supply them.
 // The signature is stable: adding deploy wiring does not change it.
 func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	execBusy := new(atomic.Bool)
+	runLogger := runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups)
+	osRunner := &deploy.OSRunner{}
 	s := &Server{
 		cfg:         cfg,
 		store:       st,
 		scanner:     sc,
 		hub:         NewHub(),
-		runner:      &deploy.OSRunner{},
+		runner:      osRunner,
 		healthCheck: deploy.CheckHTTP,
 		execBusy:    execBusy,
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers
+		runLog:      runLogger,
 	}
 	// Factory steps → FactoryRunner (npm + podman via the shared OSRunner).
 	// Claude steps → ClaudeStepRunner by default. When FACTORY_FAKE_CLAUDE is
@@ -107,18 +186,27 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// can run end-to-end locally for the MVP loop.
 	factory := &executor.FactoryRunner{
 		Store:        st,
-		Cmds:         s.runner,
+		Cmds:         osRunner,
+		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/podman emit live command_stdout/command_stderr records
 		Alloc:        deploy.DefaultAllocator(),
 		Health:       deploy.CheckHTTP,
 		Workspace:    cfg.WorkspaceRoot,
 		ArtifactRoot: cfg.ArtifactRoot,
 	}
 	claudeCmd := claudeCommandAdapter{runner: s.runner, defaultDir: cfg.WorkspaceRoot}
+	// Clarification runs against the REAL Claude Code CLI in production. It is
+	// intentionally NOT gated on FACTORY_FAKE_CLAUDE — only the step-pipeline
+	// ClaudeStepRunner slot is. Tests override s.clarifier directly.
+	s.clarifier = clarification.Runner{
+		Cmd:           claudeCmd,
+		WorkspaceRoot: cfg.WorkspaceRoot,
+		ArtifactRoot:  cfg.ArtifactRoot,
+	}
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
 		Store:        st,
 		Workspace:    cfg.WorkspaceRoot,
 		ArtifactRoot: cfg.ArtifactRoot,
-		Claude:       &runner.ClaudeRunner{Runner: claudeCmd},
+		Claude:       &runner.ClaudeRunner{Runner: claudeCmd, WorkDir: cfg.WorkspaceRoot},
 		AuditRunner:  claudeCmd,
 	}
 	if truthy(os.Getenv("FACTORY_FAKE_CLAUDE")) {
@@ -131,9 +219,20 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	}
 	dispatch := executor.NewDispatcher(factory, claude)
 	s.exec = executor.NewExecutor(st, dispatch, execBusy)
+	s.exec.RunLog = runLogger
 	s.exec.OnUpdate = func(ctx context.Context, update executor.ExecutionUpdate) {
 		s.publishStepUpdated(ctx, update.StepID)
 		s.publishJobUpdated(ctx, update.JobID)
+	}
+	// OnRecord fans out each persisted StepExecutionRecord to SSE subscribers as
+	// a "step.record.appended" event. The executor invokes this ONLY after a
+	// successful store append, so the record is durable and already carries the
+	// executor-assigned (attempt, sequence). The record content is restricted to
+	// safe kinds (system/activity/summary/command_stdout/command_stderr/error) by
+	// the emitter upstream — never file bytes or hidden reasoning — so publishing
+	// it verbatim over SSE does not leak artifact content.
+	s.exec.OnRecord = func(ctx context.Context, u runner.ExecutionRecordUpdate) {
+		s.hub.Publish(Event{Type: "step.record.appended", Data: u.Record})
 	}
 	return s
 }
@@ -185,12 +284,26 @@ func (s *Server) Start(ctx context.Context) error {
 	// Start the pipeline executor's drain loop; it exits when ctx is cancelled
 	// (server shutdown).
 	s.exec.Start(ctx)
+	s.logEvent("server_started", map[string]any{
+		"pid":                os.Getpid(),
+		"addr":               s.cfg.Addr,
+		"db_path":            s.cfg.DBPath,
+		"artifact_root":      s.cfg.ArtifactRoot,
+		"workspace_root":     s.cfg.WorkspaceRoot,
+		"cc_status_base_url": s.cfg.CCStatusBaseURL,
+	})
 	log.Printf("factory-server listening on http://%s", s.cfg.Addr)
 	err = s.srv.ListenAndServe()
 	if err == http.ErrServerClosed {
 		return nil
 	}
 	return err
+}
+
+func (s *Server) logEvent(name string, fields map[string]any) {
+	if s.runLog != nil {
+		s.runLog.Event(name, fields)
+	}
 }
 
 func (s *Server) routes() *Router {
@@ -213,10 +326,26 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/jobs", s.listJobs)
 	r.Handle("GET", "/api/jobs/:id", s.getJob)
 	r.Handle("GET", "/api/jobs/:id/steps", s.jobSteps)
+	r.Handle("GET", "/api/jobs/:id/steps/:stepID/execution-records", s.jobStepExecutionRecords)
 	r.Handle("GET", "/api/jobs/:id/artifacts", s.jobArtifacts)
+	r.Handle("GET", "/api/jobs/:id/execution-summary", s.jobExecutionSummary)
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)
 	r.Handle("POST", "/api/jobs/:id/retry-current-step", s.retryCurrentStep)
+
+	// Clarification session lifecycle (Task 4). A portal chat message creates a
+	// clarification session (NOT a job) until the user confirms.
+	r.Handle("POST", "/api/clarifications", s.createClarification)
+	r.Handle("GET", "/api/clarifications/active", s.getActiveClarification)
+	r.Handle("GET", "/api/clarifications/:id", s.getClarification)
+	r.Handle("GET", "/api/clarifications/:id/messages", s.listClarificationMessages)
+	r.Handle("POST", "/api/clarifications/:id/messages", s.addClarificationMessage)
+	r.Handle("POST", "/api/clarifications/:id/answers", s.answerClarification)
+	r.Handle("POST", "/api/clarifications/:id/answers/batch", s.answerClarificationBatch)
+	r.Handle("PATCH", "/api/clarifications/:id/requirement", s.patchClarificationRequirement)
+	r.Handle("POST", "/api/clarifications/:id/retry-current-round", s.retryClarificationRound)
+	r.Handle("POST", "/api/clarifications/:id/confirm", s.confirmClarification)
+	r.Handle("POST", "/api/clarifications/:id/abandon", s.abandonClarification)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

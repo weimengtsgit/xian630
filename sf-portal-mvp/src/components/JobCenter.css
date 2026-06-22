@@ -342,3 +342,547 @@
   background: rgba(111, 218, 255, 0.24);
   border-radius: 3px;
 }
+
+/* =========================================================================
+   Task 6: 3x2 step matrix (replaces the old vertical jc-step list) + drawer.
+   The matrix is a CSS grid: 3 wide x 2 tall for the six fixed stages. The
+   drawer is a fixed-position overlay on the right; it does NOT consume
+   center-column space, so ClarificationPanel/ChatDialog keep their heights.
+   ========================================================================= */
+
+/* The 3x2 matrix. minmax(0,1fr) keeps the middle column stable (no squeeze). */
+.jc-step-matrix {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* --- StepCard ---------------------------------------------------------- */
+.sc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(3, 17, 29, 0.7);
+  border: 1px solid rgba(111, 218, 255, 0.14);
+  border-left: 3px solid rgba(111, 218, 255, 0.18);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  transition: border-color 0.2s, background 0.2s, transform 0.05s;
+  min-width: 0;
+}
+.sc-card:hover {
+  border-color: rgba(111, 218, 255, 0.4);
+}
+.sc-card:active {
+  transform: translateY(1px);
+}
+.sc-card-selected {
+  border-color: #68ddff;
+  background: rgba(104, 221, 255, 0.1);
+}
+
+.sc-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.sc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #8fb0bf;
+}
+.sc-status-text {
+  /* Color is never the only signal: this text label always accompanies the
+     status icon + colored border. */
+}
+.sc-status-running {
+  color: #68ddff;
+}
+.sc-status-succeeded {
+  color: #7feb9b;
+}
+.sc-status-failed {
+  color: #ff665e;
+}
+.sc-status-waiting_user {
+  color: #f3c761;
+}
+
+.sc-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #68ddff;
+  color: #04283b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sc-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.sc-stage-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #edfaff;
+}
+.sc-chevron {
+  color: #68ddff;
+  flex-shrink: 0;
+}
+
+.sc-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: #8fb0bf;
+}
+.sc-agent {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sc-attempt,
+.sc-duration {
+  white-space: nowrap;
+}
+
+.sc-summary {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #b9d6e2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Status accent on the card border (mirrors old jc-step colors). */
+.sc-card.sc-status-running {
+  border-left-color: #68ddff;
+  background: rgba(104, 221, 255, 0.08);
+}
+.sc-card.sc-status-succeeded {
+  border-left-color: rgba(127, 235, 155, 0.6);
+}
+.sc-card.sc-status-failed {
+  border-left-color: #ff665e;
+  background: rgba(255, 102, 94, 0.06);
+}
+.sc-card.sc-status-waiting_user {
+  border-left-color: #f3c761;
+  background: rgba(243, 199, 97, 0.06);
+}
+
+/* --- StepExecutionDrawer (right-side overlay) -------------------------- */
+.sed-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 38vw);
+  z-index: 60;
+  display: flex;
+  pointer-events: none; /* let the panel re-enable; overlay bg is on panel */
+}
+.sed-panel {
+  pointer-events: auto;
+  width: 100%;
+  height: 100%;
+  background: rgba(7, 22, 36, 0.97);
+  border-left: 1px solid rgba(111, 218, 255, 0.32);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+
+.sed-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(111, 218, 255, 0.18);
+}
+.sed-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.sed-stage {
+  font-size: 14px;
+  font-weight: 600;
+  color: #edfaff;
+}
+
+.sed-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #8fb0bf;
+}
+.sed-status-running {
+  color: #68ddff;
+}
+.sed-status-succeeded {
+  color: #7feb9b;
+}
+.sed-status-failed {
+  color: #ff665e;
+}
+.sed-status-waiting_user {
+  color: #f3c761;
+}
+
+.sed-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  background: transparent;
+  color: #b9d6e2;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sed-close:hover {
+  background: rgba(111, 218, 255, 0.12);
+}
+
+.sed-attempt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(111, 218, 255, 0.12);
+}
+.sed-attempt-label {
+  font-size: 11px;
+  color: #8fb0bf;
+}
+.sed-attempt-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sed-attempt-chip {
+  padding: 3px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  background: transparent;
+  color: #b9d6e2;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sed-attempt-chip-active {
+  background: rgba(104, 221, 255, 0.18);
+  color: #edfaff;
+  border-color: #68ddff;
+}
+
+.sed-tabs {
+  display: flex;
+  border-bottom: 1px solid rgba(111, 218, 255, 0.18);
+}
+.sed-tab {
+  flex: 1;
+  padding: 9px 0;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8fb0bf;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sed-tab-active {
+  color: #edfaff;
+  border-bottom-color: #68ddff;
+}
+
+.sed-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+
+.sed-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sed-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 6px 10px;
+  font-size: 12px;
+}
+.sed-fact dt {
+  color: #8fb0bf;
+}
+.sed-fact dd {
+  margin: 0;
+  color: #d7eef8;
+}
+
+.sed-summary-block h4,
+.sed-error-block h4,
+.sed-artifact-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #8fb0bf;
+  font-weight: 600;
+}
+.sed-summary-text,
+.sed-error-text,
+.sed-artifact-text {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(3, 17, 29, 0.7);
+  border: 1px solid rgba(111, 218, 255, 0.14);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d7eef8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.sed-error-text {
+  color: #ff9b95;
+  border-color: rgba(255, 102, 94, 0.32);
+}
+
+.sed-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sed-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+.sed-cancel {
+  color: #ff665e;
+  background: rgba(255, 102, 94, 0.12);
+}
+.sed-cancel:hover {
+  background: rgba(255, 102, 94, 0.22);
+}
+.sed-retry {
+  color: #68ddff;
+  background: rgba(104, 221, 255, 0.12);
+}
+.sed-retry:hover {
+  background: rgba(104, 221, 255, 0.22);
+}
+.sed-readonly-hint {
+  margin: 0;
+  font-size: 11px;
+  color: #8fb0bf;
+}
+
+/* Records tab */
+.sed-records {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+}
+.sed-records-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sed-load-older,
+.sed-follow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  background: transparent;
+  color: #b9d6e2;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sed-load-older:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sed-follow-on {
+  color: #7feb9b;
+  border-color: rgba(127, 235, 155, 0.4);
+  background: rgba(127, 235, 155, 0.1);
+}
+.sed-no-older {
+  font-size: 11px;
+  color: #687f8c;
+}
+
+.sed-missed {
+  align-self: flex-start;
+  padding: 5px 11px;
+  border-radius: 12px;
+  background: #68ddff;
+  color: #04283b;
+  font-size: 11px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+}
+
+.sed-record-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px;
+}
+.sed-record {
+  padding: 6px 8px;
+  background: rgba(3, 17, 29, 0.6);
+  border: 1px solid rgba(111, 218, 255, 0.1);
+  border-radius: 5px;
+}
+.sed-record-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: #8fb0bf;
+  margin-bottom: 3px;
+}
+.sed-record-kind {
+  color: #68ddff;
+  font-weight: 600;
+}
+.sed-record-seq {
+  font-variant-numeric: tabular-nums;
+}
+.sed-record-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #d7eef8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sed-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #687f8c;
+  text-align: center;
+  padding: 24px 0;
+}
+
+/* Artifacts tab */
+.sed-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sed-artifact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sed-artifact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sed-artifact-pick {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(111, 218, 255, 0.14);
+  background: transparent;
+  color: #d7eef8;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.sed-artifact-pick span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sed-artifact-active .sed-artifact-pick {
+  background: rgba(104, 221, 255, 0.12);
+  border-color: #68ddff;
+}
+.sed-artifact-tag {
+  font-size: 10px;
+  color: #f3c761;
+  border: 1px solid rgba(243, 199, 97, 0.4);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.sed-artifact-content {
+  border-top: 1px solid rgba(111, 218, 255, 0.18);
+  padding-top: 10px;
+}
+.sed-advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #f3c761;
+  padding: 4px 0;
+  list-style: none;
+}
+.sed-advanced > summary::before {
+  content: '▸ ';
+}
+.sed-advanced[open] > summary::before {
+  content: '▾ ';
+}
+
+.spin {
+  animation: jcSpin 1s linear infinite;
+}

@@ -3,12 +3,14 @@ package executor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
 )
 
@@ -16,7 +18,8 @@ import (
 // maps a step kind to the result it should return; BlockKinds holds kinds whose
 // Run blocks until the passed ctx is cancelled (then returns a canceled
 // result). The runner records each Run call's ctx separately for the cancel
-// test.
+// test. The emitter is accepted to satisfy the StepRunner contract but is a
+// no-op here — the fake does not duplicate real persistence logic.
 type fakeRunner struct {
 	mu         sync.Mutex
 	byKind     map[model.StepKind]StepResult
@@ -25,7 +28,7 @@ type fakeRunner struct {
 	ctxCh      chan context.Context // if non-nil, receives every Run ctx
 }
 
-func (f *fakeRunner) Run(ctx context.Context, _ model.Job, step model.JobStep) (StepResult, error) {
+func (f *fakeRunner) Run(ctx context.Context, _ model.Job, step model.JobStep, _ runner.StepRecordEmitter) (StepResult, error) {
 	f.mu.Lock()
 	f.lastCtx = ctx
 	if f.ctxCh != nil {
@@ -409,4 +412,318 @@ func TestExecutorRunOnceBusySkipped(t *testing.T) {
 	if j := mustJob(t, st, id); j.Status != model.JobStatusQueued {
 		t.Fatalf("job = %s, want queued (busy held)", j.Status)
 	}
+}
+
+// TestExecutorWritesStartedAndFinishedRecords is the Task-3 Step-1 lifecycle
+// test: a succeeded step must persist at least a started + a completed system
+// record, with the completed record's content EXACTLY "步骤已完成". The executor
+// owns sequence + persistence; the runner is a no-op fake that just succeeds.
+func TestExecutorWritesStartedAndFinishedRecords(t *testing.T) {
+	e, st := newTestExecutor(t, &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepRequirementAnalysis: {Status: model.StepStatusSucceeded},
+	}})
+	jobID := seedJob(t, st)
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	steps, _ := st.ListJobSteps(context.Background(), jobID)
+	step := stepByKind(t, steps, model.StepRequirementAnalysis)
+	records, err := st.ListStepExecutionRecordPage(context.Background(), jobID, step.ID, 1, 0, 200)
+	if err != nil {
+		t.Fatalf("list records: %v", err)
+	}
+	if len(records) < 2 {
+		t.Fatalf("records = %#v, want at least 2 (started + completed)", records)
+	}
+	if records[0].Kind != model.ExecutionRecordSystem {
+		t.Fatalf("first record kind = %s, want system", records[0].Kind)
+	}
+	last := records[len(records)-1]
+	if last.Kind != model.ExecutionRecordSystem || last.Content != "步骤已完成" {
+		t.Fatalf("last record = {Kind:%s Content:%q}, want system/步骤已完成", last.Kind, last.Content)
+	}
+	// Sequences must be strictly ascending and contiguous (executor-assigned).
+	for i, r := range records {
+		if r.Sequence != i+1 {
+			t.Fatalf("record[%d].Sequence = %d, want %d", i, r.Sequence, i+1)
+		}
+	}
+}
+
+// TestExecutorWritesFailedAndWaitingRecords covers the other terminal system
+// records: a failed step emits "步骤执行失败" and a waiting_user step emits
+// "步骤等待用户输入".
+func TestExecutorWritesFailedAndWaitingRecords(t *testing.T) {
+	t.Run("failed", func(t *testing.T) {
+		e, st := newTestExecutor(t, &fakeRunner{byKind: map[model.StepKind]StepResult{
+			model.StepRequirementAnalysis: {Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "boom"},
+		}})
+		jobID := seedJob(t, st)
+		_ = e.RunOnce(context.Background())
+		steps, _ := st.ListJobSteps(context.Background(), jobID)
+		step := stepByKind(t, steps, model.StepRequirementAnalysis)
+		records, _ := st.ListStepExecutionRecordPage(context.Background(), jobID, step.ID, 1, 0, 200)
+		var lastContent string
+		if len(records) > 0 {
+			lastContent = records[len(records)-1].Content
+		}
+		if lastContent != "步骤执行失败" {
+			t.Fatalf("last record content = %q, want 步骤执行失败", lastContent)
+		}
+	})
+	t.Run("waiting_user", func(t *testing.T) {
+		e, st := newTestExecutor(t, &fakeRunner{byKind: map[model.StepKind]StepResult{
+			model.StepRequirementAnalysis: {Status: model.StepStatusWaitingUser, NeedsUserInput: true},
+		}})
+		jobID := seedJob(t, st)
+		_ = e.RunOnce(context.Background())
+		steps, _ := st.ListJobSteps(context.Background(), jobID)
+		step := stepByKind(t, steps, model.StepRequirementAnalysis)
+		records, _ := st.ListStepExecutionRecordPage(context.Background(), jobID, step.ID, 1, 0, 200)
+		var lastContent string
+		if len(records) > 0 {
+			lastContent = records[len(records)-1].Content
+		}
+		if lastContent != "步骤等待用户输入" {
+			t.Fatalf("last record content = %q, want 步骤等待用户输入", lastContent)
+		}
+	})
+}
+
+// TestExecutorMarksPersistenceFailedWhenStoreErrors verifies the mutex-guarded
+// first-error logic: if the store rejects a record append, the executor surfaces
+// execution_record_persistence_failed rather than claiming a fully-auditable
+// success. We force the failure by inserting a duplicate (step_id, attempt,
+// sequence) row before the run so the UNIQUE constraint trips on the first
+// system record.
+func TestExecutorMarksPersistenceFailedWhenStoreErrors(t *testing.T) {
+	e, st := newTestExecutor(t, &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepRequirementAnalysis: {Status: model.StepStatusSucceeded},
+	}})
+	jobID := seedJob(t, st)
+	steps, _ := st.ListJobSteps(context.Background(), jobID)
+	step := stepByKind(t, steps, model.StepRequirementAnalysis)
+	// Pre-insert a record at sequence 1 so the executor's first system record
+	// (also sequence 1) collides on the UNIQUE(step_id, attempt, sequence).
+	_ = st.AppendStepExecutionRecord(context.Background(), model.StepExecutionRecord{
+		ID: "rec_pre", JobID: jobID, StepID: step.ID, Attempt: 1, Sequence: 1,
+		Kind: model.ExecutionRecordSystem, Content: "pre-existing",
+	})
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	updated := mustJob(t, st, jobID)
+	if updated.Status != model.JobStatusFailed {
+		t.Fatalf("job status = %s, want failed (persistence failed should fail the step)", updated.Status)
+	}
+	s := stepByKind(t, mustSteps(t, st, jobID), model.StepRequirementAnalysis)
+	if s.ErrorCode != model.ErrorExecutionRecordPersistenceFailed {
+		t.Fatalf("step error_code = %s, want execution_record_persistence_failed", s.ErrorCode)
+	}
+}
+
+// blockingAppender is an instrumented recordAppender whose AppendStepExecutionRecord
+// blocks until releaseCh is closed, then records the append in the orderObserved
+// slice. It is the deterministic oracle for TestStepEmitterEmitHoldsLockAcrossAppendAndPublish:
+// it proves the stepEmitter keeps s.mu held across BOTH the store append AND the
+// OnRecord publish, so the second Emit cannot even ENTER the append until the
+// first Emit's publish has completed.
+type blockingAppender struct {
+	mu            sync.Mutex
+	enterCh       chan struct{} // signalled once when the first append enters
+	releaseCh     chan struct{} // closed to let the first append return
+	orderObserved []int         // append enter order by sequence, guarded by mu
+	enteredCount  int32
+}
+
+func (b *blockingAppender) AppendStepExecutionRecord(_ context.Context, rec model.StepExecutionRecord) error {
+	b.mu.Lock()
+	b.orderObserved = append(b.orderObserved, rec.Sequence)
+	b.mu.Unlock()
+	// First append blocks until the test releases it; this is what lets the
+	// test observe whether a second append can start concurrently.
+	if atomic.AddInt32(&b.enteredCount, 1) == 1 {
+		select {
+		case <-b.releaseCh:
+		default:
+			close(b.enterCh)
+			<-b.releaseCh
+		}
+	}
+	return nil
+}
+
+// TestStepEmitterEmitHoldsLockAcrossAppendAndPublish is the F6 regression: it
+// proves s.mu spans the store append AND the OnRecord publish. With the lock
+// held across both, the SECOND Emit's append cannot start until the FIRST Emit
+// has returned from its publish — so the published order strictly matches
+// ascending sequence. With the pre-fix code (unlock before append), two
+// concurrent emits could persist+publish 2-then-1.
+//
+// Deterministic approach: blockingAppender makes the first append block on
+// releaseCh. The second Emit is started concurrently; it MUST still be blocked
+// (mu held) while the first is stalled in append. We then release the first;
+// after both finish we assert the publish order equals [1, 2, 3, ...] ascending.
+func TestStepEmitterEmitHoldsLockAcrossAppendAndPublish(t *testing.T) {
+	app := &blockingAppender{
+		enterCh:   make(chan struct{}, 1),
+		releaseCh: make(chan struct{}),
+	}
+
+	var (
+		pubMu    sync.Mutex
+		pubOrder []int // sequence numbers in publish order
+	)
+	onRecord := func(_ context.Context, u runner.ExecutionRecordUpdate) {
+		pubMu.Lock()
+		pubOrder = append(pubOrder, u.Record.Sequence)
+		pubMu.Unlock()
+	}
+	emit := &stepEmitter{
+		store:    app,
+		onRecord: onRecord,
+		jobID:    "job_f6",
+		stepID:   "step_f6",
+		attempt:  1,
+		nextSeq:  1,
+	}
+
+	ctx := context.Background()
+	// Emit seq 1 (blocks in the appender).
+	go func() { _ = emit.Emit(ctx, model.ExecutionRecordActivity, "first") }()
+	<-app.enterCh // first append has entered and is now blocked
+
+	// While seq 1 is blocked inside the append, start seq 2 and seq 3. With the
+	// lock spanning append+publish, these MUST be queued behind s.mu and cannot
+	// enter the appender yet.
+	done2 := make(chan struct{})
+	done3 := make(chan struct{})
+	go func() { defer close(done2); _ = emit.Emit(ctx, model.ExecutionRecordActivity, "second") }()
+	go func() { defer close(done3); _ = emit.Emit(ctx, model.ExecutionRecordActivity, "third") }()
+
+	// Give the second/third emitters a chance to race ahead if the lock were NOT
+	// held across append+publish. Under the fix they stay blocked on s.mu.
+	time.Sleep(50 * time.Millisecond)
+	app.mu.Lock()
+	entered := len(app.orderObserved)
+	app.mu.Unlock()
+	if entered != 1 {
+		t.Fatalf("lock not held across append: %d appends entered while first was blocked (want 1)", entered)
+	}
+
+	// Release the first append. Now 2 then 3 proceed strictly in order.
+	close(app.releaseCh)
+	<-done2
+	<-done3
+
+	pubMu.Lock()
+	got := append([]int(nil), pubOrder...)
+	pubMu.Unlock()
+
+	if len(got) != 3 {
+		t.Fatalf("published %d records, want 3: %v", len(got), got)
+	}
+	for i, seq := range got {
+		if seq != i+1 {
+			t.Fatalf("publish order not ascending: %v (want [1 2 3])", got)
+		}
+	}
+}
+
+// TestStepEmitterEmitRedactsBeforePersistAndPublish is the P1 regression for the
+// live-record credential leak. The stepEmitter is the SINGLE chokepoint every
+// record — command_stdout, command_stderr, activity, summary, system lifecycle —
+// passes through before it is appended to the store and published over SSE. A
+// credential in command output must therefore be masked in BOTH the persisted
+// store row AND the OnRecord payload, never raw. The design
+// (software-factory-task-observability-design.md "写入执行记录前脱敏") and the
+// runbook ("Before any record or artifact is persisted") require redaction at
+// exactly this point. Before the fix the factory stream batcher and the Claude
+// stderr callback emitted raw output, and a test even asserted the raw secret
+// survived — credentials then reached the DB and the SSE fan-out.
+//
+// Deterministic: capturingAppender records exactly what stepEmitter handed it,
+// and the onRecord closure records exactly what was published, so both halves of
+// the invariant are checked directly. It also asserts a plain system record is
+// left untouched, proving redaction is content-based (not kind-based): fixed
+// Chinese status strings never carry credentials and so are never altered.
+func TestStepEmitterEmitRedactsBeforePersistAndPublish(t *testing.T) {
+	app := &capturingAppender{}
+	var pubMu sync.Mutex
+	var published model.StepExecutionRecord
+	onRecord := func(_ context.Context, u runner.ExecutionRecordUpdate) {
+		pubMu.Lock()
+		published = u.Record
+		pubMu.Unlock()
+	}
+	emit := &stepEmitter{
+		store:    app,
+		onRecord: onRecord,
+		jobID:    "job_p1",
+		stepID:   "step_p1",
+		attempt:  1,
+		nextSeq:  1,
+	}
+	ctx := context.Background()
+
+	// A command_stderr carrying both the Authorization header form and a
+	// key=value env-dump form of a secret (mirrors npm/podman/Claude output).
+	if err := emit.Emit(ctx, model.ExecutionRecordCommandStderr,
+		"Authorization: Bearer leak-xyz\nDB_PASSWORD=hunter2"); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	if len(app.records) != 1 {
+		t.Fatalf("appended %d records, want 1", len(app.records))
+	}
+	persisted := app.records[0].Content
+
+	// Both the persisted row and the published payload must be redacted.
+	for _, secret := range []string{"leak-xyz", "hunter2"} {
+		if strings.Contains(persisted, secret) {
+			t.Errorf("persisted record leaked secret %q:\n%s", secret, persisted)
+		}
+		if strings.Contains(published.Content, secret) {
+			t.Errorf("published record leaked secret %q:\n%s", secret, published.Content)
+		}
+	}
+	if !strings.Contains(persisted, "[REDACTED]") {
+		t.Errorf("persisted record missing [REDACTED]:\n%s", persisted)
+	}
+	if !strings.Contains(published.Content, "[REDACTED]") {
+		t.Errorf("published record missing [REDACTED]:\n%s", published.Content)
+	}
+
+	// A plain system lifecycle record must pass through verbatim — redaction is
+	// content-based, so fixed status strings are never altered.
+	if err := emit.Emit(ctx, model.ExecutionRecordSystem, systemRecordCompleted); err != nil {
+		t.Fatalf("Emit system: %v", err)
+	}
+	pubMu.Lock()
+	lastPersisted := app.records[len(app.records)-1].Content
+	lastPublished := published.Content
+	pubMu.Unlock()
+	if lastPersisted != systemRecordCompleted {
+		t.Errorf("system record altered by redaction: got %q want %q", lastPersisted, systemRecordCompleted)
+	}
+	if lastPublished != systemRecordCompleted {
+		t.Errorf("published system record altered by redaction: got %q want %q", lastPublished, systemRecordCompleted)
+	}
+}
+
+// capturingAppender is an instrumented recordAppender that records every appended
+// record verbatim. It is the oracle for
+// TestStepEmitterEmitRedactsBeforePersistAndPublish: it proves the content the
+// stepEmitter persisted was already redacted (the security-critical half — the
+// store row is what the audit trail and REST endpoint serve).
+type capturingAppender struct {
+	mu      sync.Mutex
+	records []model.StepExecutionRecord
+}
+
+func (c *capturingAppender) AppendStepExecutionRecord(_ context.Context, rec model.StepExecutionRecord) error {
+	c.mu.Lock()
+	c.records = append(c.records, rec)
+	c.mu.Unlock()
+	return nil
 }

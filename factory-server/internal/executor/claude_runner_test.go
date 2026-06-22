@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +110,8 @@ func TestClaudeStepRunnerRegistersGeneratedAppFromCodeGenerationOutput(t *testin
 			"createdFiles":   []string{"generated-apps/demo/.factory/app.json"},
 			"needsUserInput": false,
 			"questions":      []any{},
+			"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+			"warnings":       []string{},
 		},
 	}
 	r := &ClaudeStepRunner{
@@ -122,7 +126,7 @@ func TestClaudeStepRunnerRegistersGeneratedAppFromCodeGenerationOutput(t *testin
 		t.Fatalf("create job: %v", err)
 	}
 
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -142,18 +146,54 @@ func TestClaudeStepRunnerRegistersGeneratedAppFromCodeGenerationOutput(t *testin
 	}
 }
 
-func TestClaudeStepRunnerReturnsWaitingUserWhenOutputAsksClarification(t *testing.T) {
+func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T) {
+	workspace := t.TempDir()
+	artifactRoot := filepath.Join(t.TempDir(), ".factory-runs")
+	ws := runner.AttemptWorkspace{
+		Root:     artifactRoot,
+		JobID:    "job_codegen_paths",
+		StepKind: model.StepCodeGeneration,
+		Attempt:  1,
+	}
+	r := &ClaudeStepRunner{Workspace: workspace}
+	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepCodeGeneration}, ws, nil, nil)
+
+	for _, want := range []string{
+		"工作区根目录：" + workspace,
+		"input.json 路径：" + ws.InputPath(),
+		"output.json 路径：" + ws.OutputPath(),
+		"output.md 路径：" + ws.OutputMDPath(),
+		`"schemaVersion": 1`,
+		`"entry": "static-vite"`,
+		`"path": "generated-apps/<slug>"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("codegen prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: as of Task 5 the
+// requirement_analysis step FREEZES the confirmed requirement. It must NEVER
+// return waiting_user (clarification is pre-job now): a frozen output whose
+// validation reports complete=false fails the step with schema_validation_failed.
+func TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
 	cmd := fakeClaudeCommand{
 		t:         t,
 		workspace: ws,
 		output: map[string]any{
-			"summary":        "需要澄清",
-			"appType":        "timeline-replay",
-			"needsUserInput": true,
-			"questions": []map[string]string{
-				{"id": "range", "question": "时间范围是否固定为近一个月？", "defaultAnswer": "是"},
+			"confirmedRequirementId": "clar_x",
+			"summary":                "需求不完整",
+			"appType":                "timeline-replay",
+			"appName":                "demo",
+			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
+			"validation": map[string]any{
+				"complete":            false,
+				"supported":           true,
+				"missingFields":       []string{"coreScenario"},
+				"unsupportedRequests": []string{},
 			},
 		},
 	}
@@ -166,11 +206,324 @@ func TestClaudeStepRunnerReturnsWaitingUserWhenOutputAsksClarification(t *testin
 	}
 	job, step := claudeJobStep(model.StepRequirementAnalysis)
 
-	res, err := r.Run(context.Background(), job, step)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
-		t.Fatalf("result = %#v, want waiting_user with needs input", res)
+	if res.Status != model.StepStatusFailed {
+		t.Fatalf("result = %#v, want failed (rejected requirement fails the step)", res)
+	}
+	if res.ErrorCode != model.ErrorSchemaValidationFailed {
+		t.Fatalf("error_code = %q, want schema_validation_failed", res.ErrorCode)
+	}
+	if res.NeedsUserInput {
+		t.Fatalf("NeedsUserInput = true, want false (freeze step never pauses)")
+	}
+}
+
+// TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen: the happy path — a
+// complete+supported frozen output lets the step succeed and proceed.
+func TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"confirmedRequirementId": "clar_ok",
+			"summary":                "frozen ok",
+			"appType":                "timeline-replay",
+			"appName":                "demo",
+			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
+			"validation": map[string]any{
+				"complete":            true,
+				"supported":           true,
+				"missingFields":       []string{},
+				"unsupportedRequests": []string{},
+			},
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepRequirementAnalysis)
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("result = %#v, want succeeded", res)
+	}
+}
+
+// TestSafeName exercises the canonical path-segment validator: only single safe
+// segments are accepted; traversal, separators, and absolute-ish markers are
+// rejected. This guards both the executor path builders and the server's
+// fail-closed API validation (P2#1).
+func TestSafeName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"software-factory-app", true},
+		{"defense_operations-ui", true},
+		{"map.timeline.replay", true},
+		{"a", true},
+		{"A1", true},
+		{"", false},
+		{".", false},
+		{"..", false},
+		{"../evil", false},
+		{"a/b", false},
+		{"a\\b", false},
+		{"/etc/passwd", false},
+		{"foo..bar", false}, // contains ".."
+		{"foo bar", false},  // space
+		{"café", false},     // non-ASCII
+		{"a:b", false},
+	}
+	for _, c := range cases {
+		if got := SafeName(c.in); got != c.want {
+			t.Errorf("SafeName(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// TestSelectedSkillPathsContainmentSafe asserts that selectedSkillPaths drops
+// unsafe/escaping keys and never returns a path outside the allowed skills root.
+func TestSelectedSkillPathsContainmentSafe(t *testing.T) {
+	workspace := t.TempDir()
+	allowedRoot, _ := filepath.Abs(filepath.Join(workspace, ".claude", "skills"))
+
+	profile := map[string][]string{
+		"base":    {"software-factory-app", "", "..", "../evil", "a/b", "/abs"},
+		"domain":  {"defense-operations-ui", "foo..bar"},
+		"pattern": {"map-timeline-replay"},
+	}
+	got := selectedSkillPaths(workspace, profile)
+
+	for _, p := range got {
+		abs, err := filepath.Abs(filepath.FromSlash(p))
+		if err != nil {
+			t.Fatalf("abs %q: %v", p, err)
+		}
+		rel, err := filepath.Rel(allowedRoot, abs)
+		if err != nil {
+			t.Fatalf("rel %q under %s: %v", p, allowedRoot, err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			t.Errorf("returned path escapes skills root: %q (rel=%q)", p, rel)
+		}
+	}
+
+	// The safe keys must still be present (order: base → domain → pattern),
+	// and unsafe ones must be absent.
+	wantPaths := []string{
+		filepath.ToSlash(filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(workspace, ".claude", "skills", "defense-operations-ui", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(workspace, ".claude", "skills", "map-timeline-replay", "SKILL.md")),
+	}
+	if len(got) != len(wantPaths) {
+		t.Fatalf("got %d paths %v, want %d (%v)", len(got), got, len(wantPaths), wantPaths)
+	}
+	for i, wp := range wantPaths {
+		if got[i] != wp {
+			t.Errorf("got[%d] = %q, want %q (full: %v)", i, got[i], wp, got)
+		}
+	}
+}
+
+// TestBlueprintRefPathsContainmentSafe asserts that blueprintRefPaths drops
+// unsafe/escaping slugs and never returns a path outside the scene root. A safe
+// slug whose scene.md does not exist still surfaces a README.md fallback path
+// (existing behavior for missing refs is preserved).
+func TestBlueprintRefPathsContainmentSafe(t *testing.T) {
+	workspace := t.TempDir()
+	sceneRoot, _ := filepath.Abs(filepath.Join(workspace, "scene"))
+
+	// Create a real scene dir so we exercise both the scene.md and README.md
+	// branches; the safe "real-scene" gets a scene.md.
+	realDir := filepath.Join(sceneRoot, "real-scene")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir scene: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "scene.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write scene.md: %v", err)
+	}
+
+	got := blueprintRefPaths(workspace, []string{
+		"real-scene",
+		"missing-safe-scene", // safe but absent → README.md fallback surfaced
+		"",                   // empty → dropped
+		"..",                 // traversal → dropped
+		"../evil",            // traversal → dropped
+		"a/b",                // separator → dropped
+	})
+
+	for _, p := range got {
+		abs, err := filepath.Abs(filepath.FromSlash(p))
+		if err != nil {
+			t.Fatalf("abs %q: %v", p, err)
+		}
+		rel, err := filepath.Rel(sceneRoot, abs)
+		if err != nil {
+			t.Fatalf("rel %q under %s: %v", p, sceneRoot, err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			t.Errorf("returned path escapes scene root: %q (rel=%q)", p, rel)
+		}
+	}
+
+	// Two safe slugs survive: the real scene.md and the missing-safe README.md
+	// fallback. Unsafe slugs are dropped.
+	if len(got) != 2 {
+		t.Fatalf("got %d paths %v, want 2", len(got), got)
+	}
+	wantSceneMD := filepath.ToSlash(filepath.Join(workspace, "scene", "real-scene", "scene.md"))
+	wantReadme := filepath.ToSlash(filepath.Join(workspace, "scene", "missing-safe-scene", "README.md"))
+	if got[0] != wantSceneMD {
+		t.Errorf("got[0] = %q, want %q", got[0], wantSceneMD)
+	}
+	if got[1] != wantReadme {
+		t.Errorf("got[1] = %q, want %q", got[1], wantReadme)
+	}
+}
+
+// TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies is the
+// load-bearing security invariant for Task 2's safe artifact capture: after a
+// successful requirement_analysis step, the OPERATIONAL input.json / prompt.md /
+// output.json must be byte-for-byte identical to what Claude execution produced
+// (never redacted in place), AND the registered artifacts must point at separate
+// redacted audit copies under attempt-N/audit/, never at the operational files.
+// It also asserts the audit copies are actually redacted (a secret planted in
+// input.json does not survive into the registered artifact).
+func TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"confirmedRequirementId": "clar_intact",
+			"summary":                "ok",
+			"appType":                "timeline-replay",
+			"appName":                "demo",
+			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
+			"validation": map[string]any{
+				"complete":            true,
+				"supported":           true,
+				"missingFields":       []string{},
+				"unsupportedRequests": []string{},
+			},
+		},
+	}
+	artifactRoot := filepath.Join(ws, ".factory-runs")
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: artifactRoot,
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepRequirementAnalysis)
+	// Plant a credential-looking token in the user prompt so it lands in the
+	// operational input.json and proves the audit copy redacts it while the
+	// operational file keeps it verbatim.
+	job.UserPrompt = "需求：生成应用。附 DB_PASSWORD=hunter2-leak 用于测试脱敏。"
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s, want succeeded", res.Status)
+	}
+
+	attemptDir := filepath.Join(artifactRoot, "jobs", job.ID, string(step.Kind), "attempt-1")
+	auditDir := filepath.Join(attemptDir, "audit")
+
+	// Read the operational files that were actually written by ClaudeRunner.Run.
+	opInput, err := os.ReadFile(filepath.Join(attemptDir, "input.json"))
+	if err != nil {
+		t.Fatalf("read operational input.json: %v", err)
+	}
+	opPrompt, err := os.ReadFile(filepath.Join(attemptDir, "prompt.md"))
+	if err != nil {
+		t.Fatalf("read operational prompt.md: %v", err)
+	}
+	opOutput, err := os.ReadFile(filepath.Join(attemptDir, "output.json"))
+	if err != nil {
+		t.Fatalf("read operational output.json: %v", err)
+	}
+
+	// The operational input.json carries the job (the user prompt is embedded
+	// verbatim into input.json). It must survive UNREDACTED because Claude
+	// execution and runner.Validate* depend on the exact bytes.
+	if !bytes.Contains(opInput, []byte(job.UserPrompt)) {
+		t.Fatalf("operational input.json lost the original user prompt (was it redacted in place?)")
+	}
+
+	// The audit copy of input.json must exist and must be a REDACTED transform
+	// of the operational input. We plant a credential-looking token in the user
+	// prompt so redaction is observable: the operational file keeps it, the
+	// audit copy masks it.
+	auditInput, err := os.ReadFile(filepath.Join(auditDir, "input.json"))
+	if err != nil {
+		t.Fatalf("read audit input.json: %v", err)
+	}
+	if !bytes.Contains(auditInput, []byte("[REDACTED]")) {
+		t.Fatalf("audit input.json was not redacted: %s", auditInput)
+	}
+	if bytes.Contains(auditInput, []byte("hunter2-leak")) {
+		t.Fatalf("audit input.json leaked the planted secret")
+	}
+
+	// Registered artifacts must point at audit copies for the operational
+	// CONTRACT files (input_json/prompt_markdown/output_json), never at the
+	// operational files themselves. Command logs (command_stdout/command_stderr)
+	// are audit-only and live at the attempt dir root by design — those are
+	// allowed to be in place since they are not operational inputs to validation.
+	arts, err := st.ListArtifactsByJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(arts) == 0 {
+		t.Fatalf("no artifacts registered")
+	}
+	contractKinds := map[string]bool{
+		"input_json":      true,
+		"prompt_markdown": true,
+		"output_json":     true,
+		"output_markdown": true,
+	}
+	for _, a := range arts {
+		if contractKinds[a.Kind] {
+			if !strings.Contains(filepath.ToSlash(a.Path), "/audit/") {
+				t.Errorf("contract artifact kind=%s path=%q is not under .../audit/", a.Kind, a.Path)
+			}
+		}
+	}
+
+	// Operational files must still be byte-for-byte intact (re-read and compare).
+	opInput2, _ := os.ReadFile(filepath.Join(attemptDir, "input.json"))
+	opPrompt2, _ := os.ReadFile(filepath.Join(attemptDir, "prompt.md"))
+	opOutput2, _ := os.ReadFile(filepath.Join(attemptDir, "output.json"))
+	if !bytes.Equal(opInput, opInput2) {
+		t.Errorf("operational input.json mutated during artifact capture")
+	}
+	if !bytes.Equal(opPrompt, opPrompt2) {
+		t.Errorf("operational prompt.md mutated during artifact capture")
+	}
+	if !bytes.Equal(opOutput, opOutput2) {
+		t.Errorf("operational output.json mutated during artifact capture")
+	}
+	// Sanity: prompt is non-empty markdown (proves the operational write happened).
+	if len(opPrompt) == 0 {
+		t.Errorf("operational prompt.md is empty")
 	}
 }

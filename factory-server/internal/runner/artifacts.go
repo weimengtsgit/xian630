@@ -50,3 +50,16 @@ func (w AttemptWorkspace) StdoutPath() string { return filepath.Join(w.Dir(), "s
 
 // StderrPath captures the claude process stderr for audit (design §6).
 func (w AttemptWorkspace) StderrPath() string { return filepath.Join(w.Dir(), "stderr.log") }
+
+// AuditDir is the sanitized audit-copy directory under one attempt. The
+// operational input.json / prompt.md / output.json live directly under Dir()
+// and MUST stay byte-for-byte intact (Claude execution and output validation
+// depend on their exact bytes). The artifact-capture layer writes REDACTED,
+// capped copies of those files here and registers ONLY these copies as
+// artifacts — never the operational originals. Command stdout.log/stderr.log
+// are audit-only and are also written redacted+capped under this dir.
+func (w AttemptWorkspace) AuditDir() string { return filepath.Join(w.Dir(), "audit") }
+
+// AuditPath joins a relative filename under the audit directory. It is a thin
+// filepath.Join wrapper so callers never build raw "audit/input.json" strings.
+func (w AttemptWorkspace) AuditPath(name string) string { return filepath.Join(w.AuditDir(), name) }
