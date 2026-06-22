@@ -62,3 +62,6 @@ bin/
 
 # Software factory runtime artifacts
 /factory-server/.factory-runs/
+
+# Superpowers brainstorming companion artifacts
+.superpowers/
