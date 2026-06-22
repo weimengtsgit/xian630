@@ -36,6 +36,8 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 	seen := make(map[string]bool)
 	apps := make([]model.Application, 0)
 
+	visibility := loadPresetVisibility(s.Root)
+
 	for _, pattern := range manifestGlobs {
 		matches, err := filepath.Glob(filepath.Join(s.Root, pattern))
 		if err != nil {
@@ -71,6 +73,12 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 				return nil, fmt.Errorf("duplicate slug %q (from manifest %s)", m.Slug, relPath)
 			}
 			seen[m.Slug] = true
+
+			if m.Source == "preset" {
+				if show, ok := visibility[m.Slug]; ok && !show {
+					continue
+				}
+			}
 
 			apps = append(apps, manifestToApp(m, relPath))
 		}
