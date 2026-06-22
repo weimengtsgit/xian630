@@ -256,7 +256,7 @@ func TestGetActiveClarificationNormalizesLegacyCompleteWaitingSession(t *testing
 	}
 }
 
-func TestCreateClarificationConflictReportsNormalizedActiveStatus(t *testing.T) {
+func TestCreateClarificationAllowsMultipleActiveSessions(t *testing.T) {
 	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: waitingUserOutput})
 
 	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母母港潮汐窗口计算器"})
@@ -272,19 +272,24 @@ func TestCreateClarificationConflictReportsNormalizedActiveStatus(t *testing.T) 
 		t.Fatalf("seed requirement: %v", err)
 	}
 
-	conflict := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成另一个应用"})
-	if conflict.Code != http.StatusConflict {
-		t.Fatalf("conflict status = %d body=%s, want 409", conflict.Code, conflict.Body.String())
+	second := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成另一个应用"})
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second create status = %d body=%s, want 201", second.Code, second.Body.String())
 	}
-	var body map[string]any
-	if err := json.Unmarshal(conflict.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode conflict body: %v", err)
+	var secondSess model.ClarificationSession
+	if err := json.NewDecoder(second.Body).Decode(&secondSess); err != nil {
+		t.Fatalf("decode second session: %v", err)
 	}
-	if body["session_id"] != sess.ID {
-		t.Fatalf("session_id = %v, want %q", body["session_id"], sess.ID)
+	if secondSess.ID == sess.ID {
+		t.Fatalf("second session reused active session id %q", sess.ID)
 	}
-	if body["status"] != string(model.ClarificationStatusReadyToConfirm) {
-		t.Fatalf("status = %v, want %q", body["status"], model.ClarificationStatusReadyToConfirm)
+
+	sessions, err := st.ListClarificationSessions(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("ListClarificationSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %#v, want 2", sessions)
 	}
 }
 
@@ -1297,5 +1302,31 @@ func TestRunRoundSanitizesUnsafeBlueprintRefs(t *testing.T) {
 	}
 	if persisted.BlueprintRefs[0] != "carrier-formation-replay" {
 		t.Fatalf("persisted blueprintRef[0] = %q, want 'carrier-formation-replay'", persisted.BlueprintRefs[0])
+	}
+}
+
+func TestListClarificationsReturnsParsedRequirement(t *testing.T) {
+	_, r, _ := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clarifications?limit=50", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var views []clarificationView
+	if err := json.NewDecoder(rec.Body).Decode(&views); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("len = %d, want 1", len(views))
+	}
+	if views[0].Requirement.AppName != "航母编队复盘应用" {
+		t.Fatalf("appName = %q", views[0].Requirement.AppName)
 	}
 }

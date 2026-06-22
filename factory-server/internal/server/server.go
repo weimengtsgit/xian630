@@ -336,6 +336,7 @@ func (s *Server) routes() *Router {
 	// Clarification session lifecycle (Task 4). A portal chat message creates a
 	// clarification session (NOT a job) until the user confirms.
 	r.Handle("POST", "/api/clarifications", s.createClarification)
+	r.Handle("GET", "/api/clarifications", s.listClarifications)
 	r.Handle("GET", "/api/clarifications/active", s.getActiveClarification)
 	r.Handle("GET", "/api/clarifications/:id", s.getClarification)
 	r.Handle("GET", "/api/clarifications/:id/messages", s.listClarificationMessages)

@@ -85,3 +85,28 @@ func TestClarificationMessages(t *testing.T) {
 		t.Fatalf("messages = %#v", msgs)
 	}
 }
+
+func TestListClarificationSessionsNewestFirst(t *testing.T) {
+	st := newTestStore(t)
+	base := time.Now()
+	rows := []model.ClarificationSession{
+		{ID: "clar_old", Status: model.ClarificationStatusWaitingUser, InitialPrompt: "old", Round: 1, MaxRounds: 3, RequirementJSON: `{"appName":"旧会话"}`, CreatedAt: base, UpdatedAt: base},
+		{ID: "clar_new", Status: model.ClarificationStatusReadyToConfirm, InitialPrompt: "new", Round: 2, MaxRounds: 3, RequirementJSON: `{"appName":"新会话"}`, CreatedAt: base.Add(time.Second), UpdatedAt: base.Add(time.Second)},
+	}
+	for _, row := range rows {
+		if err := st.CreateClarificationSession(context.Background(), row); err != nil {
+			t.Fatalf("CreateClarificationSession(%s): %v", row.ID, err)
+		}
+	}
+
+	got, err := st.ListClarificationSessions(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("ListClarificationSessions: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].ID != "clar_new" || got[1].ID != "clar_old" {
+		t.Fatalf("order = %s,%s; want clar_new,clar_old", got[0].ID, got[1].ID)
+	}
+}

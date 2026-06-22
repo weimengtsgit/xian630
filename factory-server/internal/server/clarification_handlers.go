@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,32 +99,21 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if active, err := s.store.GetActiveClarificationSession(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "get active session")
-		return
-	} else if active != nil {
-		active, err = s.normalizeClarificationReadiness(ctx, active)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "normalize active session")
+	if body.AbandonActive {
+		if active, err := s.store.GetActiveClarificationSession(ctx); err != nil {
+			writeError(w, http.StatusInternalServerError, "get active session")
 			return
-		}
-		if !body.AbandonActive {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":      "active session exists",
-				"session_id": active.ID,
-				"status":     active.Status,
+		} else if active != nil {
+			if err := s.store.SetClarificationStatus(ctx, active.ID, model.ClarificationStatusAbandoned, "", ""); err != nil {
+				writeError(w, http.StatusInternalServerError, "abandon active session")
+				return
+			}
+			s.publishClarificationEvent(clarification.StreamEvent{
+				Type:      "clarification.abandoned",
+				SessionID: active.ID,
+				Data:      active,
 			})
-			return
 		}
-		if err := s.store.SetClarificationStatus(ctx, active.ID, model.ClarificationStatusAbandoned, "", ""); err != nil {
-			writeError(w, http.StatusInternalServerError, "abandon active session")
-			return
-		}
-		s.publishClarificationEvent(clarification.StreamEvent{
-			Type:      "clarification.abandoned",
-			SessionID: active.ID,
-			Data:      active,
-		})
 	}
 
 	now := time.Now()
@@ -170,6 +160,27 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, s.viewFromSession(updated))
+}
+
+// listClarifications handles GET /api/clarifications.
+func (s *Server) listClarifications(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	sessions, err := s.store.ListClarificationSessions(r.Context(), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list sessions")
+		return
+	}
+	out := make([]clarificationView, 0, len(sessions))
+	for i := range sessions {
+		sess := sessions[i]
+		out = append(out, s.viewFromSession(&sess))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // getActiveClarification handles GET /api/clarifications/active. It lets the
