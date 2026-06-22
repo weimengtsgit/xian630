@@ -33,6 +33,7 @@ type Server struct {
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
 	runner      deploy.CommandRunner                                               // default: &deploy.OSRunner{}
+	runtime     deploy.ContainerRuntime                                             // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
 	execBusy    *atomic.Bool                                                       // global executor lock (Task 10 holds it during jobs)
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
@@ -169,12 +170,25 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	execBusy := new(atomic.Bool)
 	runLogger := runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups)
 	osRunner := &deploy.OSRunner{}
+
+	// Select container runtime based on configuration
+	var runtime deploy.ContainerRuntime
+	switch cfg.ContainerRuntime {
+	case "docker":
+		runtime = deploy.NewDocker(osRunner)
+		log.Printf("Container runtime: docker")
+	default: // "podman" or any invalid value (fallback to podman)
+		runtime = deploy.NewPodman(osRunner)
+		log.Printf("Container runtime: podman")
+	}
+
 	s := &Server{
 		cfg:         cfg,
 		store:       st,
 		scanner:     sc,
 		hub:         NewHub(),
 		runner:      osRunner,
+		runtime:     runtime,
 		healthCheck: deploy.CheckHTTP,
 		execBusy:    execBusy,
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers

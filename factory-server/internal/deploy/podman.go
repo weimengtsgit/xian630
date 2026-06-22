@@ -170,6 +170,11 @@ func (p *Podman) RemoveContainer(ctx context.Context, containerName string) (Com
 	return res, nil
 }
 
+// Name returns "podman" for logging and error messages.
+func (p *Podman) Name() string {
+	return "podman"
+}
+
 // OSRunner is the production CommandRunner backed by os/exec. It is the default
 // set by server.New; tests substitute a fake.
 type OSRunner struct{}
