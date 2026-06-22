@@ -120,6 +120,14 @@ func TestRunnerWritesArtifactsAndNormalizesEvents(t *testing.T) {
 			t.Fatalf("missing %s: %v", rel, err)
 		}
 	}
+	promptRaw, err := os.ReadFile(filepath.Join(root, ".factory-runs", "clarifications", "clar_1", "round-1", "prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt.md: %v", err)
+	}
+	promptText := string(promptRaw)
+	if !strings.Contains(promptText, "requirement-clarification") {
+		t.Fatalf("prompt should reference requirement-clarification skill: %s", promptText)
+	}
 	if len(events) == 0 {
 		t.Fatalf("expected normalized events")
 	}
