@@ -32,6 +32,7 @@ export function ConversationWorkbench({
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
   const canConfirm = session && session.status === 'ready_to_confirm'
+  const terminal = !!(session && (session.status === 'confirmed' || session.status === 'abandoned' || session.status === 'failed'))
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
   const canSubmitAnswers = activeQuestions.length > 0 && completedAnswers === activeQuestions.length && !submitting
@@ -97,10 +98,18 @@ export function ConversationWorkbench({
         {session && session.status === 'failed' ? <button type="button" onClick={onRetry} disabled={submitting}>重试本轮</button> : null}
         {session && session.status !== 'confirmed' && session.status !== 'abandoned' ? <button type="button" onClick={onAbandon} disabled={submitting}>放弃</button> : null}
         {canConfirm ? <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>确认并生成</button> : null}
-        <textarea value={input} onChange={e => setInput(e.target.value)} placeholder="输入新需求或补充说明" disabled={submitting || canConfirm} />
-        <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting || canConfirm}>
-          {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-        </button>
+        {terminal ? (
+          <p className="cw-terminal-hint">
+            {session.status === 'failed' ? '会话已结束。失败会话可重试本轮，或新建会话开始新需求。' : '会话已结束，点击右上角「新建会话」开始新的需求澄清。'}
+          </p>
+        ) : (
+          <>
+            <textarea value={input} onChange={e => setInput(e.target.value)} placeholder="输入新需求或补充说明" disabled={submitting || canConfirm || terminal} />
+            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting || canConfirm || terminal}>
+              {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+            </button>
+          </>
+        )}
       </footer>
 
       {historyOpen ? (

@@ -404,6 +404,9 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 // directory under <WorkspaceRoot>/generated-apps and rejects anything that
 // escapes that root (absolute paths, parent traversal, or a slug/path mismatch).
 func (s *Server) safeGeneratedAppDir(app model.Application) (string, error) {
+	if app.Slug == "" {
+		return "", errors.New("generated app has no slug")
+	}
 	root := s.cfg.WorkspaceRoot
 	if root == "" {
 		root = "."

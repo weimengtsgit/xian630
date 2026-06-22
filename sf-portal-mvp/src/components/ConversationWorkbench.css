@@ -63,3 +63,4 @@
 .cw-custom { display: flex; gap: 6px; }
 .cw-custom input { min-width: 0; flex: 1; }
 .cw-custom-selected { color: rgba(215, 238, 248, 0.68); font-size: 11px; }
+.cw-terminal-hint { margin: 0; color: rgba(215, 238, 248, 0.58); font-size: 12px; }
