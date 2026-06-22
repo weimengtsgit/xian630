@@ -87,11 +87,19 @@ func (r Runner) runClaude(ctx context.Context, input RoundInput, prompt string, 
 	if sr, ok := r.Cmd.(streamCommandRunner); ok {
 		return r.runClaudeStream(ctx, sr, input, prompt, emit)
 	}
-	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(),
+	args := []string{
 		"--print", prompt,
 		"--permission-mode", "plan",
 		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write")
+		"--disallowedTools", "Bash,Edit,Write",
+	}
+	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
+	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(), args...)
+	// Non-streaming fallback: the captured stdout is still stream-json NDJSON,
+	// so trace each line for parity with the streaming path.
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		runner.LLMConsoleStreamLine(line)
+	}
 	return res, res.Stdout, false, err
 }
 
@@ -105,11 +113,24 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	})
 	var assistantText strings.Builder
 	var resultText string
+	var resultIsError bool
 	var lastVisible string
+	args := []string{
+		"--print", prompt,
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+		"--permission-mode", "plan",
+		"--allowedTools", "Read,Grep,Glob",
+		"--disallowedTools", "Bash,Edit,Write",
+	}
+	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
-		delta, result := parseClaudeStreamLine(line)
+		runner.LLMConsoleStreamLine(line)
+		delta, result, isErr := parseClaudeStreamLine(line)
 		if result != "" {
 			resultText = result
+			resultIsError = isErr
 		}
 		if delta == "" {
 			return
@@ -126,21 +147,23 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 			MessageID: messageID,
 			Delta:     visible,
 		})
-	},
-		"--print", prompt,
-		"--output-format", "stream-json",
-		"--include-partial-messages",
-		"--verbose",
-		"--permission-mode", "plan",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write")
+	}, args...)
 	finalText := assistantText.String()
 	if strings.TrimSpace(finalText) == "" {
 		finalText = resultText
 	}
 	finalVisible := extractWorkLogStreamText(finalText)
 	if finalVisible == "" {
-		finalVisible = "结构化澄清结果接收完成，正在解析。"
+		// When the CLI surfaced an error (e.g. an upstream API 529 overloaded)
+		// instead of a clarification document, show the real reason rather than
+		// the optimistic "parsing" string — otherwise the bubble reads "正在解析"
+		// right up until the session flips to "已失败", which looks like a parser
+		// crash instead of a model-side failure.
+		if notice := claudeErrorNotice(finalText, resultIsError); notice != "" {
+			finalVisible = notice
+		} else {
+			finalVisible = "结构化澄清结果接收完成，正在解析。"
+		}
 	}
 	emit(StreamEvent{
 		Type:      "clarification.message.completed",
@@ -151,20 +174,21 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	return res, finalText, true, err
 }
 
-func parseClaudeStreamLine(line string) (textDelta string, result string) {
+func parseClaudeStreamLine(line string) (textDelta, result string, resultIsError bool) {
 	var top struct {
-		Type   string          `json:"type"`
-		Event  json.RawMessage `json:"event"`
-		Result string          `json:"result"`
+		Type    string          `json:"type"`
+		Event   json.RawMessage `json:"event"`
+		Result  string          `json:"result"`
+		IsError bool            `json:"is_error"`
 	}
 	if err := json.Unmarshal([]byte(line), &top); err != nil {
-		return "", ""
+		return "", "", false
 	}
 	if top.Type == "result" {
-		return "", top.Result
+		return "", top.Result, top.IsError
 	}
 	if top.Type != "stream_event" || len(top.Event) == 0 {
-		return "", ""
+		return "", "", false
 	}
 	var ev struct {
 		Type  string `json:"type"`
@@ -174,12 +198,12 @@ func parseClaudeStreamLine(line string) (textDelta string, result string) {
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(top.Event, &ev); err != nil {
-		return "", ""
+		return "", "", false
 	}
 	if ev.Type != "content_block_delta" || ev.Delta.Type != "text_delta" {
-		return "", ""
+		return "", "", false
 	}
-	return ev.Delta.Text, ""
+	return ev.Delta.Text, "", false
 }
 
 func extractWorkLogStreamText(s string) string {
@@ -282,6 +306,45 @@ func parsePartialJSONString(s string, quotePos int) (string, int) {
 	return b.String(), len(s)
 }
 
+// claudeErrorNotice returns a user-facing Chinese notice when the Claude Code
+// CLI returned an error (e.g. an upstream API 529 "overloaded") in lieu of a
+// clarification document, so the failure reason is visible in the work-log
+// bubble before the session transitions to "已失败". It keys off the result
+// envelope's is_error flag (authoritative) and the CLI's "API Error" marker as a
+// textual fallback. Returns "" for ordinary output — including a valid document
+// that simply omits workLog — so the caller keeps its optimistic "正在解析"
+// fallback in that case and does not misreport a successful round as failed.
+func claudeErrorNotice(finalText string, resultIsError bool) string {
+	t := strings.TrimSpace(finalText)
+	if t == "" {
+		return ""
+	}
+	if !resultIsError && !looksLikeClaudeError(t) {
+		return ""
+	}
+	return "需求澄清失败：" + truncateNotice(t)
+}
+
+// looksLikeClaudeError detects a Claude Code CLI error surfaced as the assistant
+// text/result, e.g. `API Error: 529 {"type":"error",...}`. The CLI prints
+// upstream API failures with the literal "API Error" prefix; "overloaded_error"
+// covers the Anthropic-style error type that some gateways pass through.
+func looksLikeClaudeError(s string) bool {
+	return strings.Contains(s, "API Error") ||
+		strings.Contains(s, "overloaded_error")
+}
+
+// truncateNotice caps an error notice so a pathological blob cannot flood the
+// work-log bubble; real CLI failures are short strings.
+func truncateNotice(s string) string {
+	const max = 500
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
 func (r Runner) prompt(inputPath string) string {
 	return "Use .claude/skills/requirement-clarification/SKILL.md. " +
 		fmt.Sprintf("The round input is at the absolute path %s — read it with the Read tool. ", inputPath) +
@@ -361,11 +424,19 @@ func writeStream(path string, events []StreamEvent) error {
 }
 
 // extractJSONObject returns the substring of s spanning the outermost balanced {...}
-// object, tolerating markdown fences (```json … ```) and surrounding prose. If no
-// balanced object is found, it returns s unchanged so json.Unmarshal produces the
-// usual error.
+// object, tolerating markdown fences (```json … ```), surrounding prose, and
+// JSON strings (e.g., "{\"status\":...}"). If no balanced object is found, it
+// returns s unchanged so json.Unmarshal produces the usual error.
 func extractJSONObject(s string) string {
 	s = strings.TrimSpace(s)
+	// If the entire text is a JSON string (starts and ends with quotes), unquote it first.
+	// This handles the case where claude stream-json returns result as a quoted JSON string.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		unquoted, err := strconv.Unquote(s)
+		if err == nil && strings.HasPrefix(unquoted, "{") {
+			s = unquoted
+		}
+	}
 	// strip a leading ```lang fence and trailing ```
 	if strings.HasPrefix(s, "```") {
 		// drop the opening fence line

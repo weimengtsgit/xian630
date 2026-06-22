@@ -39,10 +39,16 @@ func (d *DockerRuntime) Name() string {
 // semantics as Run (non-zero exit → ExitCode set, nil error), so error-code
 // mapping is identical on both paths.
 func (d *DockerRuntime) runWithCallbacks(ctx context.Context, dir string, onStdout, onStderr func(string), name string, args ...string) (CommandResult, error) {
+	var (
+		res CommandResult
+		err error
+	)
 	if sr, ok := d.Runner.(StreamCommandRunner); ok && (onStdout != nil || onStderr != nil) {
-		return sr.RunStreamWithInput(ctx, dir, "", onStdout, onStderr, name, args...)
+		res, err = sr.RunStreamWithInput(ctx, dir, "", onStdout, onStderr, name, args...)
+	} else {
+		res, err = d.Runner.Run(ctx, dir, name, args...)
 	}
-	return d.Runner.Run(ctx, dir, name, args...)
+	return res, hintIfMissingBinary(name, err)
 }
 
 // BuildImage runs `docker build -t <repo>/<slug>:<tag> .` from the app's Path

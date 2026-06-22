@@ -324,6 +324,78 @@ func TestImageBuildRunsPodmanBuild(t *testing.T) {
 	}
 }
 
+// TestImageBuildUsesConfiguredRuntimeNotPodman: when FactoryRunner.Runtime is
+// set (production wires it from FACTORY_CONTAINER_RUNTIME), image_build MUST
+// drive that runtime and MUST NOT shell out to a hardcoded podman. Regression
+// test for the bug where FACTORY_CONTAINER_RUNTIME=docker was set and the
+// server logged container_runtime=docker, yet image_build still ran
+// `podman build` and failed with "podman: executable file not found".
+func TestImageBuildUsesConfiguredRuntimeNotPodman(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	r, cmds := newFactoryRunner(st, ws, true)
+	fr := &fakeContainerRuntime{name: "docker"}
+	r.Runtime = fr
+
+	job, step := factoryJobStep(model.StepImageBuild)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	if fr.buildCalls != 1 {
+		t.Fatalf("configured runtime BuildImage calls = %d, want 1", fr.buildCalls)
+	}
+	for _, c := range cmds.calls {
+		if c.Name == "podman" {
+			t.Fatalf("hardcoded podman invoked despite a custom Runtime being set: %v", c.Args)
+		}
+	}
+}
+
+// fakeContainerRuntime is a deploy.ContainerRuntime double that records its
+// calls. It stands in for docker/podman so the runtime-selection logic can be
+// tested without a real container engine.
+type fakeContainerRuntime struct {
+	name        string
+	buildCalls  int
+	runCalls    int
+	stopCalls   int
+	removeCalls int
+}
+
+func (f *fakeContainerRuntime) Name() string { return f.name }
+
+func (f *fakeContainerRuntime) BuildImage(_ context.Context, app model.Application, tag string) (deploy.ImageRef, deploy.CommandResult, error) {
+	f.buildCalls++
+	return deploy.ImageRef{FullName: "localhost/software-factory/" + app.Slug + ":" + tag}, deploy.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *fakeContainerRuntime) BuildImageWithCallbacks(ctx context.Context, app model.Application, tag string, _, _ func(string)) (deploy.ImageRef, deploy.CommandResult, error) {
+	return f.BuildImage(ctx, app, tag)
+}
+
+func (f *fakeContainerRuntime) RunContainer(_ context.Context, _ deploy.ImageRef, _ string, _, _ int) (deploy.ContainerRef, deploy.CommandResult, error) {
+	f.runCalls++
+	return deploy.ContainerRef{Name: "fake"}, deploy.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *fakeContainerRuntime) RunContainerWithCallbacks(ctx context.Context, image deploy.ImageRef, appSlug string, hostPort, containerPort int, _, _ func(string)) (deploy.ContainerRef, deploy.CommandResult, error) {
+	return f.RunContainer(ctx, image, appSlug, hostPort, containerPort)
+}
+
+func (f *fakeContainerRuntime) StopContainer(_ context.Context, _ string) (deploy.CommandResult, error) {
+	f.stopCalls++
+	return deploy.CommandResult{}, nil
+}
+
+func (f *fakeContainerRuntime) RemoveContainer(_ context.Context, _ string) (deploy.CommandResult, error) {
+	f.removeCalls++
+	return deploy.CommandResult{}, nil
+}
+
 // TestDeploymentRunsContainerHealthchecks: podman run + health ok → deployment
 // row running + app running.
 func TestDeploymentRunsContainerHealthchecks(t *testing.T) {

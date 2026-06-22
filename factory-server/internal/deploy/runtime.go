@@ -17,9 +17,17 @@ type ContainerRuntime interface {
 	// The image is built from the application's Path directory using a Dockerfile.
 	BuildImage(ctx context.Context, app model.Application, tag string) (ImageRef, CommandResult, error)
 
+	// BuildImageWithCallbacks is the streaming variant of BuildImage: stdout/stderr
+	// lines are forwarded live to onStdout/onStderr so the factory steps can emit
+	// command_stdout/command_stderr records as the build progresses.
+	BuildImageWithCallbacks(ctx context.Context, app model.Application, tag string, onStdout, onStderr func(string)) (ImageRef, CommandResult, error)
+
 	// RunContainer runs a container from the image with port mapping.
 	// The container is named using the appSlug plus a random suffix.
 	RunContainer(ctx context.Context, image ImageRef, appSlug string, hostPort, containerPort int) (ContainerRef, CommandResult, error)
+
+	// RunContainerWithCallbacks is the streaming variant of RunContainer.
+	RunContainerWithCallbacks(ctx context.Context, image ImageRef, appSlug string, hostPort, containerPort int, onStdout, onStderr func(string)) (ContainerRef, CommandResult, error)
 
 	// StopContainer stops a running container.
 	StopContainer(ctx context.Context, containerName string) (CommandResult, error)

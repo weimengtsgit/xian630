@@ -3,6 +3,8 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -350,4 +352,44 @@ func TestStreamTailBufferTracksTruncation(t *testing.T) {
 			t.Fatalf("truncated flag de-latched after further write")
 		}
 	})
+}
+
+// TestHintIfMissingBinaryAugmentsNotFoundError: when the container engine
+// binary is absent the raw exec error gives no clue that
+// FACTORY_CONTAINER_RUNTIME switches backends. The hint must wrap the original
+// error (so errors.Is(ErrRunnerFailed) holds) and mention both the env var and
+// the missing binary. A nil error and an unrelated error pass through untouched.
+func TestHintIfMissingBinaryAugmentsNotFoundError(t *testing.T) {
+	// The exact error os/exec produces when a binary is missing.
+	notFound := &exec.Error{Name: "podman", Err: exec.ErrNotFound}
+
+	hinted := hintIfMissingBinary("podman", notFound)
+	if !errors.Is(hinted, ErrRunnerFailed) {
+		t.Fatalf("hinted err does not wrap ErrRunnerFailed: %v", hinted)
+	}
+	if !strings.Contains(hinted.Error(), "FACTORY_CONTAINER_RUNTIME") {
+		t.Errorf("hint missing FACTORY_CONTAINER_RUNTIME: %v", hinted)
+	}
+	if !strings.Contains(hinted.Error(), "podman") {
+		t.Errorf("hint missing binary name: %v", hinted)
+	}
+
+	if got := hintIfMissingBinary("podman", nil); got != nil {
+		t.Errorf("nil err should pass through; got %v", got)
+	}
+	other := errors.New("some other failure")
+	if got := hintIfMissingBinary("podman", other); got != other {
+		t.Errorf("unrelated err should pass through unchanged; got %v", got)
+	}
+}
+
+// TestHintIfMissingBinaryMatchesWrappedText: a wrapped error whose message
+// carries the canonical "executable file not found" text still gets the hint,
+// even when the *exec.Error type is obscured behind another wrapper.
+func TestHintIfMissingBinaryMatchesWrappedText(t *testing.T) {
+	wrapped := fmt.Errorf("build step: %w", errors.New(`exec: "podman": executable file not found in %PATH%`))
+	hinted := hintIfMissingBinary("podman", wrapped)
+	if !strings.Contains(hinted.Error(), "FACTORY_CONTAINER_RUNTIME") {
+		t.Errorf("text-matched err should get the hint: %v", hinted)
+	}
 }

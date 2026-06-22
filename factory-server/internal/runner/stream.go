@@ -364,12 +364,40 @@ func stripCodeFences(s string) string {
 }
 
 // claudeResultEvent is the minimal projection of one stream-json line needed to
-// extract the final result. Only "type" and "result" are decoded; thinking,
+// extract the final result. Only the fields below are decoded; thinking,
 // reasoning, and every other field the provider might add are NOT in this struct
 // so json.Unmarshal drops them (the hidden-reasoning boundary).
 type claudeResultEvent struct {
-	Type   string `json:"type"`
-	Result string `json:"result"`
+	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
+	Result  string `json:"result"`
+	IsError bool   `json:"is_error"`
+}
+
+// streamHasSuccessResult reports whether stdout contains a stream-json
+// type=result event with subtype "success" and is_error=false. The Claude Code
+// CLI occasionally appends a SPURIOUS second result event — e.g.
+// "only prompt commands are supported in streaming mode" (seen when a prompt is
+// piped via stdin under --output-format stream-json in acceptEdits code
+// generation) — AFTER the genuine success result, and then exits non-zero. That
+// trailing error is a transport quirk, not a step failure: when a real success
+// result is present the agent's work is complete, so callers may treat the
+// non-zero exit as benign instead of discarding completed output.
+func streamHasSuccessResult(stdout string) bool {
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var ev claudeResultEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.Type == "result" && ev.Subtype == "success" && !ev.IsError {
+			return true
+		}
+	}
+	return false
 }
 
 // DecodeWorkLog reads output.json and returns the PUBLIC workLog entries the

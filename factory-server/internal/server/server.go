@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -181,6 +182,14 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		runtime = deploy.NewPodman(osRunner)
 		log.Printf("Container runtime: podman")
 	}
+	// Fail-fast visibility: if the selected runtime's binary is not on PATH,
+	// every image_build / container run will fail after a long generation run.
+	// Surface this at startup (not 12 minutes later at image_build) with the
+	// one-line fix. Does not block startup — the operator may install the
+	// binary before triggering a build.
+	if _, err := exec.LookPath(runtime.Name()); err != nil {
+		log.Printf("WARNING: container runtime %q not found on PATH (FACTORY_CONTAINER_RUNTIME=%s); image_build will fail until it is installed or you switch runtimes", runtime.Name(), cfg.ContainerRuntime)
+	}
 
 	s := &Server{
 		cfg:         cfg,
@@ -201,7 +210,8 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	factory := &executor.FactoryRunner{
 		Store:        st,
 		Cmds:         osRunner,
-		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/podman emit live command_stdout/command_stderr records
+		Runtime:      runtime, // docker or podman, per FACTORY_CONTAINER_RUNTIME (defaults podman)
+		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/container emit live command_stdout/command_stderr records
 		Alloc:        deploy.DefaultAllocator(),
 		Health:       deploy.CheckHTTP,
 		Workspace:    cfg.WorkspaceRoot,
@@ -230,6 +240,9 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 			ArtifactRoot: cfg.ArtifactRoot,
 		}
 		log.Printf("FACTORY_FAKE_CLAUDE=1: claude steps use the deterministic FakeClaudeRunner")
+	}
+	if runner.LLMConsoleEnabled() {
+		log.Printf("FACTORY_LLM_CONSOLE=1: claude request/response traces stream to stderr")
 	}
 	dispatch := executor.NewDispatcher(factory, claude)
 	s.exec = executor.NewExecutor(st, dispatch, execBusy)
@@ -305,6 +318,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"artifact_root":      s.cfg.ArtifactRoot,
 		"workspace_root":     s.cfg.WorkspaceRoot,
 		"cc_status_base_url": s.cfg.CCStatusBaseURL,
+		"container_runtime":  s.cfg.ContainerRuntime,
 	})
 	log.Printf("factory-server listening on http://%s", s.cfg.Addr)
 	err = s.srv.ListenAndServe()

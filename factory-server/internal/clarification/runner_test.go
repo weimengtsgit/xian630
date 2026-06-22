@@ -64,10 +64,11 @@ func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...s
 }
 
 type fakeStreamCommandRunner struct {
-	dir   string
-	name  string
-	args  []string
-	lines []string
+	dir      string
+	name     string
+	args     []string
+	lines    []string
+	exitCode int
 }
 
 func (f *fakeStreamCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
@@ -82,7 +83,7 @@ func (f *fakeStreamCommandRunner) RunStream(ctx context.Context, dir, name strin
 		stdout.WriteByte('\n')
 		onStdoutLine(line)
 	}
-	return runner.CommandResult{Stdout: stdout.String(), ExitCode: 0}, nil
+	return runner.CommandResult{Stdout: stdout.String(), ExitCode: f.exitCode}, nil
 }
 
 func TestRunnerWritesArtifactsAndNormalizesEvents(t *testing.T) {
@@ -356,6 +357,52 @@ func TestRunnerUsesClaudeStreamJSONAndEmitsLiveOutputDeltas(t *testing.T) {
 	}
 	if !sawStarted || !sawPartialText || !sawCompleted {
 		t.Fatalf("live stream events missing started=%v partialText=%v completed=%v; got %v", sawStarted, sawPartialText, sawCompleted, eventTypes(events))
+	}
+}
+
+// TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice proves that when the Claude
+// Code CLI returns an upstream API error (here a GLM 529 overloaded) instead of
+// a clarification document, the live completed event surfaces the real reason
+// rather than the optimistic "结构化澄清结果接收完成，正在解析。" fallback — so the
+// user sees why the round failed before the session flips to "已失败".
+func TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice(t *testing.T) {
+	root := t.TempDir()
+	apiErr := `API Error: 529 {"type":"error","error":{"type":"overloaded_error","code":"1305","message":"[1305][该模型当前访问量过大，请您稍后再试]"}}`
+	fr := &fakeStreamCommandRunner{
+		exitCode: 1,
+		lines: []string{
+			`{"type":"system","subtype":"init"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":` + strconv.Quote(apiErr) + `}]}}`,
+			`{"type":"result","subtype":"success","is_error":true,"result":` + strconv.Quote(apiErr) + `}`,
+		},
+	}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	_, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_err", Round: 1, MaxRounds: 3, InitialPrompt: "x",
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err == nil {
+		t.Fatalf("RunRound: expected error for API failure, got nil")
+	}
+	var completed *StreamEvent
+	for i := range events {
+		if events[i].Type == "clarification.message.completed" && events[i].MessageID == "live_round_1" {
+			completed = &events[i]
+			break
+		}
+	}
+	if completed == nil {
+		t.Fatalf("missing live_round_1 completed event; got %v", eventTypes(events))
+	}
+	wl, ok := completed.Data.(WorkLog)
+	if !ok {
+		t.Fatalf("completed event data is not a WorkLog: %#v", completed.Data)
+	}
+	if strings.Contains(wl.Content, "正在解析") {
+		t.Fatalf("completed event still shows optimistic fallback: %q", wl.Content)
+	}
+	if !strings.Contains(wl.Content, "需求澄清失败") || !strings.Contains(wl.Content, "529") {
+		t.Fatalf("completed event does not surface the real API error: %q", wl.Content)
 	}
 }
 

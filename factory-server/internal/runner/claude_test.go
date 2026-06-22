@@ -165,6 +165,49 @@ func TestClaudeRunNonzeroExit(t *testing.T) {
 	}
 }
 
+// TestClaudeRunToleratesSpuriousErrorAfterSuccess: the Claude Code CLI can emit a
+// genuine success result AND a spurious trailing "error_during_execution"
+// (e.g. "only prompt commands are supported in streaming mode", seen with
+// stdin-piped prompts under stream-json during acceptEdits code generation) and
+// then exit 1. When a success result is present, the non-zero exit is a transport
+// quirk, not a step failure — Run must proceed so completed work is not
+// discarded. Reproduces the job_32a76c2b0d13b0509c675798 code_generation failure.
+func TestClaudeRunToleratesSpuriousErrorAfterSuccess(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done"}`,
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["only prompt commands are supported in streaming mode"]}`,
+		"",
+	}, "\n")
+	fr := &fakeRunner{exitCode: 1, stdout: stdout}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	if err := r.Run(context.Background(), ws, "P", nil, false, nil); err != nil {
+		t.Fatalf("Run err = %v, want nil (success result present tolerates non-zero exit)", err)
+	}
+}
+
+// TestClaudeRunNonzeroExitStillFailsWithoutSuccess: a non-zero exit whose stdout
+// holds only an error result (no subtype:"success") is a real failure and must
+// still surface ErrRunnerExitNonzero — the tolerance is strictly opt-in on a
+// present success result, never a blanket ignore of non-zero exits.
+func TestClaudeRunNonzeroExitStillFailsWithoutSuccess(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["real failure"]}`,
+		"",
+	}, "\n")
+	fr := &fakeRunner{exitCode: 1, stdout: stdout}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	err := r.Run(context.Background(), ws, "P", nil, false, nil)
+	if !errors.Is(err, ErrRunnerExitNonzero) {
+		t.Fatalf("err = %v, want ErrRunnerExitNonzero", err)
+	}
+}
+
 // TestClaudeRunWritesStreamResultToOutputWhenMissing (F2): with stream-json
 // flags, stdout is NDJSON. When output.json is absent (read-only stages cannot
 // write it themselves), ClaudeRunner.Run must extract the final type=result
