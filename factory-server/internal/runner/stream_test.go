@@ -45,42 +45,63 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 	return false
 }
 
-// TestStreamClaudeEventsEmitsToolUseIgnoresThinking is the Task-3 Step-5
-// stream-policy test. It feeds the parser a fake stream-json sequence containing
-// one safe tool_use (Read), one thinking_delta (hidden reasoning), the final
-// result with a public workLog, and one stderr line — and asserts:
-//   - the tool_use becomes an activity record with a redacted relative path;
-//   - the thinking content NEVER appears in any record;
-//   - the public workLog becomes a summary record (decoded separately);
-//   - stderr becomes a command_stderr record.
-//
-// The stream is the canonical shape: each event is one newline-delimited JSON
-// object. thinking_delta carries a "thinking" field that must be dropped.
-func TestStreamClaudeEventsEmitsToolUseIgnoresThinking(t *testing.T) {
+// TestStreamClaudeEventsCapturesThinkingAndFileDeltas feeds the parser a REAL
+// CLI stream-json shape (verified against a live code_generation capture: each
+// event is a top-level NDJSON object; content blocks are NESTED inside
+// assistant.message.content[]) and asserts 方案 B behavior:
+//   - thinking blocks become thinking records (hidden reasoning IS shown now);
+//   - Write/Edit tool_use blocks become file_delta records (+N / +A -B);
+//   - Read/Grep/Glob become activity records with a redacted RELATIVE path;
+//   - non-allowlisted tools (WebSearch) and system events are ignored.
+func TestStreamClaudeEventsCapturesThinkingAndFileDeltas(t *testing.T) {
 	emit := &recordEmitter{}
 	stream := strings.Join([]string{
-		// 1. A hidden thinking event. The provider's internal reasoning — must
-		//    NEVER reach a record. Includes a canary string we assert is absent.
-		`{"type":"thinking","thinking":"SECRET_CHAIN_OF_THOUGHT reasoning about the plan"}`,
-		// 2. A thinking_delta (streaming partial) — also hidden, also dropped.
-		`{"type":"thinking_delta","thinking_delta":"more SECRET_PARTIAL reasoning"}`,
-		// 3. A safe tool_use: Read on an absolute path. Becomes an activity
-		//    record with the path redacted to a RELATIVE form (no leading /,
-		//    no home dir).
-		`{"type":"tool_use","name":"Read","input":{"file_path":"/Users/dev/repo/generated-apps/demo/src/App.jsx"}}`,
-		// 4. A non-allowlisted tool (e.g. WebSearch) — ignored, not recorded.
-		`{"type":"tool_use","name":"WebSearch","input":{"query":"how to"}}`,
-		// 5. A partial line (no closing brace) — dropped, not decoded.
-		`{"type":"tool_use","name":"Read","input":{"file_path":"inco`,
+		// 1. system init — ignored (not an assistant turn).
+		`{"type":"system","subtype":"init","session_id":"abc"}`,
+		// 2. assistant turn with a thinking block (方案 B: reasoning IS shown).
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先分析需求，再规划文件结构"}]}}`,
+		// 3. assistant turn with a Read tool_use on an ABSOLUTE path → activity,
+		//    path redacted to a RELATIVE form (no leading /, no home dir).
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/Users/dev/repo/generated-apps/demo/src/App.jsx"}}]}}`,
+		// 4. assistant turn with a Write tool_use → file_delta "新建 … +N".
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"/abs/repo/generated-apps/demo/src/index.html","content":"<!doctype html>\n<html>\n</html>"}}]}}`,
+		// 5. assistant turn with an Edit tool_use → file_delta "编辑 … +A -B".
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/abs/repo/generated-apps/demo/src/App.jsx","old_string":"a\nb","new_string":"a\nb\nc\nd"}}]}}`,
+		// 6. assistant turn with a non-allowlisted tool (WebSearch) → ignored.
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t4","name":"WebSearch","input":{"query":"how to"}}]}}`,
+		// 7. a partial line (no closing brace) — dropped, not decoded.
+		`{"type":"assistant","message":{"content":[{`,
 		"",
 	}, "\n")
 	streamClaudeEvents(context.Background(), emit, stream)
 
-	// Activity record exists for the Read tool_use.
-	if !emit.hasKind(model.ExecutionRecordActivity) {
-		t.Fatalf("records = %#v, want at least one activity record for the Read tool_use", emit.records)
+	// 方案 B: thinking IS captured.
+	if !emit.hasKind(model.ExecutionRecordThinking) {
+		t.Fatalf("no thinking record (方案 B regression); records=%#v", emit.records)
 	}
-	// The recorded path is RELATIVE (absolute path redacted) and tool-named.
+	if !emit.contentContaining("先分析需求") {
+		t.Errorf("thinking text not captured; records=%#v", emit.records)
+	}
+
+	// Write → file_delta with +N, no " -" minus marker.
+	writeDelta := findFileDelta(emit, "新建")
+	if writeDelta == "" {
+		t.Fatalf("no Write file_delta; records=%#v", emit.records)
+	}
+	if !strings.Contains(writeDelta, " +") || strings.Contains(writeDelta, " -") {
+		t.Errorf("Write file_delta should be +N only: %q", writeDelta)
+	}
+
+	// Edit → file_delta with +A -B (both markers present).
+	editDelta := findFileDelta(emit, "编辑")
+	if editDelta == "" {
+		t.Fatalf("no Edit file_delta; records=%#v", emit.records)
+	}
+	if !strings.Contains(editDelta, " +") || !strings.Contains(editDelta, " -") {
+		t.Errorf("Edit file_delta should be +A -B: %q", editDelta)
+	}
+
+	// Read → activity with a RELATIVE redacted path.
 	foundReadActivity := false
 	for _, e := range emit.records {
 		if e.kind == model.ExecutionRecordActivity && strings.HasPrefix(e.content, "Read ") {
@@ -96,20 +117,23 @@ func TestStreamClaudeEventsEmitsToolUseIgnoresThinking(t *testing.T) {
 	if !foundReadActivity {
 		t.Errorf("no Read activity record with redacted path; records=%#v", emit.records)
 	}
+
 	// WebSearch was NOT recorded (not in the allowlist).
 	for _, e := range emit.records {
 		if strings.Contains(e.content, "WebSearch") {
 			t.Errorf("non-allowlisted tool leaked into record: %q", e.content)
 		}
 	}
-	// Hidden reasoning NEVER appears in any record content.
+}
+
+// findFileDelta returns the first file_delta record content starting with prefix.
+func findFileDelta(emit *recordEmitter, prefix string) string {
 	for _, e := range emit.records {
-		if strings.Contains(e.content, "SECRET_CHAIN_OF_THOUGHT") ||
-			strings.Contains(e.content, "SECRET_PARTIAL") ||
-			strings.Contains(e.content, "reasoning") {
-			t.Errorf("hidden reasoning leaked into record %q", e.content)
+		if e.kind == model.ExecutionRecordFileDelta && strings.HasPrefix(e.content, prefix) {
+			return e.content
 		}
 	}
+	return ""
 }
 
 // TestStreamClaudeEventsStderrForwardsAsCommandStderr verifies the runStream
@@ -118,7 +142,7 @@ func TestStreamClaudeEventsEmitsToolUseIgnoresThinking(t *testing.T) {
 func TestStreamClaudeEventsStderrForwardsAsCommandStderr(t *testing.T) {
 	emit := &recordEmitter{}
 	fr := &fakeStreamRunner{
-		stdout: `{"type":"tool_use","name":"Read","input":{"file_path":"src/a.ts"}}
+		stdout: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/a.ts"}}]}}
 {"type":"result","result":"{\"workLog\":[]}"}`,
 		stderr: "warning: low disk\nerror: retrying\n",
 	}
@@ -264,6 +288,22 @@ func TestExtractStreamResultEmptyWhenNoResultEvent(t *testing.T) {
 	}, "\n")
 	if got := extractStreamResult(stream); got != "" {
 		t.Fatalf("extractStreamResult = %q, want empty for no result event", got)
+	}
+}
+
+// TestExtractStreamResultStripsCodeFences confirms a result the model wrapped in
+// a markdown code fence (observed in a live capture: "```json\n{…}\n```") is
+// unwrapped before being returned, so writing it to output.json yields valid
+// JSON for the stage validators.
+func TestExtractStreamResultStripsCodeFences(t *testing.T) {
+	stream := `{"type":"result","subtype":"success","result":` + jsonString("```json\n{\"a\":1}\n```") + `}`
+	got := extractStreamResult(stream)
+	if got != `{"a":1}` {
+		t.Fatalf("extractStreamResult = %q, want {\"a\":1} (code fences stripped)", got)
+	}
+	// No fence → unchanged.
+	if got := extractStreamResult(`{"type":"result","result":` + jsonString("{\"a\":1}") + `}`); got != `{"a":1}` {
+		t.Fatalf("extractStreamResult altered an unfenced result: %q", got)
 	}
 }
 

@@ -184,6 +184,20 @@ func writeCappedArtifactWithTruncationHint(path string, content []byte, upstream
 	return artifactWriteResult{BytesWritten: len(out), Truncated: true}, nil
 }
 
+// absArtifactPath returns dstPath as an absolute path. The content handler
+// (server.artifactContent) resolves a relative artifact Path by joining it with
+// the (already-rooted) ArtifactRoot; the registrar receives a CWD-relative
+// ".factory-runs/jobs/.../audit/<file>" path that ALREADY carries the root dir
+// name, so joining again would double it to ".factory-runs/.factory-runs/..."
+// and the read 404s. Storing the absolute path sidesteps that: the handler uses
+// it as-is and its under-root safety check still passes.
+func absArtifactPath(dstPath string) string {
+	if abs, err := filepath.Abs(dstPath); err == nil {
+		return abs
+	}
+	return dstPath
+}
+
 // artifactRegistrar is the shared boilerplate wrapper around store.CreateArtifact
 // for the safe, bounded artifact-capture layer. It owns the job/step/attempt
 // context so callers don't repeat the ID/summary plumbing, and it guarantees
@@ -223,7 +237,7 @@ func (r *artifactRegistrar) registerRedactedCopy(ctx context.Context, kind, srcP
 		StepID:    r.step.ID,
 		Attempt:   r.step.Attempt,
 		Kind:      kind,
-		Path:      dstPath,
+		Path:      absArtifactPath(dstPath),
 		Summary:   summary,
 		CreatedAt: time.Now(),
 	})
@@ -254,7 +268,7 @@ func (r *artifactRegistrar) registerCappedLog(ctx context.Context, kind, dstPath
 		StepID:    r.step.ID,
 		Attempt:   r.step.Attempt,
 		Kind:      kind,
-		Path:      dstPath,
+		Path:      absArtifactPath(dstPath),
 		Summary:   summary,
 		CreatedAt: time.Now(),
 	})

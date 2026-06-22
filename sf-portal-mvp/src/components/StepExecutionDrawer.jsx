@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   X,
   Loader2,
@@ -42,11 +43,63 @@ const TABS = [
 ]
 
 const RECORD_KIND_LABEL = {
+  system: '系统',
+  activity: '活动',
+  summary: '总结',
+  command_stdout: '命令输出',
+  command_stderr: '命令错误',
+  error: '错误',
+  thinking: '思考',
+  file_delta: '文件生成',
+  // legacy aliases (not emitted by the current backend, kept for safety)
   lifecycle: '生命周期',
   claude: 'Claude',
   command: '命令',
   stream: '流式',
   log: '日志',
+}
+
+// parseFileDelta splits a file_delta record's content into verb/path/added/
+// removed. Content shape (backend): "新建 <path>  +N" or "编辑 <path>  +A -B".
+// Returns null when the content does not match (so the renderer falls back to a
+// plain pre). Plain-text discipline: everything is text, no HTML.
+function parseFileDelta(content) {
+  const m = String(content || '').match(/^(新建|编辑)\s+(\S.*?)\s\s\+(\d+)(?:\s+-(\d+))?$/)
+  if (!m) return null
+  return { verb: m[1], path: m[2], added: +m[3], removed: m[4] ? +m[4] : 0 }
+}
+
+// recordText extracts the displayable text of a record across the backend's
+// possible field names (content / text / message), with a JSON fallback.
+function recordText(r) {
+  return r.content || r.text || r.message || JSON.stringify(r.payload || r.data || '', null, 2)
+}
+
+// renderRecordBody renders the BODY of one execution record, branching on kind:
+//   - thinking (方案 B): a muted pre block so the model's reasoning is visible
+//     but visually distinct from tool/command output.
+//   - file_delta: a compact "新建/编辑 <path> +N -M" chip with green +/red −, so
+//     code generation reads like an agent IDE's file progress.
+//   - everything else: the standard pre block.
+// Plain-text discipline: all branches render text nodes / pre only.
+function renderRecordBody(r) {
+  if (r.kind === 'thinking') {
+    return <pre className="sed-record-text sed-thinking-text">{recordText(r)}</pre>
+  }
+  if (r.kind === 'file_delta') {
+    const d = parseFileDelta(r.content)
+    if (d) {
+      return (
+        <div className="sed-filedelta">
+          <span className={`sed-filedelta-verb sed-filedelta-${d.verb}`}>{d.verb}</span>
+          <span className="sed-filedelta-path">{d.path}</span>
+          <span className="sed-filedelta-added">+{d.added}</span>
+          {d.removed > 0 ? <span className="sed-filedelta-removed">-{d.removed}</span> : null}
+        </div>
+      )
+    }
+  }
+  return <pre className="sed-record-text">{recordText(r)}</pre>
 }
 
 function StatusIcon({ status }) {
@@ -225,7 +278,14 @@ export function StepExecutionDrawer({
 
   if (!open) return null
 
-  return (
+  // Portal to document.body so the drawer is NOT trapped in the .workbench
+  // stacking context (z-index 5). The drawer is position:fixed so its placement
+  // is already viewport-relative, but paint order follows the DOM stacking
+  // context: as a workbench descendant its z-index:60 was capped at 5 and the
+  // .top-bar (z-index 20, a sibling root-level context) painted over the
+  // drawer's top — hiding the close button. Portaling lifts it to the root
+  // stacking context where z-index:60 correctly sits above the top-bar.
+  return createPortal(
     <aside className="sed-overlay" role="dialog" aria-label="步骤执行详情">
       <div className="sed-panel">
         <header className="sed-header">
@@ -402,26 +462,27 @@ export function StepExecutionDrawer({
                 {(!records || records.length === 0) ? (
                   <p className="sed-empty">暂无执行记录</p>
                 ) : (
-                  records.map(r => (
-                    <div key={r.id} className={`sed-record sed-record-${r.kind || 'log'}`}>
-                      <div className="sed-record-head">
-                        <span className="sed-record-kind">
-                          {RECORD_KIND_LABEL[r.kind] || r.kind || '记录'}
-                        </span>
-                        {r.sequence != null ? (
-                          <span className="sed-record-seq">#{r.sequence}</span>
-                        ) : null}
-                        {r.created_at != null || r.at != null ? (
-                          <span className="sed-record-at">
-                            {String(r.created_at || r.at).slice(11, 19)}
+                  records.map(r => {
+                    const body = renderRecordBody(r)
+                    return (
+                      <div key={r.id} className={`sed-record sed-record-${r.kind || 'log'}`}>
+                        <div className="sed-record-head">
+                          <span className="sed-record-kind">
+                            {RECORD_KIND_LABEL[r.kind] || r.kind || '记录'}
                           </span>
-                        ) : null}
+                          {r.sequence != null ? (
+                            <span className="sed-record-seq">#{r.sequence}</span>
+                          ) : null}
+                          {r.created_at != null || r.at != null ? (
+                            <span className="sed-record-at">
+                              {String(r.created_at || r.at).slice(11, 19)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {body}
                       </div>
-                      <pre className="sed-record-text">
-                        {r.content || r.text || r.message || JSON.stringify(r.payload || r.data || '', null, 2)}
-                      </pre>
-                    </div>
-                  ))
+                    )
+                  })
                 )}
               </div>
             </div>
@@ -487,6 +548,7 @@ export function StepExecutionDrawer({
           )}
         </div>
       </div>
-    </aside>
+    </aside>,
+    document.body,
   )
 }
