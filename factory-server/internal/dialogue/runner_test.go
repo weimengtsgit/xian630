@@ -191,6 +191,41 @@ func TestRouteIntentRejectsInventedBlueprintSlug(t *testing.T) {
 	}
 }
 
+// --- intent routing: dormant business intent normalized to application generation ---
+
+func TestRouteIntentNormalizesDormantBusinessIntentToApplicationGeneration(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent:                 IntentBusinessProcessingAgent,
+		Confidence:             ConfidenceHigh,
+		UserFacingReason:       "将配置一个业务处理智能体。",
+		NeedsRouteConfirmation: false,
+	})}
+	var events []StreamEvent
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID:           "dia_norm_biz",
+		UserMessage:          "创建一个审批 Agent",
+		ExistingApplications: sampleApps(),
+		Blueprints:           sampleBlueprints(),
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if out.Intent != IntentApplicationGeneration {
+		t.Fatalf("intent = %q, want application_generation", out.Intent)
+	}
+	if strings.Contains(out.UserFacingReason, "业务处理") || strings.Contains(out.UserFacingReason, "Agent") {
+		t.Fatalf("reason should be assistant-application framing, got %q", out.UserFacingReason)
+	}
+	for _, ev := range events {
+		b, _ := json.Marshal(ev)
+		if strings.Contains(string(b), "business_processing_agent") {
+			t.Fatalf("business intent leaked in event: %s", string(b))
+		}
+	}
+}
+
 // --- intent routing: valid generation route keeps internal slug in output but redacts from events ---
 
 func TestRouteIntentKeepsInternalSlugInOutputButRedactsFromEvents(t *testing.T) {

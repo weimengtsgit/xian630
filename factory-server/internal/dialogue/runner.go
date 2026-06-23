@@ -54,6 +54,7 @@ func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(Str
 	if err := json.Unmarshal([]byte(out), &routeOut); err != nil {
 		return RouteOutput{}, fmt.Errorf("decode route output: %v: %w", err, runner.ErrOutputInvalidJSON)
 	}
+	routeOut = normalizeRouteOutput(routeOut)
 	if err := validateRouteOutput(routeOut, input); err != nil {
 		return RouteOutput{}, err
 	}
@@ -262,6 +263,20 @@ func validateRouteOutput(out RouteOutput, input RouteInput) error {
 		}
 	}
 	return nil
+}
+
+// normalizeRouteOutput defensively normalizes the dormant
+// business_processing_agent intent to application_generation. The model (or a
+// legacy path) may still emit it; normalization runs BEFORE validation and
+// BEFORE any event/artifact is written, so the dormant intent never reaches a
+// user-facing event or the persisted redacted route output.
+func normalizeRouteOutput(out RouteOutput) RouteOutput {
+	if out.Intent == IntentBusinessProcessingAgent {
+		out.Intent = IntentApplicationGeneration
+		out.ExistingApplicationSlugs = nil
+		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的助手应用。"
+	}
+	return out
 }
 
 func normalizeDraftOutput(out BusinessDraftOutput) BusinessDraftOutput {

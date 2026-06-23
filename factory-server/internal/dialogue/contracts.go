@@ -17,7 +17,10 @@ import (
 	"strings"
 )
 
-// Intent is the routed user intent. It is one of the three Factory intents.
+// Intent is the routed user intent. Only existing_application and
+// application_generation are active user-visible routes in the current phase.
+// business_processing_agent remains as a dormant future route and for legacy
+// records; fresh router output is normalized away from it.
 type Intent string
 
 const (
