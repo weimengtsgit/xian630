@@ -14,6 +14,11 @@ func TestFixedSteps(t *testing.T) {
 	if steps[0].Kind != model.StepRequirementAnalysis || steps[0].AgentKey != "requirement-analyst" {
 		t.Fatalf("first step = %#v", steps[0])
 	}
+	// image_build now uses the split image-builder agent (not the combined
+	// deployer); deployment keeps deployer. Assert both to pin the 6-agent split.
+	if steps[4].Kind != model.StepImageBuild || steps[4].AgentKey != "image-builder" {
+		t.Fatalf("image-build step = %#v, want image-builder", steps[4])
+	}
 	if steps[5].Kind != model.StepDeployment || steps[5].AgentKey != "deployer" {
 		t.Fatalf("last step = %#v", steps[5])
 	}

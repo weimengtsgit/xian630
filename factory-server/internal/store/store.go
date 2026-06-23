@@ -69,6 +69,18 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate applications.display_order: %w", err)
 	}
+	// agents.category: software_development by default so existing rows backfill
+	// to the pipeline category automatically.
+	if err := s.ensureColumn(ctx, "agents", "category",
+		`ALTER TABLE agents ADD COLUMN category TEXT NOT NULL DEFAULT 'software_development'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agents.category: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "agents", "prompt",
+		`ALTER TABLE agents ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agents.prompt: %w", err)
+	}
 	return s, nil
 }
 

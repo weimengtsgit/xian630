@@ -274,6 +274,15 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	// Idempotently backfill legacy clarification sessions into the new dialogue
+	// parent resource: one application_generation dialogue per legacy session,
+	// linked via clarification_session_id. Best-effort — a backfill failure
+	// must not prevent the server from listening (re-running startup retries
+	// any unbackfilled rows; FindDialogueByClarificationID prevents dups).
+	if err := s.store.BackfillClarificationDialogues(ctx); err != nil {
+		log.Printf("backfill clarification dialogues: %v", err)
+	}
+
 	s.srv = &http.Server{Addr: s.cfg.Addr, Handler: corsMiddleware(s.routes())}
 	go func() {
 		<-ctx.Done()

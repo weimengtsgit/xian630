@@ -146,16 +146,37 @@ type Application struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// AgentCategory partitions agents by how they are produced: the six fixed
+// software-development pipeline agents (registry-seeded, kind-driven) versus
+// business-processing agents created from a confirmed dialogue.
+type AgentCategory string
+
+const (
+	// AgentCategorySoftwareDevelopment is the category for the six pipeline
+	// agents (requirement_analysis … deployment). They are registry-seeded and
+	// dispatched by StepKind; a manually-created agent cannot claim it.
+	AgentCategorySoftwareDevelopment AgentCategory = "software_development"
+	// AgentCategoryBusinessProcessing is the category for agents produced from
+	// a confirmed business-processing dialogue. They carry a non-empty Prompt.
+	AgentCategoryBusinessProcessing AgentCategory = "business_processing"
+)
+
 type Agent struct {
-	ID              string `json:"id"`
-	Key             string `json:"key"`
-	Name            string `json:"name"`
-	Role            string `json:"role"`
-	Description     string `json:"description"`
-	ClaudeAgentName string `json:"claude_agent_name"`
-	SkillsJSON      string `json:"skills_json"`
-	Enabled         bool   `json:"enabled"`
-	SortOrder       int    `json:"sort_order"`
+	ID              string        `json:"id"`
+	Key             string        `json:"key"`
+	Name            string        `json:"name"`
+	Role            string        `json:"role"`
+	Description     string        `json:"description"`
+	ClaudeAgentName string        `json:"claude_agent_name"`
+	SkillsJSON      string        `json:"skills_json"`
+	// Category is software_development (pipeline) or business_processing
+	// (dialogue-created). See AgentCategory.
+	Category AgentCategory `json:"category"`
+	// Prompt is the system prompt for a business_processing agent. Empty for
+	// the six software-development pipeline agents.
+	Prompt   string `json:"prompt"`
+	Enabled  bool   `json:"enabled"`
+	SortOrder int   `json:"sort_order"`
 }
 
 type Job struct {
@@ -283,6 +304,72 @@ type ClarificationSession struct {
 type ClarificationMessage struct {
 	ID           string    `json:"id"`
 	SessionID    string    `json:"session_id"`
+	Role         string    `json:"role"`
+	Kind         string    `json:"kind"`
+	Content      string    `json:"content"`
+	MetadataJSON string    `json:"metadata_json,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// DialogueIntent is the high-level outcome the user wants from a dialogue:
+// reuse an existing application, generate a new one, or create a
+// business-processing agent. The string value is persisted verbatim.
+type DialogueIntent string
+
+const (
+	// DialogueIntentRouting is the transient pre-route intent before the
+	// dialogue's recommendation has locked a route.
+	DialogueIntentRouting                 DialogueIntent = "routing"
+	DialogueIntentExistingApplication     DialogueIntent = "existing_application"
+	DialogueIntentApplicationGeneration   DialogueIntent = "application_generation"
+	DialogueIntentBusinessProcessingAgent DialogueIntent = "business_processing_agent"
+)
+
+// DialogueStatus is the lifecycle state of a dialogue session. It moves
+// routing -> recommending -> drafting_application|drafting_business_agent ->
+// resolved|failed|abandoned.
+type DialogueStatus string
+
+const (
+	DialogueStatusRouting              DialogueStatus = "routing"
+	DialogueStatusRecommending         DialogueStatus = "recommending"
+	DialogueStatusDraftingApplication  DialogueStatus = "drafting_application"
+	DialogueStatusDraftingBusinessAgent DialogueStatus = "drafting_business_agent"
+	DialogueStatusResolved             DialogueStatus = "resolved"
+	DialogueStatusFailed               DialogueStatus = "failed"
+	DialogueStatusAbandoned            DialogueStatus = "abandoned"
+)
+
+// DialogueSession is the durable parent of a multi-turn dialogue that routes a
+// user request to one of the three Factory outcomes (existing app, generated
+// app, or business-processing agent). DraftJSON holds the in-progress route
+// recommendation/draft payload (existing-app cards, agent draft, etc.) as a
+// JSON string. ClarificationSessionID links the legacy pre-job clarification
+// session that seeded this dialogue (set by the idempotent startup backfill;
+// empty for dialogues created by the new routes).
+type DialogueSession struct {
+	ID                    string         `json:"id"`
+	InitialPrompt         string         `json:"initial_prompt"`
+	DraftJSON             string         `json:"draft_json,omitempty"`
+	ErrorCode             string         `json:"error_code,omitempty"`
+	ErrorMessage          string         `json:"error_message,omitempty"`
+	Status                DialogueStatus `json:"status"`
+	Intent                DialogueIntent `json:"intent"`
+	RouteLocked           bool           `json:"route_locked"`
+	ClarificationSessionID string        `json:"clarification_session_id,omitempty"`
+	ResolvedApplicationID string         `json:"resolved_application_id,omitempty"`
+	CreatedAgentID        string         `json:"created_agent_id,omitempty"`
+	CreatedAt             time.Time      `json:"created_at"`
+	UpdatedAt             time.Time      `json:"updated_at"`
+	ResolvedAt            *time.Time     `json:"resolved_at,omitempty"`
+	AbandonedAt           *time.Time     `json:"abandoned_at,omitempty"`
+}
+
+// DialogueMessage is one entry in a dialogue session's message thread: a route
+// recommendation, a draft, a user answer, a system lifecycle event, etc.
+type DialogueMessage struct {
+	ID           string    `json:"id"`
+	DialogueID   string    `json:"dialogue_id"`
 	Role         string    `json:"role"`
 	Kind         string    `json:"kind"`
 	Content      string    `json:"content"`
