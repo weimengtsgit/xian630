@@ -47,15 +47,53 @@ type SceneCatalog struct {
 	entries map[string]catalogEntry
 }
 
-// LoadSceneCatalog reads and validates .factory/scene-catalog.json under root.
-// knownPresetSlugs is the discovered set of preset scene slugs (collected from
+// LoadSceneCatalog reads and validates .factory/scene-catalog.json under root AND
+// enforces that every catalog key is a discovered preset slug. knownPresetSlugs
+// is the discovered set of preset scene slugs (collected from
 // scene/*/.factory/app.json manifests); every catalog key must appear in it.
+//
+// This is the SCAN-TIME loader: the scanner has the full preset set on disk
+// (application + blueprint + hidden surfaces) so it can fail-closed against a
+// catalog that references a scene dir that does not exist.
 //
 // Fail-closed: a missing file, malformed JSON, an unsupported version, an
 // invalid surface, an application entry without an order, a duplicate
 // application order, or a catalog key that is not a discovered preset slug all
 // produce an error rather than a permissive empty catalog.
 func LoadSceneCatalog(root string, knownPresetSlugs map[string]bool) (SceneCatalog, error) {
+	cat, err := loadSceneCatalogFile(root)
+	if err != nil {
+		return cat, err
+	}
+	for slug := range cat.entries {
+		if !knownPresetSlugs[slug] {
+			return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q is not a discovered preset slug", slug)
+		}
+	}
+	return cat, nil
+}
+
+// LoadSceneCatalogForSurface reads + structurally validates
+// .factory/scene-catalog.json WITHOUT requiring every catalog key to be a
+// discovered preset slug. It is the RUNTIME loader for GET /api/apps filtering
+// and dialogue candidate building, where the catalog has already been
+// disk-validated at scan time and the application store does NOT carry the
+// blueprint-surface presets (the scanner drops them). Requiring the full preset
+// set there would 500 every fresh-database GET /api/apps and starve dialogue
+// routing of blueprint candidates.
+//
+// Fail-closed is preserved for the structural invariants only: a missing file,
+// malformed JSON, an unsupported version, an invalid surface, and a missing or
+// duplicate application order still error.
+func LoadSceneCatalogForSurface(root string) (SceneCatalog, error) {
+	return loadSceneCatalogFile(root)
+}
+
+// loadSceneCatalogFile reads + structurally validates the catalog file. It does
+// NOT check disk-membership of catalog keys; that check is LoadSceneCatalog's
+// scan-time responsibility (it has the on-disk preset set; runtime callers do
+// not).
+func loadSceneCatalogFile(root string) (SceneCatalog, error) {
 	path := filepath.Join(root, ".factory", "scene-catalog.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -91,10 +129,6 @@ func LoadSceneCatalog(root string, knownPresetSlugs map[string]bool) (SceneCatal
 				return SceneCatalog{}, fmt.Errorf("load scene catalog: duplicate application order %d (scenes %q and %q)", entry.Order, first, slug)
 			}
 			seenOrder[entry.Order] = slug
-		}
-		// Reject catalog keys that are not discovered preset slugs.
-		if !knownPresetSlugs[slug] {
-			return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q is not a discovered preset slug", slug)
 		}
 		cat.entries[slug] = entry
 	}

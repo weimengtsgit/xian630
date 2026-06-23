@@ -208,3 +208,61 @@ func TestSceneCatalogBlueprintSlugsSorted(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadSceneCatalogForSurfaceIgnoresPresetMembership is the regression for the
+// fresh-database 500: the runtime loaders (GET /api/apps filter + dialogue
+// candidate building) must NOT require blueprint-surface catalog keys to be in
+// the store, because the scanner drops blueprints from the store. The scan-time
+// LoadSceneCatalog still enforces disk membership; the runtime loader only
+// structurally validates.
+func TestLoadSceneCatalogForSurfaceIgnoresPresetMembership(t *testing.T) {
+	root := t.TempDir()
+	writeCatalog(t, root, canonicalCatalog)
+
+	// An empty/incomplete known-slug set must still succeed and surface the
+	// blueprint slugs — this is exactly the runtime condition (store has only
+	// the application-surface presets).
+	cat, err := LoadSceneCatalogForSurface(root)
+	if err != nil {
+		t.Fatalf("LoadSceneCatalogForSurface with no preset context: %v", err)
+	}
+	bps := cat.BlueprintSlugs()
+	if len(bps) != 4 {
+		t.Fatalf("BlueprintSlugs = %d, want 4 (blueprints must resolve without store membership): %+v", len(bps), bps)
+	}
+	apps := cat.VisibleApplications()
+	if len(apps) != 3 {
+		t.Fatalf("VisibleApplications = %d, want 3: %+v", len(apps), apps)
+	}
+	// The scan-time loader still rejects an unknown key (membership invariant
+	// preserved for the scanner, which has the full on-disk preset set).
+	if _, err := LoadSceneCatalog(root, map[string]bool{}); err == nil {
+		t.Fatal("LoadSceneCatalog must still reject catalog keys not in the known preset set")
+	}
+}
+
+// TestLoadSceneCatalogForSurfaceStructuralFailClosed ensures the runtime loader
+// keeps the structural fail-closed guarantees (the security property that a
+// malformed/missing catalog errors rather than silently returning a permissive
+// list) even though it no longer checks disk membership.
+func TestLoadSceneCatalogForSurfaceStructuralFailClosed(t *testing.T) {
+	t.Run("missing file errors", func(t *testing.T) {
+		if _, err := LoadSceneCatalogForSurface(t.TempDir()); err == nil {
+			t.Fatal("expected error for missing catalog file")
+		}
+	})
+	t.Run("invalid surface errors", func(t *testing.T) {
+		root := t.TempDir()
+		writeCatalog(t, root, `{"version":1,"scenes":{"east-sea-situation":{"surface":"nope","order":1}}}`)
+		if _, err := LoadSceneCatalogForSurface(root); err == nil {
+			t.Fatal("expected error for invalid surface")
+		}
+	})
+	t.Run("duplicate order errors", func(t *testing.T) {
+		root := t.TempDir()
+		writeCatalog(t, root, `{"version":1,"scenes":{"east-sea-situation":{"surface":"application","order":1},"aircraft-carrier-track":{"surface":"application","order":1}}}`)
+		if _, err := LoadSceneCatalogForSurface(root); err == nil {
+			t.Fatal("expected error for duplicate application order")
+		}
+	})
+}

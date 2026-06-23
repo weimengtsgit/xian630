@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -150,21 +151,15 @@ func (s *Server) publishDialogueSimple(eventType, dialogueID string, data any) {
 	}})
 }
 
-// loadSceneCatalog loads the validated scene catalog for the current preset
-// slugs in the store. Best-effort: on failure it returns an empty catalog so a
+// loadSceneCatalog loads the structurally-validated scene catalog for routing.
+// It uses the surface-only loader (LoadSceneCatalogForSurface): blueprint-surface
+// presets are never stored, so deriving the known-slug set from the store would
+// starve routing of blueprint candidates and empty the app candidate list on a
+// fresh database. Best-effort: on failure it returns an empty catalog so a
 // misconfigured workspace degrades to "no candidates" rather than crashing.
 func (s *Server) loadSceneCatalog(ctx context.Context) scanner.SceneCatalog {
-	presetSlugs := make(map[string]bool)
-	apps, err := s.store.ListApplications(ctx)
-	if err != nil {
-		return scanner.SceneCatalog{}
-	}
-	for _, app := range apps {
-		if app.Source == model.AppSourcePreset {
-			presetSlugs[app.Slug] = true
-		}
-	}
-	catalog, err := scanner.LoadSceneCatalog(s.cfg.WorkspaceRoot, presetSlugs)
+	_ = ctx
+	catalog, err := scanner.LoadSceneCatalogForSurface(s.cfg.WorkspaceRoot)
 	if err != nil {
 		return scanner.SceneCatalog{}
 	}
@@ -204,9 +199,10 @@ func (s *Server) routingAppCandidates(ctx context.Context, catalog scanner.Scene
 // router's internalBlueprintSlug).
 func (s *Server) blueprintCandidates(catalog scanner.SceneCatalog) []dialogue.BlueprintSummary {
 	slugs := catalog.BlueprintSlugs()
+	metas := s.loadBlueprintCatalog()
 	out := make([]dialogue.BlueprintSummary, 0, len(slugs))
 	for _, slug := range slugs {
-		name, desc, appType := lookupBlueprintMeta(slug)
+		name, desc, appType := findBlueprintMeta(metas, slug)
 		out = append(out, dialogue.BlueprintSummary{
 			Slug:    slug,
 			Name:    name,
@@ -225,30 +221,16 @@ type blueprintMeta struct {
 	AppType     string `json:"appType"`
 }
 
-// blueprintCatalog holds the parsed blueprints.json rows, loaded once.
-var blueprintCatalog []blueprintMeta
-
-// lookupBlueprintMeta returns the (name, description, appType) for a blueprint
-// slug from blueprints.json. Unknown slugs get empty strings.
-func lookupBlueprintMeta(slug string) (name, desc, appType string) {
-	if blueprintCatalog == nil {
-		blueprintCatalog = loadBlueprintCatalog()
-	}
-	for _, b := range blueprintCatalog {
-		if b.Slug == slug {
-			return b.DisplayName, b.Description, b.AppType
-		}
-	}
-	return "", "", ""
-}
-
 // loadBlueprintCatalog reads .claude/skills/requirement-clarification/blueprints.json
-// relative to the process CWD (factory-server). It is best-effort: a missing or
-// malformed file yields an empty catalog so the router simply has no blueprint
-// candidates.
-func loadBlueprintCatalog() []blueprintMeta {
-	const path = ".claude/skills/requirement-clarification/blueprints.json"
-	raw, err := readWorkspaceFile(path)
+// relative to the configured WORKSPACE ROOT, not the process CWD. The server is
+// normally launched from factory-server/ with FACTORY_WORKSPACE_ROOT pointing at
+// the repo root, so a CWD-relative read would miss the file and starve routing
+// of blueprint name/description/appType candidates. It is read fresh each routing
+// turn (a small file, rarely called) rather than cached in package state, so
+// test servers with different roots never share a stale catalog.
+func (s *Server) loadBlueprintCatalog() []blueprintMeta {
+	path := filepath.Join(s.cfg.WorkspaceRoot, ".claude", "skills", "requirement-clarification", "blueprints.json")
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
@@ -259,6 +241,17 @@ func loadBlueprintCatalog() []blueprintMeta {
 		return nil
 	}
 	return doc.Blueprints
+}
+
+// findBlueprintMeta returns the (name, description, appType) for a blueprint slug
+// among the loaded metadata. Unknown slugs get empty strings.
+func findBlueprintMeta(metas []blueprintMeta, slug string) (name, desc, appType string) {
+	for _, b := range metas {
+		if b.Slug == slug {
+			return b.DisplayName, b.Description, b.AppType
+		}
+	}
+	return "", "", ""
 }
 
 // messageViews converts persisted dialogue messages into the DialogueMessageView
@@ -1489,10 +1482,4 @@ func slugify(name string) string {
 		out = "app"
 	}
 	return out
-}
-
-// readWorkspaceFile reads a path relative to the process working directory. It
-// is a thin os.ReadFile wrapper kept separate so tests can locate the catalog.
-func readWorkspaceFile(relPath string) ([]byte, error) {
-	return os.ReadFile(relPath)
 }

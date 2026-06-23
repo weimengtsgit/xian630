@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1034,5 +1035,113 @@ func TestMessagesWhileUnlockedRepeatsRouting(t *testing.T) {
 	}
 	if !sawIntent {
 		t.Fatalf("re-route did not emit dialogue.intent.updated; got %#v", eventTypes(events))
+	}
+}
+
+// TestListAppsSurvivesFreshDatabaseWithoutBlueprintInStore is the regression for
+// the fresh-database 500 (review P0 #1): the production scanner DROPS
+// blueprint-surface presets from the store, so GET /api/apps and dialogue routing
+// must not require blueprint catalog keys to be present in the store. Before the
+// fix, filterVisibleApplications / loadSceneCatalog built the known-slug set from
+// the store and LoadSceneCatalog rejected the blueprint catalog keys → 500 on
+// /api/apps and empty routing candidates. The test harness seeds the blueprint
+// into the store (masking the bug), so we delete it to reproduce production.
+func TestListAppsSurvivesFreshDatabaseWithoutBlueprintInStore(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeExistingAppHighConfidenceOutput})
+	ctx := context.Background()
+
+	// Simulate the production condition: the scanner stores only the application
+	// presets; the blueprint preset is NOT in the store.
+	if err := st.DeleteApplication(ctx, "app-carrier-homeport-tide-window"); err != nil {
+		t.Fatalf("delete blueprint app: %v", err)
+	}
+
+	// The runtime catalog loader must still surface the blueprint slug so routing
+	// has blueprint candidates, despite the slug being absent from the store.
+	catalog := srv.loadSceneCatalog(ctx)
+	found := false
+	for _, slug := range catalog.BlueprintSlugs() {
+		if slug == "carrier-homeport-tide-window" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("loadSceneCatalog lost blueprint slug when it is absent from the store; got %+v", catalog.BlueprintSlugs())
+	}
+
+	// GET /api/apps must NOT 500 and must return the two application presets only
+	// (the blueprint must never appear in the app list).
+	rec := doJSON(t, r, http.MethodGet, "/api/apps", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/apps = %d, want 200 (fresh-database regression); body=%s", rec.Code, rec.Body.String())
+	}
+	var apps []model.Application
+	if err := json.NewDecoder(rec.Body).Decode(&apps); err != nil {
+		t.Fatalf("decode apps: %v", err)
+	}
+	if len(apps) != 2 {
+		t.Fatalf("app list = %d apps, want the 2 application presets: %+v", len(apps), appSlugs(apps))
+	}
+	for _, a := range apps {
+		if a.Slug == "carrier-homeport-tide-window" {
+			t.Fatalf("blueprint preset leaked into app list: %+v", appSlugs(apps))
+		}
+	}
+}
+
+func appSlugs(apps []model.Application) []string {
+	out := make([]string, 0, len(apps))
+	for _, a := range apps {
+		out = append(out, a.Slug)
+	}
+	return out
+}
+
+// TestBlueprintCandidatesReadFromWorkspaceRoot is the regression for review P1 #6:
+// blueprints.json must be read relative to the configured WORKSPACE ROOT, not the
+// process CWD (factory-server/). The server is normally launched from
+// factory-server/ with FACTORY_WORKSPACE_ROOT at the repo root, so a CWD-relative
+// read returned an empty catalog and starved routing of blueprint metadata. With
+// no file present the loader is best-effort (empty); writing it under the
+// workspace root must populate the candidate metadata.
+func TestBlueprintCandidatesReadFromWorkspaceRoot(t *testing.T) {
+	srv, _, _ := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	root := srv.cfg.WorkspaceRoot
+	catalog := srv.loadSceneCatalog(ctx)
+
+	// Before the file exists: best-effort empty metadata (no crash, empty name).
+	before := srv.blueprintCandidates(catalog)
+	for _, b := range before {
+		if b.Slug == "carrier-homeport-tide-window" && b.Name != "" {
+			t.Fatalf("unexpected blueprint metadata before writing blueprints.json: %+v", b)
+		}
+	}
+
+	// Write blueprints.json under the workspace root's .claude tree (the path the
+	// real runbook resolves to via FACTORY_WORKSPACE_ROOT).
+	dir := filepath.Join(root, ".claude", "skills", "requirement-clarification")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	doc := `{"blueprints":[
+		{"slug":"carrier-homeport-tide-window","displayName":"航母母港潮汐窗口计算器","description":"计算进出港潮汐窗口","appType":"command_dashboard"}
+	]}`
+	if err := os.WriteFile(filepath.Join(dir, "blueprints.json"), []byte(doc), 0o644); err != nil {
+		t.Fatalf("write blueprints.json: %v", err)
+	}
+
+	after := srv.blueprintCandidates(catalog)
+	var meta dialogue.BlueprintSummary
+	for _, b := range after {
+		if b.Slug == "carrier-homeport-tide-window" {
+			meta = b
+		}
+	}
+	if meta.Name == "" || meta.AppType == "" || meta.Summary == "" {
+		t.Fatalf("blueprint metadata not read from workspace root; got %+v", meta)
+	}
+	if meta.Name != "航母母港潮汐窗口计算器" {
+		t.Fatalf("blueprint name = %q, want 航母母港潮汐窗口计算器", meta.Name)
 	}
 }

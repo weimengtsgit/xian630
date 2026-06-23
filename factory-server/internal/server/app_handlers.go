@@ -41,16 +41,13 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 }
 
 // filterVisibleApplications keeps only catalog application-surface presets and
-// all generated apps. The scene catalog is validated against the preset slugs
-// present in the store so a missing or malformed catalog is fail-closed.
+// all generated apps. The scene catalog is loaded with the structural
+// (surface-only) loader: blueprint-surface presets are never stored (the scanner
+// drops them), so requiring the full preset set here would 500 every
+// fresh-database GET /api/apps. Structural fail-closed still applies: a missing
+// or malformed catalog errors rather than falling back to a permissive list.
 func (s *Server) filterVisibleApplications(apps []model.Application) ([]model.Application, error) {
-	presetSlugs := make(map[string]bool)
-	for _, app := range apps {
-		if app.Source == model.AppSourcePreset {
-			presetSlugs[app.Slug] = true
-		}
-	}
-	catalog, err := scanner.LoadSceneCatalog(s.cfg.WorkspaceRoot, presetSlugs)
+	catalog, err := scanner.LoadSceneCatalogForSurface(s.cfg.WorkspaceRoot)
 	if err != nil {
 		return nil, err
 	}
