@@ -65,6 +65,53 @@ func TestSelectedSkillPathsOrderIgnoresUnknownGroups(t *testing.T) {
 	}
 }
 
+// TestSelectedSkillPathsResolvesDataGroup proves selectedSkillPaths reads the
+// `data` group (added so data-acquisition skills can be surfaced to the
+// code-generation agent) and orders it after base/domain/pattern. The two
+// ACTIVE public data skills (tide + deck-wind) are the policy-compliant set;
+// ais-density-data-skill is shelved (no public no-key source) and intentionally
+// absent here — see requirement-clarification/SKILL.md.
+func TestSelectedSkillPathsResolvesDataGroup(t *testing.T) {
+	ws := repoWorkspace(t)
+	profile := map[string][]string{
+		"base":    {"software-factory-app"},
+		"pattern": {"map-timeline-replay"},
+		"data":    {"tide-data-skill", "deck-wind-data-skill"},
+	}
+	got := selectedSkillPaths(ws, profile)
+	want := []string{
+		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "software-factory-app", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "map-timeline-replay", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "tide-data-skill", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "deck-wind-data-skill", "SKILL.md")),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("selectedSkillPaths = %v, want %d entries (data group read)", got, len(want))
+	}
+	for i, p := range got {
+		if p != want[i] {
+			t.Errorf("selectedSkillPaths[%d] = %q, want %q", i, p, want[i])
+		}
+		if _, err := os.Stat(filepath.FromSlash(p)); err != nil {
+			t.Errorf("resolved skill path %q does not exist on disk: %v", p, err)
+		}
+	}
+}
+
+// TestSelectedSkillPathsDropsUnsafeDataKeys proves defense-in-depth: `data`
+// group keys failing SafeName (parent-directory traversal) are dropped, never
+// surfaced as paths the agent could Read outside .claude/skills.
+func TestSelectedSkillPathsDropsUnsafeDataKeys(t *testing.T) {
+	profile := map[string][]string{
+		"data": {"tide-data-skill", "..", "../evil"},
+	}
+	got := selectedSkillPaths("ws", profile)
+	want := []string{"ws/.claude/skills/tide-data-skill/SKILL.md"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("selectedSkillPaths = %v, want only the safe data key resolved: %v", got, want)
+	}
+}
+
 // TestBlueprintRefPathsResolution proves blueprintRefPaths maps the
 // carrier-formation-replay slug to its scene README.md (the scene has no
 // scene.md, so the README.md fallback must apply) and that the resolved path is
@@ -122,6 +169,50 @@ func TestParseGenerationProfile(t *testing.T) {
 	}
 	if p, r := parseGenerationProfile(json.RawMessage("not json")); p != nil || r != nil {
 		t.Errorf("garbage input: profile=%v refs=%v, want nil/nil", p, r)
+	}
+}
+
+// TestParseGenerationProfileSurfacesDataSkills is the end-to-end proof that the
+// ACTIVE public data skills are actually usable: it feeds a realistic confirmed
+// requirement (dataPolicy=live_api with the two policy-compliant data domains
+// in the `data` group) through the SAME production path ClaudeStepRunner.Run
+// uses (parseGenerationProfile -> selectedSkillPaths) and asserts every resolved
+// skill path points at a real SKILL.md on disk the generation agent can Read.
+// This closes the JSON->profile->path round-trip gap for the data group, which
+// the per-function tests above do not cover on their own.
+func TestParseGenerationProfileSurfacesDataSkills(t *testing.T) {
+	ws := repoWorkspace(t)
+	raw := json.RawMessage(`{
+		"appType": "command_dashboard",
+		"dataPolicy": "live_api",
+		"generationProfile": {
+			"base": ["software-factory-app"],
+			"domain": ["defense-operations-ui"],
+			"pattern": ["command-dashboard"],
+			"data": ["tide-data-skill", "deck-wind-data-skill"]
+		},
+		"blueprintRefs": []
+	}`)
+	profile, _ := parseGenerationProfile(raw)
+	if got := profile["data"]; len(got) != 2 {
+		t.Fatalf("profile[data] = %v, want 2 active data skills to survive JSON round-trip", got)
+	}
+	paths := selectedSkillPaths(ws, profile)
+	for _, key := range []string{"tide-data-skill", "deck-wind-data-skill"} {
+		want := filepath.ToSlash(filepath.Join(ws, ".claude", "skills", key, "SKILL.md"))
+		found := false
+		for _, p := range paths {
+			if p == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("selectedSkillPaths missing %q for data group (got %v)", want, paths)
+		}
+		if _, err := os.Stat(filepath.FromSlash(want)); err != nil {
+			t.Errorf("resolved data skill path %q does not exist on disk: %v", want, err)
+		}
 	}
 }
 
