@@ -323,6 +323,13 @@ func (s *Server) routes() *Router {
 	r.Handle("PATCH", "/api/agents/:id", s.updateAgent)
 	r.Handle("GET", "/api/agents/:id/runs", s.agentRuns)
 
+	// Business-agent CRUD (Task 2). Business agents are user-defined, editable
+	// agents scoped to category=business; the software registry above is
+	// read-only via these endpoints (403).
+	r.Handle("POST", "/api/business-agents", s.createBusinessAgent)
+	r.Handle("PATCH", "/api/business-agents/:id", s.updateBusinessAgent)
+	r.Handle("PATCH", "/api/business-agents/:id/enabled", s.setBusinessAgentEnabled)
+
 	r.Handle("POST", "/api/jobs", s.createJob)
 	r.Handle("GET", "/api/jobs", s.listJobs)
 	r.Handle("GET", "/api/jobs/:id", s.getJob)

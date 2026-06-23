@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,9 @@ func TestCreateAgent(t *testing.T) {
 	if got.SortOrder != 7 {
 		t.Fatalf("sort_order = %d, want 7", got.SortOrder)
 	}
+	if got.Category != model.AgentCategoryBusiness || !got.Editable || got.Prompt != "" {
+		t.Fatalf("metadata defaults = category %q editable %v prompt %q, want business true empty", got.Category, got.Editable, got.Prompt)
+	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	listRec := httptest.NewRecorder()
@@ -120,6 +124,48 @@ func TestCreateAgent(t *testing.T) {
 	}
 	if all[6].Key != "review-agent" {
 		t.Fatalf("last key = %q, want review-agent", all[6].Key)
+	}
+}
+
+func TestCreateAgentPersistsExplicitMetadata(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{
+		"key":"domain-agent",
+		"name":"领域智能体",
+		"role":"domain",
+		"category":"business",
+		"prompt":"按领域规则补充验收标准",
+		"editable":false
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var got model.Agent
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Category != model.AgentCategoryBusiness || got.Prompt != "按领域规则补充验收标准" || got.Editable {
+		t.Fatalf("metadata = %+v, want category business, prompt persisted, editable false", got)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/agents?category=business", nil)
+	listRec := httptest.NewRecorder()
+	r.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", listRec.Code)
+	}
+	var all []model.Agent
+	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(all) != 1 || all[0].Prompt != "按领域规则补充验收标准" || all[0].Editable {
+		t.Fatalf("persisted business agents = %+v", all)
 	}
 }
 
@@ -384,5 +430,199 @@ func TestAgentRunsNilClient(t *testing.T) {
 	}
 	if resp.Available {
 		t.Fatalf("available = true, want false when cc is nil")
+	}
+}
+
+// TestListAgentsByCategory verifies the optional ?category= query filter on
+// GET /api/agents returns only the agents in that category.
+func TestListAgentsByCategory(t *testing.T) {
+	srv, r := newAgentTestServer(t)
+	if err := srv.store.CreateAgent(context.Background(), model.Agent{
+		ID: "agent_maritime", Key: "maritime-alert-expert", Name: "海事预警专家",
+		Role: "business", Description: "海事规则", Category: model.AgentCategoryBusiness,
+		Prompt: "业务提示词", Editable: true, Enabled: true, SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("create business agent: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/agents?category=business", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got []model.Agent
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 1 || got[0].Category != model.AgentCategoryBusiness || got[0].Prompt == "" {
+		t.Fatalf("agents = %+v", got)
+	}
+
+	// Sanity: the software category still returns the 6 seeded defaults, not the
+	// business agent.
+	swRec := httptest.NewRecorder()
+	swReq := httptest.NewRequest(http.MethodGet, "/api/agents?category=software", nil)
+	r.ServeHTTP(swRec, swReq)
+	if swRec.Code != http.StatusOK {
+		t.Fatalf("software status = %d body=%s", swRec.Code, swRec.Body.String())
+	}
+	var sw []model.Agent
+	if err := json.NewDecoder(swRec.Body).Decode(&sw); err != nil {
+		t.Fatalf("decode software: %v", err)
+	}
+	if len(sw) != 6 {
+		t.Fatalf("software agents = %d, want 6", len(sw))
+	}
+}
+
+// TestCreateBusinessAgentEndpoint verifies POST /api/business-agents creates a
+// business agent with the fixed Category/Role/Editable defaults and echoes it
+// back to the caller.
+func TestCreateBusinessAgentEndpoint(t *testing.T) {
+	srv, r := newAgentTestServer(t)
+	_ = srv
+	body := strings.NewReader(`{"key":"maritime-alert-expert","name":"海事预警专家","description":"海事异常识别","prompt":"关注异常航迹","enabled":true}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/business-agents", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.Agent
+	_ = json.NewDecoder(rec.Body).Decode(&got)
+	if got.Category != model.AgentCategoryBusiness || !got.Editable || got.Role != "business" || got.Prompt == "" {
+		t.Fatalf("agent = %+v", got)
+	}
+	if got.Key != "maritime-alert-expert" || got.Name != "海事预警专家" {
+		t.Fatalf("key/name mismatch: %+v", got)
+	}
+	if !got.Enabled {
+		t.Fatalf("enabled = false, want true (default)")
+	}
+}
+
+// TestCreateBusinessAgentMissingRequiredField verifies the required-field
+// validation rejects a request missing prompt.
+func TestCreateBusinessAgentMissingRequiredField(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	body := strings.NewReader(`{"key":"maritime-alert-expert","name":"海事预警专家"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/business-agents", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateBusinessAgentDuplicateKey verifies a duplicate key surfaces as 409,
+// mirroring the software-agent create path.
+func TestCreateBusinessAgentDuplicateKey(t *testing.T) {
+	srv, r := newAgentTestServer(t)
+	if err := srv.store.CreateAgent(context.Background(), model.Agent{
+		ID: "agent_maritime", Key: "maritime-alert-expert", Name: "海事预警专家",
+		Role: "business", Category: model.AgentCategoryBusiness,
+		Prompt: "first", Editable: true, Enabled: true, SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	body := strings.NewReader(`{"key":"maritime-alert-expert","name":"重复","prompt":"dup"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/business-agents", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUpdateBusinessAgent verifies PATCH /api/business-agents/:id persists the
+// mutable fields (name/description/prompt/enabled) of an editable business
+// agent and echoes the updated row.
+func TestUpdateBusinessAgent(t *testing.T) {
+	srv, r := newAgentTestServer(t)
+	if err := srv.store.CreateAgent(context.Background(), model.Agent{
+		ID: "agent_maritime", Key: "maritime-alert-expert", Name: "旧名",
+		Role: "business", Description: "old", Category: model.AgentCategoryBusiness,
+		Prompt: "old prompt", Editable: true, Enabled: true, SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	body := strings.NewReader(`{"name":"新名","description":"new desc","prompt":"new prompt","enabled":false}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/business-agents/agent_maritime", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.Agent
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Name != "新名" || got.Description != "new desc" || got.Prompt != "new prompt" || got.Enabled {
+		t.Fatalf("update did not persist: %+v", got)
+	}
+}
+
+// TestUpdateBusinessAgentNotFound verifies an unknown id yields 404.
+func TestUpdateBusinessAgentNotFound(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	body := strings.NewReader(`{"name":"x","prompt":"y"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/business-agents/nope", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// TestUpdateBusinessAgentSoftwareAgentForbidden verifies a software agent
+// (non-editable) cannot be mutated via the business-agent endpoint: 403.
+func TestUpdateBusinessAgentSoftwareAgentForbidden(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	body := strings.NewReader(`{"name":"x","prompt":"y"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/business-agents/agent_code_generator", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSetBusinessAgentEnabled verifies PATCH /api/business-agents/:id/enabled
+// toggles the enabled flag on an editable business agent.
+func TestSetBusinessAgentEnabled(t *testing.T) {
+	srv, r := newAgentTestServer(t)
+	if err := srv.store.CreateAgent(context.Background(), model.Agent{
+		ID: "agent_maritime", Key: "maritime-alert-expert", Name: "海事预警专家",
+		Role: "business", Category: model.AgentCategoryBusiness,
+		Prompt: "p", Editable: true, Enabled: true, SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	body := strings.NewReader(`{"enabled":false}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/business-agents/agent_maritime/enabled", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got model.Agent
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Enabled {
+		t.Fatalf("enabled = true, want false")
+	}
+}
+
+// TestSetBusinessAgentEnabledSoftwareAgentForbidden verifies a software agent
+// cannot be disabled via the business-agent endpoint: 403.
+func TestSetBusinessAgentEnabledSoftwareAgentForbidden(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	body := strings.NewReader(`{"enabled":false}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/business-agents/agent_code_generator/enabled", body)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
 	}
 }

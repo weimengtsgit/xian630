@@ -70,6 +70,31 @@ ORDER BY sort_order ASC`)
 	return out, rows.Err()
 }
 
+// ListAgentsByCategory returns the agents in the given category ordered by
+// sort_order ascending. Used by the portal to fetch only the business agents
+// (or only the software agents) for category-scoped views.
+func (s *Store) ListAgentsByCategory(ctx context.Context, category model.AgentCategory) ([]model.Agent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+agentSelectColumns+`
+FROM agents
+WHERE category = ?
+ORDER BY sort_order ASC`, string(category))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]model.Agent, 0)
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
+}
+
 // GetAgent returns the agent with the given id. It returns (nil, nil) when no
 // such agent exists — a miss is not an error — mirroring GetApplication.
 func (s *Store) GetAgent(ctx context.Context, id string) (*model.Agent, error) {
@@ -93,6 +118,21 @@ WHERE id = ?`, id)
 func (s *Store) SetAgentEnabled(ctx context.Context, id string, enabled bool) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE agents SET enabled = ? WHERE id = ?`,
 		boolToInt(enabled), id)
+	return err
+}
+
+// UpdateBusinessAgent writes the mutable fields of an editable business agent:
+// name, role, description, claude_agent_name, skills_json, enabled, prompt. The
+// WHERE clause pins the row to category='business' AND editable=1, so a software
+// agent (or a non-editable business agent) is a no-op even if the caller supplies
+// its id — the handler surfaces this as 403 by pre-checking with GetAgent. The
+// agents table has no updated_at column, so none is touched.
+func (s *Store) UpdateBusinessAgent(ctx context.Context, a model.Agent) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE agents
+SET name = ?, role = ?, description = ?, claude_agent_name = ?, skills_json = ?, enabled = ?, prompt = ?
+WHERE id = ? AND category = 'business' AND editable = 1`,
+		a.Name, a.Role, a.Description, a.ClaudeAgentName, a.SkillsJSON, boolToInt(a.Enabled), a.Prompt, a.ID)
 	return err
 }
 
