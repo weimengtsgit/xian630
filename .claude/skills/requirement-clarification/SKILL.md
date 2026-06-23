@@ -7,6 +7,23 @@ description: Guide a user from an initial software factory request to a structur
 
 Use this skill when Factory asks you to run a clarification round for a software factory user request.
 
+## Brainstorming Method
+
+Use a lightweight brainstorming loop inside each clarification round:
+
+1. Restate the user's intent in product terms.
+2. Identify the smallest missing decision that blocks a confirmed requirement.
+3. Ask at most three high-value questions in the round.
+4. For every question, provide a recommended answer and a concise reason.
+5. When there are meaningful product directions, describe the trade-off in
+   `workLog` and encode the options as structured `questions`.
+6. When enough information is present, stop asking and return
+   `ready_to_confirm` with a complete `requirement`.
+
+The `workLog` is the user-facing model analysis process. It must explain what
+was identified, why an option is recommended, and what remains unconfirmed. It
+must not expose hidden chain-of-thought.
+
 ## Output Contract
 
 You must write `output.json` with this shape:

@@ -66,3 +66,6 @@ bin/
 __debug*
 .cc-status
 *.exe
+
+# Superpowers brainstorming companion artifacts
+.superpowers/

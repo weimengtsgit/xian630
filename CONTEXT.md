@@ -8,6 +8,18 @@ This context defines the product language for the local intelligent software fac
 A conversational session where the system helps the user refine an initial application request before any generation task is created.
 _Avoid_: 生成任务, Job, 任务
 
+**会话草稿**:
+A not-yet-persisted clarification conversation placeholder that becomes a demand clarification session only after the user sends the first request.
+_Avoid_: 生成任务草稿, 空任务
+
+**历史会话**:
+A previously created demand clarification session that remains available for review or continuation according to its lifecycle state.
+_Avoid_: 任务历史, 应用历史
+
+**会话工作台**:
+The central portal experience for reviewing and continuing a demand clarification session, including user requests, model analysis process, clarification questions, and requirement confirmation.
+_Avoid_: 需求澄清区域, 独立澄清面板, 任务区
+
 **生成任务**:
 A confirmed unit of work that runs the software factory pipeline to create, verify, build, and deploy an application.
 _Avoid_: 澄清会话, 对话, 应用
@@ -16,8 +28,12 @@ _Avoid_: 澄清会话, 对话, 应用
 A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task.
 _Avoid_: 任务, 会话, 模板
 
+**应用删除**:
+The removal of a generated application's portal record, runtime deployment state, and local generated application directory while retaining the clarification and generation audit trail.
+_Avoid_: 删除生成任务, 删除历史会话, 清空审计记录
+
 **预置应用**:
-A bundled runnable application that demonstrates a supported scenario before any user generation task is run. It can serve as a reference for future generated applications, but it is not itself a template.
+A bundled runnable application that demonstrates a supported scenario before any user generation task is run. Its visibility in the portal application list is separate from whether the same scenario is available as a blueprint reference.
 _Avoid_: 模板, 生成应用, 生成任务
 
 **系统状态日志**:
@@ -27,6 +43,10 @@ _Avoid_: 分析工作日志, 原始思考过程
 **分析工作日志**:
 A user-facing, model-generated, structured explanation of what the requirement analysis agent identified, why it recommends a choice, and what still needs confirmation.
 _Avoid_: 原始思考过程, 思维链, 系统状态日志
+
+**模型分析过程**:
+The user-facing analysis trail shown inside a clarification conversation, composed from structured analysis work logs and model output summaries rather than hidden chain-of-thought.
+_Avoid_: 原始思考过程, 隐藏推理, 思维链
 
 **步骤执行记录**:
 The auditable record for one generation-task pipeline step, combining system status logs, user-facing analysis work logs where applicable, execution output, and linked artifacts without treating raw model reasoning as product content.
@@ -42,7 +62,7 @@ _Avoid_: 只能复制模板, 完全自由生成
 
 **场景蓝本**:
 A reusable description of a customer scenario and product intent that guides requirement clarification and generation profile selection. It is not a runnable application or a copyable code template.
-_Avoid_: 应用, 预置应用, 代码模板
+_Avoid_: 应用, 预置应用, 模板应用, 代码模板
 
 **客户场景名称**:
 The original scenario name supplied by the customer and preserved as the application display name, even when internal identifiers or blueprint names need to disambiguate similar scenarios.

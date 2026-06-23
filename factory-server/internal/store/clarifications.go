@@ -61,6 +61,38 @@ ORDER BY updated_at DESC LIMIT 1`,
 	return cs, nil
 }
 
+// ListClarificationSessions returns clarification sessions newest-first.
+// limit <= 0 defaults to 50; limit > 200 is capped to 200.
+func (s *Store) ListClarificationSessions(ctx context.Context, limit int) ([]model.ClarificationSession, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+clarificationSessionCols+`
+FROM clarification_sessions
+ORDER BY updated_at DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []model.ClarificationSession{}
+	for rows.Next() {
+		cs, err := scanClarificationSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		if cs != nil {
+			out = append(out, *cs)
+		}
+	}
+	return out, rows.Err()
+}
+
 // UpdateClarificationRound advances the persisted `round` column to the round
 // that actually ran and bumps updated_at. Without this the persisted round
 // stays at its creation value (0), so GET /api/clarifications/:id would

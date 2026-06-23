@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -138,4 +139,53 @@ func TestScanRespectsContextCancellation(t *testing.T) {
 	if _, err := s.Scan(ctx); err == nil {
 		t.Fatal("expected cancelled context to error")
 	}
+}
+
+func TestScannerHidesConfiguredPresetApps(t *testing.T) {
+	root := t.TempDir()
+	writeManifest := func(rel, source, slug string) {
+		t.Helper()
+		path := filepath.Join(root, rel, ".factory")
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir manifest dir: %v", err)
+		}
+		raw := fmt.Sprintf(`{"schemaVersion":1,"slug":%q,"name":%q,"type":"command_dashboard","source":%q,"entry":"static-vite","path":%q}`, slug, slug, source, rel)
+		if err := os.WriteFile(filepath.Join(path, "app.json"), []byte(raw), 0o644); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+	}
+	writeManifest("scene/hidden-preset", "preset", "hidden-preset")
+	writeManifest("scene/visible-preset", "preset", "visible-preset")
+	writeManifest("generated-apps/generated-demo", "generated", "generated-demo")
+	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	config := `{"presetApps":{"hidden-preset":{"showInAppList":false},"visible-preset":{"showInAppList":true}}}`
+	if err := os.WriteFile(filepath.Join(root, ".factory", "preset-apps.json"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	apps, err := Scanner{Root: root}.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	slugs := make([]string, 0, len(apps))
+	for _, app := range apps {
+		slugs = append(slugs, app.Slug)
+	}
+	if containsString(slugs, "hidden-preset") {
+		t.Fatalf("hidden preset was returned: %v", slugs)
+	}
+	if !containsString(slugs, "visible-preset") || !containsString(slugs, "generated-demo") {
+		t.Fatalf("visible apps missing: %v", slugs)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

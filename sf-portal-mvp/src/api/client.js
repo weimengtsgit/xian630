@@ -82,4 +82,6 @@ export const factoryApi = {
   retryClarificationRound: id => request(`/api/clarifications/${id}/retry-current-round`, { method: 'POST' }),
   confirmClarification: id => request(`/api/clarifications/${id}/confirm`, { method: 'POST' }),
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
+  listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
+  deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }
