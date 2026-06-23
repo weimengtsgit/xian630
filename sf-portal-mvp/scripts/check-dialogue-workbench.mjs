@@ -20,6 +20,7 @@ import {
   initialDialogueState,
   applyDialogueEvent,
   lockedFromView,
+  openQuestionsForView,
   statusText,
   titleForDialogue,
 } from '../src/hooks/dialogueTimeline.js'
@@ -118,6 +119,30 @@ for (const status of ['resolved', 'abandoned', 'failed']) {
   }
   assert.equal(lockedFromView(termView), true, `${status} must lock composer (terminal)`)
 }
+
+// ---- open questions feed the answer bar (regression for review P0 #2) --------
+
+// loadView must derive the answer-bar `questions` from the open child questions;
+// ConversationWorkbench's 提交本轮澄清 control depends on questions.length > 0.
+// openQuestionsForView is the pure derivation the hook now consumes.
+const openQuestionView = {
+  session: { id: 'dlg_q', status: 'drafting_application', intent: 'application_generation', route_locked: true, initial_prompt: 'gen' },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: 'gen' }],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  child: {
+    id: 'clar_q', status: 'active', round: 1, max_rounds: 6, requirement: {},
+    messages: [
+      { id: 'cmq', role: 'agent', kind: 'question', metadata_json: JSON.stringify({ id: 'appType', label: '应用类型', options: [{ value: 'dashboard', label: '看板' }, { value: 'map', label: '地图' }], recommendation: 'dashboard' }) },
+    ],
+  },
+}
+const openQs = openQuestionsForView(openQuestionView)
+assert.equal(openQs.length, 1, `openQuestionsForView must surface the open child question; got ${openQs.length}`)
+assert.equal(openQs[0].id, 'appType', 'open question id must be appType')
+assert.equal(openQs[0].options.length, 2, 'open question must carry its options for the answer bar')
+// A ready_to_confirm child has no open questions.
+const readyView = { ...openQuestionView, child: { ...openQuestionView.child, status: 'ready_to_confirm' } }
+assert.equal(openQuestionsForView(readyView).length, 0, 'ready_to_confirm child must yield no open questions')
 
 // ---- adaptive round-5 consolidation render ----------------------------------
 
@@ -244,6 +269,11 @@ const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkben
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const apiClientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const eventsJs = readFileSync(new URL('../src/api/events.js', import.meta.url), 'utf8')
+const dialogueHookJs = readFileSync(new URL('../src/hooks/useDialogueSessions.js', import.meta.url), 'utf8')
+
+// The hook MUST derive the answer-bar questions from the open child questions
+// (regression for review P0 #2): without it the submit control never renders.
+assert.match(dialogueHookJs, /openQuestionsForView/, 'useDialogueSessions must derive questions via openQuestionsForView')
 
 // The workbench + App must use dialogue APIs, not the old clarification hook.
 assert.match(workbenchJsx, /dialogueTimeline|useDialogueSessions|titleForDialogue/, 'workbench must consume the dialogue timeline')

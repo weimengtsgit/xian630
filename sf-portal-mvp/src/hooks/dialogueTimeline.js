@@ -164,6 +164,20 @@ export function buildDialogueTimeline(view) {
   return items
 }
 
+// openQuestionsForView returns the questions currently awaiting an answer for a
+// composed view, so the hook can populate the answer bar's `questions` prop
+// (which ConversationWorkbench's 提交本轮澄清 control depends on). It mirrors the
+// question_group the timeline builder emits, derived from the open child
+// questions after the last user answer. Exported (pure) so the logic harness can
+// assert it directly — the prior bug was loadView setting `timeline` but never
+// `questions`, so the answer bar never rendered and app-gen round 1 stalled.
+export function openQuestionsForView(view) {
+  const child = view && view.child
+  if (!child) return []
+  const childMessages = Array.isArray(child.messages) ? child.messages : []
+  return openChildQuestions(child, childMessages).map(safeQuestion)
+}
+
 // appendChildItems maps the child clarification view (parent's child field) into
 // question groups, a round-5 consolidation table, and a requirement summary. It
 // reads child.messages (the persisted child thread) and child.requirement.

@@ -6,6 +6,7 @@ import {
   buildDialogueTimeline,
   initialDialogueState,
   lockedFromView,
+  openQuestionsForView,
 } from './dialogueTimeline'
 
 // dialogue.* + wrapped clarification.* event types drive a TARGETED refresh keyed
@@ -71,6 +72,7 @@ export function useDialogueSessions() {
         selectedDialogueId: id,
         view,
         timeline: buildDialogueTimeline(view),
+        questions: openQuestionsForView(view),
         requirement: view.child ? (view.child.requirement || null) : null,
         needsRefresh: null,
       }))
