@@ -72,7 +72,7 @@ Agent list refreshes, session marked complete
 | `waiting_user`       | Waiting for user input         |
 | `ready_to_confirm`   | Draft ready, can save          |
 | `confirmed`          | Agent saved                    |
-| `abandoned`          | Creation abandoneded           |
+| `abandoned`          | Creation abandoned             |
 | `failed`             | Error occurred                 |
 
 ### ConversationWorkbench Mode Awareness
@@ -98,6 +98,22 @@ Values:
 
 - `""` (empty string, default): normal requirement clarification
 - `"agent_authoring"`: agent creation conversation
+
+### API Client
+
+Update `factoryApi.createClarification` to accept an optional options object:
+
+```js
+// Before:
+createClarification: prompt => request('/api/clarifications', {
+  method: 'POST', body: JSON.stringify({ prompt })
+})
+
+// After:
+createClarification: (prompt, options = {}) => request('/api/clarifications', {
+  method: 'POST', body: JSON.stringify({ prompt, ...options })
+})
+```
 
 ### API Changes
 
@@ -147,6 +163,16 @@ model.ClarificationMessage{
 
 ```
 agent_authoring.draft.updated
+```
+
+This event type must be added to the `CLARIFICATION_TYPES` set in
+`useConversationSessions.js` so the SSE subscriber processes it:
+
+```js
+const CLARIFICATION_TYPES = new Set([
+  // ... existing types ...
+  'agent_authoring.draft.updated',
+])
 ```
 
 Payload:
@@ -219,14 +245,20 @@ const startAuthoring = async () => {
 }
 
 const saveAuthoringAgent = async () => {
-  const draft = currentAgentDraft // extracted from timeline
+  // Extract the latest draft from timeline (last agent_draft item)
+  const draftItems = state.timeline.filter(item => item.type === 'agent_draft')
+  const latestDraft = draftItems[draftItems.length - 1]?.draft
+  if (!latestDraft?.key || !latestDraft?.name || !latestDraft?.prompt) {
+    throw new Error('Draft is missing required fields')
+  }
   const created = await factoryApi.createBusinessAgent({
-    key: draft.key,
-    name: draft.name,
-    description: draft.description,
-    prompt: draft.prompt,
+    key: latestDraft.key,
+    name: latestDraft.name,
+    description: latestDraft.description || '',
+    prompt: latestDraft.prompt,
     enabled: true,
   })
+  // Mark session as complete (no job creation in agent_authoring mode)
   await factoryApi.confirmClarification(state.session.id)
   await refreshSessions()
   return created
@@ -245,6 +277,16 @@ const isAuthoringMode = session?.mode === 'agent_authoring'
 ```
 
 Footer conditional rendering:
+
+```jsx
+// canSaveDraft: session is ready_to_confirm AND timeline has a complete draft
+const draftItems = timeline.filter(item => item.type === 'agent_draft')
+const latestDraft = draftItems[draftItems.length - 1]?.draft
+const canSaveDraft = session?.status === 'ready_to_confirm'
+  && latestDraft?.name
+  && latestDraft?.key
+  && latestDraft?.prompt
+```
 
 ```jsx
 {isAuthoringMode ? (
