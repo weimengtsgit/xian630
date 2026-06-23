@@ -1121,7 +1121,7 @@ func (s *Server) loadChildConsolidation(ctx context.Context, childID string) []c
 // dialogue id so the portal updates one state source.
 func (s *Server) publishDialogueChild(ctx context.Context, dialogueID, childID string, req clarification.Requirement) {
 	s.publishClarificationEvent(clarification.StreamEvent{
-		Type: "clarification.summary.updated", SessionID: childID, Data: req,
+		Type: "clarification.summary.updated", SessionID: childID, Data: clarification.PublicRequirement(req),
 	})
 	s.publishDialogueSimple("dialogue.clarification.updated", dialogueID, map[string]any{
 		"child_id": childID,

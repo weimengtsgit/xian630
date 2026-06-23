@@ -397,7 +397,7 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      req,
+		Data:      clarification.PublicRequirement(req),
 	})
 	// Advance the round exactly like the free-text path (P2#2): the structured
 	// answer + merged requirement must be visible to the next clarifier round,
@@ -469,7 +469,7 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      req,
+		Data:      clarification.PublicRequirement(req),
 	})
 
 	advanced, ok := s.advanceAfterUserTurn(r.Context(), id, updated)
@@ -558,7 +558,7 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      current,
+		Data:      clarification.PublicRequirement(current),
 	})
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 }

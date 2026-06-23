@@ -310,11 +310,22 @@ type normalizeOptions struct {
 	SkipWorkLogs bool
 }
 
+// PublicRequirement projects a Requirement into its user-facing form, stripping
+// the internal BlueprintRefs. It is the ONLY shape that may appear in a
+// user-facing SSE event; the raw Requirement (with blueprintRefs) is retained
+// on the persisted RoundOutput returned to the caller and written to
+// output.json. Handlers in other packages MUST route every clarification /
+// dialogue event payload through this helper rather than publishing the raw
+// Requirement, which carries internal Factory blueprint slugs.
+func PublicRequirement(r Requirement) requirementView {
+	return requirementWithoutBlueprintRefs(r)
+}
+
 // requirementWithoutBlueprintRefs projects a Requirement into its user-facing
 // form, stripping the internal BlueprintRefs. It is the ONLY shape that may
 // appear in a user-facing SSE event; the raw Requirement (with blueprintRefs)
 // is retained on the persisted RoundOutput returned to the caller and written
-// to output.json.
+// to output.json. PublicRequirement is the exported alias used by handlers.
 func requirementWithoutBlueprintRefs(r Requirement) requirementView {
 	return requirementView{
 		AppType:           r.AppType,
