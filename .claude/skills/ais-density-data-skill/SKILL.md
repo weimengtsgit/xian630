@@ -16,6 +16,38 @@ description: Download and process HISTORICAL AIS archives (MarineCadastre / DMA 
 - Historical data is inherently stale; always report how recent it is.
 - Return failure when every applicable source fails. Do not fabricate vessel counts.
 
+## Real Data Is MANDATORY — and AIS is NOT browser-fetchable
+
+Unlike tide/wind, historical AIS is **gigabyte-scale archive download**, so the
+generated app CANNOT `fetch()` it live in the browser. Therefore, when
+`dataPolicy` is `live_api`/`mock_then_api`, the app MUST do one of these — and
+**never** invent `MOCK_CELLS` / synthetic density numbers:
+
+1. **Load a real historical density sample** that ships with the repo (a JSON
+   whose every field carries provenance: `source`, `dateRange`, `coverageNote`,
+   `dataAsOf`). Display it labeled "历史样本 / historical sample", not "live".
+2. **If no real sample exists for the requested zone**, render an explicit
+   `COVERAGE_NOT_AVAILABLE` / "需下载历史归档" state — empty grid + the real
+   source link — NOT a green heat-map of fake counts.
+
+Fabricating vessel counts to "make the demo look full" is a **generation
+failure**. Mock data is permitted ONLY when `dataPolicy=mock_data` or
+`useMock=true`, and even then must be labeled as mock.
+
+## Real download sources (one-time, offline processing — not a runtime fetch)
+
+- `marinecadastre` — NOAA/BOEM U.S. AIS Vessel Traffic Data (ArcGIS hub / AWS
+  Open Data). U.S. waters/EEZ only. Bulk per-month files; aggregate to a
+  50-NM grid offline, then ship the resulting small JSON as the real sample.
+- `dma` — Danish Maritime Authority bulk AIS CSV (`aisdata.ais.dk`). Danish
+  waters only.
+- `gfw` — Global Fishing Watch (global, fishing-oriented; free account/token).
+
+If the brief targets a sea outside all free sources (e.g. Philippine Sea, deep
+Western Pacific), the correct app behavior is option 2 (coverage-not-available),
+not invented data.
+
+
 ## Trigger Mapping
 
 - Trigger on intent about `AIS`, `merchant density`, `shipping density`,

@@ -11,6 +11,45 @@ description: Fetch and normalize real 10 m wind data for carrier operating regio
 - Skip this skill only when the user explicitly asks for `mock`, `demo data`, or `sample data`.
 - Return failure when every real source fails. Do not synthesize wind values.
 
+## Real Data Is MANDATORY in the generated app
+
+When `dataPolicy` is `live_api` or `mock_then_api`, the generated application MUST
+issue real HTTP requests to Open-Meteo GFS and populate its data layer from the
+real response. Shipping a deterministic / synthetic / mock wind series in that
+case is a **generation failure**, not a safe default — even if it "makes the
+build pass". If a real fetch fails at runtime, show an explicit error/empty state
+and log it in `output.json` warnings; never silently substitute fake wind.
+Mock data is permitted ONLY when `dataPolicy=mock_data` or `useMock=true`.
+
+## Fetch Adapter — Open-Meteo GFS (public, no key, CORS `*`, browser-fetchable)
+
+Drop this into the generated app and call it instead of any synthetic generator.
+Open-Meteo serves the GFS model's 10 m wind as hourly arrays in **knots** and
+**degrees** (verified: returns real values, e.g. 11.4 kt / 162°).
+
+```js
+// src/data/windProvider.js
+export async function fetchDeckWind(lat, lon, { deckWindMinKt = 20, days = 3 } = {}) {
+  const url = `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}` +
+    `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kn&forecast_days=${days}&time_zone=auto`;
+  const res = await fetch(url);
+  const j = await res.json();
+  const h = j.hourly;
+  if (!h || !h.time) throw new Error("Open-Meteo error: " + JSON.stringify(j).slice(0, 200));
+  const cardinal = (deg) => ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"][Math.round(deg/22.5)%16];
+  const series = h.time.map((t, i) => ({
+    t, windSpeedKt: h.wind_speed_10m[i], windFromDeg: h.wind_direction_10m[i],
+    windFromCardinal: cardinal(h.wind_direction_10m[i]),
+  }));
+  return { lat, lon, deckWindMinKt, series, source: "gfs-open-meteo" };
+}
+```
+
+Map each requested operating region to a representative `lat/lon` (e.g. Western
+Pacific ≈ 22.4/138.7, Norfolk approach ≈ 36.9/-76.3). `deckWindMinKt` is the
+launch/recovery wind threshold the caller supplies.
+
+
 ## Trigger Mapping
 
 - Trigger on intent about `deck wind`, `10 m wind`, `wind speed and direction`, `recovery condition`, or `launch wind`.

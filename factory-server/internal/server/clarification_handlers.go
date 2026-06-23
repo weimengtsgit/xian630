@@ -545,8 +545,9 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
-	// Always (re)compute the profile from appType — never trust the client.
-	current.GenerationProfile = generationProfileForAppType(current.AppType)
+	// Always (re)compute the profile from appType — never trust the client —
+	// but preserve the server-derived `data` skill group across the recompute.
+	current.GenerationProfile = recomputeGenerationProfile(current.GenerationProfile, current.AppType)
 
 	reqBytes, _ := json.Marshal(current)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
@@ -695,12 +696,15 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The confirmed requirement may carry business fields; recompute the
-		// profile from appType so a client can never inject one at confirm time.
-		incoming.GenerationProfile = generationProfileForAppType(incoming.AppType)
+		// profile from appType so a client can never inject one at confirm time,
+		// but preserve the persisted `data` skill group (req is still the
+		// persisted requirement here) across the recompute.
+		incoming.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, incoming.AppType)
 		req = incoming
 	} else {
-		// Recompute the profile defensively even on the persisted requirement.
-		req.GenerationProfile = generationProfileForAppType(req.AppType)
+		// Recompute the profile defensively even on the persisted requirement,
+		// preserving the server-derived `data` skill group.
+		req.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, req.AppType)
 	}
 
 	// Fail closed on unsafe blueprintRef slugs (P2#1): unified check covers BOTH
@@ -1172,7 +1176,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "appType", "app_type":
 		if value != "" {
 			req.AppType = value
-			req.GenerationProfile = generationProfileForAppType(value)
+			req.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, value)
 		}
 	case "appName", "app_name":
 		if value != "" {
@@ -1326,4 +1330,22 @@ func generationProfileForAppType(appType string) map[string][]string {
 	default:
 		return nil
 	}
+}
+
+// recomputeGenerationProfile rebuilds base/domain/pattern from appType while
+// preserving the data-skill group the clarification runner already derived.
+// generationProfile is server-derived and never client-supplied: base/domain/
+// pattern always come from appType, but the `data` group is selected during
+// clarification (per the requirement-clarification Data Skill Mapping) and MUST
+// survive the appType recompute at patch/confirm time — otherwise the selected
+// data skills are stripped before the job reaches code_generation.
+func recomputeGenerationProfile(existing map[string][]string, appType string) map[string][]string {
+	fresh := generationProfileForAppType(appType)
+	if dataGroup := existing["data"]; len(dataGroup) > 0 {
+		if fresh == nil {
+			fresh = map[string][]string{}
+		}
+		fresh["data"] = append([]string(nil), dataGroup...)
+	}
+	return fresh
 }

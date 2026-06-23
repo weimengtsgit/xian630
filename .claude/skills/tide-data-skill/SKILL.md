@@ -11,6 +11,56 @@ description: Fetch and normalize real tide forecast data for named ports or port
 - Skip this skill only when the user explicitly asks for `mock`, `demo data`, or `sample data`.
 - Return failure when every real source fails. Do not fabricate tide series.
 
+## Real Data Is MANDATORY in the generated app
+
+When `dataPolicy` is `live_api` or `mock_then_api`, the generated application MUST
+issue real HTTP requests to NOAA CO-OPS (and/or JCG) and populate its data layer
+from the real response. Shipping a deterministic / synthetic / mock tide curve in
+that case is a **generation failure**, not a safe default — even if it "makes the
+build pass". If a real fetch fails at runtime, show an explicit error/empty state
+and log it in `output.json` warnings; never silently substitute fake heights.
+Mock data is permitted ONLY when `dataPolicy=mock_data` or `useMock=true`.
+
+## Fetch Adapter — NOAA CO-OPS (public, no key, CORS `*`, browser-fetchable)
+
+Drop this into the generated app and call it instead of any synthetic generator.
+NOAA returns hourly tide **predictions** in **meters above MLLW** as
+`{predictions:[{t:"YYYY-MM-DD HH:mm", v:"0.163"}, ...]}`.
+
+```js
+// src/data/tideProvider.js
+const STATIONS = {
+  norfolk:  { id: "8638610", nameZh: "诺福克",   tz: "America/New_York" },
+  sandiego: { id: "9410170", nameZh: "圣迭戈",   tz: "America/Los_Angeles" },
+  // Bremerton's own station 9446486 does NOT publish MLLW predictions; use the
+  // Seattle/Puget Sound predictions station as the working nearby source.
+  bremerton:{ id: "9447130", nameZh: "布雷默顿(普吉特湾)", tz: "America/Los_Angeles" },
+  // 横须贺用 JCG（见 Source Priority），无 CORS，需服务端/构建期取数。
+};
+const ymd = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}`;
+export async function fetchTideSeries(portKey, days = 3) {
+  const st = STATIONS[portKey];
+  if (!st) throw new Error("unknown port: " + portKey);
+  const start = new Date();
+  const end = new Date(Date.now() + days * 86400000);
+  const url = `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?station=${st.id}&product=predictions&datum=MLLW&units=metric&format=json&interval=h&begin_date=${ymd(start)}&end_date=${ymd(end)}&time_zone=lst_ldt`;
+  const res = await fetch(url);
+  const j = await res.json();
+  if (!j.predictions) throw new Error("NOAA error: " + JSON.stringify(j).slice(0, 200));
+  return {
+    port: portKey, nameZh: st.nameZh, timezone: st.tz, source: "noaa-coops",
+    series: j.predictions.map((p) => ({ t: p.t, height: Number(p.v) })), // 米，MLLW 基准
+  };
+}
+```
+
+Datum note: NOAA `MLLW` heights for these ports are small (~0.0–1.5 m). Any
+departure-window threshold in the app must be expressed in the **same datum**
+(meters above MLLW); do not compare MLLW heights against an unrelated "12.8 m
+draft" number. Verify each `STATIONS` id at
+`https://tidesandcurrents.noaa.gov/stations.html` if a port is added.
+
+
 ## Trigger Mapping
 
 - Trigger on intent about `tide`, `tidal height`, `departure window`, `draft threshold`, or `72-hour port forecast`.
