@@ -99,6 +99,8 @@ export function AgentsPanel({
   const draft = parseDraft(authoring.session)
   const canFinalize = authoring.session?.status === 'ready_to_save' && draft?.prompt
   const authoringBusy = authoring.initializing || authoring.sending || authoring.finalizing
+  const hasAuthoringInput = Boolean(authoring.input.trim())
+  const canSaveAuthoring = Boolean(canFinalize || (authoring.session?.id && hasAuthoringInput))
 
   const openAgentDetail = agent => {
     setPanelError('')
@@ -211,25 +213,31 @@ export function AgentsPanel({
     setAuthoring(emptyAuthoringState)
   }
 
+  const sendAuthoringContent = async content => {
+    if (!content || !authoring.session?.id || !onSendAuthoringMessage) return null
+    const messages = [...authoring.messages, { role: 'user', content }]
+    setAuthoring(current => ({ ...current, messages, input: '', sending: true, error: '' }))
+    const session = await onSendAuthoringMessage(authoring.session.id, content)
+    setAuthoring({
+      ...emptyAuthoringState,
+      session,
+      messages: [
+        ...messages,
+        {
+          role: 'assistant',
+          content: '已根据本轮信息更新业务智能体预览，可以继续补充约束或保存智能体。',
+        },
+      ],
+    })
+    return session
+  }
+
   const submitAuthoringMessage = async event => {
     event.preventDefault()
     const content = authoring.input.trim()
-    if (!content || !authoring.session?.id || !onSendAuthoringMessage) return
-    const messages = [...authoring.messages, { role: 'user', content }]
-    setAuthoring(current => ({ ...current, messages, input: '', sending: true, error: '' }))
+    if (!content || !authoring.session?.id || !onSendAuthoringMessage || authoringBusy) return
     try {
-      const session = await onSendAuthoringMessage(authoring.session.id, content)
-      setAuthoring({
-        ...emptyAuthoringState,
-        session,
-        messages: [
-          ...messages,
-          {
-            role: 'assistant',
-            content: '已根据本轮信息更新业务智能体预览，可以继续补充约束或保存智能体。',
-          },
-        ],
-      })
+      await sendAuthoringContent(content)
     } catch (err) {
       setAuthoring(current => ({
         ...current,
@@ -240,10 +248,34 @@ export function AgentsPanel({
   }
 
   const finalizeAuthoring = async () => {
-    if (!authoring.session?.id || !onFinalizeAuthoring) return
+    if (!authoring.session?.id || !onFinalizeAuthoring || authoringBusy) return
+    let sessionId = authoring.session.id
+    if (hasAuthoringInput || !canFinalize) {
+      const content = authoring.input.trim()
+      if (!content || !onSendAuthoringMessage) return
+      try {
+        const session = await sendAuthoringContent(content)
+        if (!session?.id || session.status !== 'ready_to_save' || !parseDraft(session)?.prompt) {
+          setAuthoring(current => ({
+            ...current,
+            sending: false,
+            error: '请先生成业务智能体预览后再保存',
+          }))
+          return
+        }
+        sessionId = session.id
+      } catch (err) {
+        setAuthoring(current => ({
+          ...current,
+          sending: false,
+          error: err.message || String(err),
+        }))
+        return
+      }
+    }
     setAuthoring(current => ({ ...current, finalizing: true, error: '' }))
     try {
-      const created = await onFinalizeAuthoring(authoring.session.id)
+      const created = await onFinalizeAuthoring(sessionId)
       setSelectedId(created.id || created.key)
       setAuthoringOpen(false)
       setAuthoring(emptyAuthoringState)
@@ -596,10 +628,10 @@ export function AgentsPanel({
                 type="button"
                 className="agent-primary-button"
                 onClick={finalizeAuthoring}
-                disabled={authoringBusy || !canFinalize}
+                disabled={authoringBusy || !canSaveAuthoring}
               >
                 <Check size={14} />
-                保存智能体
+                {canFinalize && !hasAuthoringInput ? '保存智能体' : '生成并保存'}
               </button>
             </div>
           </section>
