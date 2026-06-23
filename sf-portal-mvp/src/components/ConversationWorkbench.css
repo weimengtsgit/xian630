@@ -25,6 +25,13 @@
 .cw-title strong { color: #edfaff; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-kicker { font-size: 11px; color: rgba(104, 221, 255, 0.7); }
 .cw-actions { display: flex; align-items: center; gap: 6px; }
+.cw-business-agents { flex: 0 0 auto; display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid rgba(111, 218, 255, 0.14); background: rgba(104, 221, 255, 0.04); }
+.cw-business-label { flex: 0 0 auto; color: #8fb0bf; font-size: 12px; line-height: 24px; }
+.cw-business-chips { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-business-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; min-height: 24px; border: 1px solid rgba(104, 221, 255, 0.28); border-radius: 6px; padding: 3px 5px 3px 8px; color: #d4ecf7; background: rgba(3, 17, 29, 0.72); font-size: 12px; }
+.cw-business-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-business-chip button { flex: 0 0 20px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 4px; color: #68ddff; background: rgba(104, 221, 255, 0.06); cursor: pointer; }
+.cw-business-chip button:disabled { opacity: 0.35; cursor: not-allowed; }
 .cw-icon-btn, .cw-send, .cw-composer button, .cw-answer-bar button {
   border: 1px solid rgba(111, 218, 255, 0.32);
   background: rgba(11, 29, 44, 0.72);

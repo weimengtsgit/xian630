@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, MessageSquarePlus, History, Send } from 'lucide-react'
+import { Loader2, MessageSquarePlus, History, Send, ChevronUp, ChevronDown, X } from 'lucide-react'
 import { titleForSession } from '../hooks/conversationTimeline'
 import './ConversationWorkbench.css'
 
@@ -19,6 +19,9 @@ export function ConversationWorkbench({
   questions,
   error,
   submitting,
+  selectedBusinessAgents = [],
+  onRemoveBusinessAgent,
+  onMoveBusinessAgent,
   historyOpen,
   setHistoryOpen,
   onNewSession,
@@ -34,6 +37,7 @@ export function ConversationWorkbench({
   const canConfirm = session && session.status === 'ready_to_confirm'
   const terminal = !!(session && (session.status === 'confirmed' || session.status === 'abandoned' || session.status === 'failed'))
   const activeQuestions = Array.isArray(questions) ? questions : []
+  const businessAgents = Array.isArray(selectedBusinessAgents) ? selectedBusinessAgents : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
   const canSubmitAnswers = activeQuestions.length > 0 && completedAnswers === activeQuestions.length && !submitting
 
@@ -72,6 +76,31 @@ export function ConversationWorkbench({
           <button type="button" className="cw-icon-btn" onClick={() => setHistoryOpen(true)} title="历史会话"><History size={16} /></button>
         </div>
       </header>
+
+      {businessAgents.length > 0 ? (
+        <div className="cw-business-agents" aria-label="本次业务智能体">
+          <span className="cw-business-label">本次业务智能体</span>
+          <div className="cw-business-chips">
+            {businessAgents.map((agent, index) => {
+              const agentLabel = agent.name || agent.key || agent.id
+              return (
+                <span className="cw-business-chip" key={agent.id || agent.key || `${agentLabel}_${index}`}>
+                  <span className="cw-business-chip-label">{index + 1}. {agentLabel}</span>
+                  <button type="button" onClick={() => onMoveBusinessAgent?.(agent.id, -1)} disabled={index === 0} aria-label={`上移${agentLabel}`}>
+                    <ChevronUp size={12} aria-hidden="true" />
+                  </button>
+                  <button type="button" onClick={() => onMoveBusinessAgent?.(agent.id, 1)} disabled={index === businessAgents.length - 1} aria-label={`下移${agentLabel}`}>
+                    <ChevronDown size={12} aria-hidden="true" />
+                  </button>
+                  <button type="button" onClick={() => onRemoveBusinessAgent?.(agent.id)} aria-label={`移除${agentLabel}`}>
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <div className="cw-body">
         {timeline.length === 0 ? (

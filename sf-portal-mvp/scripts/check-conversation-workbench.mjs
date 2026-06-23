@@ -93,6 +93,7 @@ assert.equal(state.timeline.at(-1).blueprints[0].id, 'carrier-formation-replay')
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const appCss = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
 const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
 
 assert.match(appJsx, /<ConversationWorkbench/, 'App must render ConversationWorkbench')
 assert.doesNotMatch(appJsx, /<ClarificationPanel/, 'App must not render the old ClarificationPanel')
@@ -106,6 +107,10 @@ assert.match(workbenchJsx, /参考蓝本/, 'ConversationWorkbench must label blu
 assert.match(workbenchJsx, /updated_at/, 'history drawer must show updated time')
 assert.match(workbenchJsx, /coreScenario/, 'history drawer must show requirement summary')
 assert.match(workbenchJsx, /应用已删除/, 'history drawer must show deleted application state')
+
+assert.match(workbenchJsx, /selectedBusinessAgents/, 'ConversationWorkbench must accept selected business agents')
+assert.match(workbenchJsx, /本次业务智能体/, 'ConversationWorkbench must label selected business agents')
+assert.match(workbenchCss, /\.cw-business-chip/, 'ConversationWorkbench must style selected business agent chips')
 
 const appsPanelJsx = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
 const useApplicationsJs = readFileSync(new URL('../src/hooks/useApplications.js', import.meta.url), 'utf8')
