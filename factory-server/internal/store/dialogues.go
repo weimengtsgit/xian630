@@ -146,6 +146,16 @@ WHERE id = ?`,
 	return err
 }
 
+// SetDialogueClarificationID links a child clarification session to a dialogue
+// by stamping the clarification_session_id column. It bumps updated_at.
+func (s *Store) SetDialogueClarificationID(ctx context.Context, id, clarificationID string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET clarification_session_id = ?, updated_at = ?
+WHERE id = ?`, clarificationID, ms(time.Now()), id)
+	return err
+}
+
 // SetDialogueResolved marks the dialogue resolved and records the terminal
 // result links: the application id it produced (for application_generation)
 // and/or the agent id it created (for business_processing_agent). Either may be

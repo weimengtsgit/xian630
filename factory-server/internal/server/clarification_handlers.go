@@ -913,6 +913,22 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 			return sess, roundN, false
 		}
 	}
+	// Persist the round-5 consolidation list as a recommendation_consolidation
+	// message so the round-6 adjust handler (Task 4 dialogue facade) can load it
+	// via ApplyConsolidationAdjustment without a model turn.
+	if len(out.Consolidation) > 0 {
+		consBytes, _ := json.Marshal(out.Consolidation)
+		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
+			ID:           "cmsg_" + idpkg.New(),
+			SessionID:    sessID,
+			Role:         "agent",
+			Kind:         "recommendation_consolidation",
+			MetadataJSON: string(consBytes),
+			CreatedAt:    now,
+		}); err != nil {
+			return sess, roundN, false
+		}
+	}
 
 	// Map the runner's reported status onto the session status, defaulting to
 	// waiting_user when the runner did not declare readiness.
