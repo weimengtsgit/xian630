@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE TABLE IF NOT EXISTS clarification_sessions (
     id               TEXT    PRIMARY KEY,
     status           TEXT    NOT NULL,
+    mode             TEXT    NOT NULL DEFAULT '',
     initial_prompt   TEXT    NOT NULL DEFAULT '',
     round            INTEGER NOT NULL DEFAULT 0,
     max_rounds       INTEGER NOT NULL DEFAULT 3,

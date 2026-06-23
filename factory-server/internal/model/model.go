@@ -305,6 +305,7 @@ const (
 type ClarificationSession struct {
 	ID              string              `json:"id"`
 	Status          ClarificationStatus `json:"status"`
+	Mode            string              `json:"mode"`
 	InitialPrompt   string              `json:"initial_prompt"`
 	Round           int                 `json:"round"`
 	MaxRounds       int                 `json:"max_rounds"`

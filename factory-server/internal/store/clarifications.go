@@ -11,14 +11,14 @@ import (
 // clarificationSessionCols lists the clarification_sessions columns in scan
 // order, shared by the SELECTs below to keep the query and
 // scanClarificationSession in sync.
-const clarificationSessionCols = `id,status,initial_prompt,round,max_rounds,requirement_json,created_job_id,error_code,error_message,created_at,updated_at,confirmed_at,abandoned_at`
+const clarificationSessionCols = `id,status,mode,initial_prompt,round,max_rounds,requirement_json,created_job_id,error_code,error_message,created_at,updated_at,confirmed_at,abandoned_at`
 
 // CreateClarificationSession inserts a new clarification session row.
 func (s *Store) CreateClarificationSession(ctx context.Context, cs model.ClarificationSession) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO clarification_sessions(id,status,initial_prompt,round,max_rounds,requirement_json,created_job_id,error_code,error_message,created_at,updated_at,confirmed_at,abandoned_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		cs.ID, string(cs.Status), cs.InitialPrompt, cs.Round, cs.MaxRounds, cs.RequirementJSON,
+INSERT INTO clarification_sessions(id,status,mode,initial_prompt,round,max_rounds,requirement_json,created_job_id,error_code,error_message,created_at,updated_at,confirmed_at,abandoned_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		cs.ID, string(cs.Status), cs.Mode, cs.InitialPrompt, cs.Round, cs.MaxRounds, cs.RequirementJSON,
 		cs.CreatedJobID, cs.ErrorCode, cs.ErrorMessage, ms(cs.CreatedAt), ms(cs.UpdatedAt),
 		nullableMs(cs.ConfirmedAt), nullableMs(cs.AbandonedAt))
 	return err
@@ -175,7 +175,7 @@ func scanClarificationSession(sc scanner) (*model.ClarificationSession, error) {
 	var status string
 	var created, updated int64
 	var confirmed, abandoned sql.NullInt64
-	err := sc.Scan(&s.ID, &status, &s.InitialPrompt, &s.Round, &s.MaxRounds,
+	err := sc.Scan(&s.ID, &status, &s.Mode, &s.InitialPrompt, &s.Round, &s.MaxRounds,
 		&s.RequirementJSON, &s.CreatedJobID, &s.ErrorCode, &s.ErrorMessage,
 		&created, &updated, &confirmed, &abandoned)
 	if err == sql.ErrNoRows {

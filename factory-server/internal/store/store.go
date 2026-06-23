@@ -83,6 +83,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.business_agent_snapshots_json: %w", err)
 	}
+	if err := s.ensureColumn(ctx, "clarification_sessions", "mode",
+		`ALTER TABLE clarification_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate clarification_sessions.mode: %w", err)
+	}
 	return s, nil
 }
 
