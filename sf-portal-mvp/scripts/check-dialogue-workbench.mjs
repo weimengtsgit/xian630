@@ -176,7 +176,7 @@ const resolvedAppView = {
 const resolvedAppTimeline = buildDialogueTimeline(resolvedAppView)
 assert.equal(resolvedAppTimeline.some(item => item.type === 'resolved_outcome'), true, 'resolved dialogue must render a resolved outcome item')
 const resolvedItem = resolvedAppTimeline.find(item => item.type === 'resolved_outcome')
-assert.equal(resolvedItem.kind, 'application' || 'agent' || 'job', 'resolved outcome carries a kind')
+assert.ok(['application', 'agent', 'job'].includes(resolvedItem.kind), `unexpected resolved outcome kind: ${resolvedItem.kind}`)
 
 // Resolved business-agent dialogue => resolved outcome naming the agent.
 const resolvedAgentView = {
@@ -189,6 +189,18 @@ const resolvedAgentTimeline = buildDialogueTimeline(resolvedAgentView)
 assert.equal(resolvedAgentTimeline.some(item => item.type === 'resolved_outcome'), true)
 const agentOutcome = resolvedAgentTimeline.find(item => item.type === 'resolved_outcome')
 assert.equal(agentOutcome.kind, 'agent')
+
+// Resolved application-generation dialogue => resolved outcome naming the seeded job.
+const resolvedJobView = {
+  session: { id: 'dlg_9', status: 'resolved', intent: 'application_generation', route_locked: true, initial_prompt: '生成态势看板' },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '生成态势看板' }],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  seededJob: { id: 'job_1', app_name: '态势看板' },
+}
+const resolvedJobTimeline = buildDialogueTimeline(resolvedJobView)
+assert.equal(resolvedJobTimeline.some(item => item.type === 'resolved_outcome'), true)
+const jobOutcome = resolvedJobTimeline.find(item => item.type === 'resolved_outcome')
+assert.equal(jobOutcome.kind, 'job')
 
 // ---- event hydration after reload ------------------------------------------
 
