@@ -21,6 +21,7 @@ const CLARIFICATION_TYPES = new Set([
   'clarification.confirmed',
   'clarification.failed',
   'clarification.abandoned',
+  'agent_authoring.draft.updated',
 ])
 
 const terminal = status => status === 'confirmed' || status === 'abandoned' || status === 'failed'
@@ -212,6 +213,56 @@ export function useConversationSessions() {
     }
   }, [refreshSessions, selectSession, state.session, submitting])
 
+  const startAuthoring = useCallback(async () => {
+    setError(null)
+    setSelectedBusinessAgents([])
+    setSubmitting(true)
+    try {
+      const session = await factoryApi.createClarification(
+        '请帮我创建一个业务智能体',
+        { mode: 'agent_authoring' }
+      )
+      await refreshSessions()
+      await selectSession(session.id)
+      return session
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [refreshSessions, selectSession])
+
+  const saveAuthoringAgent = useCallback(async () => {
+    if (!state.session || submitting) return null
+    // Extract the latest draft from timeline (last agent_draft item)
+    const draftItems = state.timeline.filter(item => item.type === 'agent_draft')
+    const latestDraft = draftItems[draftItems.length - 1]?.draft
+    if (!latestDraft?.key || !latestDraft?.name || !latestDraft?.prompt) {
+      throw new Error('Draft is missing required fields (name, key, prompt)')
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const created = await factoryApi.createBusinessAgent({
+        key: latestDraft.key,
+        name: latestDraft.name,
+        description: latestDraft.description || '',
+        prompt: latestDraft.prompt,
+        enabled: true,
+      })
+      // Mark session as complete (no job creation in agent_authoring mode)
+      await factoryApi.confirmClarification(state.session.id)
+      await refreshSessions()
+      return created
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [refreshSessions, state.session, state.timeline, submitting])
+
   useEffect(() => {
     mountedRef.current = true
     refreshSessions().then(sessions => {
@@ -248,6 +299,8 @@ export function useConversationSessions() {
     confirm,
     retry,
     abandon,
+    startAuthoring,
+    saveAuthoringAgent,
     addBusinessAgent,
     removeBusinessAgent,
     moveBusinessAgent,
