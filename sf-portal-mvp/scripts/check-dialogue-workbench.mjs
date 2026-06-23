@@ -189,6 +189,28 @@ assert.equal(businessTimeline.some(item => item.type === 'business_recommendatio
 const bizSerialized = JSON.stringify(businessTimeline)
 assert.equal(bizSerialized.includes('internalBlueprintSlug'), false)
 
+// ---- business-draft multi-round question visibility (regression P0 #4) -------
+
+// A business-drafting round that asks a clarifying question must surface it as an
+// answerable question_group (parent agent question after the last user turn), so
+// the locked business route — which has no free-text /messages path — can still
+// collect the answer via the continue endpoint.
+const businessQuestionView = {
+  session: { id: 'dlg_bq', status: 'drafting_business_agent', intent: 'business_processing_agent', route_locked: true, initial_prompt: '做一个告警分诊助手' },
+  messages: [
+    { id: 'u1', role: 'user', kind: 'prompt', content: '做一个告警分诊助手' },
+    { id: 'a1', role: 'agent', kind: 'analysis_work_log', content: '需要确认分诊范围' },
+    { id: 'q1', role: 'agent', kind: 'question', metadata_json: JSON.stringify({ id: 'scope', label: '分诊范围', options: [{ value: 'all', label: '全部告警' }, { value: 'critical', label: '仅严重告警' }], recommendation: 'all' }) },
+  ],
+  route: { intent: 'business_processing_agent', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  agentDraft: { name: '', description: '', prompt: '' },
+}
+const bizQTimeline = buildDialogueTimeline(businessQuestionView)
+assert.equal(bizQTimeline.some(item => item.type === 'question_group'), true, 'business drafting must surface its open clarifying question as a question_group')
+const bizOpenQs = openQuestionsForView(businessQuestionView)
+assert.equal(bizOpenQs.length, 1, 'openQuestionsForView must surface the business question for the answer bar')
+assert.equal(bizOpenQs[0].id, 'scope', 'business open question id must be scope')
+
 // ---- resolved application/agent history records -----------------------------
 
 // Resolved existing-application dialogue => resolved outcome item naming the app.

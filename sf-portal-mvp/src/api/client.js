@@ -126,5 +126,11 @@ export const factoryApi = {
     request(`/api/dialogues/${id}/clarification/abandon`, { method: 'POST' }),
   confirmDialogueBusinessAgent: id =>
     request(`/api/dialogues/${id}/business-agent/confirm`, { method: 'POST' }),
+  // continueDialogueBusinessAgent drives the multi-round business-agent drafting
+  // loop: append the user's refinement/answer and re-run the draft round. The
+  // business route is locked, so free-text /messages would 409 — this is the
+  // dedicated answer/refine path.
+  continueDialogueBusiness: (id, content) =>
+    request(`/api/dialogues/${id}/business-agent/continue`, { method: 'POST', body: JSON.stringify({ content }) }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

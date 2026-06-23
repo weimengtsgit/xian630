@@ -105,6 +105,49 @@ const businessDraftReadyOutput = `{
   }
 }`
 
+// businessDraftQuestionOutput is a round-1 draft that asks ONE clarifying
+// question and emits no complete draft — the case the multi-round loop must
+// support (the user answers via the continue endpoint).
+const businessDraftQuestionOutput = `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"需要确认分诊范围"}],
+  "questions": [{"id":"scope","label":"分诊范围","question":"这个助手分诊哪类告警？","required":true,"recommendation":"all","options":[{"value":"all","label":"全部告警"},{"value":"critical","label":"仅严重告警"}]}],
+  "agentDraft": {"name":"","description":"","prompt":""}
+}`
+
+// businessDraftReadyAfterRefineOutput is the round-2 draft that converges to a
+// complete, ready_to_confirm agentDraft after the user's refinement.
+const businessDraftReadyAfterRefineOutput = `{
+  "status": "ready_to_confirm",
+  "round": 2,
+  "workLog": [{"type":"analysis","content":"草稿已收敛"}],
+  "questions": [],
+  "agentDraft": {"name":"告警分诊助手","description":"按规则分诊全部告警","prompt":"你是告警分诊助手，按规则分诊全部告警。不执行任何工具调用或运行时操作。"}
+}`
+
+// businessDraftSequenceRunner emits canned route output for intent-routing and a
+// SEQUENCE of draft outputs (one per business-draft round) so the multi-round
+// loop can be exercised: draftOutputs[0] is round 1, [1] is round 2, etc.
+type businessDraftSequenceRunner struct {
+	draftOutputs []string
+	draftCalls   int
+}
+
+func (r *businessDraftSequenceRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "business-agent-drafting") {
+		idx := r.draftCalls
+		r.draftCalls++
+		out := businessDraftReadyOutput
+		if idx < len(r.draftOutputs) {
+			out = r.draftOutputs[idx]
+		}
+		return runner.CommandResult{ExitCode: 0, Stdout: out}, nil
+	}
+	return runner.CommandResult{ExitCode: 0, Stdout: routeBusinessAgentOutput}, nil
+}
+
 // --- test harness --------------------------------------------------------
 
 // newDialogueTestServer builds an in-memory test Server and overrides both the
@@ -1287,5 +1330,103 @@ func TestBlueprintCandidatesReadFromWorkspaceRoot(t *testing.T) {
 	}
 	if meta.Name != "航母母港潮汐窗口计算器" {
 		t.Fatalf("blueprint name = %q, want 航母母港潮汐窗口计算器", meta.Name)
+	}
+}
+
+// TestBusinessAgentMultiRoundContinueThenConfirm is the regression for review P0
+// #4: the business-agent multi-round drafting loop must close. Before the fix,
+// the business route was locked (so /messages 409'd) and the draft's clarifying
+// questions had no answer/continue endpoint, so only a first-round-ready draft
+// could complete. Now POST .../business-agent/continue appends the user's
+// refinement and re-runs the draft round, capped at six rounds.
+func TestBusinessAgentMultiRoundContinueThenConfirm(t *testing.T) {
+	seq := &businessDraftSequenceRunner{draftOutputs: []string{businessDraftQuestionOutput, businessDraftReadyAfterRefineOutput}}
+	srv, r, st := newDialogueTestServer(t, seq)
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个告警分诊助手"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "business_processing_agent"})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var routed dialogueView
+	json.NewDecoder(routeRec.Body).Decode(&routed)
+	if routed.Session.Status != model.DialogueStatusDraftingBusinessAgent {
+		t.Fatalf("status = %q, want drafting_business_agent", routed.Session.Status)
+	}
+	// Round 1 ran at route-lock and produced a clarifying question (no complete draft).
+	if seq.draftCalls != 1 {
+		t.Fatalf("draftCalls = %d, want 1 after route-lock round 1", seq.draftCalls)
+	}
+
+	// Answer the round-1 question via the continue endpoint -> round 2 converges.
+	contRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/continue", map[string]any{"content": "全部告警"})
+	if contRec.Code != http.StatusOK {
+		t.Fatalf("continue status = %d body=%s", contRec.Code, contRec.Body.String())
+	}
+	var contView dialogueView
+	json.NewDecoder(contRec.Body).Decode(&contView)
+	if seq.draftCalls != 2 {
+		t.Fatalf("draftCalls = %d, want 2 (round 2 ran on continue)", seq.draftCalls)
+	}
+	if contView.AgentDraft.Name == "" || contView.AgentDraft.Prompt == "" {
+		t.Fatalf("round-2 continue did not surface a complete agentDraft: %+v", contView.AgentDraft)
+	}
+
+	// Confirm creates the agent and resolves the dialogue.
+	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/confirm", nil)
+	if confirmRec.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+	var confirmView dialogueView
+	json.NewDecoder(confirmRec.Body).Decode(&confirmView)
+	if confirmView.Session.Status != model.DialogueStatusResolved {
+		t.Fatalf("status = %q, want resolved", confirmView.Session.Status)
+	}
+	if confirmView.Session.CreatedAgentID == "" {
+		t.Fatalf("no created agent")
+	}
+
+	// A continue on a resolved (non-drafting) dialogue must 409 — the loop does
+	// not run past resolution.
+	again := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/continue", map[string]any{"content": "more"})
+	if again.Code != http.StatusConflict {
+		t.Fatalf("continue after resolve = %d, want 409", again.Code)
+	}
+	_ = srv
+	_ = st
+}
+
+// TestBusinessAgentContinueEnforcesSixRoundCap verifies the continue loop refuses
+// a seventh model turn: once six user turns exist, continue 409s instead of
+// running another draft round.
+func TestBusinessAgentContinueEnforcesSixRoundCap(t *testing.T) {
+	seq := &businessDraftSequenceRunner{draftOutputs: []string{businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput}}
+	_, r, _ := newDialogueTestServer(t, seq)
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个助手"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "business_processing_agent"})
+
+	// Route-lock ran round 1 (1 user turn). Five continues reach round 6 (6 user
+	// turns); a sixth continue must be refused (no 7th round).
+	for i := 0; i < 5; i++ {
+		rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/continue", map[string]any{"content": "refine"})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("continue #%d status = %d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	if seq.draftCalls != 6 {
+		t.Fatalf("draftCalls = %d, want 6 (rounds 1-6)", seq.draftCalls)
+	}
+	cap := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/continue", map[string]any{"content": "one more"})
+	if cap.Code != http.StatusConflict {
+		t.Fatalf("7th continue = %d, want 409 (six-round cap)", cap.Code)
+	}
+	if seq.draftCalls != 6 {
+		t.Fatalf("draftCalls = %d, want 6 (no 7th round must run)", seq.draftCalls)
 	}
 }

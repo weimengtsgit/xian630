@@ -136,6 +136,19 @@ export function buildDialogueTimeline(view) {
   }
 
   // 5. Business-agent drafting surface.
+  // 5a. Open business-draft clarifying questions (parent agent question messages
+  //     after the last user turn) render as an answerable question group — the
+  //     business route is locked so these need a dedicated continue path, not the
+  //     free-text composer.
+  const bizQuestions = openBusinessQuestions(view)
+  if (bizQuestions.length > 0) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_bizquestions`,
+      type: 'question_group',
+      questions: bizQuestions.map(safeQuestion),
+    })
+  }
+  // 5b. The in-progress agentDraft card (重新描述 / 确认创建).
   if (view.agentDraft && (view.agentDraft.name || view.agentDraft.prompt)) {
     items.push({
       id: `${view.session.id || 'dlg'}_business`,
@@ -166,16 +179,44 @@ export function buildDialogueTimeline(view) {
 
 // openQuestionsForView returns the questions currently awaiting an answer for a
 // composed view, so the hook can populate the answer bar's `questions` prop
-// (which ConversationWorkbench's 提交本轮澄清 control depends on). It mirrors the
-// question_group the timeline builder emits, derived from the open child
-// questions after the last user answer. Exported (pure) so the logic harness can
-// assert it directly — the prior bug was loadView setting `timeline` but never
-// `questions`, so the answer bar never rendered and app-gen round 1 stalled.
+// (which ConversationWorkbench's 提交本轮澄清 control depends on). For an
+// application-generation view it derives the open CHILD questions; for a
+// business-agent drafting view it derives the open PARENT (business-draft)
+// questions. Exported (pure) so the logic harness can assert it directly — the
+// prior bug was loadView setting `timeline` but never `questions`, so the answer
+// bar never rendered and round 1 stalled.
 export function openQuestionsForView(view) {
+  const sess = view && view.session
+  if (sess && (sess.intent === 'business_processing_agent' || sess.status === 'drafting_business_agent')) {
+    return openBusinessQuestions(view).map(safeQuestion)
+  }
   const child = view && view.child
   if (!child) return []
   const childMessages = Array.isArray(child.messages) ? child.messages : []
   return openChildQuestions(child, childMessages).map(safeQuestion)
+}
+
+// openBusinessQuestions returns the business-draft questions currently awaiting
+// an answer: parent agent question messages emitted AFTER the last user turn,
+// while the dialogue is still drafting the business agent. Mirrors openChildQuestions
+// over the parent thread.
+function openBusinessQuestions(view) {
+  const sess = view && view.session
+  if (!sess) return []
+  if (sess.status === 'resolved' || sess.status === 'abandoned' || sess.status === 'failed') return []
+  const msgs = Array.isArray(view.messages) ? view.messages : []
+  const lastUserIndex = findLastIndex(msgs, m => m && m.role === 'user')
+  const out = []
+  const seen = new Set()
+  for (const msg of msgs.slice(lastUserIndex + 1)) {
+    if (!msg || msg.role !== 'agent' || msg.kind !== 'question' || !msg.metadata_json) continue
+    const q = parseJSON(msg.metadata_json)
+    if (q && q.id && !seen.has(q.id)) {
+      out.push(q)
+      seen.add(q.id)
+    }
+  }
+  return out
 }
 
 // appendChildItems maps the child clarification view (parent's child field) into

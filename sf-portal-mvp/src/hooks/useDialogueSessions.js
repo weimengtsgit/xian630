@@ -119,7 +119,13 @@ export function useDialogueSessions() {
     setError(null)
     try {
       let view
-      if (!state.view || terminal(state.view.session.status)) {
+      const sess = state.view && state.view.session
+      // A locked business-agent drafting dialogue has no free-text /messages path
+      // (it 409s). Route its refinement — including the 重新描述 action — to the
+      // dedicated continue endpoint so the multi-round draft loop closes.
+      if (sess && sess.route_locked && sess.intent === 'business_processing_agent' && sess.status === 'drafting_business_agent') {
+        view = await factoryApi.continueDialogueBusiness(sess.id, prompt)
+      } else if (!state.view || terminal(state.view.session.status)) {
         view = await factoryApi.createDialogue({ initialPrompt: prompt })
       } else {
         view = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
@@ -178,15 +184,22 @@ export function useDialogueSessions() {
     setError(null)
     try {
       let view
-      if (consolidation && consolidation.field) {
+      const sess = state.view.session
+      if (sess.intent === 'business_processing_agent') {
+        // Business drafting: the selected answer(s) become a refinement that
+        // continues the draft round (the route is locked; there is no separate
+        // answer endpoint).
+        const content = answers.map(a => a.value).filter(Boolean).join('；')
+        view = await factoryApi.continueDialogueBusiness(sess.id, content)
+      } else if (consolidation && consolidation.field) {
         // Round-6 single-field adjust path: the backend merges the persisted
         // consolidation with the override (no model turn) and marks ready_to_confirm.
-        view = await factoryApi.applyDialogueConsolidation(state.view.session.id, {
+        view = await factoryApi.applyDialogueConsolidation(sess.id, {
           field: consolidation.field,
           value: consolidation.value,
         })
       } else {
-        view = await factoryApi.answerDialogueClarificationBatch(state.view.session.id, answers)
+        view = await factoryApi.answerDialogueClarificationBatch(sess.id, answers)
       }
       await refreshSessions()
       await loadView(view.session.id)

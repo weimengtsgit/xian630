@@ -803,11 +803,21 @@ func (s *Server) linkDialogueChild(ctx context.Context, dialogueID, childID stri
 func (s *Server) runBusinessDraftRound(ctx context.Context, dialogueID string, dlg *model.DialogueSession, round int) error {
 	msgs, _ := s.store.LatestDialogueMessages(ctx, dialogueID, 100)
 	currentDraft := s.latestAgentDraft(ctx, dialogueID)
+	// UserMessage focuses the model on the LATEST user turn (the refinement being
+	// answered), falling back to the initial prompt. The full history still
+	// travels in Messages.
+	userMessage := dlg.InitialPrompt
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" && strings.TrimSpace(msgs[i].Content) != "" {
+			userMessage = msgs[i].Content
+			break
+		}
+	}
 	input := dialogue.BusinessDraftInput{
 		DialogueID:       dialogueID,
 		Round:            round,
 		MaxRounds:        6,
-		UserMessage:      dlg.InitialPrompt,
+		UserMessage:      userMessage,
 		Messages:         messageViews(msgs),
 		CurrentDraft:     currentDraft,
 		CurrentQuestions: nil,
@@ -1416,6 +1426,82 @@ func (s *Server) confirmDialogueBusinessAgent(w http.ResponseWriter, r *http.Req
 		"agent_id": agentID, "agent_key": agentKey, "name": draft.Name,
 	})
 	s.publishDialogueSimple("dialogue.resolved", id, map[string]any{"created_agent_id": agentID})
+	view, err := s.composeDialogueView(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "compose view")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+type continueDialogueBusinessBody struct {
+	Content string `json:"content"`
+}
+
+// continueDialogueBusinessAgent handles POST
+// /api/dialogues/:id/business-agent/continue. It is the multi-round drafting
+// loop closer (review P0 #4): a business route is locked, so /messages 409s and
+// the draft's clarifying questions had no answer path. This endpoint appends the
+// user's refinement/answer as a parent user message and re-runs the draft round,
+// so rounds 1–4 questions are answerable and the draft converges. The six-round
+// cap is enforced (no seventh model turn), mirroring the clarification MaxRounds
+// invariant.
+func (s *Server) continueDialogueBusinessAgent(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	dlg, err := s.store.GetDialogueSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get dialogue")
+		return
+	}
+	if dlg == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if dlg.Status != model.DialogueStatusDraftingBusinessAgent {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "dialogue is not in business-agent drafting", "status": dlg.Status})
+		return
+	}
+	var body continueDialogueBusinessBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if strings.TrimSpace(body.Content) == "" {
+		writeError(w, http.StatusBadRequest, "missing content")
+		return
+	}
+	ctx := r.Context()
+	// Six-round cap: the initial prompt is turn 1 (round 1 ran at route-lock).
+	// Each continue is a new turn; refuse once six turns exist so there is no
+	// seventh model round.
+	msgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
+	userTurns := 0
+	for _, m := range msgs {
+		if m.Role == "user" {
+			userTurns++
+		}
+	}
+	if userTurns >= 6 {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "business drafting reached the six-round cap", "rounds": userTurns})
+		return
+	}
+	now := time.Now()
+	if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+		ID: "dmsg_" + idpkg.New(), DialogueID: id, Role: "user", Kind: "message",
+		Content: body.Content, CreatedAt: now,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "append message")
+		return
+	}
+	// Re-read so runBusinessDraftRound sees the freshest session row.
+	refreshed, _ := s.store.GetDialogueSession(ctx, id)
+	if refreshed != nil {
+		dlg = refreshed
+	}
+	if rerr := s.runBusinessDraftRound(ctx, id, dlg, userTurns+1); rerr != nil {
+		// A failed round leaves a diagnosable state; the view still composes.
+		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
+	}
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")

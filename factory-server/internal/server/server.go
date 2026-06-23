@@ -389,6 +389,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/dialogues/:id/clarification/confirm", s.confirmDialogueClarification)
 	r.Handle("POST", "/api/dialogues/:id/clarification/abandon", s.abandonDialogue)
 	r.Handle("POST", "/api/dialogues/:id/business-agent/confirm", s.confirmDialogueBusinessAgent)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/continue", s.continueDialogueBusinessAgent)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)
