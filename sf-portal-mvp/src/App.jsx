@@ -76,6 +76,7 @@ function App() {
             questions={conversation.questions}
             error={conversation.error || jobs.error}
             submitting={conversation.submitting}
+            deletingSessionId={conversation.deletingSessionId}
             historyOpen={conversation.historyOpen}
             setHistoryOpen={conversation.setHistoryOpen}
             onNewSession={conversation.newSession}
@@ -90,6 +91,7 @@ function App() {
             onConfirm={conversation.confirm}
             onRetry={conversation.retry}
             onAbandon={conversation.abandon}
+            onDeleteSession={conversation.deleteSession}
           />
         </div>
 

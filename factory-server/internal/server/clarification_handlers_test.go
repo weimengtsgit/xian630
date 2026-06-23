@@ -1392,3 +1392,86 @@ func TestListClarificationsIncludesLinkedJobAndDeletedApplicationState(t *testin
 		t.Fatalf("application_state = %q, want deleted", linked.ApplicationState)
 	}
 }
+
+func TestDeleteClarificationDeletesSessionMessagesButKeepsJob(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	ctx := context.Background()
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID:              "clar_delete",
+		Status:          model.ClarificationStatusConfirmed,
+		InitialPrompt:   "生成历史会话",
+		Round:           2,
+		MaxRounds:       3,
+		RequirementJSON: `{}`,
+		CreatedJobID:    "job_delete_keep",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ConfirmedAt:     &now,
+	}
+	if err := st.CreateClarificationSession(ctx, sess); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if err := st.AddClarificationMessage(ctx, model.ClarificationMessage{
+		ID: "cmsg_delete", SessionID: sess.ID, Role: "agent", Kind: "analysis_work_log",
+		Content: "历史内容", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	job := model.Job{
+		ID: "job_delete_keep", UserPrompt: "生成历史会话", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAt: now, UpdatedAt: now,
+		ClarificationSessionID: sess.ID,
+	}
+	if err := st.CreateJob(ctx, job); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/clarifications/"+sess.ID, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetClarificationSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get deleted session: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("session still exists: %#v", got)
+	}
+	msgs, err := st.ListClarificationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want none", msgs)
+	}
+	gotJob, err := st.GetJob(ctx, job.ID)
+	if err != nil || gotJob == nil {
+		t.Fatalf("linked job was deleted: %#v err=%v", gotJob, err)
+	}
+}
+
+func TestDeleteClarificationRejectsActiveSession(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID: "clar_active_delete", Status: model.ClarificationStatusActive, InitialPrompt: "分析中",
+		Round: 1, MaxRounds: 3, RequirementJSON: `{}`, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateClarificationSession(context.Background(), sess); err != nil {
+		t.Fatalf("seed active session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/clarifications/"+sess.ID, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete active status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("active session should remain: %#v err=%v", got, err)
+	}
+}

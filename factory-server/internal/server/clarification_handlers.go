@@ -256,6 +256,37 @@ func (s *Server) getClarification(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.viewFromSession(sess))
 }
 
+// deleteClarification handles DELETE /api/clarifications/:id. It removes only
+// the clarification history row and transcript messages; generated jobs/apps and
+// execution artifacts remain intact. A currently-active analysis round is not
+// deletable because the runner may still be appending messages.
+func (s *Server) deleteClarification(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	sess, err := s.store.GetClarificationSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get session")
+		return
+	}
+	if sess == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if sess.Status == model.ClarificationStatusActive {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "active session cannot be deleted", "status": sess.Status})
+		return
+	}
+	if err := s.store.DeleteClarificationSession(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete session")
+		return
+	}
+	s.publishClarificationEvent(clarification.StreamEvent{
+		Type:      "clarification.deleted",
+		SessionID: id,
+		Data:      map[string]string{"id": id},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
 // listClarificationMessages handles GET /api/clarifications/:id/messages.
 func (s *Server) listClarificationMessages(w http.ResponseWriter, r *http.Request) {
 	msgs, err := s.store.ListClarificationMessages(r.Context(), Param(r, "id"))

@@ -83,5 +83,6 @@ export const factoryApi = {
   confirmClarification: id => request(`/api/clarifications/${id}/confirm`, { method: 'POST' }),
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
   listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
+  deleteClarification: id => request(`/api/clarifications/${id}`, { method: 'DELETE' }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

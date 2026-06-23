@@ -20,6 +20,7 @@ const CLARIFICATION_TYPES = new Set([
   'clarification.confirmed',
   'clarification.failed',
   'clarification.abandoned',
+  'clarification.deleted',
 ])
 
 const terminal = status => status === 'confirmed' || status === 'abandoned' || status === 'failed'
@@ -29,6 +30,7 @@ export function useConversationSessions() {
   const [error, setError] = useState(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [deletingSessionId, setDeletingSessionId] = useState(null)
   const mountedRef = useRef(true)
 
   const refreshSessions = useCallback(async () => {
@@ -170,6 +172,31 @@ export function useConversationSessions() {
     }
   }, [refreshSessions, selectSession, state.session, submitting])
 
+  const deleteSession = useCallback(async id => {
+    const sessionId = String(id || '').trim()
+    if (!sessionId || deletingSessionId) return null
+    setDeletingSessionId(sessionId)
+    setError(null)
+    try {
+      await factoryApi.deleteClarification(sessionId)
+      const sessions = await refreshSessions()
+      if (mountedRef.current && state.selectedSessionId === sessionId) {
+        setState(prev => ({
+          ...initialConversationState(),
+          sessions,
+          selectedSessionId: null,
+          session: null,
+        }))
+      }
+      return true
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setDeletingSessionId(null)
+    }
+  }, [deletingSessionId, refreshSessions, state.selectedSessionId])
+
   useEffect(() => {
     mountedRef.current = true
     refreshSessions().then(sessions => {
@@ -194,6 +221,7 @@ export function useConversationSessions() {
     ...state,
     error,
     submitting,
+    deletingSessionId,
     historyOpen,
     setHistoryOpen,
     refreshSessions,
@@ -204,5 +232,6 @@ export function useConversationSessions() {
     confirm,
     retry,
     abandon,
+    deleteSession,
   }
 }
