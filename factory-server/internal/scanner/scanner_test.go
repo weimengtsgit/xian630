@@ -141,7 +141,7 @@ func TestScanRespectsContextCancellation(t *testing.T) {
 	}
 }
 
-func TestScannerHidesDisabledAppsFromUnifiedCatalog(t *testing.T) {
+func TestScannerHidesConfiguredPresetApps(t *testing.T) {
 	root := t.TempDir()
 	writeManifest := func(rel, source, slug string) {
 		t.Helper()
@@ -160,8 +160,8 @@ func TestScannerHidesDisabledAppsFromUnifiedCatalog(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
-	config := `{"apps":{"hidden-preset":false,"visible-preset":true,"generated-demo":true}}`
-	if err := os.WriteFile(filepath.Join(root, ".factory", "catalog.json"), []byte(config), 0o644); err != nil {
+	config := `{"presetApps":{"hidden-preset":{"showInAppList":false},"visible-preset":{"showInAppList":true}}}`
+	if err := os.WriteFile(filepath.Join(root, ".factory", "preset-apps.json"), []byte(config), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

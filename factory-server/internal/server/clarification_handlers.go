@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/weimengtsgit/xian630/factory-server/internal/catalog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -353,7 +352,6 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add answer message")
 		return
 	}
-	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -426,7 +424,6 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -513,7 +510,7 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
-	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
+	current.BlueprintRefs = incoming.BlueprintRefs
 	// Always (re)compute the profile from appType — never trust the client.
 	current.GenerationProfile = generationProfileForAppType(current.AppType)
 
@@ -818,10 +815,7 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 		CurrentRequirement: s.parseRequirement(sess.RequirementJSON),
 	}
 
-	cfg := catalog.Load(s.cfg.WorkspaceRoot)
-	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
-		s.publishClarificationEvent(s.filterClarificationEvent(cfg, ev))
-	})
+	out, err := s.clarifier.RunRound(ctx, input, s.publishClarificationEvent)
 	if err != nil {
 		// Round failed: advance the persisted round to the round we attempted so
 		// retry-current-round re-runs the right round, mark the session failed,
@@ -857,8 +851,7 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// not fail: a single bad slug should not abort the round; the executor drops
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
-	out.Requirement.BlueprintRefs = s.sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
-	out.RecommendedBlueprints = s.filterRecommendedBlueprints(cfg, out.RecommendedBlueprints)
+	out.Requirement.BlueprintRefs = sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
 	now := time.Now()
 	reqBytes, _ := json.Marshal(out.Requirement)
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
@@ -1037,41 +1030,11 @@ func blueprintRefsAllSafe(refs []string) bool {
 // sanitizeBlueprintRefs drops any unsafe blueprintRef slug, keeping only safe
 // ones. Used on LLM-produced refs (semi-trusted): a single bad slug should not
 // abort the whole round; the executor drops unsafe refs for Reads regardless.
-func (s *Server) sanitizeBlueprintRefs(refs []string) []string {
+func sanitizeBlueprintRefs(refs []string) []string {
 	out := refs[:0:0]
-	cfg := catalog.Load(s.cfg.WorkspaceRoot)
 	for _, slug := range refs {
-		if executor.SafeName(slug) && catalog.BlueprintEnabled(cfg, slug) {
+		if executor.SafeName(slug) {
 			out = append(out, slug)
-		}
-	}
-	return out
-}
-
-func (s *Server) filterClarificationEvent(cfg catalog.Config, ev clarification.StreamEvent) clarification.StreamEvent {
-	switch ev.Type {
-	case "clarification.summary.updated", "clarification.ready_to_confirm":
-		req, ok := ev.Data.(clarification.Requirement)
-		if !ok {
-			return ev
-		}
-		req.BlueprintRefs = catalog.FilterBlueprintRefs(cfg, req.BlueprintRefs)
-		ev.Data = req
-	case "clarification.blueprint.recommended":
-		refs, ok := ev.Data.([]clarification.BlueprintRef)
-		if !ok {
-			return ev
-		}
-		ev.Data = s.filterRecommendedBlueprints(cfg, refs)
-	}
-	return ev
-}
-
-func (s *Server) filterRecommendedBlueprints(cfg catalog.Config, refs []clarification.BlueprintRef) []clarification.BlueprintRef {
-	out := refs[:0:0]
-	for _, bp := range refs {
-		if catalog.BlueprintEnabled(cfg, bp.Slug) {
-			out = append(out, bp)
 		}
 	}
 	return out
@@ -1166,7 +1129,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "acceptanceFocus", "acceptance_focus":
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
 	case "blueprintRefs", "blueprint_refs":
-		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
+		req.BlueprintRefs = sanitizeBlueprintRefs(mergeAnswerList(req.BlueprintRefs, value))
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
