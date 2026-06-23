@@ -15,7 +15,9 @@ const emptyAuthoringState = {
   messages: [],
   input: '',
   error: '',
-  saving: false,
+  initializing: false,
+  sending: false,
+  finalizing: false,
 }
 
 function agentIdentity(agent) {
@@ -96,6 +98,7 @@ export function AgentsPanel({
   const selectedCount = selectedBusinessAgentIds.length
   const draft = parseDraft(authoring.session)
   const canFinalize = authoring.session?.status === 'ready_to_save' && draft?.prompt
+  const authoringBusy = authoring.initializing || authoring.sending || authoring.finalizing
 
   const openAgentDetail = agent => {
     setPanelError('')
@@ -190,7 +193,7 @@ export function AgentsPanel({
 
   const openAuthoringDialog = async () => {
     setPanelError('')
-    setAuthoring({ ...emptyAuthoringState, saving: true })
+    setAuthoring({ ...emptyAuthoringState, initializing: true })
     setAuthoringOpen(true)
     try {
       const session = await onCreateAuthoringSession?.({ mode: 'create' })
@@ -204,7 +207,6 @@ export function AgentsPanel({
   }
 
   const closeAuthoringDialog = () => {
-    if (authoring.saving) return
     setAuthoringOpen(false)
     setAuthoring(emptyAuthoringState)
   }
@@ -214,7 +216,7 @@ export function AgentsPanel({
     const content = authoring.input.trim()
     if (!content || !authoring.session?.id || !onSendAuthoringMessage) return
     const messages = [...authoring.messages, { role: 'user', content }]
-    setAuthoring(current => ({ ...current, messages, input: '', saving: true, error: '' }))
+    setAuthoring(current => ({ ...current, messages, input: '', sending: true, error: '' }))
     try {
       const session = await onSendAuthoringMessage(authoring.session.id, content)
       setAuthoring({
@@ -231,7 +233,7 @@ export function AgentsPanel({
     } catch (err) {
       setAuthoring(current => ({
         ...current,
-        saving: false,
+        sending: false,
         error: err.message || String(err),
       }))
     }
@@ -239,7 +241,7 @@ export function AgentsPanel({
 
   const finalizeAuthoring = async () => {
     if (!authoring.session?.id || !onFinalizeAuthoring) return
-    setAuthoring(current => ({ ...current, saving: true, error: '' }))
+    setAuthoring(current => ({ ...current, finalizing: true, error: '' }))
     try {
       const created = await onFinalizeAuthoring(authoring.session.id)
       setSelectedId(created.id || created.key)
@@ -250,7 +252,7 @@ export function AgentsPanel({
     } catch (err) {
       setAuthoring(current => ({
         ...current,
-        saving: false,
+        finalizing: false,
         error: err.message || String(err),
       }))
     }
@@ -567,15 +569,14 @@ export function AgentsPanel({
                   setAuthoring(current => ({ ...current, input: event.target.value }))
                 }
                 rows={4}
-                disabled={authoring.saving}
                 placeholder="例如：创建海事预警专家，关注 AIS 异常航迹、越界、停留超时，并给出风险等级和处置建议"
               />
               <button
                 type="submit"
                 className="agent-icon-button"
-                disabled={authoring.saving || !authoring.input.trim()}
-                title="发送"
-                aria-label="发送"
+                disabled={authoringBusy || !authoring.session?.id || !authoring.input.trim()}
+                title={authoring.initializing ? '正在初始化' : '发送'}
+                aria-label={authoring.initializing ? '正在初始化' : '发送'}
               >
                 <Send size={16} />
               </button>
@@ -588,7 +589,6 @@ export function AgentsPanel({
                 type="button"
                 className="agent-secondary-button"
                 onClick={closeAuthoringDialog}
-                disabled={authoring.saving}
               >
                 取消
               </button>
@@ -596,7 +596,7 @@ export function AgentsPanel({
                 type="button"
                 className="agent-primary-button"
                 onClick={finalizeAuthoring}
-                disabled={authoring.saving || !canFinalize}
+                disabled={authoringBusy || !canFinalize}
               >
                 <Check size={14} />
                 保存智能体
