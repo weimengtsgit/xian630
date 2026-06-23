@@ -30,6 +30,19 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'clarification.failed',
     'clarification.abandoned',
     'clarification.deleted',
+    // dialogue.* (Task 4): the composed parent facade. Child clarification events
+    // arrive wrapped with a parent dialogue_id; the portal keys updates by
+    // dialogue_id rather than refetching the whole history per streaming delta.
+    'dialogue.created',
+    'dialogue.intent.updated',
+    'dialogue.application.recommended',
+    'dialogue.route.confirmed',
+    'dialogue.agent_draft.updated',
+    'dialogue.agent.created',
+    'dialogue.clarification.updated',
+    'dialogue.resolved',
+    'dialogue.abandoned',
+    'dialogue.deleted',
   ]
   types.forEach(type => {
     source.addEventListener(type, event => {

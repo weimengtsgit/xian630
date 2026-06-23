@@ -1,31 +1,40 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Loader2, MessageSquarePlus, History, Send, X, Trash2 } from 'lucide-react'
-import { titleForSession } from '../hooks/conversationTimeline'
+import { useEffect, useState } from 'react'
+import {
+  AlertTriangle,
+  Check,
+  Edit3,
+  ExternalLink,
+  Loader2,
+  MessageSquarePlus,
+  History,
+  PlayCircle,
+  RefreshCw,
+  Send,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import './ConversationWorkbench.css'
-
-const STATUS_TEXT = {
-  active: '分析中',
-  waiting_user: '等待补充',
-  ready_to_confirm: '待确认',
-  confirmed: '已确认',
-  failed: '已失败',
-  abandoned: '已放弃',
-}
 
 export function ConversationWorkbench({
   session,
+  view,
   sessions,
   timeline,
   questions,
+  locked,
   error,
   submitting,
-  deletingSessionId,
+  deletingDialogueId,
   historyOpen,
   setHistoryOpen,
   onNewSession,
   onSelectSession,
   onSend,
+  onSelectRoute,
+  onOpenApp,
   onAnswerBatch,
+  onAcceptConsolidation,
   onConfirm,
   onRetry,
   onAbandon,
@@ -33,11 +42,19 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
-  const canConfirm = session && session.status === 'ready_to_confirm'
-  const terminal = !!(session && (session.status === 'confirmed' || session.status === 'abandoned' || session.status === 'failed'))
+  const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
   const canSubmitAnswers = activeQuestions.length > 0 && completedAnswers === activeQuestions.length && !submitting
+  const intent = session && session.intent
+  const isBusiness = intent === 'business_processing_agent'
+  const isClarification = intent === 'application_generation' && view && view.child
+  const childStatus = isClarification ? view.child.status : null
+  const canConfirmClarification = childStatus === 'ready_to_confirm'
+  const canConfirmBusiness = isBusiness && view && view.agentDraft && (view.agentDraft.name || view.agentDraft.prompt)
+  const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
+  const canRetry = status === 'failed'
+  const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -46,7 +63,7 @@ export function ConversationWorkbench({
 
   const submitText = async () => {
     const value = input.trim()
-    if (!value || submitting) return
+    if (!value || submitting || locked) return
     setInput('')
     await onSend(value)
   }
@@ -66,21 +83,30 @@ export function ConversationWorkbench({
       <header className="cw-header">
         <div className="cw-title">
           <span className="cw-kicker">会话工作台</span>
-          <strong>{session ? titleForSession(session) : '新会话'}</strong>
+          <strong>{session ? titleForDialogue(session) : '新会话'}</strong>
         </div>
         <div className="cw-actions">
-          {session ? <span className={`cw-status cw-status-${session.status}`}>{STATUS_TEXT[session.status] || session.status}</span> : null}
-          <button type="button" className="cw-icon-btn" onClick={onNewSession} title="新建会话"><MessageSquarePlus size={16} /></button>
-          <button type="button" className="cw-icon-btn" onClick={() => setHistoryOpen(true)} title="历史会话"><History size={16} /></button>
+          {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
+          <button type="button" className="cw-icon-btn" onClick={onNewSession} title="新建会话" aria-label="新建会话"><MessageSquarePlus size={16} /></button>
+          <button type="button" className="cw-icon-btn" onClick={() => setHistoryOpen(true)} title="历史会话" aria-label="历史会话"><History size={16} /></button>
         </div>
       </header>
 
       <div className="cw-body">
         {timeline.length === 0 ? (
-          <div className="cw-empty">输入需求后，模型会先进行需求分析和澄清。</div>
+          <div className="cw-empty">输入需求后，将自动识别是复用已有应用、生成新应用，还是配置业务 Agent。</div>
         ) : (
           timeline.map(item => (
-            <TimelineItem key={item.id} item={item} draftAnswers={draftAnswers} setDraftAnswers={setDraftAnswers} />
+            <TimelineItem
+              key={item.id}
+              item={item}
+              draftAnswers={draftAnswers}
+              setDraftAnswers={setDraftAnswers}
+              submitting={submitting}
+              onSelectRoute={onSelectRoute}
+              onOpenApp={onOpenApp}
+              onAcceptConsolidation={onAcceptConsolidation}
+            />
           ))
         )}
       </div>
@@ -94,20 +120,35 @@ export function ConversationWorkbench({
         </div>
       ) : null}
 
+      {canConfirm ? (
+        <div className="cw-answer-bar">
+          <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>
+            {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
+          </button>
+        </div>
+      ) : null}
+
       {error ? <div className="cw-error">{error}</div> : null}
 
       <footer className="cw-composer">
-        {session && session.status === 'failed' ? <button type="button" onClick={onRetry} disabled={submitting}>重试本轮</button> : null}
-        {session && session.status !== 'confirmed' && session.status !== 'abandoned' ? <button type="button" onClick={onAbandon} disabled={submitting}>放弃</button> : null}
-        {canConfirm ? <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>确认并生成</button> : null}
-        {terminal ? (
-          <p className="cw-terminal-hint">
-            {session.status === 'failed' ? '会话已结束。失败会话可重试本轮，或新建会话开始新需求。' : '会话已结束，点击右上角「新建会话」开始新的需求澄清。'}
-          </p>
+        {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
+        {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
+        {status === 'resolved' ? (
+          <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
+        ) : status === 'abandoned' || status === 'failed' ? (
+          <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
+        ) : locked ? (
+          <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
           <>
-            <textarea value={input} onChange={e => setInput(e.target.value)} placeholder="输入新需求或补充说明" disabled={submitting || canConfirm || terminal} />
-            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting || canConfirm || terminal}>
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              placeholder="输入需求或补充说明"
+              disabled={submitting}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
+            />
+            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
               {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
             </button>
           </>
@@ -115,10 +156,10 @@ export function ConversationWorkbench({
       </footer>
 
       {historyOpen ? (
-        <ConversationHistoryDrawer
+        <DialogueHistoryDrawer
           sessions={sessions}
           selectedId={session && session.id}
-          deletingSessionId={deletingSessionId}
+          deletingDialogueId={deletingDialogueId}
           onClose={() => setHistoryOpen(false)}
           onSelect={id => { onSelectSession(id); setHistoryOpen(false) }}
           onDeleteSession={onDeleteSession}
@@ -128,12 +169,22 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
-  if (item.type === 'analysis_stream') return <div className="cw-item cw-agent"><span className="cw-item-label">模型分析过程</span>{item.content}</div>
-  if (item.type === 'blueprint_recommendation') return <BlueprintRecommendation blueprints={item.blueprints} />
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
-  if (item.type === 'system_status') return <div className="cw-system">{item.status}</div>
+  if (item.type === 'analysis_stream') {
+    return (
+      <div className="cw-item cw-agent">
+        <span className="cw-item-label">分析过程</span>
+        {item.content}
+      </div>
+    )
+  }
+  if (item.type === 'route_recommendation') {
+    return <RouteChoiceCard reason={item.reason} onSelectRoute={onSelectRoute} submitting={submitting} />
+  }
+  if (item.type === 'app_recommendation') {
+    return <AppRecommendationList cards={item.cards} onOpenApp={onOpenApp} submitting={submitting} />
+  }
   if (item.type === 'question_group') {
     return (
       <div className="cw-question-group">
@@ -143,24 +194,181 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers }) {
       </div>
     )
   }
+  if (item.type === 'consolidation_table') {
+    return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
+  }
+  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
+  if (item.type === 'business_recommendation') {
+    return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
+  }
+  if (item.type === 'resolved_outcome') {
+    return (
+      <div className="cw-item cw-resolved">
+        <Check size={14} />
+        <span>{item.label}</span>
+      </div>
+    )
+  }
+  if (item.type === 'system_status') {
+    return <div className="cw-system">{statusText(item.status)}</div>
+  }
   return null
 }
 
-function BlueprintRecommendation({ blueprints }) {
-  const list = Array.isArray(blueprints) ? blueprints : []
+function RouteChoiceCard({ reason, onSelectRoute, submitting }) {
+  return (
+    <div className="cw-route-choice">
+      {reason ? <p className="cw-route-reason">{reason}</p> : null}
+      <div className="cw-route-options">
+        <button type="button" disabled={submitting} onClick={() => onSelectRoute('existing_application')}>
+          <b>复用已有应用</b>
+          <small>打开匹配的现有应用</small>
+        </button>
+        <button type="button" disabled={submitting} onClick={() => onSelectRoute('application_generation')}>
+          <b>生成新应用</b>
+          <small>通过需求澄清生成</small>
+        </button>
+        <button type="button" disabled={submitting} onClick={() => onSelectRoute('business_processing_agent')}>
+          <b>配置业务 Agent</b>
+          <small>创建一个业务处理 Agent</small>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AppRecommendationList({ cards, onOpenApp, submitting }) {
+  const list = Array.isArray(cards) ? cards : []
   if (list.length === 0) return null
   return (
-    <div className="cw-blueprints">
-      <strong>参考蓝本</strong>
-      <div className="cw-blueprint-list">
-        {list.map((bp, i) => (
-          <span key={bp.id || bp.name || `bp_${i}`} className="cw-blueprint-chip">
-            <b>{bp.name || bp.id}</b>
-            {bp.referenceKind ? <em>{bp.referenceKind}</em> : null}
-            {bp.reason ? <small>{bp.reason}</small> : null}
-          </span>
+    <div className="cw-apps">
+      <strong>推荐应用</strong>
+      <div className="cw-app-list">
+        {list.map(card => (
+          <AppRecommendationCard key={card.applicationId || card.slug} card={card} onOpenApp={onOpenApp} submitting={submitting} />
         ))}
       </div>
+    </div>
+  )
+}
+
+function AppRecommendationCard({ card, onOpenApp, submitting }) {
+  const running = card.status === 'running'
+  const stopped = !running && card.status !== 'running'
+  const open = () => {
+    if (submitting) return
+    onOpenApp(card.applicationId)
+  }
+  return (
+    <div className={`cw-app-card${card.primary ? ' cw-app-primary' : ''}`}>
+      <div className="cw-app-head">
+        <b>{card.name}</b>
+        {card.primary ? <em className="cw-app-primary-badge">主推荐</em> : null}
+      </div>
+      {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
+      <div className="cw-app-actions">
+        {running ? (
+          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开应用">
+            <ExternalLink size={14} />
+            <span>打开应用</span>
+          </button>
+        ) : stopped ? (
+          <button type="button" className="cw-app-action cw-app-action-primary" onClick={open} disabled={submitting} title="启动并打开">
+            <PlayCircle size={14} />
+            <span>启动并打开</span>
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ConsolidationTable({ rows, onAccept, submitting }) {
+  const [adjustField, setAdjustField] = useState(null)
+  const [adjustValue, setAdjustValue] = useState('')
+  const list = Array.isArray(rows) ? rows : []
+  const submitAdjust = field => {
+    if (!adjustValue.trim() || submitting) return
+    onAccept({ field, value: adjustValue.trim() })
+    setAdjustField(null)
+    setAdjustValue('')
+  }
+  return (
+    <div className="cw-consolidation">
+      <strong>推荐汇总</strong>
+      <table className="cw-consolidation-table">
+        <tbody>
+          {list.map(row => (
+            <tr key={row.field}>
+              <th>{fieldLabel(row.field)}</th>
+              <td>{formatValue(row.recommendedValue)}</td>
+              {row.reason ? <td className="cw-consolidation-reason">{row.reason}</td> : <td />}
+              <td className="cw-consolidation-actions">
+                {adjustField === row.field ? (
+                  <span className="cw-consolidation-adjust">
+                    <input
+                      value={adjustValue}
+                      onChange={e => setAdjustValue(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') submitAdjust(row.field) }}
+                      placeholder={row.alternatives && row.alternatives[0] ? `如 ${row.alternatives[0]}` : '输入调整值'}
+                    />
+                    <button type="button" disabled={!adjustValue.trim() || submitting} onClick={() => submitAdjust(row.field)}>应用</button>
+                    <button type="button" className="cw-consolidation-cancel" onClick={() => { setAdjustField(null); setAdjustValue('') }} title="取消"><X size={12} /></button>
+                  </span>
+                ) : (
+                  <button type="button" className="cw-consolidation-edit" onClick={() => { setAdjustField(row.field); setAdjustValue('') }} title="调整该字段">
+                    <Edit3 size={12} />
+                    <span>调整</span>
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="cw-consolidation-bar">
+        <button type="button" className="primary" onClick={() => onAccept()} disabled={submitting}>
+          <Check size={14} />
+          <span>接受推荐</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function BusinessRecommendationCard({ draft, onRedescribe, submitting }) {
+  const [redescribing, setRedescribing] = useState(false)
+  const [text, setText] = useState('')
+  const submitRedescribe = () => {
+    const value = text.trim()
+    if (!value || submitting) return
+    onRedescribe(value)
+    setText('')
+    setRedescribing(false)
+  }
+  return (
+    <div className="cw-business">
+      <strong>推荐业务 Agent</strong>
+      <div className="cw-business-draft">
+        <b>{draft.name || '业务处理 Agent'}</b>
+        {draft.description ? <p>{draft.description}</p> : null}
+      </div>
+      {redescribing ? (
+        <div className="cw-business-redescribe">
+          <input
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') submitRedescribe() }}
+            placeholder="补充说明你希望这个 Agent 做什么"
+          />
+          <button type="button" disabled={!text.trim() || submitting} onClick={submitRedescribe}>提交</button>
+          <button type="button" className="cw-consolidation-cancel" onClick={() => { setRedescribing(false); setText('') }} title="取消"><X size={12} /></button>
+        </div>
+      ) : (
+        <div className="cw-business-actions">
+          <button type="button" onClick={() => setRedescribing(true)} title="重新描述"><RefreshCw size={12} /><span>重新描述</span></button>
+        </div>
+      )}
     </div>
   )
 }
@@ -178,7 +386,7 @@ function QuestionCard({ q, value, setValue }) {
   }
   return (
     <div className="cw-question">
-      <strong>{q.label || q.question || q.id}</strong>
+      <strong>{q.label || q.id}</strong>
       <div className="cw-options">
         {(q.options || []).map(opt => {
           const recommended = optionIsRecommended(q, opt)
@@ -222,12 +430,6 @@ function CustomAnswer({ onSubmit }) {
   )
 }
 
-function optionIsRecommended(q, opt) {
-  if (opt.recommended) return true
-  const values = Array.isArray(q.recommendation) ? q.recommendation : q.recommendation ? [q.recommendation] : []
-  return values.includes(opt.value)
-}
-
 function RequirementSummary({ requirement }) {
   const rows = [
     ['应用类型', requirement.appType],
@@ -236,42 +438,40 @@ function RequirementSummary({ requirement }) {
     ['主视图', requirement.primaryView],
     ['数据策略', requirement.dataPolicy],
   ].filter(([, value]) => value)
-  const refs = Array.isArray(requirement.blueprintRefs) ? requirement.blueprintRefs : []
   return (
     <div className="cw-summary">
       <strong>确认需求摘要</strong>
       {rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
-      {refs.length > 0 ? (
-        <div>
-          <span>蓝本引用</span>
-          <b>{refs.map(ref => ref.name || ref.id || ref).join('、')}</b>
-        </div>
-      ) : null}
     </div>
   )
 }
 
-function ConversationHistoryDrawer({ sessions, selectedId, deletingSessionId, onClose, onSelect, onDeleteSession }) {
+function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClose, onSelect, onDeleteSession }) {
   const list = Array.isArray(sessions) ? sessions : []
-  const [pendingDeleteSession, setPendingDeleteSession] = useState(null)
-  const pendingTitle = pendingDeleteSession ? titleForSession(pendingDeleteSession) : ''
-  const confirmingDelete = pendingDeleteSession && deletingSessionId === pendingDeleteSession.id
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const pendingTitle = pendingDelete ? titleForDialogue(pendingDelete.session || pendingDelete) : ''
+  const confirmingDelete = pendingDelete && deletingDialogueId === (pendingDelete.session && pendingDelete.session.id)
 
   useEffect(() => {
-    if (!pendingDeleteSession) return
-    if (!list.some(sess => sess.id === pendingDeleteSession.id)) setPendingDeleteSession(null)
-  }, [pendingDeleteSession, list.map(sess => sess.id).join('|')])
+    if (!pendingDelete) return
+    const pid = pendingDelete.session && pendingDelete.session.id
+    if (!list.some(v => v.session && v.session.id === pid)) setPendingDelete(null)
+  }, [pendingDelete, list.map(v => v.session && v.session.id).join('|')])
 
-  const requestDeleteHistorySession = sess => {
-    if (!sess || sess.status === 'active') return
-    setPendingDeleteSession(sess)
+  const requestDelete = entry => {
+    const sess = entry && entry.session
+    if (!sess) return
+    if (sess.status === 'routing' || sess.status === 'drafting_application' || sess.status === 'drafting_business_agent') return
+    setPendingDelete(entry)
   }
 
-  const confirmDeleteHistorySession = async () => {
-    if (!pendingDeleteSession || pendingDeleteSession.status === 'active' || confirmingDelete) return
+  const confirmDelete = async () => {
+    if (!pendingDelete || confirmingDelete) return
+    const sess = pendingDelete.session
+    if (!sess) return
     try {
-      await onDeleteSession(pendingDeleteSession.id)
-      setPendingDeleteSession(null)
+      await onDeleteSession(sess.id)
+      setPendingDelete(null)
     } catch (_) {
       // The hook surfaces the error in the workbench error bar.
     }
@@ -284,41 +484,46 @@ function ConversationHistoryDrawer({ sessions, selectedId, deletingSessionId, on
         <button type="button" className="cw-history-close" onClick={onClose} title="关闭历史会话" aria-label="关闭历史会话"><X size={16} /></button>
       </header>
       <div className="cw-history-list">
-        {list.map(sess => (
-          <div key={sess.id} className={`cw-history-row${sess.id === selectedId ? ' active' : ''}`}>
-            <button type="button" className="cw-history-item" onClick={() => onSelect(sess.id)}>
-              <span className="cw-history-title">{titleForSession(sess)}</span>
-              <span className="cw-history-meta">
-                <em>{STATUS_TEXT[sess.status] || sess.status}</em>
-                <time dateTime={sess.updated_at}>{formatSessionTime(sess.updated_at)}</time>
-              </span>
-              <small>{summaryForSession(sess)}</small>
-              {resultForSession(sess) ? <b>{resultForSession(sess)}</b> : null}
-            </button>
-            <button
-              type="button"
-              className="cw-history-delete"
-              disabled={sess.status === 'active' || deletingSessionId === sess.id}
-              onClick={() => requestDeleteHistorySession(sess)}
-              title={sess.status === 'active' ? '分析中会话不可删除' : '删除历史会话'}
-              aria-label="删除历史会话"
-            >
-              {deletingSessionId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-            </button>
-          </div>
-        ))}
+        {list.map(entry => {
+          const sess = entry && entry.session
+          if (!sess) return null
+          const deletable = sess.status !== 'routing' && sess.status !== 'drafting_application' && sess.status !== 'drafting_business_agent'
+          return (
+            <div key={sess.id} className={`cw-history-row${sess.id === selectedId ? ' active' : ''}`}>
+              <button type="button" className="cw-history-item" onClick={() => onSelect(sess.id)}>
+                <span className="cw-history-title">{titleForDialogue(sess)}</span>
+                <span className="cw-history-meta">
+                  <em>{statusText(sess.status)}</em>
+                  <time dateTime={sess.updated_at}>{formatSessionTime(sess.updated_at)}</time>
+                </span>
+                <small>{summaryForEntry(entry)}</small>
+                {resultForEntry(entry) ? <b>{resultForEntry(entry)}</b> : null}
+              </button>
+              <button
+                type="button"
+                className="cw-history-delete"
+                disabled={!deletable || deletingDialogueId === sess.id}
+                onClick={() => requestDelete(entry)}
+                title={deletable ? '删除历史会话' : '进行中的会话不可删除'}
+                aria-label="删除历史会话"
+              >
+                {deletingDialogueId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+              </button>
+            </div>
+          )
+        })}
       </div>
-      {pendingDeleteSession ? (
+      {pendingDelete ? (
         <div className="cw-delete-confirm" role="dialog" aria-labelledby="cw-delete-confirm-title">
           <div className="cw-delete-confirm-card">
             <span className="cw-delete-confirm-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
             <div className="cw-delete-confirm-copy">
               <strong id="cw-delete-confirm-title">删除历史会话</strong>
-              <p>将删除「{pendingTitle}」的会话记录和消息，不会删除已生成任务或应用。</p>
+              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的应用或 Agent。</p>
             </div>
             <div className="cw-delete-confirm-actions">
-              <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDeleteSession(null)} disabled={confirmingDelete}>取消</button>
-              <button type="button" className="cw-delete-confirm-danger" onClick={confirmDeleteHistorySession} disabled={confirmingDelete}>
+              <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>取消</button>
+              <button type="button" className="cw-delete-confirm-danger" onClick={confirmDelete} disabled={confirmingDelete}>
                 {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                 删除
               </button>
@@ -328,6 +533,12 @@ function ConversationHistoryDrawer({ sessions, selectedId, deletingSessionId, on
       ) : null}
     </aside>
   )
+}
+
+function optionIsRecommended(q, opt) {
+  if (opt.recommended) return true
+  const values = Array.isArray(q.recommendation) ? q.recommendation : q.recommendation ? [q.recommendation] : []
+  return values.includes(opt.value)
 }
 
 function hasAnswer(value) {
@@ -341,16 +552,39 @@ function formatSessionTime(value) {
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function summaryForSession(sess) {
-  const requirement = (sess && sess.requirement) || {}
-  const parts = [requirement.appType, requirement.coreScenario].filter(Boolean)
-  return parts.length > 0 ? parts.join(' · ') : sess.initial_prompt || '暂无摘要'
+function summaryForEntry(entry) {
+  const child = entry && entry.child
+  const req = (child && child.requirement) || {}
+  const parts = [req.appType, req.coreScenario].filter(Boolean)
+  if (parts.length > 0) return parts.join(' · ')
+  const sess = entry && entry.session
+  return (sess && sess.initial_prompt) || '暂无摘要'
 }
 
-function resultForSession(sess) {
-  if (!sess || (!sess.created_job_id && !sess.created_job)) return ''
-  if (sess.application_state === 'deleted') return '应用已删除'
-  if (sess.application) return sess.application.name || sess.application.slug || '应用已创建'
-  if (sess.created_job && sess.created_job.status) return `生成任务：${sess.created_job.status}`
-  return '生成任务已创建'
+function resultForEntry(entry) {
+  if (!entry) return ''
+  const sess = entry.session || {}
+  if (entry.resolvedApplication) return entry.resolvedApplication.name || '应用已就绪'
+  if (entry.createdAgent) return entry.createdAgent.name || 'Agent 已创建'
+  if (entry.seededJob) return entry.seededJob.app_name ? `生成任务：${entry.seededJob.app_name}` : '生成任务已创建'
+  if (sess.status === 'resolved') return '已完成'
+  return ''
+}
+
+function fieldLabel(field) {
+  const map = {
+    appType: '应用类型',
+    appName: '应用名称',
+    coreScenario: '核心场景',
+    primaryView: '主视图',
+    dataPolicy: '数据策略',
+  }
+  return map[field] || field
+}
+
+function formatValue(value) {
+  if (value == null || value === '') return ''
+  if (Array.isArray(value)) return value.join('、')
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
 }

@@ -1,0 +1,394 @@
+// Pure dialogue timeline mapper + event reducer. NO React imports — exercised by
+// the node-assert logic harness (scripts/check-dialogue-workbench.mjs) in addition
+// to being consumed by useDialogueSessions.js.
+//
+// Contract: the mapper consumes the composed DialogueView the Task 4 backend
+// returns (parent session + parent messages + redacted route + recommendation
+// cards + optional child clarification view + business agent draft + resolved
+// application/agent/job). It produces SEMANTIC UI items, NOT JSX. It DELIBERATELY
+// DROPS unknown/internal metadata keys (any blueprint/internal-slug/thinking
+// fields) — the browser never derives trusted catalog or route data.
+//
+// Security boundary: only the fields explicitly named in this mapper survive into
+// a timeline item. Any extra key on a persisted message's metadata_json is
+// ignored. Blueprint refs / internal slugs / catalog availability never appear.
+
+export const initialDialogueState = () => ({
+  selectedDialogueId: null,
+  view: null,
+  sessions: [],
+  timeline: [],
+  questions: [],
+  requirement: null,
+  // needsRefresh is set to a dialogue id when a targeted SSE update arrives for
+  // the selected (or any) dialogue, so the hook can refetch ONE view instead of
+  // doing an N+1 full-history refresh per streaming delta.
+  needsRefresh: null,
+  dialogueActivity: {},
+})
+
+// statusText maps a dialogue status to user-facing Chinese. It is the ONLY place
+// status strings are translated; the workbench imports this (no inline maps).
+export function statusText(status) {
+  const map = {
+    routing: '识别需求中',
+    recommending: '推荐应用中',
+    drafting_application: '需求澄清中',
+    drafting_business_agent: '配置 Agent 中',
+    resolved: '已完成',
+    failed: '已失败',
+    abandoned: '已放弃',
+  }
+  if (status == null) return ''
+  return map[status] || status
+}
+
+// titleForDialogue derives a short, human title from a session. It prefers an
+// app name in the resolved requirement, then the initial prompt.
+export function titleForDialogue(session) {
+  if (!session) return '新会话'
+  const fromRequirement = session.requirement && session.requirement.appName
+  const raw = String(fromRequirement || session.initial_prompt || '新会话').trim()
+  if (raw.length <= 32) return raw
+  return `${raw.slice(0, 32)}...`
+}
+
+// lockedFromView returns true when the composer's free-text input must be
+// non-editable: the route is locked OR confirmation is needed OR the dialogue is
+// terminal. When locked the user interacts via the rendered cards/controls, not a
+// free textarea.
+export function lockedFromView(view) {
+  if (!view || !view.session) return false
+  const status = view.session.status
+  if (status === 'resolved' || status === 'abandoned' || status === 'failed') return true
+  const route = view.route
+  // Route confirmation needed => the user must pick a route card; no free text.
+  if (route && route.needsRouteConfirmation) return true
+  // Route locked into an outcome => further free-text would be ignored (backend 409).
+  if (view.session.route_locked && view.session.intent !== 'routing') return true
+  return false
+}
+
+// buildDialogueTimeline maps a composed DialogueView to an ordered list of
+// semantic UI items. Items are plain objects; the workbench renders them. Every
+// item is built from EXPLICITLY NAMED fields so internal keys cannot leak.
+export function buildDialogueTimeline(view) {
+  if (!view) return []
+  const items = []
+  const parentMessages = Array.isArray(view.messages) ? view.messages : []
+
+  // 1. Parent thread: user messages + analysis work logs, in persisted order.
+  for (const msg of parentMessages) {
+    if (!msg || msg.role === 'user') {
+      if (msg && msg.role === 'user') {
+        items.push({
+          id: msg.id,
+          type: 'user_message',
+          content: safeString(msg.content),
+        })
+      }
+      continue
+    }
+    if (msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
+      items.push({
+        id: msg.id,
+        type: 'analysis_stream',
+        content: safeString(msg.content),
+      })
+    }
+    // Other parent agent kinds (business_draft handled below) are dropped here.
+  }
+
+  // 2. Route choice cards when the intent is ambiguous (needs confirmation).
+  const route = view.route
+  if (route && route.needsRouteConfirmation && statusIsRouting(view.session)) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_route`,
+      type: 'route_recommendation',
+      reason: safeString(route.userFacingReason),
+    })
+  }
+
+  // 3. Existing-app recommendation cards (intent locked to existing_application
+  //    or pre-lock recommendation present). One primary + <=2 alternatives.
+  const recs = Array.isArray(view.recommendations) ? view.recommendations : []
+  if (recs.length > 0) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_apps`,
+      type: 'app_recommendation',
+      cards: recs.slice(0, 3).map(card => ({
+        applicationId: safeString(card.applicationId),
+        slug: safeString(card.slug),
+        name: safeString(card.name),
+        appType: safeString(card.appType),
+        matchReason: safeString(card.matchReason),
+        status: safeString(card.status),
+        runtimeUrl: safeString(card.runtimeUrl),
+        primary: !!card.primary,
+      })),
+    })
+  }
+
+  // 4. Child clarification (application-generation) surface.
+  const child = view.child
+  if (child) {
+    appendChildItems(items, child, view.session)
+  }
+
+  // 5. Business-agent drafting surface.
+  if (view.agentDraft && (view.agentDraft.name || view.agentDraft.prompt)) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_business`,
+      type: 'business_recommendation',
+      draft: {
+        name: safeString(view.agentDraft.name),
+        description: safeString(view.agentDraft.description),
+        prompt: safeString(view.agentDraft.prompt),
+      },
+    })
+  }
+
+  // 6. Resolved outcome (application / agent / seeded job).
+  appendResolvedOutcome(items, view)
+
+  // 7. System status for terminal non-resolved states.
+  const status = view.session && view.session.status
+  if (status === 'failed' || status === 'abandoned') {
+    items.push({
+      id: `${view.session.id || 'dlg'}_${status}`,
+      type: 'system_status',
+      status,
+    })
+  }
+
+  return items
+}
+
+// appendChildItems maps the child clarification view (parent's child field) into
+// question groups, a round-5 consolidation table, and a requirement summary. It
+// reads child.messages (the persisted child thread) and child.requirement.
+function appendChildItems(items, child, parentSession) {
+  const childMessages = Array.isArray(child.messages) ? child.messages : []
+  // Question groups: the latest unanswered question set after the last user
+  // answer. One group with all open questions.
+  const openQuestions = openChildQuestions(child, childMessages)
+  if (openQuestions.length > 0) {
+    items.push({
+      id: `${parentSession.id || 'dlg'}_questions`,
+      type: 'question_group',
+      questions: openQuestions.map(safeQuestion),
+    })
+  }
+  // Round-5 consolidation table (recommendation_consolidation message present).
+  const consolidation = latestConsolidation(childMessages)
+  if (consolidation && consolidation.length > 0) {
+    items.push({
+      id: `${parentSession.id || 'dlg'}_consolidation`,
+      type: 'consolidation_table',
+      rows: consolidation.map(safeConsolidationRow),
+    })
+  }
+  // Requirement summary when the child has a populated requirement.
+  const req = child.requirement
+  if (req && (req.appType || req.appName || req.coreScenario)) {
+    items.push({
+      id: `${parentSession.id || 'dlg'}_requirement`,
+      type: 'requirement_summary',
+      requirement: safeRequirement(req),
+    })
+  }
+}
+
+// openChildQuestions returns the questions currently awaiting an answer, mirroring
+// the legacy questionsFromMessages logic: questions after the last user answer,
+// while the child status accepts answers.
+function openChildQuestions(child, childMessages) {
+  const status = child.status
+  if (status === 'ready_to_confirm' || status === 'confirmed' || status === 'abandoned' || status === 'failed') return []
+  const lastUserIndex = findLastIndex(childMessages, m => m && m.role === 'user')
+  const out = []
+  const seen = new Set()
+  for (const msg of childMessages.slice(lastUserIndex + 1)) {
+    if (!msg || msg.role !== 'agent' || msg.kind !== 'question' || !msg.metadata_json) continue
+    const q = parseJSON(msg.metadata_json)
+    if (q && q.id && !seen.has(q.id)) {
+      out.push(q)
+      seen.add(q.id)
+    }
+  }
+  return out
+}
+
+function latestConsolidation(childMessages) {
+  for (let i = childMessages.length - 1; i >= 0; i -= 1) {
+    const m = childMessages[i]
+    if (m && m.kind === 'recommendation_consolidation' && m.metadata_json) {
+      const parsed = parseJSON(m.metadata_json)
+      if (Array.isArray(parsed)) return parsed
+    }
+  }
+  return null
+}
+
+// appendResolvedOutcome emits a resolved_outcome item for a resolved dialogue,
+// classifying it by which linked result is present.
+function appendResolvedOutcome(items, view) {
+  const status = view.session && view.session.status
+  if (status !== 'resolved') return
+  let kind = 'application'
+  let label = ''
+  if (view.resolvedApplication) {
+    kind = 'application'
+    label = view.resolvedApplication.name || view.resolvedApplication.slug || '应用已就绪'
+  } else if (view.createdAgent) {
+    kind = 'agent'
+    label = view.createdAgent.name || 'Agent 已创建'
+  } else if (view.seededJob) {
+    kind = 'job'
+    label = view.seededJob.app_name ? `生成任务：${view.seededJob.app_name}` : '生成任务已创建'
+  } else {
+    kind = 'application'
+    label = '已完成'
+  }
+  items.push({
+    id: `${view.session.id || 'dlg'}_resolved`,
+    type: 'resolved_outcome',
+    kind,
+    label,
+  })
+}
+
+// ---- safe field mappers (drop unknown/internal keys) -----------------------
+
+function safeString(value) {
+  if (value == null) return ''
+  return String(value)
+}
+
+function safeQuestion(q) {
+  if (!q) return null
+  return {
+    id: safeString(q.id),
+    label: safeString(q.label || q.question),
+    multiSelect: !!q.multiSelect,
+    allowCustom: !!q.allowCustom,
+    options: Array.isArray(q.options)
+      ? q.options.map(opt => ({
+          value: safeString(opt.value),
+          label: safeString(opt.label || opt.value),
+          reason: safeString(opt.reason),
+          recommended: !!opt.recommended,
+        }))
+      : [],
+    recommendation: normalizeRecommendation(q.recommendation),
+  }
+}
+
+function normalizeRecommendation(rec) {
+  if (rec == null) return []
+  return Array.isArray(rec) ? rec.map(safeString) : [safeString(rec)]
+}
+
+function safeConsolidationRow(entry) {
+  if (!entry) return null
+  return {
+    field: safeString(entry.field),
+    recommendedValue: entry.recommendedValue != null ? entry.recommendedValue : '',
+    reason: safeString(entry.reason),
+    alternatives: Array.isArray(entry.alternatives) ? entry.alternatives.map(safeString) : [],
+  }
+}
+
+function safeRequirement(req) {
+  if (!req) return null
+  // Explicitly named fields ONLY. blueprintRefs / generationProfile / any future
+  // internal field is dropped — it must never reach the UI.
+  return {
+    appType: safeString(req.appType),
+    appName: safeString(req.appName),
+    coreScenario: safeString(req.coreScenario),
+    primaryView: safeString(req.primaryView),
+    dataPolicy: safeString(req.dataPolicy),
+  }
+}
+
+// ---- SSE event reducer -----------------------------------------------------
+
+// applyDialogueEvent folds one dialogue.* (or wrapped clarification.*) SSE event
+// into state. It NEVER does an N+1 full-history refresh: for the selected
+// dialogue it sets needsRefresh=<id> so the hook refetches ONE view; for other
+// dialogues it records lightweight activity. Returns NEW state (immutable).
+export function applyDialogueEvent(state, type, ev) {
+  const dialogueId = ev && (ev.dialogue_id || (ev.data && ev.data.dialogue_id))
+  if (!dialogueId) return state
+  if (type === 'dialogue.deleted') {
+    return applyDeletedEvent(state, dialogueId)
+  }
+  const isActivityOnly = ACTIVITY_ONLY_EVENTS.has(type)
+  if (state.selectedDialogueId && dialogueId === state.selectedDialogueId) {
+    // Targeted refresh: the hook refetches this single composed view.
+    return { ...state, needsRefresh: dialogueId }
+  }
+  if (isActivityOnly) {
+    return {
+      ...state,
+      dialogueActivity: {
+        ...state.dialogueActivity,
+        [dialogueId]: { status: 'updated', lastType: type },
+      },
+    }
+  }
+  // Non-activity events for an unselected dialogue still mark it dirty so the
+  // history list can refresh on next open, but do not trigger a targeted refresh.
+  return {
+    ...state,
+    dialogueActivity: {
+      ...state.dialogueActivity,
+      [dialogueId]: { status: 'updated', lastType: type },
+    },
+  }
+}
+
+// Events that only nudge the history list (no need to interrupt the current view
+// beyond a refresh if it happens to be the selected one). Used to distinguish a
+// background status change from a foreground content update.
+const ACTIVITY_ONLY_EVENTS = new Set([
+  'dialogue.created',
+])
+
+function applyDeletedEvent(state, dialogueId) {
+  const sessions = (state.sessions || []).filter(s => s.session && s.session.id !== dialogueId)
+  const dialogueActivity = { ...state.dialogueActivity }
+  delete dialogueActivity[dialogueId]
+  if (state.selectedDialogueId === dialogueId) {
+    return {
+      ...initialDialogueState(),
+      sessions,
+      dialogueActivity,
+    }
+  }
+  return { ...state, sessions, dialogueActivity }
+}
+
+// ---- helpers ---------------------------------------------------------------
+
+function statusIsRouting(session) {
+  if (!session) return false
+  return session.status === 'routing' && !session.route_locked
+}
+
+function findLastIndex(arr, predicate) {
+  for (let i = arr.length - 1; i >= 0; i -= 1) {
+    if (predicate(arr[i])) return i
+  }
+  return -1
+}
+
+function parseJSON(raw) {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}

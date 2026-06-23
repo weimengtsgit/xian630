@@ -84,5 +84,35 @@ export const factoryApi = {
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
   listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
   deleteClarification: id => request(`/api/clarifications/${id}`, { method: 'DELETE' }),
+  // ---- dialogue facade (Task 4 backend) -----------------------------------
+  // The /api/dialogues surface is the composed parent view over the three Factory
+  // outcomes: existing-app reuse, application generation (child clarification),
+  // and business-agent drafting. Every method returns a composed DialogueView
+  // (or a list of them). Path/methods mirror the backend routes exactly.
+  listDialogues: () => request('/api/dialogues'),
+  getDialogue: id => request(`/api/dialogues/${id}`),
+  createDialogue: ({ initialPrompt }) =>
+    request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
+  deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
+  sendDialogueMessage: (id, content) =>
+    request(`/api/dialogues/${id}/messages`, { method: 'POST', body: JSON.stringify({ content }) }),
+  selectDialogueRoute: (id, { intent, ...rest }) =>
+    request(`/api/dialogues/${id}/route`, { method: 'POST', body: JSON.stringify({ intent, ...rest }) }),
+  openDialogueApplication: (id, applicationID) =>
+    request(`/api/dialogues/${id}/applications/${applicationID}/open`, { method: 'POST' }),
+  answerDialogueClarification: (id, answers) =>
+    request(`/api/dialogues/${id}/clarification/answers`, { method: 'POST', body: JSON.stringify(answers) }),
+  answerDialogueClarificationBatch: (id, answers) =>
+    request(`/api/dialogues/${id}/clarification/answers/batch`, { method: 'POST', body: JSON.stringify({ answers }) }),
+  patchDialogueRequirement: (id, requirement) =>
+    request(`/api/dialogues/${id}/clarification/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
+  retryDialogueRound: id =>
+    request(`/api/dialogues/${id}/clarification/retry-current-round`, { method: 'POST' }),
+  confirmDialogueClarification: id =>
+    request(`/api/dialogues/${id}/clarification/confirm`, { method: 'POST' }),
+  abandonDialogueClarification: id =>
+    request(`/api/dialogues/${id}/clarification/abandon`, { method: 'POST' }),
+  confirmDialogueBusinessAgent: id =>
+    request(`/api/dialogues/${id}/business-agent/confirm`, { method: 'POST' }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }
