@@ -32,9 +32,9 @@ func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...s
 		return runner.CommandResult{Stdout: f.rawStdout, ExitCode: 0}, nil
 	}
 	out := RoundOutput{
-		Status:  "ready_to_confirm",
-		Round:   1,
-		WorkLog: []WorkLog{{Type: "analysis", Content: "识别到这是态势复盘类应用。"}},
+		Status:                 "ready_to_confirm",
+		Round:                  1,
+		WorkLog:                []WorkLog{{Type: "analysis", Content: "识别到这是态势复盘类应用。"}},
 		NormalizedScenarioName: "航母编队月度航迹复盘",
 		Requirement: Requirement{
 			AppType: "situation_replay", AppName: "航母编队月度航迹复盘",
@@ -606,7 +606,6 @@ func TestRunnerRedactsBlueprintRefsFromUserFacingEvents(t *testing.T) {
 		t.Fatalf("missing clarification.ready_to_confirm; got %v", eventTypes(events))
 	}
 }
-
 
 // TestRunnerSurfacesNormalizedScenarioName proves the scenario name is carried
 // on the round output for Task 4 to append the Base36 serial.

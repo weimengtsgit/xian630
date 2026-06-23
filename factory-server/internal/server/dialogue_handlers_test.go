@@ -26,12 +26,12 @@ import (
 // RouteOutput or BusinessDraftOutput as JSON stdout. The server injects it into
 // srv.dialogueRouter so the real claude CLI is never invoked.
 type fakeDialogueRunner struct {
-	routeStdout  string // JSON RouteOutput
-	draftStdout  string // JSON BusinessDraftOutput
-	routeCalls   int
-	draftCalls   int
-	routeErr     bool
-	draftErr     bool
+	routeStdout string // JSON RouteOutput
+	draftStdout string // JSON BusinessDraftOutput
+	routeCalls  int
+	draftCalls  int
+	routeErr    bool
+	draftErr    bool
 }
 
 func (f *fakeDialogueRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {

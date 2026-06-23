@@ -128,13 +128,13 @@ type ConsolidationEntry struct {
 }
 
 type RoundOutput struct {
-	Status                string             `json:"status"`
-	Round                 int                `json:"round"`
-	WorkLog               []WorkLog          `json:"workLog"`
-	Questions             []Question         `json:"questions"`
-	Requirement           Requirement        `json:"requirement"`
-	NormalizedScenarioName string            `json:"normalizedScenarioName"`
-	Consolidation         []ConsolidationEntry `json:"consolidation,omitempty"`
+	Status                 string               `json:"status"`
+	Round                  int                  `json:"round"`
+	WorkLog                []WorkLog            `json:"workLog"`
+	Questions              []Question           `json:"questions"`
+	Requirement            Requirement          `json:"requirement"`
+	NormalizedScenarioName string               `json:"normalizedScenarioName"`
+	Consolidation          []ConsolidationEntry `json:"consolidation,omitempty"`
 }
 
 type StreamEvent struct {

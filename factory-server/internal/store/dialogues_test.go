@@ -173,7 +173,7 @@ func TestListDialogueSessionsNewestFirst(t *testing.T) {
 	for i, id := range []string{"dlg_old", "dlg_new"} {
 		if err := st.CreateDialogueSession(ctx, model.DialogueSession{
 			ID: id, InitialPrompt: "x", Status: model.DialogueStatusRouting,
-			Intent: model.DialogueIntentRouting,
+			Intent:    model.DialogueIntentRouting,
 			CreatedAt: base.Add(time.Duration(i) * time.Second),
 			UpdatedAt: base.Add(time.Duration(i) * time.Second),
 		}); err != nil {

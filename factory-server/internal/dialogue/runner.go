@@ -62,11 +62,11 @@ func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(Str
 	// server-side use; it must never appear in any emitted event or persisted
 	// artifact, so emit a redacted projection that omits the field entirely.
 	redacted := routeEventView{
-		Intent:                  routeOut.Intent,
-		Confidence:              routeOut.Confidence,
+		Intent:                   routeOut.Intent,
+		Confidence:               routeOut.Confidence,
 		ExistingApplicationSlugs: routeOut.ExistingApplicationSlugs,
-		UserFacingReason:        routeOut.UserFacingReason,
-		NeedsRouteConfirmation:  routeOut.NeedsRouteConfirmation,
+		UserFacingReason:         routeOut.UserFacingReason,
+		NeedsRouteConfirmation:   routeOut.NeedsRouteConfirmation,
 	}
 	redactedBytes, _ := json.MarshalIndent(redacted, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, "output.json"), redactedBytes, 0o644)
@@ -170,10 +170,10 @@ func (r Runner) runClaude(ctx context.Context, dialogueID, op, startedType, prom
 func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dialogueID, op, startedType, prompt string, emit func(StreamEvent)) (runner.CommandResult, string, bool, error) {
 	messageID := op + "_live"
 	emit(StreamEvent{
-		Type:      startedType + ".started",
+		Type:       startedType + ".started",
 		DialogueID: dialogueID,
-		MessageID: messageID,
-		Data:      WorkLog{Type: "analysis_work_log", Content: "已连接 Claude Code 流式输出。"},
+		MessageID:  messageID,
+		Data:       WorkLog{Type: "analysis_work_log", Content: "已连接 Claude Code 流式输出。"},
 	})
 	var assistantText strings.Builder
 	var resultText string
@@ -193,10 +193,10 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dia
 		}
 		lastVisible = visible
 		emit(StreamEvent{
-			Type:      startedType + ".delta",
+			Type:       startedType + ".delta",
 			DialogueID: dialogueID,
-			MessageID: messageID,
-			Delta:     visible,
+			MessageID:  messageID,
+			Delta:      visible,
 		})
 	},
 		"--print", prompt,
@@ -211,10 +211,10 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dia
 		finalText = resultText
 	}
 	emit(StreamEvent{
-		Type:      startedType + ".completed",
+		Type:       startedType + ".completed",
 		DialogueID: dialogueID,
-		MessageID: messageID,
-		Data:      WorkLog{Type: "analysis_work_log", Content: "结构化结果接收完成。"},
+		MessageID:  messageID,
+		Data:       WorkLog{Type: "analysis_work_log", Content: "结构化结果接收完成。"},
 	})
 	return res, finalText, true, err
 }

@@ -266,14 +266,14 @@ func (s *Store) BackfillClarificationDialogues(ctx context.Context) error {
 		}
 		status := mapClarificationToDialogueStatus(cs.Status)
 		dlg := model.DialogueSession{
-			ID:                    "dlg_" + idpkg.New(),
-			InitialPrompt:         cs.InitialPrompt,
-			Status:                status,
-			Intent:                model.DialogueIntentApplicationGeneration,
-			RouteLocked:           true,
+			ID:                     "dlg_" + idpkg.New(),
+			InitialPrompt:          cs.InitialPrompt,
+			Status:                 status,
+			Intent:                 model.DialogueIntentApplicationGeneration,
+			RouteLocked:            true,
 			ClarificationSessionID: cs.ID,
-			CreatedAt:             now,
-			UpdatedAt:             now,
+			CreatedAt:              now,
+			UpdatedAt:              now,
 		}
 		if status == model.DialogueStatusResolved {
 			t := now

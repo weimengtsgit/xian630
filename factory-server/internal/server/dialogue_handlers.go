@@ -82,11 +82,11 @@ type recommendationCard struct {
 // OMITS internalBlueprintSlug entirely — that field survives only in the
 // persisted DraftJSON (server-side) and is never returned.
 type routePayload struct {
-	Intent                  dialogue.Intent     `json:"intent"`
-	Confidence              dialogue.Confidence `json:"confidence"`
+	Intent                   dialogue.Intent     `json:"intent"`
+	Confidence               dialogue.Confidence `json:"confidence"`
 	ExistingApplicationSlugs []string            `json:"existingApplicationSlugs"`
-	UserFacingReason        string              `json:"userFacingReason"`
-	NeedsRouteConfirmation  bool                `json:"needsRouteConfirmation"`
+	UserFacingReason         string              `json:"userFacingReason"`
+	NeedsRouteConfirmation   bool                `json:"needsRouteConfirmation"`
 }
 
 // persistedRoute is the full route shape stored in DraftJSON, INCLUDING the
@@ -113,15 +113,15 @@ func (p persistedRoute) public() routePayload {
 
 // dialogueView is the composed response shape returned by every dialogue route.
 type dialogueView struct {
-	Session            model.DialogueSession   `json:"session"`
-	Messages           []model.DialogueMessage `json:"messages"`
-	Route              routePayload            `json:"route"`
-	Recommendations    []recommendationCard    `json:"recommendations,omitempty"`
-	AgentDraft         dialogue.BusinessAgentDraft `json:"agentDraft,omitempty"`
-	Child              *clarificationView      `json:"child,omitempty"`
-	ResolvedApplication *model.Application      `json:"resolvedApplication,omitempty"`
-	CreatedAgent       *model.Agent            `json:"createdAgent,omitempty"`
-	SeededJob          *model.Job              `json:"seededJob,omitempty"`
+	Session             model.DialogueSession       `json:"session"`
+	Messages            []model.DialogueMessage     `json:"messages"`
+	Route               routePayload                `json:"route"`
+	Recommendations     []recommendationCard        `json:"recommendations,omitempty"`
+	AgentDraft          dialogue.BusinessAgentDraft `json:"agentDraft,omitempty"`
+	Child               *clarificationView          `json:"child,omitempty"`
+	ResolvedApplication *model.Application          `json:"resolvedApplication,omitempty"`
+	CreatedAgent        *model.Agent                `json:"createdAgent,omitempty"`
+	SeededJob           *model.Job                  `json:"seededJob,omitempty"`
 }
 
 // ---- helpers --------------------------------------------------------------

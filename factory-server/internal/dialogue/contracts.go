@@ -21,9 +21,9 @@ import (
 type Intent string
 
 const (
-	IntentExistingApplication      Intent = "existing_application"
-	IntentApplicationGeneration    Intent = "application_generation"
-	IntentBusinessProcessingAgent  Intent = "business_processing_agent"
+	IntentExistingApplication     Intent = "existing_application"
+	IntentApplicationGeneration   Intent = "application_generation"
+	IntentBusinessProcessingAgent Intent = "business_processing_agent"
 )
 
 func validIntent(s string) bool {
@@ -77,11 +77,11 @@ type DialogueMessageView struct {
 // dialogue history, the visible preset/generated app summaries, and the
 // internal blueprint summaries. The router must use ONLY these candidates.
 type RouteInput struct {
-	DialogueID           string               `json:"dialogueId"`
-	UserMessage          string               `json:"userMessage"`
+	DialogueID           string                `json:"dialogueId"`
+	UserMessage          string                `json:"userMessage"`
 	Messages             []DialogueMessageView `json:"messages"`
-	ExistingApplications []AppSummary         `json:"existingApplications"`
-	Blueprints           []BlueprintSummary   `json:"blueprints"`
+	ExistingApplications []AppSummary          `json:"existingApplications"`
+	Blueprints           []BlueprintSummary    `json:"blueprints"`
 }
 
 // RouteOutput is the EXACT contract the router must emit. Factory validates
@@ -89,12 +89,12 @@ type RouteInput struct {
 // and InternalBlueprintSlug against RouteInput.Blueprints. InternalBlueprintSlug
 // is server-side only and is redacted from any emitted event.
 type RouteOutput struct {
-	Intent                  Intent     `json:"intent"`
-	Confidence              Confidence `json:"confidence"`
+	Intent                   Intent     `json:"intent"`
+	Confidence               Confidence `json:"confidence"`
 	ExistingApplicationSlugs []string   `json:"existingApplicationSlugs"`
-	InternalBlueprintSlug   string     `json:"internalBlueprintSlug"`
-	UserFacingReason        string     `json:"userFacingReason"`
-	NeedsRouteConfirmation  bool       `json:"needsRouteConfirmation"`
+	InternalBlueprintSlug    string     `json:"internalBlueprintSlug"`
+	UserFacingReason         string     `json:"userFacingReason"`
+	NeedsRouteConfirmation   bool       `json:"needsRouteConfirmation"`
 }
 
 // routeEventView is the user-facing projection of RouteOutput with the
@@ -102,11 +102,11 @@ type RouteOutput struct {
 // may appear in an emitted StreamEvent or a persisted artifact; the internal
 // slug survives only in the returned RouteOutput for server-side use.
 type routeEventView struct {
-	Intent                  Intent     `json:"intent"`
-	Confidence              Confidence `json:"confidence"`
+	Intent                   Intent     `json:"intent"`
+	Confidence               Confidence `json:"confidence"`
 	ExistingApplicationSlugs []string   `json:"existingApplicationSlugs"`
-	UserFacingReason        string     `json:"userFacingReason"`
-	NeedsRouteConfirmation  bool       `json:"needsRouteConfirmation"`
+	UserFacingReason         string     `json:"userFacingReason"`
+	NeedsRouteConfirmation   bool       `json:"needsRouteConfirmation"`
 }
 
 // WorkLog is the user-facing analysis work log. It is the ONLY model-authored
@@ -160,13 +160,13 @@ type BusinessAgentDraft struct {
 
 // BusinessDraftInput is the bounded input for one business-agent drafting round.
 type BusinessDraftInput struct {
-	DialogueID          string               `json:"dialogueId"`
-	Round               int                  `json:"round"`
-	MaxRounds           int                  `json:"maxRounds"`
-	UserMessage         string               `json:"userMessage"`
-	Messages            []DialogueMessageView `json:"messages"`
-	CurrentDraft        BusinessAgentDraft   `json:"currentDraft"`
-	CurrentQuestions    []Question           `json:"currentQuestions"`
+	DialogueID       string                `json:"dialogueId"`
+	Round            int                   `json:"round"`
+	MaxRounds        int                   `json:"maxRounds"`
+	UserMessage      string                `json:"userMessage"`
+	Messages         []DialogueMessageView `json:"messages"`
+	CurrentDraft     BusinessAgentDraft    `json:"currentDraft"`
+	CurrentQuestions []Question            `json:"currentQuestions"`
 }
 
 // BusinessDraftOutput mirrors the adaptive shape: status/round/work-log,
@@ -183,11 +183,11 @@ type BusinessDraftOutput struct {
 // StreamEvent is the normalized event the runner emits. It must NEVER carry
 // the internal blueprint slug or hidden reasoning.
 type StreamEvent struct {
-	Type      string `json:"type"`
+	Type       string `json:"type"`
 	DialogueID string `json:"dialogue_id"`
-	MessageID string `json:"message_id,omitempty"`
-	Delta     string `json:"delta,omitempty"`
-	Data      any    `json:"data,omitempty"`
+	MessageID  string `json:"message_id,omitempty"`
+	Delta      string `json:"delta,omitempty"`
+	Data       any    `json:"data,omitempty"`
 }
 
 // Status recognizes the adaptive drafting statuses. ready_to_confirm means the
