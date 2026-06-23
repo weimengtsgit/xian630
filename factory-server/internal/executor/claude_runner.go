@@ -411,9 +411,10 @@ func SafeName(s string) bool {
 }
 
 // selectedSkillPaths maps a confirmed requirement's generationProfile
-// (base/domain/pattern → skill keys) to the concrete project-local SKILL.md
-// file paths under <workspace>/.claude/skills/<key>/SKILL.md. The order is
-// base → domain → pattern so downstream prompts list foundational skills first.
+// (base/domain/pattern/data → skill keys) to the concrete project-local
+// SKILL.md file paths under <workspace>/.claude/skills/<key>/SKILL.md. The
+// order is base → domain → pattern → data so downstream prompts list
+// foundational/UI skills first and data-acquisition skills last.
 // Paths are slash-normalised so they can be embedded verbatim in input.json and
 // prompt text for Claude to Read. Missing files are NOT filtered out here: the
 // prompt instructs Claude to report a missing required skill in warnings rather
@@ -425,7 +426,7 @@ func SafeName(s string) bool {
 // names that simply do not exist on disk are still surfaced (existing behavior).
 func selectedSkillPaths(workspace string, profile map[string][]string) []string {
 	keys := []string{}
-	for _, group := range []string{"base", "domain", "pattern"} {
+	for _, group := range []string{"base", "domain", "pattern", "data"} {
 		keys = append(keys, profile[group]...)
 	}
 	allowedRoot := filepath.Clean(filepath.Join(workspace, ".claude", "skills"))
