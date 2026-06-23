@@ -31,6 +31,8 @@ export function ConversationWorkbench({
   onConfirm,
   onRetry,
   onAbandon,
+  onSaveAuthoring,
+  onRefreshAgents,
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
@@ -40,6 +42,15 @@ export function ConversationWorkbench({
   const businessAgents = Array.isArray(selectedBusinessAgents) ? selectedBusinessAgents : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
   const canSubmitAnswers = activeQuestions.length > 0 && completedAnswers === activeQuestions.length && !submitting
+
+  const isAuthoringMode = session?.mode === 'agent_authoring'
+  const draftItems = timeline.filter(item => item.type === 'agent_draft')
+  const latestDraft = draftItems.length > 0 ? draftItems[draftItems.length - 1].draft : null
+  const canSaveDraft = isAuthoringMode
+    && session?.status === 'ready_to_confirm'
+    && latestDraft?.name
+    && latestDraft?.key
+    && latestDraft?.prompt
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -63,6 +74,16 @@ export function ConversationWorkbench({
     setDraftAnswers({})
   }
 
+  const handleSaveAuthoring = async () => {
+    if (!onSaveAuthoring || submitting) return
+    try {
+      await onSaveAuthoring()
+      if (onRefreshAgents) await onRefreshAgents()
+    } catch {
+      // Error is surfaced by the hook's setError
+    }
+  }
+
   return (
     <section className="conversation-workbench">
       <header className="cw-header">
@@ -77,7 +98,7 @@ export function ConversationWorkbench({
         </div>
       </header>
 
-      {businessAgents.length > 0 ? (
+      {!isAuthoringMode && businessAgents.length > 0 ? (
         <div className="cw-business-agents" aria-label="本次业务智能体">
           <span className="cw-business-label">本次业务智能体</span>
           <div className="cw-business-chips">
@@ -126,14 +147,24 @@ export function ConversationWorkbench({
       <footer className="cw-composer">
         {session && session.status === 'failed' ? <button type="button" onClick={onRetry} disabled={submitting}>重试本轮</button> : null}
         {session && session.status !== 'confirmed' && session.status !== 'abandoned' ? <button type="button" onClick={onAbandon} disabled={submitting}>放弃</button> : null}
-        {canConfirm ? <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>确认并生成</button> : null}
+        {isAuthoringMode ? (
+          canSaveDraft ? (
+            <button type="button" className="primary" onClick={handleSaveAuthoring} disabled={submitting}>
+              保存智能体
+            </button>
+          ) : session && session.status !== 'confirmed' && session.status !== 'abandoned' ? (
+            <p className="cw-terminal-hint">请回答上方的引导问题,生成智能体草稿后可以保存。</p>
+          ) : null
+        ) : (
+          canConfirm ? <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>确认并生成</button> : null
+        )}
         {terminal ? (
           <p className="cw-terminal-hint">
-            {session.status === 'failed' ? '会话已结束。失败会话可重试本轮，或新建会话开始新需求。' : '会话已结束，点击右上角「新建会话」开始新的需求澄清。'}
+            {session.status === 'failed' ? '会话已结束。失败会话可重试本轮，或新建会话开始新需求。' : isAuthoringMode ? '智能体创建会话已结束，点击右上角「新建会话」开始新的需求。' : '会话已结束，点击右上角「新建会话」开始新的需求澄清。'}
           </p>
         ) : (
           <>
-            <textarea value={input} onChange={e => setInput(e.target.value)} placeholder="输入新需求或补充说明" disabled={submitting || canConfirm || terminal} />
+            <textarea value={input} onChange={e => setInput(e.target.value)} placeholder={isAuthoringMode ? '描述业务场景、规则或补充说明' : '输入新需求或补充说明'} disabled={submitting || canConfirm || terminal} />
             <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting || canConfirm || terminal}>
               {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
             </button>
@@ -163,6 +194,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers }) {
       </div>
     )
   }
+  if (item.type === 'agent_draft') return <AgentDraftCard draft={item.draft} />
   return null
 }
 
@@ -237,6 +269,23 @@ function RequirementSummary({ requirement }) {
           <b>{refs.map(ref => ref.name || ref.id || ref).join('、')}</b>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function AgentDraftCard({ draft }) {
+  if (!draft) return null
+  return (
+    <div className="cw-agent-draft">
+      <strong>智能体预览</strong>
+      <dl className="cw-agent-draft-grid">
+        <div><dt>名称</dt><dd>{draft.name || '-'}</dd></div>
+        <div><dt>标识</dt><dd>{draft.key || '-'}</dd></div>
+        <div><dt>描述</dt><dd>{draft.description || '-'}</dd></div>
+        <div><dt>状态</dt><dd>{draft.enabled === false ? '停用' : '启用'}</dd></div>
+      </dl>
+      <h4>最终提示词</h4>
+      <pre className="cw-agent-draft-prompt">{draft.prompt || '待生成...'}</pre>
     </div>
   )
 }

@@ -82,3 +82,58 @@
 .cw-custom input { min-width: 0; flex: 1; }
 .cw-custom-selected { color: rgba(215, 238, 248, 0.68); font-size: 11px; }
 .cw-terminal-hint { margin: 0; color: rgba(215, 238, 248, 0.58); font-size: 12px; }
+
+/* Agent draft preview card (agent_authoring mode) */
+.cw-agent-draft {
+  align-self: stretch;
+  background: rgba(104, 221, 255, 0.06);
+  border: 1px solid rgba(104, 221, 255, 0.22);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: #d7eef8;
+}
+.cw-agent-draft strong {
+  display: block;
+  color: #68ddff;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.cw-agent-draft-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.cw-agent-draft-grid dt {
+  color: #8fb0bf;
+  font-size: 12px;
+}
+.cw-agent-draft-grid dd {
+  margin: 0;
+  color: #edfaff;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-agent-draft h4 {
+  color: #8fb0bf;
+  font-size: 11px;
+  margin: 8px 0 4px;
+  font-weight: normal;
+}
+.cw-agent-draft-prompt {
+  background: rgba(3, 17, 29, 0.6);
+  border: 1px solid rgba(111, 218, 255, 0.12);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #d7eef8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+  margin: 0;
+}
