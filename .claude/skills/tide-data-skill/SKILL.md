@@ -22,12 +22,20 @@ description: Fetch and normalize real tide forecast data for named ports or port
 Use sources in this order unless the caller overrides `sourcePriority`:
 
 1. `noaa-coops` for Norfolk, San Diego, and Bremerton
-2. `japan-tide-source` for Yokosuka — **currently unsupported**: there is no
-   reachable public, no-API-key endpoint (the JCG tide site is not reachable
-   from the deployment environment, and no clean public JSON source exists).
-   For Yokosuka, return `ok=false` with `error.code=ALL_SOURCES_FAILED` rather
-   than falling through to `shipxy`/`page-scraper` (both violate the no-key
-   policy). Re-enable only when a public source is wired.
+2. `japan-tide-source` (JCG / 海上保安庁 潮汐推算) for Yokosuka — public, no key.
+   Endpoint:
+   `https://www1.kaiho.mlit.go.jp/TIDE/pred2/cgi-bin/TidePredCgi.cgi?area=<code>&year=<Y>&month=<M>&day=<D>`
+   Port area codes (from the JCG region map; region 5 = Kanto): Yokosuka =
+   `1407`, Kurihama(Yokosuka) = `1410`, Yokohama = `1403`. The response is an
+   HTML page; the **毎時潮高** (hourly tide height) table holds 24 values in
+   **cm** above mean sea level, laid out as two rows of 12 (hours 00–11 then
+   12–23, each block preceded by a `(cm)` marker). Extract the 24 values,
+   convert cm → m, map to `series`. A PNG graph
+   (`tide_img/<area>_<YYYYMMDD>.png`) is also served but is not needed for
+   numeric extraction. **Reachability:** the host is in `.jp`; confirm the
+   deployment network can reach `www1.kaiho.mlit.go.jp` (verified HTTP 200 from
+   the target environment — some sandboxes block `.jp`, which only affects
+   local testing, not production).
 3. `shipxy`
 4. `page-scraper`
 5. fail
