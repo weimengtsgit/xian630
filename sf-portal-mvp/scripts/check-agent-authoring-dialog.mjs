@@ -9,20 +9,17 @@ assert.doesNotMatch(source, /authoringOpen/, 'authoringOpen state must be remove
 assert.doesNotMatch(source, /ensureAuthoringSession/, 'ensureAuthoringSession must be removed')
 assert.doesNotMatch(source, /sendAuthoringContent/, 'sendAuthoringContent must be removed')
 assert.doesNotMatch(source, /finalizeAuthoring/, 'finalizeAuthoring must be removed')
-assert.doesNotMatch(source, /authoring-dialog/, 'authoring dialog JSX must be removed')
-assert.doesNotMatch(source, /authoring-message/, 'authoring message JSX must be removed')
-assert.doesNotMatch(source, /authoring-draft/, 'authoring draft preview JSX must be removed')
-assert.doesNotMatch(source, /authoring-input-row/, 'authoring input row JSX must be removed')
 
-// New: onStartAuthoring prop must be present
-assert.match(source, /onStartAuthoring/, 'onStartAuthoring prop must be accepted')
-
-// New: create button delegates to onStartAuthoring
-assert.match(source, /onStartAuthoring\?\.\(\)/, 'create button must call onStartAuthoring')
-
-// Old props must be removed
+// Old props that are no longer needed must be removed
+assert.doesNotMatch(source, /onStartAuthoring/, 'onStartAuthoring prop must be removed (replaced by dialog)')
 assert.doesNotMatch(source, /onCreateAuthoringSession/, 'onCreateAuthoringSession prop must be removed')
 assert.doesNotMatch(source, /onSendAuthoringMessage/, 'onSendAuthoringMessage prop must be removed')
+
+// New: dialog integration
+assert.match(source, /useAgentAuthoringDialog/, 'must use useAgentAuthoringDialog hook')
+assert.match(source, /AgentAuthoringDialog/, 'must render AgentAuthoringDialog component')
+assert.match(source, /onRefreshAgents/, 'must accept onRefreshAgents prop')
+assert.match(source, /openAuthoringDialog/, 'must call openAuthoringDialog on create button')
 
 // Agent detail and edit functionality must still be present
 assert.match(source, /onCreateBusinessAgent/, 'onCreateBusinessAgent prop must still exist')

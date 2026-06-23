@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { Bot, Pencil, Plus, Power, Save, X } from 'lucide-react'
 import { applySelectedBusinessAgents, splitAgentsByCategory } from '../hooks/agentList'
+import { useAgentAuthoringDialog } from '../hooks/useAgentAuthoringDialog'
+import { AgentAuthoringDialog } from './AgentAuthoringDialog'
 import './AgentsPanel.css'
 
 const emptyEditForm = {
@@ -42,7 +44,7 @@ export function AgentsPanel({
   onCreateBusinessAgent,
   onUpdateBusinessAgent,
   onSetBusinessAgentEnabled,
-  onStartAuthoring,
+  onRefreshAgents,
 }) {
   const [activeTab, setActiveTab] = useState('software')
   const [selectedId, setSelectedId] = useState('')
@@ -52,6 +54,8 @@ export function AgentsPanel({
   const [editError, setEditError] = useState('')
   const [editSaving, setEditSaving] = useState(false)
   const [panelError, setPanelError] = useState('')
+
+  const authoring = useAgentAuthoringDialog(onRefreshAgents)
 
   const splitFallback = useMemo(() => splitAgentsByCategory(agents), [agents])
   const softwareList = useMemo(
@@ -166,9 +170,11 @@ export function AgentsPanel({
     }
   }
 
+  const openAuthoringDialog = () => authoring.openDialog()
+
   const handleCreateBusinessAgent = () => {
     setPanelError('')
-    onStartAuthoring?.().catch(() => {})
+    openAuthoringDialog()
   }
 
   return (
@@ -424,6 +430,18 @@ export function AgentsPanel({
           </section>
         </div>
       )}
+
+      <AgentAuthoringDialog
+        open={authoring.open}
+        messages={authoring.messages}
+        draft={authoring.draft}
+        sending={authoring.sending}
+        saving={authoring.saving}
+        error={authoring.error}
+        onClose={authoring.closeDialog}
+        onSend={authoring.sendMessage}
+        onSave={authoring.saveAgent}
+      />
     </div>
   )
 }

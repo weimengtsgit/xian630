@@ -111,7 +111,7 @@ function App() {
             onCreateBusinessAgent={agents.createBusinessAgent}
             onUpdateBusinessAgent={agents.updateBusinessAgent}
             onSetBusinessAgentEnabled={agents.setBusinessAgentEnabled}
-            onStartAuthoring={conversation.startAuthoring}
+            onRefreshAgents={agents.refresh}
           />
         </div>
       </div>
