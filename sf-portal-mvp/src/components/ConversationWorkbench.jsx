@@ -122,6 +122,7 @@ export function ConversationWorkbench({
 function TimelineItem({ item, draftAnswers, setDraftAnswers }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
   if (item.type === 'analysis_stream') return <div className="cw-item cw-agent"><span className="cw-item-label">模型分析过程</span>{item.content}</div>
+  if (item.type === 'blueprint_recommendation') return <BlueprintRecommendation blueprints={item.blueprints} />
   if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
   if (item.type === 'system_status') return <div className="cw-system">{item.status}</div>
   if (item.type === 'question_group') {
@@ -134,6 +135,25 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers }) {
     )
   }
   return null
+}
+
+function BlueprintRecommendation({ blueprints }) {
+  const list = Array.isArray(blueprints) ? blueprints : []
+  if (list.length === 0) return null
+  return (
+    <div className="cw-blueprints">
+      <strong>参考蓝本</strong>
+      <div className="cw-blueprint-list">
+        {list.map((bp, i) => (
+          <span key={bp.id || bp.name || `bp_${i}`} className="cw-blueprint-chip">
+            <b>{bp.name || bp.id}</b>
+            {bp.referenceKind ? <em>{bp.referenceKind}</em> : null}
+            {bp.reason ? <small>{bp.reason}</small> : null}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function QuestionCard({ q, value, setValue }) {
@@ -177,7 +197,19 @@ function RequirementSummary({ requirement }) {
     ['主视图', requirement.primaryView],
     ['数据策略', requirement.dataPolicy],
   ].filter(([, value]) => value)
-  return <div className="cw-summary"><strong>确认需求摘要</strong>{rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}</div>
+  const refs = Array.isArray(requirement.blueprintRefs) ? requirement.blueprintRefs : []
+  return (
+    <div className="cw-summary">
+      <strong>确认需求摘要</strong>
+      {rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+      {refs.length > 0 ? (
+        <div>
+          <span>蓝本引用</span>
+          <b>{refs.map(ref => ref.name || ref.id || ref).join('、')}</b>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function ConversationHistoryDrawer({ sessions, selectedId, onClose, onSelect }) {
@@ -187,8 +219,13 @@ function ConversationHistoryDrawer({ sessions, selectedId, onClose, onSelect }) 
       <header><strong>历史会话</strong><button type="button" onClick={onClose}>关闭</button></header>
       {list.map(sess => (
         <button key={sess.id} type="button" className={sess.id === selectedId ? 'active' : ''} onClick={() => onSelect(sess.id)}>
-          <span>{titleForSession(sess)}</span>
-          <em>{STATUS_TEXT[sess.status] || sess.status}</em>
+          <span className="cw-history-title">{titleForSession(sess)}</span>
+          <span className="cw-history-meta">
+            <em>{STATUS_TEXT[sess.status] || sess.status}</em>
+            <time dateTime={sess.updated_at}>{formatSessionTime(sess.updated_at)}</time>
+          </span>
+          <small>{summaryForSession(sess)}</small>
+          {resultForSession(sess) ? <b>{resultForSession(sess)}</b> : null}
         </button>
       ))}
     </aside>
@@ -197,4 +234,25 @@ function ConversationHistoryDrawer({ sessions, selectedId, onClose, onSelect }) 
 
 function hasAnswer(value) {
   return Array.isArray(value) ? value.length > 0 : value != null && value !== ''
+}
+
+function formatSessionTime(value) {
+  if (!value) return '未更新'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function summaryForSession(sess) {
+  const requirement = (sess && sess.requirement) || {}
+  const parts = [requirement.appType, requirement.coreScenario].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : sess.initial_prompt || '暂无摘要'
+}
+
+function resultForSession(sess) {
+  if (!sess || (!sess.created_job_id && !sess.created_job)) return ''
+  if (sess.application_state === 'deleted') return '应用已删除'
+  if (sess.application) return sess.application.name || sess.application.slug || '应用已创建'
+  if (sess.created_job && sess.created_job.status) return `生成任务：${sess.created_job.status}`
+  return '生成任务已创建'
 }

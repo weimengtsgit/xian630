@@ -36,7 +36,7 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 	seen := make(map[string]bool)
 	apps := make([]model.Application, 0)
 
-	visibility := loadPresetVisibility(s.Root)
+	visibility := LoadPresetVisibility(s.Root)
 
 	for _, pattern := range manifestGlobs {
 		matches, err := filepath.Glob(filepath.Join(s.Root, pattern))

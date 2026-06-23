@@ -4,6 +4,7 @@ import {
   buildTimelineFromMessages,
   initialConversationState,
   applyConversationEvent,
+  questionsFromMessages,
   titleForSession,
 } from '../src/hooks/conversationTimeline.js'
 
@@ -33,6 +34,26 @@ const timeline = buildTimelineFromMessages(messages, session)
 assert.deepEqual(timeline.map(item => item.type), ['user_message', 'analysis_stream', 'question_group', 'user_message', 'requirement_summary'])
 assert.equal(timeline[2].questions[0].id, 'targetUsers')
 
+const multiRoundMessages = [
+  { id: 'u1', role: 'user', kind: 'prompt', content: '生成应用' },
+  {
+    id: 'q1',
+    role: 'agent',
+    kind: 'question',
+    content: '',
+    metadata_json: JSON.stringify({ id: 'targetUsers', label: '用户' }),
+  },
+  { id: 'ans1', role: 'user', kind: 'answer', content: 'ops', metadata_json: JSON.stringify({ questionId: 'targetUsers', value: 'ops' }) },
+  {
+    id: 'q2',
+    role: 'agent',
+    kind: 'question',
+    content: '',
+    metadata_json: JSON.stringify({ id: 'coreScenario', label: '核心场景' }),
+  },
+]
+assert.deepEqual(questionsFromMessages(multiRoundMessages, 'waiting_user').map(q => q.id), ['coreScenario'])
+
 let state = initialConversationState()
 state = { ...state, selectedSessionId: 'clar_1' }
 state = applyConversationEvent(state, 'clarification.message.delta', {
@@ -61,6 +82,14 @@ state = applyConversationEvent(state, 'clarification.question.created', {
 assert.equal(state.questions.length, 1)
 assert.equal(state.timeline.at(-1).type, 'question_group')
 
+state = applyConversationEvent(state, 'clarification.blueprint.recommended', {
+  type: 'clarification.blueprint.recommended',
+  session_id: 'clar_1',
+  data: [{ id: 'carrier-formation-replay', name: '航母编队复盘', reason: '匹配复盘场景' }],
+})
+assert.equal(state.timeline.at(-1).type, 'blueprint_recommendation')
+assert.equal(state.timeline.at(-1).blueprints[0].id, 'carrier-formation-replay')
+
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const appCss = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
 const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
@@ -72,6 +101,11 @@ assert.match(appCss, /\.wb-center\s*>\s*\.conversation-workbench/, 'center colum
 assert.match(workbenchJsx, /历史会话/, 'ConversationWorkbench must expose historical sessions')
 assert.match(workbenchJsx, /新建会话/, 'ConversationWorkbench must expose new session action')
 assert.match(workbenchJsx, /模型分析过程/, 'ConversationWorkbench must label user-facing model analysis process')
+assert.match(workbenchJsx, /blueprint_recommendation/, 'ConversationWorkbench must render blueprint recommendation timeline items')
+assert.match(workbenchJsx, /参考蓝本/, 'ConversationWorkbench must label blueprint recommendations')
+assert.match(workbenchJsx, /updated_at/, 'history drawer must show updated time')
+assert.match(workbenchJsx, /coreScenario/, 'history drawer must show requirement summary')
+assert.match(workbenchJsx, /应用已删除/, 'history drawer must show deleted application state')
 
 const appsPanelJsx = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
 const useApplicationsJs = readFileSync(new URL('../src/hooks/useApplications.js', import.meta.url), 'utf8')

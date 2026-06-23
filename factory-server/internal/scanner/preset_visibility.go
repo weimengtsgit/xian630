@@ -12,7 +12,7 @@ type presetVisibilityConfig struct {
 	} `json:"presetApps"`
 }
 
-func loadPresetVisibility(root string) map[string]bool {
+func LoadPresetVisibility(root string) map[string]bool {
 	path := filepath.Join(root, ".factory", "preset-apps.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {

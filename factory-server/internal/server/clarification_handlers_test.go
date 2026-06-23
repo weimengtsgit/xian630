@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
@@ -1328,5 +1329,66 @@ func TestListClarificationsReturnsParsedRequirement(t *testing.T) {
 	}
 	if views[0].Requirement.AppName != "航母编队复盘应用" {
 		t.Fatalf("appName = %q", views[0].Requirement.AppName)
+	}
+}
+
+func TestListClarificationsIncludesLinkedJobAndDeletedApplicationState(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID:              "clar_linked",
+		Status:          model.ClarificationStatusConfirmed,
+		InitialPrompt:   "生成已删除应用",
+		Round:           2,
+		MaxRounds:       3,
+		RequirementJSON: `{"appType":"command_dashboard","appName":"已删除应用","coreScenario":"查看历史状态"}`,
+		CreatedJobID:    "job_linked",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ConfirmedAt:     &now,
+	}
+	if err := st.CreateClarificationSession(context.Background(), sess); err != nil {
+		t.Fatalf("seed clarification: %v", err)
+	}
+	job := model.Job{
+		ID:                     "job_linked",
+		UserPrompt:             "生成已删除应用",
+		AppSlug:                "deleted-app",
+		AppName:                "已删除应用",
+		Status:                 model.JobStatusCompleted,
+		CurrentStepKind:        model.StepDeployment,
+		CreatedAppID:           "app_deleted",
+		CreatedAt:              now,
+		UpdatedAt:              now,
+		ClarificationSessionID: sess.ID,
+	}
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clarifications?limit=50", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var views []clarificationView
+	if err := json.NewDecoder(rec.Body).Decode(&views); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var linked *clarificationView
+	for i := range views {
+		if views[i].ID == sess.ID {
+			linked = &views[i]
+		}
+	}
+	if linked == nil {
+		t.Fatalf("linked session missing from views: %#v", views)
+	}
+	if linked.CreatedJob == nil || linked.CreatedJob.ID != job.ID {
+		t.Fatalf("created job = %#v, want %s", linked.CreatedJob, job.ID)
+	}
+	if linked.ApplicationState != "deleted" {
+		t.Fatalf("application_state = %q, want deleted", linked.ApplicationState)
 	}
 }

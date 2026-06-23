@@ -383,12 +383,7 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.DeleteDeploymentsByApp(ctx, appID); err != nil {
-		restoreTombstone(tombstone, appDir)
-		writeError(w, http.StatusInternalServerError, "delete deployments")
-		return
-	}
-	if err := s.store.DeleteApplication(ctx, appID); err != nil {
+	if err := s.store.DeleteApplicationWithDeployments(ctx, appID); err != nil {
 		restoreTombstone(tombstone, appDir)
 		writeError(w, http.StatusInternalServerError, "delete app")
 		return

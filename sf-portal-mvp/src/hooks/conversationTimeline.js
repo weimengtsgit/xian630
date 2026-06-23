@@ -52,6 +52,10 @@ export function buildTimelineFromMessages(messages = [], session = null) {
     }
   }
   const requirement = session && session.requirement
+  const blueprints = blueprintsFromRequirement(requirement)
+  if (blueprints.length > 0) {
+    items.push({ id: `${session.id || 'draft'}_blueprints`, type: 'blueprint_recommendation', blueprints })
+  }
   if (requirement && (requirement.appName || requirement.appType || requirement.coreScenario)) {
     items.push({ id: `${session.id || 'draft'}_requirement`, type: 'requirement_summary', requirement })
   }
@@ -81,7 +85,7 @@ export function applyConversationEvent(state, type, ev) {
     case 'clarification.ready_to_confirm':
       return applyRequirementEvent(state, type, ev)
     case 'clarification.blueprint.recommended':
-      return { ...state, blueprints: Array.isArray(ev.data) ? ev.data : ev.data ? [ev.data] : [] }
+      return applyBlueprintEvent(state, ev)
     case 'clarification.confirmed':
     case 'clarification.failed':
     case 'clarification.abandoned':
@@ -89,6 +93,26 @@ export function applyConversationEvent(state, type, ev) {
     default:
       return state
   }
+}
+
+export function questionsFromMessages(messages, status) {
+  if (status === 'ready_to_confirm' || status === 'confirmed' || status === 'abandoned' || status === 'failed') return []
+  const lastUserIndex = findLastUserMessageIndex(messages)
+  const out = []
+  const seen = new Set()
+  for (const msg of (messages || []).slice(lastUserIndex + 1)) {
+    if (msg.role !== 'agent' || msg.kind !== 'question' || !msg.metadata_json) continue
+    try {
+      const q = JSON.parse(msg.metadata_json)
+      if (q && q.id && !seen.has(q.id)) {
+        out.push(q)
+        seen.add(q.id)
+      }
+    } catch {
+      // Ignore malformed historical question metadata.
+    }
+  }
+  return out
 }
 
 function upsertAnalysisEvent(state, ev) {
@@ -130,6 +154,18 @@ function applyRequirementEvent(state, type, ev) {
   }
 }
 
+function applyBlueprintEvent(state, ev) {
+  const blueprints = Array.isArray(ev.data) ? ev.data : ev.data ? [ev.data] : []
+  const timeline = state.timeline.filter(item => item.type !== 'blueprint_recommendation' || item.live !== true)
+  return {
+    ...state,
+    blueprints,
+    timeline: blueprints.length > 0
+      ? [...timeline, { id: `${ev.session_id}_blueprints_live`, type: 'blueprint_recommendation', live: true, blueprints }]
+      : timeline,
+  }
+}
+
 function applyStatusEvent(state, type, ev) {
   const status = type.replace('clarification.', '')
   const session = state.session ? { ...state.session, status } : state.session
@@ -138,6 +174,21 @@ function applyStatusEvent(state, type, ev) {
     session,
     timeline: [...state.timeline, { id: `${ev.session_id}_${type}`, type: 'system_status', status, data: ev.data || null }],
   }
+}
+
+function blueprintsFromRequirement(requirement) {
+  const refs = requirement && Array.isArray(requirement.blueprintRefs) ? requirement.blueprintRefs : []
+  return refs.map((ref, i) => {
+    if (ref && typeof ref === 'object') return ref
+    return { id: String(ref || `blueprint_${i}`), name: String(ref || `blueprint_${i}`) }
+  }).filter(bp => bp.id || bp.name)
+}
+
+function findLastUserMessageIndex(messages = []) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i] && messages[i].role === 'user') return i
+  }
+  return -1
 }
 
 function typeClearsQuestions(type) {

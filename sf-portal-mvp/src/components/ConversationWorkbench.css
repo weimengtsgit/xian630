@@ -41,7 +41,7 @@
 .cw-agent { align-self: flex-start; background: rgba(3, 17, 29, 0.74); border: 1px solid rgba(111, 218, 255, 0.16); color: #d7eef8; }
 .cw-item-label { display: block; color: #68ddff; font-size: 11px; margin-bottom: 4px; }
 .cw-system { align-self: center; color: rgba(215, 238, 248, 0.55); font-size: 11px; }
-.cw-question-group, .cw-summary { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; padding: 10px; background: rgba(11, 29, 44, 0.55); }
+.cw-question-group, .cw-summary, .cw-blueprints { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; padding: 10px; background: rgba(11, 29, 44, 0.55); }
 .cw-question { display: flex; flex-direction: column; gap: 8px; }
 .cw-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .cw-options button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 6px 9px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.28); background: rgba(3, 17, 29, 0.7); color: #d7eef8; }
@@ -51,15 +51,26 @@
 .cw-summary div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
 .cw-summary span { color: rgba(215, 238, 248, 0.55); }
 .cw-summary b { color: #edfaff; font-weight: 500; }
+.cw-blueprints { display: flex; flex-direction: column; gap: 8px; }
+.cw-blueprints strong { color: #edfaff; font-size: 12px; }
+.cw-blueprint-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-blueprint-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; padding: 5px 7px; border-radius: 6px; background: rgba(3, 17, 29, 0.72); border: 1px solid rgba(104, 221, 255, 0.28); color: #d7eef8; font-size: 11px; }
+.cw-blueprint-chip b, .cw-blueprint-chip small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-blueprint-chip em { color: rgba(104, 221, 255, 0.82); font-style: normal; }
+.cw-blueprint-chip small { color: rgba(215, 238, 248, 0.62); }
 .cw-answer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid rgba(111, 218, 255, 0.14); font-size: 12px; }
 .cw-error { padding: 6px 12px; color: #ff9a9a; background: rgba(255, 102, 94, 0.08); font-size: 12px; }
 .cw-composer textarea { flex: 1; min-height: 42px; max-height: 120px; resize: vertical; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.24); background: rgba(3, 17, 29, 0.8); color: #edfaff; padding: 8px; font-family: inherit; }
 .cw-send { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; }
 .cw-history { position: absolute; top: 45px; right: 10px; bottom: 62px; width: 320px; z-index: 8; background: rgba(9, 24, 38, 0.98); border: 1px solid rgba(111, 218, 255, 0.32); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35); }
 .cw-history header { display: flex; justify-content: space-between; align-items: center; }
-.cw-history > button { text-align: left; padding: 8px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.18); background: rgba(11, 29, 44, 0.72); color: #d7eef8; display: flex; flex-direction: column; gap: 3px; }
+.cw-history > button { text-align: left; padding: 8px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.18); background: rgba(11, 29, 44, 0.72); color: #d7eef8; display: flex; flex-direction: column; gap: 4px; }
 .cw-history > button.active { border-color: rgba(104, 221, 255, 0.66); }
-.cw-history em { font-style: normal; font-size: 11px; color: rgba(215, 238, 248, 0.58); }
+.cw-history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #edfaff; }
+.cw-history-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cw-history em, .cw-history time, .cw-history small, .cw-history b { font-style: normal; font-size: 11px; color: rgba(215, 238, 248, 0.58); }
+.cw-history small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-history b { color: rgba(104, 221, 255, 0.82); font-weight: 500; }
 .cw-custom { display: flex; gap: 6px; }
 .cw-custom input { min-width: 0; flex: 1; }
 .cw-custom-selected { color: rgba(215, 238, 248, 0.68); font-size: 11px; }

@@ -63,7 +63,10 @@ type confirmClarificationBody struct {
 // round that actually ran. No response-side round override is needed.
 type clarificationView struct {
 	model.ClarificationSession
-	Requirement clarification.Requirement `json:"requirement"`
+	Requirement      clarification.Requirement `json:"requirement"`
+	CreatedJob       *model.Job                `json:"created_job,omitempty"`
+	Application      *model.Application        `json:"application,omitempty"`
+	ApplicationState string                    `json:"application_state,omitempty"`
 }
 
 func (s *Server) viewFromSession(sess *model.ClarificationSession) clarificationView {
@@ -77,6 +80,34 @@ func (s *Server) viewFromSession(sess *model.ClarificationSession) clarification
 		v.Requirement.GenerationProfile = nil
 	}
 	return v
+}
+
+func (s *Server) enrichClarificationHistoryView(ctx context.Context, v clarificationView) (clarificationView, error) {
+	if v.CreatedJobID == "" {
+		return v, nil
+	}
+	job, err := s.store.GetJob(ctx, v.CreatedJobID)
+	if err != nil {
+		return v, err
+	}
+	if job == nil {
+		return v, nil
+	}
+	v.CreatedJob = job
+	if job.CreatedAppID == "" {
+		return v, nil
+	}
+	app, err := s.store.GetApplication(ctx, job.CreatedAppID)
+	if err != nil {
+		return v, err
+	}
+	if app == nil {
+		v.ApplicationState = "deleted"
+		return v, nil
+	}
+	v.Application = app
+	v.ApplicationState = string(app.Status)
+	return v, nil
 }
 
 // ---- handlers ---------------------------------------------------------------
@@ -178,7 +209,12 @@ func (s *Server) listClarifications(w http.ResponseWriter, r *http.Request) {
 	out := make([]clarificationView, 0, len(sessions))
 	for i := range sessions {
 		sess := sessions[i]
-		out = append(out, s.viewFromSession(&sess))
+		view, err := s.enrichClarificationHistoryView(r.Context(), s.viewFromSession(&sess))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "enrich sessions")
+			return
+		}
+		out = append(out, view)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

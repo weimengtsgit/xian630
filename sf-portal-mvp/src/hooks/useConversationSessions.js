@@ -5,6 +5,7 @@ import {
   applyConversationEvent,
   buildTimelineFromMessages,
   initialConversationState,
+  questionsFromMessages,
 } from './conversationTimeline'
 
 const CLARIFICATION_TYPES = new Set([
@@ -204,23 +205,4 @@ export function useConversationSessions() {
     retry,
     abandon,
   }
-}
-
-function questionsFromMessages(messages, status) {
-  if (status === 'ready_to_confirm' || status === 'confirmed' || status === 'abandoned' || status === 'failed') return []
-  const out = []
-  const seen = new Set()
-  for (const msg of messages || []) {
-    if (msg.role !== 'agent' || msg.kind !== 'question' || !msg.metadata_json) continue
-    try {
-      const q = JSON.parse(msg.metadata_json)
-      if (q && q.id && !seen.has(q.id)) {
-        out.push(q)
-        seen.add(q.id)
-      }
-    } catch {
-      // Ignore malformed historical question metadata.
-    }
-  }
-  return out
 }
