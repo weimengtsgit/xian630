@@ -31,6 +31,7 @@ func (s *Server) publishClarificationEvent(ev clarification.StreamEvent) {
 
 type createClarificationBody struct {
 	Prompt        string `json:"prompt"`
+	Mode          string `json:"mode"`
 	AbandonActive bool   `json:"abandonActive"`
 }
 
@@ -150,12 +151,18 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	sessID := "clar_" + idpkg.New()
 	reqJSON := "{}"
+	mode := strings.TrimSpace(body.Mode)
+	maxRounds := 3
+	if mode == "agent_authoring" {
+		maxRounds = 4 // Allow more rounds for guided agent creation
+	}
 	sess := model.ClarificationSession{
 		ID:              sessID,
 		Status:          model.ClarificationStatusActive,
+		Mode:            mode,
 		InitialPrompt:   body.Prompt,
 		Round:           0,
-		MaxRounds:       3,
+		MaxRounds:       maxRounds,
 		RequirementJSON: reqJSON,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -643,6 +650,28 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In agent_authoring mode, confirm just marks the session as complete.
+	// The actual agent is created by the frontend calling POST /api/business-agents.
+	// No job is created, no requirement validation is needed.
+	if isAgentAuthoringMode(sess) {
+		if err := s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusConfirmed, "", ""); err != nil {
+			writeError(w, http.StatusInternalServerError, "set confirmed")
+			return
+		}
+		updated, err := s.store.GetClarificationSession(r.Context(), id)
+		if err != nil || updated == nil {
+			writeError(w, http.StatusInternalServerError, "get session")
+			return
+		}
+		s.publishClarificationEvent(clarification.StreamEvent{
+			Type:      "clarification.confirmed",
+			SessionID: id,
+			Data:      updated,
+		})
+		writeJSON(w, http.StatusOK, s.viewFromSession(updated))
+		return
+	}
+
 	var body confirmClarificationBody
 	// An empty body is allowed: we confirm the session's already-persisted
 	// requirement. A supplied requirement (if any) is validated and used.
@@ -887,6 +916,19 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 			CreatedAt:    now,
 		}); err != nil {
 			return sess, roundN, false
+		}
+	}
+
+	// In agent_authoring mode, generate and persist an agent draft from the
+	// conversation so the frontend can show an inline preview card.
+	if isAgentAuthoringMode(sess) && len(msgs) > 0 {
+		// Re-read messages to include the just-persisted work log and questions
+		allMsgs, err := s.store.ListClarificationMessages(ctx, sessID)
+		if err == nil && len(allMsgs) > 0 {
+			draft := generateAgentDraft(allMsgs)
+			if draft.Name != "" && draft.Key != "" {
+				_ = s.persistAgentDraft(ctx, sessID, draft)
+			}
 		}
 	}
 
