@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS agents (
     claude_agent_name TEXT    NOT NULL DEFAULT '',
     skills_json       TEXT    NOT NULL DEFAULT '',
     enabled           INTEGER NOT NULL DEFAULT 1,
-    sort_order        INTEGER NOT NULL DEFAULT 0
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    category          TEXT    NOT NULL DEFAULT 'business',
+    prompt            TEXT    NOT NULL DEFAULT '',
+    editable          INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -48,7 +51,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- until Job gains these fields; backfilled on existing DBs via
     -- Store.ensureColumn in Open.
     clarification_session_id  TEXT    NOT NULL DEFAULT '',
-    confirmed_requirement_json TEXT NOT NULL DEFAULT ''
+    confirmed_requirement_json TEXT NOT NULL DEFAULT '',
+    business_agent_snapshots_json TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS job_steps (

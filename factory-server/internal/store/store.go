@@ -64,6 +64,25 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.confirmed_requirement_json: %w", err)
 	}
+	agentColumns := []struct {
+		column string
+		ddl    string
+	}{
+		{"category", `ALTER TABLE agents ADD COLUMN category TEXT NOT NULL DEFAULT 'business'`},
+		{"prompt", `ALTER TABLE agents ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`},
+		{"editable", `ALTER TABLE agents ADD COLUMN editable INTEGER NOT NULL DEFAULT 1`},
+	}
+	for _, col := range agentColumns {
+		if err := s.ensureColumn(ctx, "agents", col.column, col.ddl); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate agents.%s: %w", col.column, err)
+		}
+	}
+	if err := s.ensureColumn(ctx, "jobs", "business_agent_snapshots_json",
+		`ALTER TABLE jobs ADD COLUMN business_agent_snapshots_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.business_agent_snapshots_json: %w", err)
+	}
 	return s, nil
 }
 

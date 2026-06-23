@@ -142,16 +142,26 @@ type Application struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+type AgentCategory string
+
+const (
+	AgentCategorySoftware AgentCategory = "software"
+	AgentCategoryBusiness AgentCategory = "business"
+)
+
 type Agent struct {
-	ID              string `json:"id"`
-	Key             string `json:"key"`
-	Name            string `json:"name"`
-	Role            string `json:"role"`
-	Description     string `json:"description"`
-	ClaudeAgentName string `json:"claude_agent_name"`
-	SkillsJSON      string `json:"skills_json"`
-	Enabled         bool   `json:"enabled"`
-	SortOrder       int    `json:"sort_order"`
+	ID              string        `json:"id"`
+	Key             string        `json:"key"`
+	Name            string        `json:"name"`
+	Role            string        `json:"role"`
+	Description     string        `json:"description"`
+	ClaudeAgentName string        `json:"claude_agent_name"`
+	SkillsJSON      string        `json:"skills_json"`
+	Enabled         bool          `json:"enabled"`
+	SortOrder       int           `json:"sort_order"`
+	Category        AgentCategory `json:"category"`
+	Prompt          string        `json:"prompt"`
+	Editable        bool          `json:"editable"`
 }
 
 type Job struct {

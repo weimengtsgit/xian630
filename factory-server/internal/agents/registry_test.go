@@ -1,27 +1,48 @@
 package agents
 
-import "testing"
+import (
+	"strings"
+	"testing"
 
-func TestDefaultRegistryContainsFixedAgents(t *testing.T) {
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+)
+
+func TestDefaultRegistryContainsSixSoftwareAgents(t *testing.T) {
 	agents := DefaultRegistry()
 	keys := map[string]bool{}
 	for _, agent := range agents {
 		keys[agent.Key] = true
+		if agent.Category != model.AgentCategorySoftware {
+			t.Fatalf("%s category = %q, want software", agent.Key, agent.Category)
+		}
+		if agent.Editable {
+			t.Fatalf("%s editable = true, want false", agent.Key)
+		}
+		if strings.TrimSpace(agent.Prompt) == "" {
+			t.Fatalf("%s prompt is empty", agent.Key)
+		}
 	}
-	for _, key := range []string{"requirement-analyst", "solution-designer", "code-generator", "tester", "deployer"} {
+	for _, key := range []string{
+		"requirement-analyst",
+		"solution-designer",
+		"code-generator",
+		"tester",
+		"image-builder",
+		"deployer",
+	} {
 		if !keys[key] {
 			t.Fatalf("missing agent key %s", key)
 		}
 	}
+	if len(agents) != 6 {
+		t.Fatalf("len = %d, want 6", len(agents))
+	}
 }
 
-// TestDefaultRegistryStableIDsAndOrder asserts the stable id, sort_order, and
-// claude_agent_name values that the design pins for the five factory agents.
-func TestDefaultRegistryStableIDsAndOrder(t *testing.T) {
+// TestDefaultRegistryOrderAndClaudeNames asserts the stable id, sort_order, and
+// claude_agent_name values that the design pins for the six software agents.
+func TestDefaultRegistryOrderAndClaudeNames(t *testing.T) {
 	agents := DefaultRegistry()
-	if len(agents) != 5 {
-		t.Fatalf("len = %d, want 5", len(agents))
-	}
 	want := []struct {
 		id, key, claude string
 		sortOrder       int
@@ -30,7 +51,8 @@ func TestDefaultRegistryStableIDsAndOrder(t *testing.T) {
 		{"agent_solution_designer", "solution-designer", "solution-designer", 2},
 		{"agent_code_generator", "code-generator", "code-generator", 3},
 		{"agent_tester", "tester", "tester", 4},
-		{"agent_deployer", "deployer", "deployer", 5},
+		{"agent_image_builder", "image-builder", "image-builder", 5},
+		{"agent_deployer", "deployer", "deployer", 6},
 	}
 	for i, w := range want {
 		got := agents[i]

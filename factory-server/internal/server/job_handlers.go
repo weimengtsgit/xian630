@@ -23,7 +23,7 @@ var stepPlan = []struct {
 	{model.StepSolutionDesign, "solution-designer"},
 	{model.StepCodeGeneration, "code-generator"},
 	{model.StepTestVerification, "tester"},
-	{model.StepImageBuild, "deployer"},
+	{model.StepImageBuild, "image-builder"},
 	{model.StepDeployment, "deployer"},
 }
 

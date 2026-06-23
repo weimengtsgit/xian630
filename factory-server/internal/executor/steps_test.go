@@ -14,6 +14,9 @@ func TestFixedSteps(t *testing.T) {
 	if steps[0].Kind != model.StepRequirementAnalysis || steps[0].AgentKey != "requirement-analyst" {
 		t.Fatalf("first step = %#v", steps[0])
 	}
+	if steps[4].Kind != model.StepImageBuild || steps[4].AgentKey != "image-builder" {
+		t.Fatalf("image build step = %#v", steps[4])
+	}
 	if steps[5].Kind != model.StepDeployment || steps[5].AgentKey != "deployer" {
 		t.Fatalf("last step = %#v", steps[5])
 	}

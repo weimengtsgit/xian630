@@ -24,6 +24,9 @@ func TestUpsertAgentPreservesEnabled(t *testing.T) {
 		SkillsJSON:      "[]",
 		Enabled:         true,
 		SortOrder:       1,
+		Category:        model.AgentCategorySoftware,
+		Prompt:          "test prompt",
+		Editable:        false,
 	}
 
 	// First insert seeds enabled from the argument (true).
@@ -38,6 +41,8 @@ func TestUpsertAgentPreservesEnabled(t *testing.T) {
 
 	// Simulate the next server boot: the default registry (Enabled=true) is
 	// upserted again. The disable must survive.
+	agent.Name = "Agent Tester Updated"
+	agent.Prompt = "updated prompt"
 	if err := st.UpsertAgent(ctx, agent); err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -51,6 +56,9 @@ func TestUpsertAgentPreservesEnabled(t *testing.T) {
 	}
 	if got.Enabled {
 		t.Fatalf("enabled = true after re-upsert; want false (disable should persist)")
+	}
+	if got.Name != "Agent Tester Updated" || got.Prompt != "updated prompt" || got.Category != model.AgentCategorySoftware || got.Editable {
+		t.Fatalf("updated metadata mismatch: %+v", got)
 	}
 }
 
@@ -70,6 +78,9 @@ func TestUpsertAgentSeedsEnabledOnInsert(t *testing.T) {
 		SkillsJSON:      "[]",
 		Enabled:         true,
 		SortOrder:       2,
+		Category:        model.AgentCategoryBusiness,
+		Prompt:          "business prompt",
+		Editable:        true,
 	}
 
 	if err := st.UpsertAgent(ctx, agent); err != nil {
@@ -85,5 +96,42 @@ func TestUpsertAgentSeedsEnabledOnInsert(t *testing.T) {
 	}
 	if !got.Enabled {
 		t.Fatalf("enabled = false on insert; want true (seed from argument)")
+	}
+	if got.Category != model.AgentCategoryBusiness || got.Prompt != "business prompt" || !got.Editable {
+		t.Fatalf("metadata = %+v, want business prompt editable", got)
+	}
+}
+
+func TestCreateAgentPersistsMetadata(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	agent := model.Agent{
+		ID:              "agent_maritime",
+		Key:             "maritime-alert-expert",
+		Name:            "海事预警专家",
+		Role:            "business",
+		Description:     "识别海事异常",
+		ClaudeAgentName: "maritime-alert-expert",
+		SkillsJSON:      "[]",
+		Enabled:         true,
+		SortOrder:       100,
+		Category:        model.AgentCategoryBusiness,
+		Prompt:          "关注 AIS、海况、异常航迹",
+		Editable:        true,
+	}
+	if err := st.CreateAgent(ctx, agent); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := st.GetAgent(ctx, "agent_maritime")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("agent missing after create")
+	}
+	if got.Category != model.AgentCategoryBusiness || got.Prompt != agent.Prompt || !got.Editable {
+		t.Fatalf("metadata = %+v, want category/prompt/editable", got)
 	}
 }
