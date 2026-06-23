@@ -122,6 +122,34 @@ const waitingNoQuestionsCompleteOutput = `{
   }
 }`
 
+// agentAuthoringRound1Output simulates round 1 of an agent authoring session:
+// the clarifier asks about the business scenario.
+const agentAuthoringRound1Output = `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"正在分析业务场景需求"}],
+  "questions": [{"id":"agent_scenario","label":"业务场景","question":"这个业务智能体关注什么业务场景？"}],
+  "requirement": {}
+}`
+
+// agentAuthoringRound2Output simulates round 2: the clarifier asks for the name.
+const agentAuthoringRound2Output = `{
+  "status": "waiting_user",
+  "round": 2,
+  "workLog": [{"type":"analysis","content":"业务场景已明确"}],
+  "questions": [{"id":"agent_name","label":"智能体名称","question":"你希望这个智能体叫什么名字？"}],
+  "requirement": {}
+}`
+
+// agentAuthoringReadyOutput simulates the final round: draft is ready.
+const agentAuthoringReadyOutput = `{
+  "status": "ready_to_confirm",
+  "round": 3,
+  "workLog": [{"type":"analysis","content":"智能体草稿已生成"}],
+  "questions": [],
+  "requirement": {}
+}`
+
 // newClarTestServer builds an in-memory test Server and overrides its unexported
 // clarifier with one backed by the given fake runner. It mirrors the existing
 // newJobsTestServer harness (in-memory store, routes registered) and reuses the
@@ -1472,5 +1500,179 @@ func TestConfirmSnapshotsSelectedBusinessAgents(t *testing.T) {
 	}
 	if !strings.Contains(jobs[0].BusinessAgentSnapshotsJSON, "A prompt") || !strings.Contains(jobs[0].BusinessAgentSnapshotsJSON, "agent_a") {
 		t.Fatalf("snapshot json = %s", jobs[0].BusinessAgentSnapshotsJSON)
+	}
+}
+
+// TestCreateAgentAuthoringClarification verifies that POST /api/clarifications
+// with mode: "agent_authoring" creates a session with the correct mode, does
+// NOT create a job, and runs round 1 successfully.
+func TestCreateAgentAuthoringClarification(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: agentAuthoringRound1Output})
+
+	rec := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{
+		"prompt": "请帮我创建一个业务智能体",
+		"mode":   "agent_authoring",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(rec.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if sess.Mode != "agent_authoring" {
+		t.Fatalf("session mode = %q, want agent_authoring", sess.Mode)
+	}
+	if sess.Status != model.ClarificationStatusWaitingUser {
+		t.Fatalf("session status = %q, want waiting_user", sess.Status)
+	}
+
+	// No job should be created
+	jobs, err := st.ListJobs(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("jobs = %d, want 0 before save", len(jobs))
+	}
+}
+
+// TestConfirmAgentAuthoringDoesNotCreateJob verifies that confirming an
+// agent_authoring session marks it as confirmed but does NOT create a job.
+func TestConfirmAgentAuthoringDoesNotCreateJob(t *testing.T) {
+	_, r, st := newClarTestServer(t, &sequenceClarRunner{
+		outputs: []string{
+			agentAuthoringRound1Output,
+			agentAuthoringRound2Output,
+			agentAuthoringReadyOutput,
+		},
+	})
+
+	// Create the session
+	rec := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{
+		"prompt": "请帮我创建一个海事预警智能体",
+		"mode":   "agent_authoring",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(rec.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Answer round 1 question
+	rec = doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/answers/batch", map[string]any{
+		"answers": []map[string]string{{"questionId": "agent_scenario", "value": "海事异常航迹监控"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer1 status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Answer round 2 question
+	rec = doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/answers/batch", map[string]any{
+		"answers": []map[string]string{{"questionId": "agent_name", "value": "海事预警专家"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer2 status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Confirm the session
+	rec = doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/confirm", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var confirmed model.ClarificationSession
+	if err := json.NewDecoder(rec.Body).Decode(&confirmed); err != nil {
+		t.Fatalf("decode confirmed: %v", err)
+	}
+	if confirmed.Status != model.ClarificationStatusConfirmed {
+		t.Fatalf("status = %q, want confirmed", confirmed.Status)
+	}
+	if confirmed.CreatedJobID != "" {
+		t.Fatalf("created_job_id = %q, want empty (no job in agent_authoring mode)", confirmed.CreatedJobID)
+	}
+
+	// Verify no jobs were created
+	jobs, err := st.ListJobs(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Fatalf("jobs = %d, want 0 (agent_authoring must not create jobs)", len(jobs))
+	}
+}
+
+// TestAgentAuthoringGeneratesDraftMessage verifies that after a user turn in
+// agent_authoring mode, an agent_draft message is created in the session.
+func TestAgentAuthoringGeneratesDraftMessage(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: agentAuthoringRound1Output})
+
+	// Create the session
+	rec := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{
+		"prompt": "创建海事预警智能体",
+		"mode":   "agent_authoring",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", rec.Code)
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(rec.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Check that an agent_draft message was created during round 1
+	msgs, err := st.ListClarificationMessages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var hasDraft bool
+	for _, msg := range msgs {
+		if msg.Kind == "agent_draft" {
+			hasDraft = true
+			var draft agentDraftBody
+			if err := json.Unmarshal([]byte(msg.MetadataJSON), &draft); err != nil {
+				t.Fatalf("parse draft: %v", err)
+			}
+			if draft.Name == "" {
+				t.Fatal("draft name is empty")
+			}
+			if draft.Key == "" {
+				t.Fatal("draft key is empty")
+			}
+			if draft.Prompt == "" {
+				t.Fatal("draft prompt is empty")
+			}
+			break
+		}
+	}
+	if !hasDraft {
+		t.Fatal("expected agent_draft message in session, got none")
+	}
+}
+
+// TestNormalClarificationUnaffectedByMode verifies that creating a clarification
+// without mode (or with empty mode) behaves exactly as before.
+func TestNormalClarificationUnaffectedByMode(t *testing.T) {
+	_, r, _ := newClarTestServer(t, fakeClarRunner{stdout: waitingUserOutput})
+
+	rec := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{
+		"prompt": "生成一个航母编队复盘应用",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(rec.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if sess.Mode != "" {
+		t.Fatalf("mode = %q, want empty for normal clarification", sess.Mode)
+	}
+	if sess.Status != model.ClarificationStatusWaitingUser {
+		t.Fatalf("status = %q, want waiting_user", sess.Status)
 	}
 }
