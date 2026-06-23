@@ -139,6 +139,16 @@ CREATE TABLE IF NOT EXISTS clarification_messages (
     created_at    INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS clarification_business_agents (
+    clarification_session_id TEXT    NOT NULL,
+    agent_id                 TEXT    NOT NULL,
+    priority                 INTEGER NOT NULL,
+    created_at               INTEGER NOT NULL,
+    PRIMARY KEY(clarification_session_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_clarification_business_agents_session
+ON clarification_business_agents(clarification_session_id, priority);
+
 -- Step execution records: the durable, immutable audit trail of a step attempt
 -- (lifecycle events, activity/summary blobs, captured command stdout/stderr,
 -- errors). sequence is per (step_id, attempt) and assigned by the executor-side

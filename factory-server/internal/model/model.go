@@ -182,11 +182,15 @@ type Job struct {
 	// ConfirmedRequirementJSON is the frozen, server-finalized requirement the
 	// requirement_analysis step audits (it no longer clarifies). Empty for legacy
 	// jobs; the requirement_analysis step guards the empty case by substituting {}.
-	ConfirmedRequirementJSON string     `json:"confirmed_requirement_json,omitempty"`
-	CreatedAt                time.Time  `json:"created_at"`
-	StartedAt                *time.Time `json:"started_at,omitempty"`
-	EndedAt                  *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt                time.Time  `json:"updated_at"`
+	ConfirmedRequirementJSON string `json:"confirmed_requirement_json,omitempty"`
+	// BusinessAgentSnapshotsJSON freezes the ordered business-agent context
+	// selected for the clarification at confirm time. Later edits to business
+	// agents must not alter already-created jobs.
+	BusinessAgentSnapshotsJSON string     `json:"business_agent_snapshots_json,omitempty"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	StartedAt                  *time.Time `json:"started_at,omitempty"`
+	EndedAt                    *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
 }
 
 type JobStep struct {

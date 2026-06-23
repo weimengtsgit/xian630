@@ -692,6 +692,12 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	businessAgentSnapshotsJSON, err := s.store.BusinessAgentSnapshotsJSON(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "selected business agents unavailable")
+		return
+	}
+
 	// Create the generation job + six steps, mirroring createJob. The job now
 	// carries the CONFIRMED requirement so the requirement_analysis pipeline step
 	// can audit/freeze it (Task 5) instead of clarifying from scratch.
@@ -702,15 +708,16 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		displayName = deriveJobDisplayName(sess.InitialPrompt)
 	}
 	job := model.Job{
-		ID:                       jobID,
-		UserPrompt:               sess.InitialPrompt,
-		AppName:                  displayName,
-		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          model.StepRequirementAnalysis,
-		ClarificationSessionID:   id,
-		ConfirmedRequirementJSON: string(reqBytes),
-		CreatedAt:                now,
-		UpdatedAt:                now,
+		ID:                         jobID,
+		UserPrompt:                 sess.InitialPrompt,
+		AppName:                    displayName,
+		Status:                     model.JobStatusQueued,
+		CurrentStepKind:            model.StepRequirementAnalysis,
+		ClarificationSessionID:     id,
+		ConfirmedRequirementJSON:   string(reqBytes),
+		BusinessAgentSnapshotsJSON: businessAgentSnapshotsJSON,
+		CreatedAt:                  now,
+		UpdatedAt:                  now,
 	}
 	if err := s.store.CreateJob(r.Context(), job); err != nil {
 		writeError(w, http.StatusInternalServerError, "create job")

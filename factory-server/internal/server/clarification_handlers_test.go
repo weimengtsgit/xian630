@@ -1392,3 +1392,85 @@ func TestListClarificationsIncludesLinkedJobAndDeletedApplicationState(t *testin
 		t.Fatalf("application_state = %q, want deleted", linked.ApplicationState)
 	}
 }
+
+func TestClarificationBusinessAgentsSelection(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	for _, a := range []model.Agent{
+		{ID: "agent_a", Key: "a", Name: "A", Role: "business", Category: model.AgentCategoryBusiness, Prompt: "A prompt", Editable: true, Enabled: true, SortOrder: 100},
+		{ID: "agent_b", Key: "b", Name: "B", Role: "business", Category: model.AgentCategoryBusiness, Prompt: "B prompt", Editable: true, Enabled: true, SortOrder: 101},
+	} {
+		if err := st.CreateAgent(context.Background(), a); err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+	}
+	rec := doPost(t, r, http.MethodPut, "/api/clarifications/"+sess.ID+"/business-agents", map[string]any{
+		"agent_ids": []string{"agent_b", "agent_a"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	list := doPost(t, r, http.MethodGet, "/api/clarifications/"+sess.ID+"/business-agents", nil)
+	var got []model.Agent
+	if err := json.NewDecoder(list.Body).Decode(&got); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "agent_b" || got[1].ID != "agent_a" {
+		t.Fatalf("got = %+v", got)
+	}
+}
+
+func TestClarificationBusinessAgentsRejectsDisabledAgent(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if err := st.CreateAgent(context.Background(), model.Agent{
+		ID: "agent_disabled", Key: "disabled", Name: "Disabled", Role: "business",
+		Category: model.AgentCategoryBusiness, Prompt: "prompt", Editable: true, Enabled: false, SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("create disabled agent: %v", err)
+	}
+	rec := doPost(t, r, http.MethodPut, "/api/clarifications/"+sess.ID+"/business-agents", map[string]any{
+		"agent_ids": []string{"agent_disabled"},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConfirmSnapshotsSelectedBusinessAgents(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if err := st.CreateAgent(context.Background(), model.Agent{
+		ID: "agent_a", Key: "a", Name: "A", Description: "A desc", Role: "business",
+		Category: model.AgentCategoryBusiness, Prompt: "A prompt", Editable: true, Enabled: true, SortOrder: 100,
+	}); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	selectRec := doPost(t, r, http.MethodPut, "/api/clarifications/"+sess.ID+"/business-agents", map[string]any{"agent_ids": []string{"agent_a"}})
+	if selectRec.Code != http.StatusOK {
+		t.Fatalf("select status = %d body=%s", selectRec.Code, selectRec.Body.String())
+	}
+	confirm := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/confirm", nil)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d body=%s", confirm.Code, confirm.Body.String())
+	}
+	jobs, err := st.ListJobs(context.Background(), "")
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs = %+v err=%v", jobs, err)
+	}
+	if !strings.Contains(jobs[0].BusinessAgentSnapshotsJSON, "A prompt") || !strings.Contains(jobs[0].BusinessAgentSnapshotsJSON, "agent_a") {
+		t.Fatalf("snapshot json = %s", jobs[0].BusinessAgentSnapshotsJSON)
+	}
+}
