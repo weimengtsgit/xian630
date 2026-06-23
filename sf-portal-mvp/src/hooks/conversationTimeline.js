@@ -49,6 +49,18 @@ export function buildTimelineFromMessages(messages = [], session = null) {
           questions: [question],
         })
       }
+      continue
+    }
+    if (msg.role === 'agent' && msg.kind === 'agent_draft') {
+      const draft = parseJSON(msg.metadata_json)
+      if (draft) {
+        items.push({
+          id: msg.id,
+          type: 'agent_draft',
+          draft,
+        })
+      }
+      continue
     }
   }
   const requirement = session && session.requirement
@@ -90,6 +102,8 @@ export function applyConversationEvent(state, type, ev) {
     case 'clarification.failed':
     case 'clarification.abandoned':
       return applyStatusEvent(state, type, ev)
+    case 'agent_authoring.draft.updated':
+      return applyAgentDraftEvent(state, ev)
     default:
       return state
   }
@@ -193,6 +207,22 @@ function findLastUserMessageIndex(messages = []) {
 
 function typeClearsQuestions(type) {
   return type === 'clarification.ready_to_confirm'
+}
+
+function applyAgentDraftEvent(state, ev) {
+  const draft = ev && ev.data
+  if (!draft || !draft.name) return state
+  // Replace or append the latest agent_draft in the timeline.
+  // Use a stable id based on session so only the latest draft shows.
+  const draftId = `${ev.session_id || 'draft'}_agent_draft_live`
+  const existing = state.timeline.findIndex(item => item.id === draftId)
+  const item = { id: draftId, type: 'agent_draft', draft, live: true }
+  if (existing === -1) {
+    return { ...state, timeline: [...state.timeline, item] }
+  }
+  const next = state.timeline.slice()
+  next[existing] = item
+  return { ...state, timeline: next }
 }
 
 function parseJSON(raw) {
