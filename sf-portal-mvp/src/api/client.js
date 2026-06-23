@@ -83,7 +83,7 @@ export const factoryApi = {
     ),
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
   getArtifactContent: async id => requestText(`/api/artifacts/${id}/content`),
-  createClarification: prompt => request('/api/clarifications', { method: 'POST', body: JSON.stringify({ prompt }) }),
+  createClarification: (prompt, options = {}) => request('/api/clarifications', { method: 'POST', body: JSON.stringify({ prompt, ...options }) }),
   getActiveClarification: () => request('/api/clarifications/active'),
   getClarification: id => request(`/api/clarifications/${id}`),
   getClarificationMessages: id => request(`/api/clarifications/${id}/messages`),
