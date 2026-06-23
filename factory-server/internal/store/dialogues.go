@@ -95,10 +95,10 @@ func (s *Store) LatestDialogueMessages(ctx context.Context, dialogueID string, l
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id,dialogue_id,role,kind,content,metadata_json,created_at FROM (
-  SELECT id,dialogue_id,role,kind,content,metadata_json,created_at
+  SELECT id,dialogue_id,role,kind,content,metadata_json,created_at,rowid
   FROM dialogue_messages WHERE dialogue_id = ?
-  ORDER BY created_at DESC LIMIT ?
-) ORDER BY created_at ASC`, dialogueID, limit)
+  ORDER BY created_at DESC, rowid DESC LIMIT ?
+) ORDER BY created_at ASC, rowid ASC`, dialogueID, limit)
 	if err != nil {
 		return nil, err
 	}

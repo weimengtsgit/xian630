@@ -126,6 +126,27 @@ const businessDraftReadyAfterRefineOutput = `{
   "agentDraft": {"name":"告警分诊助手","description":"按规则分诊全部告警","prompt":"你是告警分诊助手，按规则分诊全部告警。不执行任何工具调用或运行时操作。"}
 }`
 
+const businessDraftConsolidationOutput = `{
+  "status": "waiting_user",
+  "round": 5,
+  "workLog": [{"type":"consolidation","content":"推荐按剩余字段收敛"}],
+  "questions": [],
+  "consolidation": [
+    {"field":"agentDraft.name","recommendedValue":"告警分诊助手","reason":"匹配用户的分诊诉求","alternatives":["告警处置助手"]},
+    {"field":"agentDraft.description","recommendedValue":"按规则分诊全部告警","reason":"覆盖用户选择的全部告警范围","alternatives":["仅分诊严重告警"]},
+    {"field":"agentDraft.prompt","recommendedValue":"你是告警分诊助手，按规则分诊全部告警，输出分诊结论、优先级和处置建议。不执行任何工具调用或运行时操作。","reason":"形成可保存的业务处理 Agent 指令","alternatives":[]}
+  ],
+  "agentDraft": {"name":"告警分诊助手","description":"","prompt":""}
+}`
+
+const businessDraftPartialWaitingOutput = `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"草稿仍需补充"}],
+  "questions": [],
+  "agentDraft": {"name":"告警分诊助手","description":"","prompt":"你是告警分诊助手。"}
+}`
+
 // businessDraftSequenceRunner emits canned route output for intent-routing and a
 // SEQUENCE of draft outputs (one per business-draft round) so the multi-round
 // loop can be exercised: draftOutputs[0] is round 1, [1] is round 2, etc.
@@ -212,6 +233,27 @@ func mustWriteCatalog(t *testing.T, root string) {
 	}
 	if err := os.WriteFile(dir+"/scene-catalog.json", []byte(cat), 0o644); err != nil {
 		t.Fatalf("write catalog: %v", err)
+	}
+	for _, slug := range []string{"carrier-formation-replay", "aircraft-carrier-track", "carrier-homeport-tide-window"} {
+		sceneDir := filepath.Join(root, "scene", slug, ".factory")
+		if err := os.MkdirAll(sceneDir, 0o755); err != nil {
+			t.Fatalf("mkdir scene manifest %s: %v", slug, err)
+		}
+		raw := `{
+  "schemaVersion": 1,
+  "slug": "` + slug + `",
+  "name": "` + slug + `",
+  "type": "command_dashboard",
+  "source": "preset",
+  "description": "` + slug + `",
+  "entry": "static-vite",
+  "path": "scene/` + slug + `",
+  "build": { "command": "npm run build", "outputDir": "dist" },
+  "runtime": { "devCommand": "npm run dev", "defaultPort": 5173 }
+}`
+		if err := os.WriteFile(filepath.Join(sceneDir, "app.json"), []byte(raw), 0o644); err != nil {
+			t.Fatalf("write scene manifest %s: %v", slug, err)
+		}
 	}
 }
 
@@ -467,15 +509,15 @@ func TestRouteSelectApplicationGenerationCreatesChildClarification(t *testing.T)
 	}
 }
 
-// TestRouteSelectBusinessAgentStartsDrafting verifies business_processing_agent
-// selection enters drafting_business_agent and starts the draft round.
-func TestRouteSelectBusinessAgentStartsDrafting(t *testing.T) {
-	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeBusinessAgentOutput, draftStdout: businessDraftReadyOutput})
+// TestRouteSelectBusinessAgentFallsBackToApplicationGeneration verifies that a
+// stale client selecting the now-hidden business_processing_agent route is
+// normalized to application_generation: it creates a child clarification and
+// enters drafting_application, never starting business drafting.
+func TestRouteSelectBusinessAgentFallsBackToApplicationGeneration(t *testing.T) {
+	seq := &fakeDialogueRunner{routeStdout: routeBusinessAgentOutput, draftStdout: businessDraftReadyOutput}
+	_, r, _ := newDialogueTestServer(t, seq)
 
-	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "配置一个业务助手"})
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create: %d %s", create.Code, create.Body.String())
-	}
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "创建一个告警分诊 Agent"})
 	var created dialogueView
 	json.NewDecoder(create.Body).Decode(&created)
 
@@ -487,14 +529,51 @@ func TestRouteSelectBusinessAgentStartsDrafting(t *testing.T) {
 	}
 	var view dialogueView
 	json.NewDecoder(routeRec.Body).Decode(&view)
-	if view.Session.Status != model.DialogueStatusDraftingBusinessAgent {
-		t.Fatalf("status = %q, want drafting_business_agent", view.Session.Status)
+	if view.Session.Intent != model.DialogueIntentApplicationGeneration {
+		t.Fatalf("intent = %q, want application_generation", view.Session.Intent)
 	}
-	if view.Session.Intent != model.DialogueIntentBusinessProcessingAgent {
-		t.Fatalf("intent = %q", view.Session.Intent)
+	if view.Session.Status != model.DialogueStatusDraftingApplication {
+		t.Fatalf("status = %q, want drafting_application", view.Session.Status)
 	}
-	if view.AgentDraft.Name == "" {
-		t.Fatalf("agent draft not populated after draft round 1")
+	if view.Session.ClarificationSessionID == "" || view.Child == nil {
+		t.Fatalf("expected application clarification child, got view=%#v", view)
+	}
+	if seq.draftCalls != 0 {
+		t.Fatalf("business draft calls = %d, want 0", seq.draftCalls)
+	}
+}
+
+// TestApplicationGenerationWithoutBlueprintStillCreatesClarification verifies
+// that application generation works with NO blueprint: the child clarification
+// is still created.
+func TestApplicationGenerationWithoutBlueprintStillCreatesClarification(t *testing.T) {
+	routeNoBlueprint := `{
+	  "intent": "application_generation",
+	  "confidence": "high",
+	  "existingApplicationSlugs": [],
+	  "internalBlueprintSlug": "",
+	  "userFacingReason": "将先澄清需求并生成一个可运行的新应用。",
+	  "needsRouteConfirmation": false
+	}`
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeNoBlueprint})
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个新的排班助手应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{
+		"intent": "application_generation",
+	})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var view dialogueView
+	json.NewDecoder(routeRec.Body).Decode(&view)
+	if view.Session.Intent != model.DialogueIntentApplicationGeneration {
+		t.Fatalf("intent = %q, want application_generation", view.Session.Intent)
+	}
+	if view.Session.ClarificationSessionID == "" || view.Child == nil {
+		t.Fatalf("expected clarification child without blueprint, got view=%#v", view)
 	}
 }
 
@@ -591,16 +670,37 @@ func (f *fakeDeployRunner) RunStreamWithInput(ctx context.Context, dir, input st
 
 // --- business agent confirm ---
 
+// seedBusinessDrafting puts a dialogue into the dormant drafting_business_agent
+// state and runs business draft round 1 — exactly what the now-hidden business
+// route selection used to do — so dormant business-endpoint coverage (confirm /
+// continue / consolidation) can still reach that state. Test-only.
+func seedBusinessDrafting(t *testing.T, srv *Server, dlgID string) {
+	t.Helper()
+	ctx := context.Background()
+	dlg, err := srv.store.GetDialogueSession(ctx, dlgID)
+	if err != nil || dlg == nil {
+		t.Fatalf("seedBusinessDrafting: get dialogue: %v", err)
+	}
+	routeBytes, _ := json.Marshal(persistedRoute{Intent: dialogue.IntentBusinessProcessingAgent})
+	if err := srv.store.UpdateDialogueRoute(ctx, dlgID, model.DialogueIntentBusinessProcessingAgent, model.DialogueStatusDraftingBusinessAgent, string(routeBytes), true); err != nil {
+		t.Fatalf("seedBusinessDrafting: lock business route: %v", err)
+	}
+	dlg, _ = srv.store.GetDialogueSession(ctx, dlgID)
+	if err := srv.runBusinessDraftRound(ctx, dlgID, dlg, 1); err != nil {
+		t.Fatalf("seedBusinessDrafting: round 1: %v", err)
+	}
+}
+
 // TestNoAgentCreatedBeforeExplicitConfirmation verifies that selecting the
 // business-agent route does NOT create an Agent until the confirm endpoint.
 func TestNoAgentCreatedBeforeExplicitConfirmation(t *testing.T) {
-	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeBusinessAgentOutput, draftStdout: businessDraftReadyOutput})
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeBusinessAgentOutput, draftStdout: businessDraftReadyOutput})
 
 	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "业务助手"})
 	var created dialogueView
 	json.NewDecoder(create.Body).Decode(&created)
 
-	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "business_processing_agent"})
+	seedBusinessDrafting(t, srv, created.Session.ID)
 
 	agents, err := st.ListAgents(context.Background())
 	if err != nil {
@@ -622,7 +722,7 @@ func TestBusinessAgentConfirmCreatesAgentWithUniqueKey(t *testing.T) {
 	var created dialogueView
 	json.NewDecoder(create.Body).Decode(&created)
 
-	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "business_processing_agent"})
+	seedBusinessDrafting(t, srv, created.Session.ID)
 
 	ch := srv.hub.Subscribe()
 	defer srv.hub.Unsubscribe(ch)
@@ -673,6 +773,92 @@ func TestBusinessAgentConfirmCreatesAgentWithUniqueKey(t *testing.T) {
 	}
 	if !sawResolved {
 		t.Fatalf("did not see dialogue.resolved; got %#v", eventTypes(events))
+	}
+}
+
+func TestBusinessAgentConfirmRequiresReadyDraftStatus(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeBusinessAgentOutput, draftStdout: businessDraftPartialWaitingOutput})
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "业务助手"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	seedBusinessDrafting(t, srv, created.Session.ID)
+
+	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/confirm", nil)
+	if confirmRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("confirm waiting_user draft status = %d, want 422; body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+	agents, err := st.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	for _, a := range agents {
+		if a.Category == model.AgentCategoryBusinessProcessing {
+			t.Fatalf("business agent created from waiting_user draft: %#v", a)
+		}
+	}
+}
+
+func TestBusinessAgentConsolidationAcceptsRecommendationsWithoutSeventhRound(t *testing.T) {
+	seq := &businessDraftSequenceRunner{draftOutputs: []string{
+		businessDraftQuestionOutput,
+		businessDraftQuestionOutput,
+		businessDraftQuestionOutput,
+		businessDraftQuestionOutput,
+		businessDraftConsolidationOutput,
+	}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个告警分诊助手"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	seedBusinessDrafting(t, srv, created.Session.ID)
+	for i := 0; i < 4; i++ {
+		rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/continue", map[string]any{"content": "全部告警"})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("continue #%d status = %d body=%s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	if seq.draftCalls != 5 {
+		t.Fatalf("draftCalls = %d, want 5 after round-5 consolidation", seq.draftCalls)
+	}
+
+	getRec := doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil)
+	var round5View struct {
+		Session            model.DialogueSession         `json:"session"`
+		AgentDraftStatus   string                        `json:"agentDraftStatus"`
+		AgentConsolidation []dialogue.ConsolidationEntry `json:"agentConsolidation"`
+		AgentDraft         dialogue.BusinessAgentDraft   `json:"agentDraft"`
+	}
+	json.NewDecoder(getRec.Body).Decode(&round5View)
+	if len(round5View.AgentConsolidation) != 3 {
+		t.Fatalf("agentConsolidation = %d rows, want 3: %+v", len(round5View.AgentConsolidation), round5View.AgentConsolidation)
+	}
+	if round5View.AgentDraftStatus == "ready_to_confirm" {
+		t.Fatalf("round-5 consolidation must not be ready before user accepts recommendations")
+	}
+
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/business-agent/consolidation", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("business consolidation accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	var accepted struct {
+		AgentDraftStatus string                      `json:"agentDraftStatus"`
+		AgentDraft       dialogue.BusinessAgentDraft `json:"agentDraft"`
+	}
+	json.NewDecoder(acceptRec.Body).Decode(&accepted)
+	if accepted.AgentDraftStatus != "ready_to_confirm" {
+		t.Fatalf("agentDraftStatus = %q, want ready_to_confirm", accepted.AgentDraftStatus)
+	}
+	if accepted.AgentDraft.Name == "" || accepted.AgentDraft.Description == "" || accepted.AgentDraft.Prompt == "" {
+		t.Fatalf("accepted draft incomplete: %+v", accepted.AgentDraft)
+	}
+	if seq.draftCalls != 5 {
+		t.Fatalf("draftCalls = %d, want 5 (accept recommendations must not call model again)", seq.draftCalls)
 	}
 }
 
@@ -1347,15 +1533,7 @@ func TestBusinessAgentMultiRoundContinueThenConfirm(t *testing.T) {
 	var created dialogueView
 	json.NewDecoder(create.Body).Decode(&created)
 
-	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "business_processing_agent"})
-	if routeRec.Code != http.StatusOK {
-		t.Fatalf("route status = %d body=%s", routeRec.Code, routeRec.Body.String())
-	}
-	var routed dialogueView
-	json.NewDecoder(routeRec.Body).Decode(&routed)
-	if routed.Session.Status != model.DialogueStatusDraftingBusinessAgent {
-		t.Fatalf("status = %q, want drafting_business_agent", routed.Session.Status)
-	}
+	seedBusinessDrafting(t, srv, created.Session.ID)
 	// Round 1 ran at route-lock and produced a clarifying question (no complete draft).
 	if seq.draftCalls != 1 {
 		t.Fatalf("draftCalls = %d, want 1 after route-lock round 1", seq.draftCalls)
@@ -1404,12 +1582,12 @@ func TestBusinessAgentMultiRoundContinueThenConfirm(t *testing.T) {
 // running another draft round.
 func TestBusinessAgentContinueEnforcesSixRoundCap(t *testing.T) {
 	seq := &businessDraftSequenceRunner{draftOutputs: []string{businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput, businessDraftQuestionOutput}}
-	_, r, _ := newDialogueTestServer(t, seq)
+	srv, r, _ := newDialogueTestServer(t, seq)
 
 	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个助手"})
 	var created dialogueView
 	json.NewDecoder(create.Body).Decode(&created)
-	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "business_processing_agent"})
+	seedBusinessDrafting(t, srv, created.Session.ID)
 
 	// Route-lock ran round 1 (1 user turn). Five continues reach round 6 (6 user
 	// turns); a sixth continue must be refused (no 7th round).

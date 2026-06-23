@@ -62,6 +62,12 @@ type dialogueBatchAnswersBody struct {
 	ConsolidationAccept bool                 `json:"consolidationAccept"`
 }
 
+type businessConsolidationBody struct {
+	ConsolidationField  string `json:"consolidationField"`
+	ConsolidationValue  string `json:"consolidationValue"`
+	ConsolidationAccept bool   `json:"consolidationAccept"`
+}
+
 type dialoguePatchRequirementBody struct {
 	Requirement json.RawMessage `json:"requirement"`
 }
@@ -113,17 +119,25 @@ func (p persistedRoute) public() routePayload {
 	}
 }
 
+type businessDraftRecord struct {
+	Status     string                      `json:"status,omitempty"`
+	Round      int                         `json:"round,omitempty"`
+	AgentDraft dialogue.BusinessAgentDraft `json:"agentDraft,omitempty"`
+}
+
 // dialogueView is the composed response shape returned by every dialogue route.
 type dialogueView struct {
-	Session             model.DialogueSession       `json:"session"`
-	Messages            []model.DialogueMessage     `json:"messages"`
-	Route               routePayload                `json:"route"`
-	Recommendations     []recommendationCard        `json:"recommendations,omitempty"`
-	AgentDraft          dialogue.BusinessAgentDraft `json:"agentDraft,omitempty"`
-	Child               *clarificationView          `json:"child,omitempty"`
-	ResolvedApplication *model.Application          `json:"resolvedApplication,omitempty"`
-	CreatedAgent        *model.Agent                `json:"createdAgent,omitempty"`
-	SeededJob           *model.Job                  `json:"seededJob,omitempty"`
+	Session             model.DialogueSession         `json:"session"`
+	Messages            []model.DialogueMessage       `json:"messages"`
+	Route               routePayload                  `json:"route"`
+	Recommendations     []recommendationCard          `json:"recommendations,omitempty"`
+	AgentDraft          dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
+	AgentDraftStatus    string                        `json:"agentDraftStatus,omitempty"`
+	AgentConsolidation  []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
+	Child               *clarificationView            `json:"child,omitempty"`
+	ResolvedApplication *model.Application            `json:"resolvedApplication,omitempty"`
+	CreatedAgent        *model.Agent                  `json:"createdAgent,omitempty"`
+	SeededJob           *model.Job                    `json:"seededJob,omitempty"`
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -415,7 +429,10 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 	// Business-agent draft: surface the in-progress agentDraft from the latest
 	// business_draft message so the portal can render the confirm card.
 	if dlg.Status == model.DialogueStatusDraftingBusinessAgent {
-		view.AgentDraft = s.latestAgentDraft(ctx, id)
+		record := s.latestAgentDraftRecord(ctx, id)
+		view.AgentDraft = record.AgentDraft
+		view.AgentDraftStatus = record.Status
+		view.AgentConsolidation = s.latestBusinessConsolidation(ctx, id)
 	}
 	// Seeded job for a resolved application-generation dialogue.
 	if dlg.Status == model.DialogueStatusResolved && dlg.Intent == model.DialogueIntentApplicationGeneration {
@@ -456,20 +473,128 @@ func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []rec
 
 // latestAgentDraft decodes the most recent business_draft message's agentDraft.
 func (s *Server) latestAgentDraft(ctx context.Context, dialogueID string) dialogue.BusinessAgentDraft {
+	return s.latestAgentDraftRecord(ctx, dialogueID).AgentDraft
+}
+
+func (s *Server) latestAgentDraftRecord(ctx context.Context, dialogueID string) businessDraftRecord {
 	msgs, err := s.store.LatestDialogueMessages(ctx, dialogueID, 100)
 	if err != nil {
-		return dialogue.BusinessAgentDraft{}
+		return businessDraftRecord{}
 	}
 	for i := len(msgs) - 1; i >= 0; i-- {
 		m := msgs[i]
 		if m.Kind == "business_draft" && m.MetadataJSON != "" {
+			var record businessDraftRecord
+			if json.Unmarshal([]byte(m.MetadataJSON), &record) == nil && (record.Status != "" || businessDraftHasContent(record.AgentDraft)) {
+				return record
+			}
 			var draft dialogue.BusinessAgentDraft
 			if json.Unmarshal([]byte(m.MetadataJSON), &draft) == nil {
-				return draft
+				return businessDraftRecord{AgentDraft: draft}
 			}
 		}
 	}
-	return dialogue.BusinessAgentDraft{}
+	return businessDraftRecord{}
+}
+
+func businessDraftHasContent(draft dialogue.BusinessAgentDraft) bool {
+	return strings.TrimSpace(draft.Name) != "" ||
+		strings.TrimSpace(draft.Description) != "" ||
+		strings.TrimSpace(draft.Prompt) != ""
+}
+
+func businessDraftComplete(draft dialogue.BusinessAgentDraft) bool {
+	return strings.TrimSpace(draft.Name) != "" &&
+		strings.TrimSpace(draft.Description) != "" &&
+		strings.TrimSpace(draft.Prompt) != ""
+}
+
+func (s *Server) latestBusinessConsolidation(ctx context.Context, dialogueID string) []dialogue.ConsolidationEntry {
+	msgs, err := s.store.LatestDialogueMessages(ctx, dialogueID, 100)
+	if err != nil {
+		return nil
+	}
+	start := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			start = i + 1
+			break
+		}
+	}
+	for i := len(msgs) - 1; i >= start; i-- {
+		m := msgs[i]
+		if m.Kind == "recommendation_consolidation" && m.MetadataJSON != "" {
+			var entries []dialogue.ConsolidationEntry
+			if json.Unmarshal([]byte(m.MetadataJSON), &entries) == nil {
+				return entries
+			}
+		}
+	}
+	return nil
+}
+
+func applyBusinessConsolidationAdjustment(current dialogue.BusinessAgentDraft, entries []dialogue.ConsolidationEntry, selectedField, selectedValue string) (dialogue.BusinessAgentDraft, error) {
+	if len(entries) == 0 {
+		return dialogue.BusinessAgentDraft{}, errors.New("empty consolidation")
+	}
+	selected := normalizeBusinessDraftField(selectedField)
+	if strings.TrimSpace(selectedField) != "" && selected == "" {
+		return dialogue.BusinessAgentDraft{}, fmt.Errorf("unsupported field %q", selectedField)
+	}
+	out := current
+	seenSelected := selected == ""
+	for _, entry := range entries {
+		field := normalizeBusinessDraftField(entry.Field)
+		if field == "" {
+			return dialogue.BusinessAgentDraft{}, fmt.Errorf("unsupported field %q", entry.Field)
+		}
+		value := rawConsolidationString(entry.RecommendedValue)
+		if selected != "" && field == selected {
+			value = strings.TrimSpace(selectedValue)
+			seenSelected = true
+		}
+		if value == "" {
+			continue
+		}
+		switch field {
+		case "name":
+			out.Name = value
+		case "description":
+			out.Description = value
+		case "prompt":
+			out.Prompt = value
+		}
+	}
+	if !seenSelected {
+		return dialogue.BusinessAgentDraft{}, fmt.Errorf("selected field %q is not in consolidation", selectedField)
+	}
+	if !businessDraftComplete(out) {
+		return dialogue.BusinessAgentDraft{}, errors.New("business draft remains incomplete after consolidation")
+	}
+	return out, nil
+}
+
+func normalizeBusinessDraftField(field string) string {
+	f := strings.TrimSpace(field)
+	f = strings.TrimPrefix(f, "agentDraft.")
+	f = strings.TrimPrefix(f, "agent_draft.")
+	switch f {
+	case "name", "description", "prompt":
+		return f
+	default:
+		return ""
+	}
+}
+
+func rawConsolidationString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // findJobForDialogue locates the job seeded from this dialogue's child
@@ -709,7 +834,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	intent := dialogue.Intent(body.Intent)
+	intent := activeDialogueIntent(dialogue.Intent(body.Intent))
 	if !dialogueValidIntent(string(intent)) {
 		writeError(w, http.StatusBadRequest, "invalid intent")
 		return
@@ -826,7 +951,7 @@ func (s *Server) runBusinessDraftRound(ctx context.Context, dialogueID string, d
 	if err != nil {
 		return err
 	}
-	// Persist work-log + questions + agentDraft as messages.
+	// Persist work-log + questions + consolidation + agentDraft as messages.
 	now := time.Now()
 	for _, wl := range out.WorkLog {
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
@@ -840,14 +965,29 @@ func (s *Server) runBusinessDraftRound(ctx context.Context, dialogueID string, d
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "question",
 			MetadataJSON: string(qBytes), CreatedAt: now,
 		})
+		s.publishDialogueSimple("dialogue.draft.question.created", dialogueID, q)
 	}
-	if out.AgentDraft.Name != "" || out.AgentDraft.Prompt != "" {
-		draftBytes, _ := json.Marshal(out.AgentDraft)
+	if len(out.Consolidation) > 0 {
+		cBytes, _ := json.Marshal(out.Consolidation)
+		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "recommendation_consolidation",
+			MetadataJSON: string(cBytes), CreatedAt: now,
+		})
+		s.publishDialogueSimple("dialogue.draft.consolidation.updated", dialogueID, out.Consolidation)
+	}
+	if businessDraftHasContent(out.AgentDraft) || out.Status != "" {
+		draftBytes, _ := json.Marshal(businessDraftRecord{
+			Status:     out.Status,
+			Round:      out.Round,
+			AgentDraft: out.AgentDraft,
+		})
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "business_draft",
 			MetadataJSON: string(draftBytes), CreatedAt: now,
 		})
-		s.publishDialogueSimple("dialogue.agent_draft.updated", dialogueID, out.AgentDraft)
+		if businessDraftHasContent(out.AgentDraft) {
+			s.publishDialogueSimple("dialogue.agent_draft.updated", dialogueID, out.AgentDraft)
+		}
 	}
 	return nil
 }
@@ -1113,7 +1253,14 @@ func (s *Server) loadChildConsolidation(ctx context.Context, childID string) []c
 	if err != nil {
 		return nil
 	}
+	start := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			start = i + 1
+			break
+		}
+	}
+	for i := len(msgs) - 1; i >= start; i-- {
 		m := msgs[i]
 		if m.Kind == "recommendation_consolidation" && m.MetadataJSON != "" {
 			var entries []clarification.ConsolidationEntry
@@ -1381,9 +1528,14 @@ func (s *Server) confirmDialogueBusinessAgent(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "dialogue is not in business-agent drafting", "status": dlg.Status})
 		return
 	}
-	draft := s.latestAgentDraft(r.Context(), id)
-	if draft.Name == "" || strings.TrimSpace(draft.Prompt) == "" {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "agent draft is incomplete; name and prompt are required"})
+	record := s.latestAgentDraftRecord(r.Context(), id)
+	if !dialogue.IsReadyToConfirmStatus(record.Status) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "agent draft is not ready to confirm", "status": record.Status})
+		return
+	}
+	draft := record.AgentDraft
+	if !businessDraftComplete(draft) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "agent draft is incomplete; name, description, and prompt are required"})
 		return
 	}
 	ctx := r.Context()
@@ -1510,7 +1662,84 @@ func (s *Server) continueDialogueBusinessAgent(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, view)
 }
 
+// applyDialogueBusinessConsolidation handles POST
+// /api/dialogues/:id/business-agent/consolidation. It applies the round-5
+// recommendation list without invoking the model again: accept-all uses every
+// recommended value; a selected field overrides exactly that field and uses the
+// remaining recommendations for the other fields.
+func (s *Server) applyDialogueBusinessConsolidation(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	dlg, err := s.store.GetDialogueSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get dialogue")
+		return
+	}
+	if dlg == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if dlg.Status != model.DialogueStatusDraftingBusinessAgent {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "dialogue is not in business-agent drafting", "status": dlg.Status})
+		return
+	}
+	var body businessConsolidationBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if !body.ConsolidationAccept && strings.TrimSpace(body.ConsolidationField) == "" {
+		writeError(w, http.StatusBadRequest, "missing consolidation selection")
+		return
+	}
+	ctx := r.Context()
+	consolidation := s.latestBusinessConsolidation(ctx, id)
+	if len(consolidation) == 0 {
+		writeError(w, http.StatusConflict, "no business consolidation list")
+		return
+	}
+	current := s.latestAgentDraft(ctx, id)
+	adjusted, aerr := applyBusinessConsolidationAdjustment(current, consolidation, body.ConsolidationField, body.ConsolidationValue)
+	if aerr != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "business consolidation adjust failed", "detail": aerr.Error()})
+		return
+	}
+	now := time.Now()
+	draftBytes, _ := json.Marshal(businessDraftRecord{
+		Status:     "ready_to_confirm",
+		Round:      6,
+		AgentDraft: adjusted,
+	})
+	if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+		ID: "dmsg_" + idpkg.New(), DialogueID: id, Role: "agent", Kind: "business_draft",
+		MetadataJSON: string(draftBytes), CreatedAt: now,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "append business draft")
+		return
+	}
+	s.publishDialogueSimple("dialogue.agent_draft.updated", id, adjusted)
+	view, err := s.composeDialogueView(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "compose view")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 // ---- shared small helpers -------------------------------------------------
+
+// activeDialogueIntent normalizes a route-selection intent before it drives the
+// route switch. The business_processing_agent route is now hidden at the server
+// layer: a stale client POST {intent:"business_processing_agent"} is mapped to
+// application_generation so it falls into the application-generation case
+// (child clarification + drafting_application) instead of starting business
+// drafting. The dormant business-agent endpoints/consts stay intact for
+// compatibility coverage.
+func activeDialogueIntent(intent dialogue.Intent) dialogue.Intent {
+	if intent == dialogue.IntentBusinessProcessingAgent {
+		return dialogue.IntentApplicationGeneration
+	}
+	return intent
+}
 
 func dialogueValidIntent(s string) bool {
 	switch dialogue.Intent(s) {
