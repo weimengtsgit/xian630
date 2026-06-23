@@ -164,6 +164,36 @@ type Agent struct {
 	Editable        bool          `json:"editable"`
 }
 
+type AgentAuthoringStatus string
+
+const (
+	AgentAuthoringDrafting    AgentAuthoringStatus = "drafting"
+	AgentAuthoringReadyToSave AgentAuthoringStatus = "ready_to_save"
+	AgentAuthoringSaved       AgentAuthoringStatus = "saved"
+	AgentAuthoringAbandoned   AgentAuthoringStatus = "abandoned"
+	AgentAuthoringFailed      AgentAuthoringStatus = "failed"
+)
+
+type AgentAuthoringSession struct {
+	ID            string               `json:"id"`
+	Mode          string               `json:"mode"`
+	TargetAgentID string               `json:"target_agent_id,omitempty"`
+	Status        AgentAuthoringStatus `json:"status"`
+	DraftJSON     string               `json:"draft_json"`
+	CreatedAt     time.Time            `json:"created_at"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+}
+
+type AgentAuthoringMessage struct {
+	ID           string    `json:"id"`
+	SessionID    string    `json:"session_id"`
+	Role         string    `json:"role"`
+	Kind         string    `json:"kind"`
+	Content      string    `json:"content"`
+	MetadataJSON string    `json:"metadata_json"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type Job struct {
 	ID               string    `json:"id"`
 	UserPrompt       string    `json:"user_prompt"`

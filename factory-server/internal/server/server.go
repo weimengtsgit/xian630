@@ -329,6 +329,11 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/business-agents", s.createBusinessAgent)
 	r.Handle("PATCH", "/api/business-agents/:id", s.updateBusinessAgent)
 	r.Handle("PATCH", "/api/business-agents/:id/enabled", s.setBusinessAgentEnabled)
+	r.Handle("POST", "/api/business-agent-authoring", s.createBusinessAgentAuthoring)
+	r.Handle("GET", "/api/business-agent-authoring/:id", s.getBusinessAgentAuthoring)
+	r.Handle("POST", "/api/business-agent-authoring/:id/messages", s.addBusinessAgentAuthoringMessage)
+	r.Handle("POST", "/api/business-agent-authoring/:id/finalize", s.finalizeBusinessAgentAuthoring)
+	r.Handle("POST", "/api/business-agent-authoring/:id/abandon", s.abandonBusinessAgentAuthoring)
 
 	r.Handle("POST", "/api/jobs", s.createJob)
 	r.Handle("GET", "/api/jobs", s.listJobs)

@@ -280,19 +280,25 @@ func (s *Server) createBusinessAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	agent, status, errText := s.createBusinessAgentFromBody(r, body)
+	if errText != "" {
+		writeError(w, status, errText)
+		return
+	}
+	writeJSON(w, http.StatusCreated, agent)
+}
 
+func (s *Server) createBusinessAgentFromBody(r *http.Request, body businessAgentBody) (model.Agent, int, string) {
 	key := strings.TrimSpace(body.Key)
 	name := strings.TrimSpace(body.Name)
 	prompt := strings.TrimSpace(body.Prompt)
 	if key == "" || name == "" || prompt == "" {
-		writeError(w, http.StatusBadRequest, "key, name, and prompt are required")
-		return
+		return model.Agent{}, http.StatusBadRequest, "key, name, and prompt are required"
 	}
 
 	existing, err := s.store.ListAgents(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list agents")
-		return
+		return model.Agent{}, http.StatusInternalServerError, "list agents"
 	}
 	id := agentIDFromKey(key)
 	sortOrder := 1
@@ -301,8 +307,7 @@ func (s *Server) createBusinessAgent(w http.ResponseWriter, r *http.Request) {
 			sortOrder = agent.SortOrder + 1
 		}
 		if agent.ID == id || agent.Key == key {
-			writeError(w, http.StatusConflict, "agent already exists")
-			return
+			return model.Agent{}, http.StatusConflict, "agent already exists"
 		}
 	}
 
@@ -326,10 +331,9 @@ func (s *Server) createBusinessAgent(w http.ResponseWriter, r *http.Request) {
 		Editable:        true,
 	}
 	if err := s.store.CreateAgent(r.Context(), agent); err != nil {
-		writeError(w, http.StatusInternalServerError, "create agent")
-		return
+		return model.Agent{}, http.StatusInternalServerError, "create agent"
 	}
-	writeJSON(w, http.StatusCreated, agent)
+	return agent, http.StatusCreated, ""
 }
 
 // businessAgentUpdateBody is the request shape for PATCH /api/business-agents/:id.

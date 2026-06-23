@@ -149,6 +149,26 @@ CREATE TABLE IF NOT EXISTS clarification_business_agents (
 CREATE INDEX IF NOT EXISTS idx_clarification_business_agents_session
 ON clarification_business_agents(clarification_session_id, priority);
 
+CREATE TABLE IF NOT EXISTS agent_authoring_sessions (
+    id              TEXT    PRIMARY KEY,
+    mode            TEXT    NOT NULL,
+    target_agent_id TEXT    NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL,
+    draft_json      TEXT    NOT NULL DEFAULT '{}',
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_authoring_messages (
+    id            TEXT    PRIMARY KEY,
+    session_id    TEXT    NOT NULL,
+    role          TEXT    NOT NULL,
+    kind          TEXT    NOT NULL,
+    content       TEXT    NOT NULL DEFAULT '',
+    metadata_json TEXT    NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL
+);
+
 -- Step execution records: the durable, immutable audit trail of a step attempt
 -- (lifecycle events, activity/summary blobs, captured command stdout/stderr,
 -- errors). sequence is per (step_id, attempt) and assigned by the executor-side
