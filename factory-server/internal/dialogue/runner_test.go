@@ -1,0 +1,409 @@
+package dialogue
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
+)
+
+// --- fakes (mirror clarification/runner_test.go) ---
+
+type fakeCommandRunner struct {
+	dir       string
+	name      string
+	args      []string
+	rawStdout string
+}
+
+func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	f.dir, f.name, f.args = dir, name, args
+	return runner.CommandResult{Stdout: f.rawStdout, ExitCode: 0}, nil
+}
+
+type fakeStreamCommandRunner struct {
+	dir   string
+	name  string
+	args  []string
+	lines []string
+}
+
+func (f *fakeStreamCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	return runner.CommandResult{ExitCode: 1, Stderr: "Run should not be used when RunStream exists"}, nil
+}
+
+func (f *fakeStreamCommandRunner) RunStream(ctx context.Context, dir, name string, onStdoutLine func(string), args ...string) (runner.CommandResult, error) {
+	f.dir, f.name, f.args = dir, name, args
+	var stdout strings.Builder
+	for _, line := range f.lines {
+		stdout.WriteString(line)
+		stdout.WriteByte('\n')
+		onStdoutLine(line)
+	}
+	return runner.CommandResult{Stdout: stdout.String(), ExitCode: 0}, nil
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
+}
+
+func sampleApps() []AppSummary {
+	return []AppSummary{
+		{Slug: "carrier-deck-wind-calculator", Name: "甲板风计算器", AppType: "command_dashboard"},
+		{Slug: "fleet-replay", Name: "编队复盘", AppType: "situation_replay", IsGenerated: true},
+	}
+}
+
+func sampleBlueprints() []BlueprintSummary {
+	return []BlueprintSummary{
+		{Slug: "carrier-formation-replay", Name: "航母编队复盘", AppType: "situation_replay"},
+		{Slug: "tidal-window", Name: "潮汐窗口", AppType: "command_dashboard"},
+	}
+}
+
+// --- intent routing: argv discipline ---
+
+func TestRouteIntentPromptUsesSkillAndPermitsOnlyReadGrepGlob(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent: IntentExistingApplication, Confidence: ConfidenceHigh,
+		ExistingApplicationSlugs: []string{"carrier-deck-wind-calculator"},
+		UserFacingReason:         "已存在该应用", NeedsRouteConfirmation: true,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_1", UserMessage: "打开甲板风计算器",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if fr.name != "claude" {
+		t.Fatalf("command = %s", fr.name)
+	}
+	if !argContains(fr.args, "--permission-mode", "plan") {
+		t.Fatalf("missing plan mode: %v", fr.args)
+	}
+	if !argContains(fr.args, "--allowedTools", "Read,Grep,Glob") {
+		t.Fatalf("missing allowedTools: %v", fr.args)
+	}
+	if !argHasDisallowed(fr.args, "Bash,Edit,Write") {
+		t.Fatalf("missing disallowedTools Bash,Edit,Write: %v", fr.args)
+	}
+	var sawPromptSkill bool
+	for _, a := range fr.args {
+		if strings.Contains(a, "dialogue-intent-routing") {
+			sawPromptSkill = true
+		}
+	}
+	if !sawPromptSkill {
+		t.Fatalf("prompt must reference dialogue-intent-routing skill: %v", fr.args)
+	}
+	// artifacts written
+	for _, rel := range []string{"input.json", "prompt.md", "output.json", "stdout.log", "stderr.log", "stream.jsonl"} {
+		if _, err := os.Stat(filepath.Join(root, ".factory-runs", "dialogues", "dia_1", "route", rel)); err != nil {
+			t.Fatalf("missing %s: %v", rel, err)
+		}
+	}
+}
+
+// --- intent routing: invented slug rejection ---
+
+func TestRouteIntentRejectsInventedAppSlug(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent: IntentExistingApplication, Confidence: ConfidenceHigh,
+		ExistingApplicationSlugs: []string{"totally-fabricated-app"},
+		UserFacingReason:         "x", NeedsRouteConfirmation: true,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_2", UserMessage: "x",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err == nil {
+		t.Fatalf("expected error for invented app slug")
+	}
+	if !strings.Contains(err.Error(), "fabricated-app") && !strings.Contains(err.Error(), "existingApplicationSlugs") {
+		t.Fatalf("error should name the invalid slug: %v", err)
+	}
+	for _, ev := range events {
+		b, _ := json.Marshal(ev)
+		if strings.Contains(string(b), "fabricated-app") {
+			t.Fatalf("invented slug leaked into emitted event: %s", string(b))
+		}
+	}
+}
+
+func TestRouteIntentRejectsInventedBlueprintSlug(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent: IntentApplicationGeneration, Confidence: ConfidenceHigh,
+		InternalBlueprintSlug: "invented-blueprint",
+		UserFacingReason:      "x", NeedsRouteConfirmation: true,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_3", UserMessage: "x",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err == nil {
+		t.Fatalf("expected error for invented blueprint slug")
+	}
+}
+
+// --- intent routing: valid generation route keeps internal slug in output but redacts from events ---
+
+func TestRouteIntentKeepsInternalSlugInOutputButRedactsFromEvents(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent: IntentApplicationGeneration, Confidence: ConfidenceHigh,
+		InternalBlueprintSlug: "carrier-formation-replay",
+		UserFacingReason:      "将基于现有蓝本生成新应用", NeedsRouteConfirmation: true,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_4", UserMessage: "做一个类似编队复盘的应用",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if out.InternalBlueprintSlug != "carrier-formation-replay" {
+		t.Fatalf("returned output must keep internal slug, got %q", out.InternalBlueprintSlug)
+	}
+	for _, ev := range events {
+		b, _ := json.Marshal(ev)
+		if strings.Contains(string(b), "carrier-formation-replay") || strings.Contains(string(b), "internalBlueprintSlug") {
+			t.Fatalf("internal blueprint slug leaked into emitted event: %s", string(b))
+		}
+		if strings.Contains(string(b), "invented") {
+			t.Fatalf("invented content leaked: %s", string(b))
+		}
+	}
+}
+
+// --- intent routing: ambiguous confidence surfaced ---
+
+func TestRouteIntentAcceptsAmbiguousConfidence(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent: IntentApplicationGeneration, Confidence: ConfidenceAmbiguous,
+		UserFacingReason: "无法确定是要新建应用还是处理业务", NeedsRouteConfirmation: true,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_5", UserMessage: "x",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent ambiguous: %v", err)
+	}
+	if out.Confidence != ConfidenceAmbiguous {
+		t.Fatalf("confidence = %s", out.Confidence)
+	}
+}
+
+func TestRouteIntentRejectsInvalidIntent(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, map[string]any{
+		"intent": "free_form_chat", "confidence": "high",
+		"existingApplicationSlugs": []string{}, "userFacingReason": "x",
+		"needsRouteConfirmation": false,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_6", UserMessage: "x",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err == nil {
+		t.Fatalf("expected error for invalid intent")
+	}
+}
+
+// --- intent routing: malformed JSON ---
+
+func TestRouteIntentRejectsMalformedJSON(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: "not json at all {{{"}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_7", UserMessage: "x",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err == nil {
+		t.Fatalf("expected error for malformed JSON")
+	}
+	if !strings.Contains(err.Error(), "output") && !strings.Contains(err.Error(), "JSON") {
+		t.Fatalf("error should describe JSON failure: %v", err)
+	}
+}
+
+// --- intent routing: thinking_delta filtered from streamed events ---
+
+func TestRouteIntentFiltersThinkingDeltaFromStream(t *testing.T) {
+	root := t.TempDir()
+	out := RouteOutput{
+		Intent: IntentExistingApplication, Confidence: ConfidenceHigh,
+		ExistingApplicationSlugs: []string{"carrier-deck-wind-calculator"},
+		UserFacingReason:         "已存在", NeedsRouteConfirmation: true,
+	}
+	outJSON := mustJSON(t, out)
+	// Split into two text_delta chunks with a thinking_delta in between.
+	split := len(outJSON) / 2
+	part1, part2 := outJSON[:split], outJSON[split:]
+	fr := &fakeStreamCommandRunner{lines: []string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"stream_event","event":{"delta":{"text":` + strconv.Quote(part1) + `,"type":"text_delta"},"index":0,"type":"content_block_delta"}}`,
+		`{"type":"stream_event","event":{"delta":{"thinking":"hidden internal reasoning about blueprints","type":"thinking_delta"},"index":1,"type":"content_block_delta"}}`,
+		`{"type":"stream_event","event":{"delta":{"text":` + strconv.Quote(part2) + `,"type":"text_delta"},"index":0,"type":"content_block_delta"}}`,
+		`{"type":"result","subtype":"success","result":` + strconv.Quote(outJSON) + `}`,
+	}}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_8", UserMessage: "x",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err != nil {
+		t.Fatalf("RouteIntent stream: %v", err)
+	}
+	for _, ev := range events {
+		if strings.Contains(ev.Delta, "hidden internal reasoning") {
+			t.Fatalf("thinking_delta leaked into event delta: %q", ev.Delta)
+		}
+		b, _ := json.Marshal(ev)
+		if strings.Contains(string(b), "hidden internal reasoning") {
+			t.Fatalf("thinking_delta leaked into event data: %s", string(b))
+		}
+	}
+}
+
+// --- business drafting: valid agentDraft ---
+
+func TestBusinessDraftRoundProducesValidAgentDraft(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, BusinessDraftOutput{
+		Status: "ready_to_confirm", Round: 1,
+		WorkLog: []WorkLog{{Type: "analysis", Content: "已识别业务处理需求"}},
+		AgentDraft: BusinessAgentDraft{
+			Name:        "物资申请审批 agent",
+			Description: "辅助审批物资申请",
+			Prompt:      "你是物资申请审批助手。阅读申请内容，依据规则给出建议。",
+		},
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	out, err := r.RunBusinessDraftRound(context.Background(), BusinessDraftInput{
+		DialogueID: "dia_b1", Round: 1, MaxRounds: 6, UserMessage: "做一个物资审批 agent",
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err != nil {
+		t.Fatalf("RunBusinessDraftRound: %v", err)
+	}
+	if out.AgentDraft.Name == "" || out.AgentDraft.Prompt == "" {
+		t.Fatalf("agentDraft incomplete: %+v", out.AgentDraft)
+	}
+	if out.Status != "ready_to_confirm" {
+		t.Fatalf("status = %s", out.Status)
+	}
+	if len(events) == 0 {
+		t.Fatalf("expected events")
+	}
+}
+
+// --- business drafting: prompt does not imply execution ---
+
+func TestBusinessDraftPromptSkillDoesNotImplyExecution(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, BusinessDraftOutput{
+		Status: "ready_to_confirm", Round: 1,
+		AgentDraft: BusinessAgentDraft{Name: "x", Description: "y", Prompt: "z"},
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RunBusinessDraftRound(context.Background(), BusinessDraftInput{
+		DialogueID: "dia_b2", Round: 1, MaxRounds: 6, UserMessage: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunBusinessDraftRound: %v", err)
+	}
+	var promptText string
+	for _, a := range fr.args {
+		if strings.Contains(a, "business-agent-drafting") {
+			promptText = a
+			break
+		}
+	}
+	if promptText == "" {
+		t.Fatalf("prompt must reference business-agent-drafting skill")
+	}
+	// The prompt must instruct the model the draft prompt must not imply tool access/execution.
+	if !strings.Contains(promptText, "tool access") || !strings.Contains(promptText, "execution") {
+		t.Fatalf("prompt must forbid implying tool access/execution: %s", promptText)
+	}
+}
+
+// --- business drafting: rejects >1 question ---
+
+func TestBusinessDraftRoundRejectsMoreThanOneQuestion(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, BusinessDraftOutput{
+		Status: "waiting_user", Round: 1,
+		Questions: []Question{
+			{ID: "q1", Required: true, Options: []Option{{Value: "a"}, {Value: "b"}}},
+			{ID: "q2", Required: true, Options: []Option{{Value: "c"}, {Value: "d"}}},
+		},
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RunBusinessDraftRound(context.Background(), BusinessDraftInput{
+		DialogueID: "dia_b3", Round: 1, MaxRounds: 6, UserMessage: "x",
+	}, func(ev StreamEvent) {})
+	if err == nil {
+		t.Fatalf("expected error for >1 question")
+	}
+}
+
+// --- business drafting: malformed JSON ---
+
+func TestBusinessDraftRoundRejectsMalformedJSON(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: "garbage {{{"}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RunBusinessDraftRound(context.Background(), BusinessDraftInput{
+		DialogueID: "dia_b4", Round: 1, MaxRounds: 6, UserMessage: "x",
+	}, func(ev StreamEvent) {})
+	if err == nil {
+		t.Fatalf("expected error for malformed JSON")
+	}
+}
+
+// --- helpers ---
+
+func argContains(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func argHasDisallowed(args []string, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--disallowedTools" && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}

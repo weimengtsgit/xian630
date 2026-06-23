@@ -35,6 +35,7 @@ func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...s
 		Status:  "ready_to_confirm",
 		Round:   1,
 		WorkLog: []WorkLog{{Type: "analysis", Content: "识别到这是态势复盘类应用。"}},
+		NormalizedScenarioName: "航母编队月度航迹复盘",
 		Requirement: Requirement{
 			AppType: "situation_replay", AppName: "航母编队月度航迹复盘",
 			TargetUsers: []string{"态势分析人员"}, CoreScenario: "复盘近 1 个月航迹",
@@ -47,13 +48,6 @@ func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...s
 			},
 			BlueprintRefs: []string{"carrier-formation-replay"},
 		},
-		RecommendedBlueprints: []BlueprintRef{{
-			Slug:          "carrier-formation-replay",
-			Name:          "航母编队月度航迹复盘",
-			AppType:       "situation_replay",
-			Reason:        "近一月编队航迹复盘匹配",
-			ReferenceKind: "structure|interaction|data-model|style",
-		}},
 	}
 	b, _ := json.Marshal(out)
 	stdout := string(b)
@@ -131,17 +125,13 @@ func TestRunnerWritesArtifactsAndNormalizesEvents(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatalf("expected normalized events")
 	}
-	// The blueprint catalog branch: a clarification.blueprint.recommended event
-	// must be present whenever RecommendedBlueprints is non-empty.
-	var sawBlueprint bool
+	// Adaptive contract: blueprint recommendation events are gone (blueprints
+	// are an internal Factory reference). Assert NO such event is emitted and
+	// that the normalizedScenarioName is surfaced instead.
 	for _, ev := range events {
 		if ev.Type == "clarification.blueprint.recommended" {
-			sawBlueprint = true
-			break
+			t.Fatalf("blueprint recommendation event must be removed in adaptive contract: %#v", ev)
 		}
-	}
-	if !sawBlueprint {
-		t.Fatalf("expected clarification.blueprint.recommended event, got types: %v", eventTypes(events))
 	}
 }
 
@@ -209,8 +199,8 @@ func TestRunnerParsesFencedJSON(t *testing.T) {
 	if out.Requirement.AppType != "situation_replay" {
 		t.Fatalf("apptype = %s", out.Requirement.AppType)
 	}
-	if len(out.RecommendedBlueprints) != 1 || out.RecommendedBlueprints[0].Slug != "carrier-formation-replay" {
-		t.Fatalf("blueprints = %+v", out.RecommendedBlueprints)
+	if out.NormalizedScenarioName != "航母编队月度航迹复盘" {
+		t.Fatalf("normalizedScenarioName = %q", out.NormalizedScenarioName)
 	}
 	// output.json must hold the clean (re-marshaled) object, not the raw fence.
 	raw, err := os.ReadFile(filepath.Join(root, ".factory-runs", "clarifications", "clar_fence", "round-1", "output.json"))
@@ -383,4 +373,189 @@ func contains(xs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// --- adaptive 6-round contract (Step 4) ---
+
+// TestRunnerRejectsMoreThanOneQuestion proves the runner rejects a model round
+// that emits more than one question rather than silently truncating.
+func TestRunnerRejectsMoreThanOneQuestion(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"分析中"}],
+  "questions": [
+    {"id":"q1","required":true,"options":[{"value":"a"},{"value":"b"}]},
+    {"id":"q2","required":true,"options":[{"value":"c"},{"value":"d"}]}
+  ],
+  "requirement": {"appType":"command_dashboard","appName":"x"}
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	_, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_multi_q", Round: 1, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err == nil {
+		t.Fatalf("expected error for >1 question")
+	}
+	// No question.created events should leak for a rejected round.
+	for _, ev := range events {
+		if ev.Type == "clarification.question.created" {
+			t.Fatalf("rejected round must not emit question events: %#v", ev)
+		}
+	}
+}
+
+// TestRunnerAcceptsExactlyOneQuestion proves a valid one-decision round passes.
+func TestRunnerAcceptsExactlyOneQuestion(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"需要确认应用类型"}],
+  "questions": [
+    {"id":"app_type","label":"应用类型","required":true,"recommendation":"command_dashboard","options":[{"value":"command_dashboard","label":"指挥仪表盘"},{"value":"situation_replay","label":"态势复盘"}],"allowCustom":false}
+  ],
+  "requirement": {"appType":"command_dashboard","appName":"潮汐窗口"}
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_one_q", Round: 1, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound one question: %v", err)
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	}
+}
+
+// TestRunnerEmitsConsolidationEvent proves a round-5 consolidation list is
+// surfaced as a clarification.consolidation.updated event.
+func TestRunnerEmitsConsolidationEvent(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "waiting_user",
+  "round": 5,
+  "workLog": [{"type":"analysis","content":"汇总推荐"}],
+  "questions": [],
+  "consolidation": [
+    {"field":"primaryView","recommendedValue":"四格仪表盘","reason":"匹配指挥决策","alternatives":["列表"]},
+    {"field":"dataPolicy","recommendedValue":"mock_data","reason":"先验数据","alternatives":["live_api"]}
+  ],
+  "requirement": {"appType":"command_dashboard","appName":"潮汐窗口"}
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	_, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_consol", Round: 5, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err != nil {
+		t.Fatalf("RunRound consolidation: %v", err)
+	}
+	var sawConsolidation bool
+	for _, ev := range events {
+		if ev.Type == "clarification.consolidation.updated" {
+			sawConsolidation = true
+			b, _ := json.Marshal(ev.Data)
+			var entries []ConsolidationEntry
+			if err := json.Unmarshal(b, &entries); err != nil {
+				t.Fatalf("unmarshal consolidation event: %v", err)
+			}
+			if len(entries) != 2 || entries[0].Field != "primaryView" {
+				t.Fatalf("consolidation entries = %+v", entries)
+			}
+		}
+	}
+	if !sawConsolidation {
+		t.Fatalf("missing clarification.consolidation.updated; got %v", eventTypes(events))
+	}
+}
+
+// TestApplyConsolidationAdjustment proves the round-6 merge: only the selected
+// field is overridden; every other missing field takes its persisted
+// recommended value; the result is ready_to_confirm. No model turn is invoked.
+func TestApplyConsolidationAdjustment(t *testing.T) {
+	base := Requirement{
+		AppType: "command_dashboard", AppName: "潮汐窗口计算器",
+		TargetUsers: []string{"作战参谋"}, CoreScenario: "计算出港窗口",
+		GenerationProfile: map[string][]string{"base": {"software-factory-app"}},
+	}
+	consolidation := []ConsolidationEntry{
+		{Field: "primaryView", RecommendedValue: json.RawMessage(`"四格仪表盘"`), Reason: "r", Alternatives: []string{"列表"}},
+		{Field: "mainEntities", RecommendedValue: json.RawMessage(`["港口","潮汐","窗口"]`), Reason: "r"},
+		{Field: "dataPolicy", RecommendedValue: json.RawMessage(`"mock_data"`), Reason: "r"},
+		{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["窗口计算"]`), Reason: "r"},
+	}
+	// User adjusts primaryView away from the recommendation.
+	merged, err := ApplyConsolidationAdjustment(base, consolidation, "primaryView", "双屏对比")
+	if err != nil {
+		t.Fatalf("ApplyConsolidationAdjustment: %v", err)
+	}
+	if merged.PrimaryView != "双屏对比" {
+		t.Fatalf("selected field should be overridden, got %q", merged.PrimaryView)
+	}
+	// Other missing fields take their recommended values.
+	if merged.DataPolicy != "mock_data" {
+		t.Fatalf("dataPolicy should be merged recommended value, got %q", merged.DataPolicy)
+	}
+	if len(merged.MainEntities) != 3 || merged.MainEntities[0] != "港口" {
+		t.Fatalf("mainEntities should be merged: %+v", merged.MainEntities)
+	}
+	if len(merged.AcceptanceFocus) != 1 || merged.AcceptanceFocus[0] != "窗口计算" {
+		t.Fatalf("acceptanceFocus should be merged: %+v", merged.AcceptanceFocus)
+	}
+}
+
+// TestApplyConsolidationAdjustmentRejectsUnknownField proves only a known field
+// (present in the consolidation list) may be adjusted.
+func TestApplyConsolidationAdjustmentRejectsUnknownField(t *testing.T) {
+	consolidation := []ConsolidationEntry{
+		{Field: "primaryView", RecommendedValue: json.RawMessage(`"x"`)},
+	}
+	_, err := ApplyConsolidationAdjustment(Requirement{}, consolidation, "notInList", "v")
+	if err == nil {
+		t.Fatalf("expected error for field not in consolidation list")
+	}
+}
+
+// TestApplyConsolidationAdjustmentRejectsInvalidValue proves a malformed
+// recommendedValue is rejected rather than silently dropped.
+func TestApplyConsolidationAdjustmentRejectsInvalidValue(t *testing.T) {
+	consolidation := []ConsolidationEntry{
+		{Field: "primaryView", RecommendedValue: json.RawMessage(`{broken`), Reason: "r"},
+	}
+	_, err := ApplyConsolidationAdjustment(Requirement{}, consolidation, "primaryView", "v")
+	if err == nil {
+		t.Fatalf("expected error for malformed recommendedValue")
+	}
+}
+
+// TestRunnerSurfacesNormalizedScenarioName proves the scenario name is carried
+// on the round output for Task 4 to append the Base36 serial.
+func TestRunnerSurfacesNormalizedScenarioName(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "normalizedScenarioName": "潮汐窗口计算",
+  "workLog": [{"type":"ready","content":"ok"}],
+  "questions": [],
+  "requirement": {"appType":"command_dashboard","appName":"潮汐窗口","targetUsers":["x"],"coreScenario":"y","primaryView":"z","mainEntities":["a"],"dataPolicy":"mock_data","acceptanceFocus":["b"],"generationProfile":{"base":["software-factory-app"]}}
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_name", Round: 1, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if out.NormalizedScenarioName != "潮汐窗口计算" {
+		t.Fatalf("normalizedScenarioName = %q", out.NormalizedScenarioName)
+	}
+	// Must NOT contain a Base36 serial appended here (Factory does that in Task 4).
+	if strings.ContainsAny(out.NormalizedScenarioName, "0123456789") {
+		t.Fatalf("scenario name must not include serial here: %q", out.NormalizedScenarioName)
+	}
 }
