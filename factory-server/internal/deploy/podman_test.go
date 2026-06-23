@@ -3,12 +3,37 @@ package deploy
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
+
+func TestHelperProcessRunStream(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	switch os.Getenv("GO_HELPER_STREAM_MODE") {
+	case "success":
+		os.Stdout.WriteString("out1\nout2\n")
+		os.Stderr.WriteString("err1\nerr2\n")
+		os.Exit(0)
+	case "failure":
+		os.Stderr.WriteString("failing\n")
+		os.Exit(3)
+	default:
+		os.Exit(2)
+	}
+}
+
+func runStreamHelperCommand(mode string) (string, []string) {
+	return os.Args[0], []string{
+		"-test.run=TestHelperProcessRunStream",
+		"--",
+	}
+}
 
 // fakeRunner records every Run invocation and returns a configured result. It
 // is the test double for OSRunner so podman.go can be unit-tested without a
@@ -225,7 +250,9 @@ func TestRunStreamWithInputForwardsStdoutAndStderr(t *testing.T) {
 	var stdoutLines, stderrLines []string
 	var mu sync.Mutex
 	os := OSRunner{}
-	// A portable shell one-liner: print two stdout lines + two stderr lines.
+	name, args := runStreamHelperCommand("success")
+	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv("GO_HELPER_STREAM_MODE", "success")
 	res, err := os.RunStreamWithInput(
 		context.Background(), "", "",
 		func(line string) {
@@ -238,7 +265,7 @@ func TestRunStreamWithInputForwardsStdoutAndStderr(t *testing.T) {
 			defer mu.Unlock()
 			stderrLines = append(stderrLines, line)
 		},
-		"sh", "-c", "echo out1; echo out2; echo err1 1>&2; echo err2 1>&2",
+		name, args...,
 	)
 	if err != nil {
 		t.Fatalf("RunStreamWithInput: %v", err)
@@ -272,11 +299,14 @@ func TestRunStreamWithInputReturnsOutputOnNonZeroExit(t *testing.T) {
 	}
 	var stderrLines []string
 	os := OSRunner{}
+	name, args := runStreamHelperCommand("failure")
+	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv("GO_HELPER_STREAM_MODE", "failure")
 	res, err := os.RunStreamWithInput(
 		context.Background(), "", "",
 		func(line string) {},
 		func(line string) { stderrLines = append(stderrLines, line) },
-		"sh", "-c", "echo failing 1>&2; exit 3",
+		name, args...,
 	)
 	if err != nil {
 		t.Fatalf("RunStreamWithInput err = %v, want nil (non-zero exit reported via ExitCode)", err)

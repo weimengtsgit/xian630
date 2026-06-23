@@ -65,7 +65,11 @@ func TestResolveEnvOverrides(t *testing.T) {
 	if cfg.ArtifactRoot != "/tmp/factory-runs" {
 		t.Fatalf("ArtifactRoot = %q", cfg.ArtifactRoot)
 	}
-	if cfg.WorkspaceRoot != "/tmp/xian630" {
+	wantWorkspaceRoot, err := filepath.Abs("/tmp/xian630")
+	if err != nil {
+		t.Fatalf("Abs workspace root: %v", err)
+	}
+	if cfg.WorkspaceRoot != wantWorkspaceRoot {
 		t.Fatalf("WorkspaceRoot = %q", cfg.WorkspaceRoot)
 	}
 	if cfg.LogPath != "/tmp/factory.log" {
