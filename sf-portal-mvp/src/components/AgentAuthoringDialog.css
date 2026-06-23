@@ -214,7 +214,7 @@
   background: rgba(111, 218, 255, 0.4);
 }
 
-.spin {
+.authoring-spin {
   animation: authoring-spin 1s linear infinite;
 }
 

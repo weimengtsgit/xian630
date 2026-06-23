@@ -16,6 +16,13 @@ export function AgentAuthoringDialog({ open, messages, draft, sending, saving, e
     if (!open) setInput('')
   }, [open])
 
+  useEffect(() => {
+    if (!open) return
+    const handleKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [open, onClose])
+
   if (!open) return null
 
   const handleSend = async () => {
@@ -62,7 +69,7 @@ export function AgentAuthoringDialog({ open, messages, draft, sending, saving, e
           ))}
           {sending && (
             <div className="authoring-bubble authoring-bubble-agent">
-              <Loader2 size={14} className="spin" />
+              <Loader2 size={14} className="authoring-spin" />
               <span className="authoring-thinking">思考中...</span>
             </div>
           )}
@@ -88,7 +95,7 @@ export function AgentAuthoringDialog({ open, messages, draft, sending, saving, e
               title="发送"
               aria-label="发送"
             >
-              {sending ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+              {sending ? <Loader2 size={14} className="authoring-spin" /> : <Send size={14} />}
             </button>
           </div>
           <div className="authoring-actions">
