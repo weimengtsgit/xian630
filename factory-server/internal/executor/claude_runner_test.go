@@ -173,6 +173,38 @@ func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T)
 	}
 }
 
+func TestBusinessAgentContextInjectedIntoClaudePrompts(t *testing.T) {
+	workspace := t.TempDir()
+	artifactRoot := filepath.Join(t.TempDir(), ".factory-runs")
+	ws := runner.AttemptWorkspace{
+		Root:     artifactRoot,
+		JobID:    "job_business_context",
+		StepKind: model.StepSolutionDesign,
+		Attempt:  1,
+	}
+	job := model.Job{
+		ID:                         "job_business_context",
+		UserPrompt:                 "生成海事预警看板",
+		BusinessAgentSnapshotsJSON: `[{"id":"agent_a","key":"maritime-alert-expert","name":"海事预警专家","description":"海事规则","enabled":true,"prompt":"必须突出 AIS 异常航迹"}]`,
+	}
+	r := &ClaudeStepRunner{Workspace: workspace}
+
+	solutionPrompt := r.prompt(job, model.JobStep{Kind: model.StepSolutionDesign}, ws, nil, nil)
+	if !strings.Contains(solutionPrompt, "本次任务绑定了多个业务智能体") || !strings.Contains(solutionPrompt, "必须突出 AIS 异常航迹") {
+		t.Fatalf("business context missing from solution prompt: %s", solutionPrompt)
+	}
+
+	codePrompt := r.prompt(job, model.JobStep{Kind: model.StepCodeGeneration}, ws, nil, nil)
+	if !strings.Contains(codePrompt, "海事预警专家") || !strings.Contains(codePrompt, "maritime-alert-expert") {
+		t.Fatalf("business context missing from code prompt: %s", codePrompt)
+	}
+
+	requirementPrompt := r.prompt(job, model.JobStep{Kind: model.StepRequirementAnalysis}, ws, nil, nil)
+	if !strings.Contains(requirementPrompt, "业务智能体上下文") {
+		t.Fatalf("business context missing from requirement prompt: %s", requirementPrompt)
+	}
+}
+
 // TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: as of Task 5 the
 // requirement_analysis step FREEZES the confirmed requirement. It must NEVER
 // return waiting_user (clarification is pre-job now): a frozen output whose

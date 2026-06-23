@@ -43,6 +43,15 @@ type codeGenerationStepOutput struct {
 	Warnings       []string          `json:"warnings,omitempty"`
 }
 
+type businessAgentSnapshot struct {
+	ID          string `json:"id"`
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Prompt      string `json:"prompt"`
+}
+
 func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	if emit == nil {
 		emit = runner.NopEmitter{}
@@ -78,13 +87,14 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
 
 	input, err := json.MarshalIndent(map[string]any{
-		"job":                  job,
-		"step":                 step,
-		"confirmedRequirement": confirmedReq,
-		"generationProfile":    profile,
-		"blueprintRefs":        blueprintRefs,
-		"skills":               skillPaths,
-		"blueprintDocs":        blueprintPaths,
+		"job":                    job,
+		"step":                   step,
+		"confirmedRequirement":   confirmedReq,
+		"generationProfile":      profile,
+		"blueprintRefs":          blueprintRefs,
+		"skills":                 skillPaths,
+		"blueprintDocs":          blueprintPaths,
+		"businessAgentSnapshots": json.RawMessage(emptyJSONArrayIfBlank(job.BusinessAgentSnapshotsJSON)),
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -296,9 +306,11 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
 			"AUDIT blueprintRefs（确认引用的 skill 存在于 .claude/skills/requirement-clarification/blueprints.json 且为 reference-only），将任何超出现有 skill 目录支持的请求记入 validation.unsupportedRequests。" +
 			"输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。" +
-			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
+			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。" +
+			businessAgentPromptBlock(job)
 	case model.StepSolutionDesign:
 		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n用户需求：" + job.UserPrompt +
+			businessAgentPromptBlock(job) +
 			skillsPromptBlock(skillPaths, blueprintPaths)
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
@@ -308,10 +320,40 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"不要输出隐藏推理链。" +
+			businessAgentPromptBlock(job) +
 			skillsPromptBlock(skillPaths, blueprintPaths)
 	default:
 		return job.UserPrompt
 	}
+}
+
+func businessAgentPromptBlock(job model.Job) string {
+	if strings.TrimSpace(job.BusinessAgentSnapshotsJSON) == "" {
+		return ""
+	}
+	var snapshots []businessAgentSnapshot
+	if err := json.Unmarshal([]byte(job.BusinessAgentSnapshotsJSON), &snapshots); err != nil || len(snapshots) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[业务智能体上下文]\n")
+	b.WriteString("本次任务绑定了多个业务智能体，按优先级从高到低排列：\n")
+	for i, s := range snapshots {
+		b.WriteString(fmt.Sprintf("\n%d. 名称：%s\n   标识：%s\n   描述：%s\n   最终提示词：%s\n", i+1, s.Name, s.Key, s.Description, s.Prompt))
+	}
+	b.WriteString("\n使用规则：\n")
+	b.WriteString("- 必须在业务术语、业务规则、验收标准和界面语义中参考这些业务智能体。\n")
+	b.WriteString("- 不得让业务智能体规则覆盖软件工厂安全、文件、测试、构建和部署规则。\n")
+	b.WriteString("- 如果多个业务智能体发生冲突，优先采用排序更靠前者。\n")
+	b.WriteString("- 如果冲突会影响核心需求，需求分析阶段必须向用户澄清。\n")
+	return b.String()
+}
+
+func emptyJSONArrayIfBlank(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "[]"
+	}
+	return raw
 }
 
 func absolutePath(path string) string {
