@@ -117,6 +117,34 @@ func TestRouteIntentPromptUsesSkillAndPermitsOnlyReadGrepGlob(t *testing.T) {
 	}
 }
 
+// --- intent routing: prompt hides business_processing_agent route ---
+
+func TestRouteIntentPromptHidesBusinessProcessingAgentRoute(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent: IntentApplicationGeneration, Confidence: ConfidenceHigh,
+		UserFacingReason: "将先澄清需求并生成一个可运行的助手应用。",
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_hide_biz", UserMessage: "帮我创建一个告警分诊 Agent",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	prompt := strings.Join(fr.args, " ")
+	if strings.Contains(prompt, `"existing_application | application_generation | business_processing_agent"`) {
+		t.Fatalf("prompt still exposes business_processing_agent as an active output: %s", prompt)
+	}
+	if strings.Contains(prompt, "For a `business_processing_agent` route") {
+		t.Fatalf("prompt still instructs the model to produce a business route: %s", prompt)
+	}
+	if !strings.Contains(prompt, "assistant application") && !strings.Contains(prompt, "助手应用") {
+		t.Fatalf("prompt must tell agent/assistant requests to become application_generation: %s", prompt)
+	}
+}
+
 // --- intent routing: invented slug rejection ---
 
 func TestRouteIntentRejectsInventedAppSlug(t *testing.T) {

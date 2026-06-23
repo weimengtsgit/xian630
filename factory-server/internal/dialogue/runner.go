@@ -224,7 +224,7 @@ func (r Runner) routePrompt(inputPath string) string {
 		fmt.Sprintf("The route input is at the absolute path %s — read it with the Read tool. ", inputPath) +
 		"Output ONLY valid JSON matching the route output contract. " +
 		"Use only the candidate applications and blueprints supplied in the input; never invent slugs or resource names, never state nothing is reusable, never describe a blueprint as a template, never expose hidden reasoning. " +
-		"For a business_processing_agent route return a positive user-facing explanation of the business outcome."
+		"Do not emit business_processing_agent in the current phase. If the user asks to create an agent or assistant and no existing app is a strong fit, route to application_generation as a runnable assistant application."
 }
 
 func (r Runner) draftPrompt(inputPath string) string {
