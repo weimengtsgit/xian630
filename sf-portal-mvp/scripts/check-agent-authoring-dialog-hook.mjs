@@ -92,4 +92,17 @@ const sysResult = parseDialogMessages(withSystem)
 assert.equal(sysResult.messages.length, 1, 'system messages should be filtered out')
 assert.equal(sysResult.messages[0].role, 'user')
 
+// --- Source scan: AgentAuthoringDialog.jsx exists and has required structure ---
+import { readFileSync } from 'node:fs'
+const dialogSource = readFileSync(new URL('../src/components/AgentAuthoringDialog.jsx', import.meta.url), 'utf8')
+
+assert.match(dialogSource, /agent-dialog-backdrop/, 'must use agent-dialog-backdrop class')
+assert.match(dialogSource, /authoring-dialog/, 'must have authoring-dialog class')
+assert.match(dialogSource, /authoring-bubble/, 'must have chat bubble class')
+assert.match(dialogSource, /authoring-draft-card/, 'must have draft card class')
+assert.match(dialogSource, /保存智能体/, 'must have save button with Chinese label')
+assert.match(dialogSource, /onSend/, 'must accept onSend prop')
+assert.match(dialogSource, /onSave/, 'must accept onSave prop')
+assert.match(dialogSource, /onClose/, 'must accept onClose prop')
+
 console.log('check-agent-authoring-dialog-hook: OK')
