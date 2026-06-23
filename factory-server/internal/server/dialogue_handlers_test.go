@@ -1097,6 +1097,83 @@ func appSlugs(apps []model.Application) []string {
 	return out
 }
 
+// TestFactoryAppSlugDerivation is the regression for review P2 #7 (a)/(b): the
+// safe slug is derived from the same values as the readable name, with a
+// LOWERCASE serial (the readable name keeps the uppercase serial). A pure-Chinese
+// scenario name must anchor on appType so the slug is not serial-only.
+func TestFactoryAppSlugDerivation(t *testing.T) {
+	cases := []struct {
+		name, appType, serial, want string
+	}{
+		{"Carrier Replay", "", "K7M2", "carrier-replay-k7m2"},           // ASCII name passthrough + lowercased serial
+		{"航母编队复盘", "situation_replay", "K7M2", "situation-replay-k7m2"}, // Chinese name -> appType anchor
+		{"航母编队复盘", "", "K7M2", "app-k7m2"},                              // Chinese name, no appType -> app anchor
+		{"  Mixed 航迹 Replay ", "situation_replay", "AB12", "mixed-replay-ab12"},
+	}
+	for _, c := range cases {
+		if got := factoryAppSlug(c.name, c.appType, c.serial); got != c.want {
+			t.Errorf("factoryAppSlug(%q,%q,%q) = %q, want %q", c.name, c.appType, c.serial, got, c.want)
+		}
+	}
+}
+
+// TestAppSlugCollisionMatchesLowercaseSlug is the regression for review P2 #7
+// (b): the OLD collision check was HasSuffix(a.Slug, "-"+UPPERCASE cand), which
+// never matched the lowercased stored slug and so admitted duplicates. The fix
+// compares the exact candidate slug. Seeding an app whose slug is the lowercased
+// factory slug for uppercase serial "K7M2" must be detected as taken when the
+// predicate is called with that uppercase candidate.
+func TestAppSlugCollisionMatchesLowercaseSlug(t *testing.T) {
+	srv, _, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+	existing := factoryAppSlug("航母编队复盘", "situation_replay", "K7M2") // situation-replay-k7m2
+	if err := st.SyncApplications(ctx, []model.Application{
+		{ID: "app-existing", Slug: existing, Name: "existing", Type: "situation_replay", Source: model.AppSourceGenerated, Status: model.AppStatusStopped, Path: "generated-apps/existing", CreatedAt: now, UpdatedAt: now},
+	}); err != nil {
+		t.Fatalf("seed existing app: %v", err)
+	}
+	// Uppercase candidate "K7M2" must collide with the lowercased stored slug.
+	if !srv.appSlugTaken(ctx, "航母编队复盘", "situation_replay", "K7M2") {
+		t.Fatalf("appSlugTaken must detect the lowercased existing slug %q against uppercase cand K7M2", existing)
+	}
+	// A different serial must not collide.
+	if srv.appSlugTaken(ctx, "航母编队复盘", "situation_replay", "ZZ99") {
+		t.Fatalf("appSlugTaken must not flag an unused serial")
+	}
+}
+
+// TestAgentKeyIncludesNameSlug is the regression for review P2 #7 (c): the agent
+// key is derived from the normalized name plus a serial (spec), not a bare
+// "biz-<serial>". An ASCII draft name anchors the key; a non-ASCII name falls
+// back to the "biz" anchor. agentKeyTaken matches the lowercased key exactly.
+func TestAgentKeyIncludesNameSlug(t *testing.T) {
+	srv, _, _ := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	// ASCII name -> name-anchored key.
+	if got := slugify(normalizeScenarioName("Alert Triage", "", "")) + "-abcd"; got != "alert-triage-abcd" {
+		t.Fatalf("ascii name key anchor = %q, want alert-triage-abcd", got)
+	}
+	// Non-ASCII name -> "biz" anchor (slugifyRaw yields nothing for pure Chinese).
+	nameSlug := slugifyRaw(normalizeScenarioName("告警分诊助手", "", ""))
+	if nameSlug != "" {
+		t.Fatalf("non-ASCII name slug = %q, want empty (so the biz anchor is used)", nameSlug)
+	}
+	// Before seeding: no collision.
+	if srv.agentKeyTaken(ctx, "alert-triage", "ABCD") {
+		t.Fatalf("agentKeyTaken must be false before any agent is seeded")
+	}
+	// Seed an agent with key alert-triage-abcd and verify the predicate detects it
+	// via the uppercase candidate serial.
+	agent := model.Agent{ID: "agent-x", Key: "alert-triage-abcd", Name: "x", Role: "business_processing", Category: model.AgentCategoryBusinessProcessing, SortOrder: 99}
+	if err := srv.store.CreateAgent(ctx, agent); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+	if !srv.agentKeyTaken(ctx, "alert-triage", "ABCD") {
+		t.Fatalf("agentKeyTaken must detect the lowercased key alert-triage-abcd against uppercase cand ABCD")
+	}
+}
+
 // TestBlueprintCandidatesReadFromWorkspaceRoot is the regression for review P1 #6:
 // blueprints.json must be read relative to the configured WORKSPACE ROOT, not the
 // process CWD (factory-server/). The server is normally launched from

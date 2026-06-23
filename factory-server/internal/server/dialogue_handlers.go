@@ -1254,19 +1254,17 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 
 	// Allocate the Factory-owned app name: <normalizedScenarioName>-<Base36>.
-	// Never trust client appName/slug/blueprint/serial.
+	// Never trust client appName/slug/blueprint/serial. The readable name keeps
+	// the UPPERCASE serial (spec example: 航母编队航迹复盘-K7M2); the slug is the
+	// lowercase, filesystem-safe derivation. Collision detection compares the
+	// EXACT candidate slug (case-consistent), not an uppercase-suffix heuristic
+	// that could never match the lowercased slug and so admit duplicates.
 	normalizedName := normalizeScenarioName(req.AppName, req.CoreScenario, sess.InitialPrompt)
 	suffix := idpkg.Base36Serial(func(cand string) bool {
-		apps, _ := s.store.ListApplications(ctx)
-		for _, a := range apps {
-			if strings.HasSuffix(a.Slug, "-"+cand) {
-				return true
-			}
-		}
-		return false
+		return s.appSlugTaken(ctx, normalizedName, req.AppType, cand)
 	})
 	factoryName := normalizedName + "-" + suffix
-	factorySlug := slugify(factoryName)
+	factorySlug := factoryAppSlug(normalizedName, req.AppType, suffix)
 
 	// Seed the fixed 6-step job, mirroring confirmClarification. The job carries
 	// the CONFIRMED requirement + child session id. The job + steps + child link
@@ -1374,17 +1372,19 @@ func (s *Server) confirmDialogueBusinessAgent(w http.ResponseWriter, r *http.Req
 		return
 	}
 	ctx := r.Context()
-	// Derive a unique internal key. Never trust client/LLM keys.
+	// Derive a unique internal key from the normalized draft name plus a random
+	// serial (spec). Never trust client/LLM keys. The name's ASCII contribution
+	// anchors the key so two differently-named agents read distinctly; a pure
+	// non-ASCII name falls back to the "biz" anchor. Collision detection matches
+	// the exact candidate key.
+	nameSlug := slugifyRaw(normalizeScenarioName(draft.Name, draft.Description, dlg.InitialPrompt))
+	if nameSlug == "" {
+		nameSlug = "biz"
+	}
 	serial := idpkg.Base36Serial(func(cand string) bool {
-		agents, _ := s.store.ListAgents(ctx)
-		for _, a := range agents {
-			if a.Key == "biz-"+cand {
-				return true
-			}
-		}
-		return false
+		return s.agentKeyTaken(ctx, nameSlug, cand)
 	})
-	agentKey := "biz-" + serial
+	agentKey := nameSlug + "-" + strings.ToLower(serial)
 	agentID := agentIDFromKey(agentKey)
 	existing, _ := s.store.ListAgents(ctx)
 	sortOrder := 1
@@ -1453,12 +1453,13 @@ func normalizeScenarioName(appName, coreScenario, initialPrompt string) string {
 	return "未命名"
 }
 
-// slugify produces a URL-safe slug from a name. Non-ASCII (e.g. Chinese) is
-// transliterated to a pinyin-free fallback: the name is kept verbatim with
-// unsafe characters replaced by hyphens, and a short hex hash suffix guarantees
-// uniqueness (the Base36 serial already provides uniqueness, but slugify must
-// never produce an empty slug).
-func slugify(name string) string {
+// slugifyRaw is the core slug transform: lowercase, keep [a-z0-9], map '-'/'_'
+// and every other rune (whitespace, punctuation, non-ASCII such as Chinese) to
+// '-', then trim/collapse hyphens. Unlike slugify it does NOT substitute "app"
+// for an empty result — it returns "" when the input has no ASCII alphanumerics.
+// That lets callers detect a non-ASCII name and choose their own anchor
+// (factoryAppSlug anchors on appType; the agent key falls back to "biz").
+func slugifyRaw(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	var b strings.Builder
 	for _, r := range s {
@@ -1468,18 +1469,78 @@ func slugify(name string) string {
 		case r == '-' || r == '_':
 			b.WriteByte('-')
 		default:
-			// Non-ASCII / whitespace / punctuation: keep as-is transliterated to
-			// a hyphen so the slug is never empty and stays filesystem-safe.
 			b.WriteByte('-')
 		}
 	}
 	out := strings.Trim(b.String(), "-")
-	// Collapse runs of hyphens.
 	for strings.Contains(out, "--") {
 		out = strings.ReplaceAll(out, "--", "-")
 	}
-	if out == "" {
-		out = "app"
-	}
 	return out
+}
+
+// slugify produces a URL-safe slug from a name, falling back to "app" when the
+// name has no ASCII alphanumerics so the result is never empty.
+func slugify(name string) string {
+	if out := slugifyRaw(name); out != "" {
+		return out
+	}
+	return "app"
+}
+
+// factoryAppSlug derives the lowercase, filesystem-safe slug from the same values
+// as the readable factory name (<normalizedName>-<UPPERCASE serial>): the ASCII
+// portion of the name plus the lowercased serial. When the name contributes no
+// ASCII (e.g. a pure-Chinese scenario name), it anchors the slug on the appType
+// so the result is readable and stable rather than serial-only (e.g.
+// situation-replay-k7m2 instead of k7m2). "app" is the final fallback. The slug
+// is deterministic in (name, appType, suffix) so the collision predicate can test
+// the exact candidate slug.
+func factoryAppSlug(name, appType, suffix string) string {
+	serial := strings.ToLower(suffix)
+	if namePart := slugifyRaw(name); namePart != "" {
+		return namePart + "-" + serial
+	}
+	anchor := slugifyRaw(appType)
+	if anchor == "" {
+		anchor = "app"
+	}
+	return anchor + "-" + serial
+}
+
+// appSlugTaken reports whether the factory slug derived from (name, appType,
+// candSerial) is already used by an existing application. candSerial is the
+// UPPERCASE Base36 candidate; factoryAppSlug lowercases it, so this matches the
+// lowercased stored slugs exactly (the prior HasSuffix(slug,"-"+UPPERCASE) check
+// never matched and admitted duplicates). Extracted so collision behavior is
+// unit-testable without driving the random serial generator.
+func (s *Server) appSlugTaken(ctx context.Context, name, appType, candSerial string) bool {
+	candidate := factoryAppSlug(name, appType, candSerial)
+	apps, err := s.store.ListApplications(ctx)
+	if err != nil {
+		return false
+	}
+	for _, a := range apps {
+		if a.Slug == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// agentKeyTaken reports whether the agent key derived from (nameSlug, candSerial)
+// is already used by an existing agent. Mirrors appSlugTaken's exact-match,
+// case-consistent comparison.
+func (s *Server) agentKeyTaken(ctx context.Context, nameSlug, candSerial string) bool {
+	candidate := nameSlug + "-" + strings.ToLower(candSerial)
+	agents, err := s.store.ListAgents(ctx)
+	if err != nil {
+		return false
+	}
+	for _, a := range agents {
+		if a.Key == candidate {
+			return true
+		}
+	}
+	return false
 }
