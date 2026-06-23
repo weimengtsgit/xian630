@@ -93,6 +93,8 @@ function App() {
             onConfirm={conversation.confirm}
             onRetry={conversation.retry}
             onAbandon={conversation.abandon}
+            onSaveAuthoring={conversation.saveAuthoringAgent}
+            onRefreshAgents={agents.refresh}
           />
         </div>
 
@@ -103,15 +105,13 @@ function App() {
             businessAgents={agents.businessAgents}
             loading={agents.loading}
             error={agents.error}
-            onCreateAgent={agents.createAgent}
             selectedBusinessAgentIds={conversation.selectedBusinessAgentIds}
             onAddBusinessAgent={conversation.addBusinessAgent}
             onRemoveBusinessAgent={conversation.removeBusinessAgent}
             onCreateBusinessAgent={agents.createBusinessAgent}
-            onCreateAuthoringSession={agents.createAuthoringSession}
-            onSendAuthoringMessage={agents.sendAuthoringMessage}
             onUpdateBusinessAgent={agents.updateBusinessAgent}
             onSetBusinessAgentEnabled={agents.setBusinessAgentEnabled}
+            onStartAuthoring={conversation.startAuthoring}
           />
         </div>
       </div>
