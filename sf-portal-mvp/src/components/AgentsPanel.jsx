@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bot, Check, Pencil, Plus, Power, Save, Send, X } from 'lucide-react'
+import { Bot, Pencil, Plus, Power, Save, X } from 'lucide-react'
 import { applySelectedBusinessAgents, splitAgentsByCategory } from '../hooks/agentList'
 import './AgentsPanel.css'
 
@@ -8,16 +8,6 @@ const emptyEditForm = {
   description: '',
   prompt: '',
   enabled: true,
-}
-
-const emptyAuthoringState = {
-  session: null,
-  messages: [],
-  input: '',
-  error: '',
-  initializing: false,
-  sending: false,
-  finalizing: false,
 }
 
 function agentIdentity(agent) {
@@ -30,15 +20,6 @@ function agentKey(agent) {
 
 function isEnabled(agent) {
   return agent?.enabled === undefined ? true : Boolean(agent.enabled)
-}
-
-function parseDraft(session) {
-  if (!session?.draft_json) return null
-  try {
-    return JSON.parse(session.draft_json)
-  } catch {
-    return null
-  }
 }
 
 function promptText(agent) {
@@ -59,10 +40,9 @@ export function AgentsPanel({
   onAddBusinessAgent,
   onRemoveBusinessAgent,
   onCreateBusinessAgent,
-  onCreateAuthoringSession,
-  onSendAuthoringMessage,
   onUpdateBusinessAgent,
   onSetBusinessAgentEnabled,
+  onStartAuthoring,
 }) {
   const [activeTab, setActiveTab] = useState('software')
   const [selectedId, setSelectedId] = useState('')
@@ -71,8 +51,6 @@ export function AgentsPanel({
   const [editForm, setEditForm] = useState(emptyEditForm)
   const [editError, setEditError] = useState('')
   const [editSaving, setEditSaving] = useState(false)
-  const [authoringOpen, setAuthoringOpen] = useState(false)
-  const [authoring, setAuthoring] = useState(emptyAuthoringState)
   const [panelError, setPanelError] = useState('')
 
   const splitFallback = useMemo(() => splitAgentsByCategory(agents), [agents])
@@ -96,20 +74,6 @@ export function AgentsPanel({
   }, [softwareList, businessList, selectedId])
 
   const selectedCount = selectedBusinessAgentIds.length
-  const draft = parseDraft(authoring.session)
-  const canFinalize = authoring.session?.status === 'ready_to_save' && draft?.prompt
-  const authoringBusy = authoring.initializing || authoring.sending || authoring.finalizing
-  const hasAuthoringInput = Boolean(authoring.input.trim())
-  const canSaveAuthoring = Boolean(canFinalize && !hasAuthoringInput)
-  const sendAuthoringDisabled = authoring.sending || authoring.finalizing || !hasAuthoringInput
-  const authoringFieldRows = draft
-    ? [
-        ['名称', draft.name || '-'],
-        ['标识', draft.key || '-'],
-        ['状态', draft.enabled === false ? '停用' : '启用'],
-        ['描述', draft.description || '-'],
-      ]
-    : []
 
   const openAgentDetail = agent => {
     setPanelError('')
@@ -202,112 +166,9 @@ export function AgentsPanel({
     }
   }
 
-  const openAuthoringDialog = () => {
+  const handleCreateBusinessAgent = () => {
     setPanelError('')
-    setAuthoring(emptyAuthoringState)
-    setAuthoringOpen(true)
-  }
-
-  const closeAuthoringDialog = () => {
-    setAuthoringOpen(false)
-    setAuthoring(emptyAuthoringState)
-  }
-
-  const ensureAuthoringSession = async () => {
-    if (authoring.session?.id) return authoring.session
-    if (!onCreateAuthoringSession) throw new Error('当前服务不支持创建业务智能体会话')
-    setAuthoring(current => ({ ...current, initializing: true, error: '' }))
-    const session = await onCreateAuthoringSession({ mode: 'create' })
-    setAuthoring(current => ({ ...current, session, initializing: false }))
-    return session
-  }
-
-  const sendAuthoringContent = async content => {
-    if (!content || !onSendAuthoringMessage) return null
-    setAuthoring(current => ({ ...current, sending: true, error: '' }))
-    const baseSession = await ensureAuthoringSession()
-    if (!baseSession?.id) return null
-    const messages = [...authoring.messages, { role: 'user', content }]
-    setAuthoring(current => ({ ...current, messages, input: '', sending: true, error: '' }))
-    const session = await onSendAuthoringMessage(baseSession.id, content)
-    setAuthoring({
-      ...emptyAuthoringState,
-      session,
-      messages: [
-        ...messages,
-        {
-          role: 'assistant',
-          content: '已根据本轮信息更新业务智能体预览，可以继续补充约束或保存智能体。',
-        },
-      ],
-    })
-    return session
-  }
-
-  const buildBusinessAgentPayload = sourceDraft => {
-    const key = String(sourceDraft?.key || '').trim()
-    const name = String(sourceDraft?.name || '').trim()
-    const description = String(sourceDraft?.description || '').trim()
-    const prompt = String(sourceDraft?.prompt || '').trim()
-    if (!key || !name || !prompt) {
-      throw new Error('生成结果缺少名称、标识或最终提示词')
-    }
-    return {
-      key,
-      name,
-      description,
-      prompt,
-      enabled: sourceDraft.enabled === undefined ? true : Boolean(sourceDraft.enabled),
-    }
-  }
-
-  const submitAuthoringMessage = async event => {
-    event.preventDefault()
-    const content = authoring.input.trim()
-    if (!content || !onSendAuthoringMessage || authoring.sending || authoring.finalizing) return
-    try {
-      await sendAuthoringContent(content)
-    } catch (err) {
-      setAuthoring(current => ({
-        ...current,
-        initializing: false,
-        sending: false,
-        error: err.message || String(err),
-      }))
-    }
-  }
-
-  const finalizeAuthoring = async () => {
-    if (!onCreateBusinessAgent || authoringBusy) return
-    if (!canSaveAuthoring) {
-      setAuthoring(current => ({
-        ...current,
-        error: hasAuthoringInput ? '请先发送当前输入并刷新关键字段后再生成智能体' : '请先通过对话生成业务智能体关键字段',
-      }))
-      return
-    }
-    setAuthoring(current => ({ ...current, finalizing: true, error: '' }))
-    try {
-      const payload = buildBusinessAgentPayload(draft)
-      const created = await onCreateBusinessAgent({
-        key: payload.key,
-        name: payload.name,
-        description: payload.description,
-        prompt: payload.prompt,
-        enabled: payload.enabled,
-      })
-      setSelectedId(created.id || created.key)
-      setAuthoringOpen(false)
-      setAuthoring(emptyAuthoringState)
-      setActiveTab('business')
-      setDetailOpen(true)
-    } catch (err) {
-      setAuthoring(current => ({
-        ...current,
-        finalizing: false,
-        error: err.message || String(err),
-      }))
-    }
+    onStartAuthoring?.()
   }
 
   return (
@@ -322,7 +183,7 @@ export function AgentsPanel({
             <button
               type="button"
               className="agent-icon-button"
-              onClick={openAuthoringDialog}
+              onClick={handleCreateBusinessAgent}
               title="创建业务智能体"
               aria-label="创建业务智能体"
             >
@@ -560,97 +421,6 @@ export function AgentsPanel({
                 </div>
               </form>
             )}
-          </section>
-        </div>
-      )}
-
-      {authoringOpen && (
-        <div className="agent-dialog-backdrop" role="presentation">
-          <section className="agent-dialog agent-authoring-dialog" role="dialog" aria-modal="true">
-            <div className="agent-dialog-header">
-              <h3>创建业务智能体</h3>
-              <button
-                type="button"
-                className="agent-icon-button"
-                onClick={closeAuthoringDialog}
-                title="关闭"
-                aria-label="关闭"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="authoring-thread">
-              <div className="authoring-message assistant">
-                请描述这个业务智能体要关注的业务场景、判断标准、输出边界和禁忌。我会生成名称、标识和最终提示词。
-              </div>
-              {authoring.messages.map((message, index) => (
-                <div
-                  key={`${message.role}-${index}`}
-                  className={`authoring-message ${message.role}`}
-                >
-                  {message.content}
-                </div>
-              ))}
-              {draft && (
-                <div className="authoring-draft">
-                  <div className="agent-detail-title">
-                    <span className="agent-detail-subtitle">生成预览</span>
-                    <span className="agent-enabled-badge on">待保存</span>
-                  </div>
-                  <dl className="agent-detail-grid">
-                    {authoringFieldRows.map(([label, value]) => (
-                      <div key={label}>
-                        <dt>{label}</dt>
-                        <dd>{value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <pre className="agent-skills">{draft.prompt || '暂无提示词'}</pre>
-                </div>
-              )}
-            </div>
-
-            <form className="authoring-input-row" onSubmit={submitAuthoringMessage}>
-              <textarea
-                value={authoring.input}
-                onChange={event =>
-                  setAuthoring(current => ({ ...current, input: event.target.value }))
-                }
-                rows={4}
-                placeholder="例如：创建海事预警专家，关注 AIS 异常航迹、越界、停留超时，并给出风险等级和处置建议"
-              />
-              <button
-                type="submit"
-                className="agent-icon-button"
-                disabled={sendAuthoringDisabled}
-                title={authoring.initializing ? '正在初始化' : '发送'}
-                aria-label={authoring.initializing ? '正在初始化' : '发送'}
-              >
-                <Send size={16} />
-              </button>
-            </form>
-
-            {authoring.error && <div className="agent-form-error">{authoring.error}</div>}
-
-            <div className="agent-dialog-actions">
-              <button
-                type="button"
-                className="agent-secondary-button"
-                onClick={closeAuthoringDialog}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="agent-primary-button"
-                onClick={finalizeAuthoring}
-                disabled={authoringBusy || !canSaveAuthoring}
-              >
-                <Check size={14} />
-                生成智能体
-              </button>
-            </div>
           </section>
         </div>
       )}
