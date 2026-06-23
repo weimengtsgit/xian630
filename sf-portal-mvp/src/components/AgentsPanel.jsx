@@ -168,7 +168,7 @@ export function AgentsPanel({
 
   const handleCreateBusinessAgent = () => {
     setPanelError('')
-    onStartAuthoring?.()
+    onStartAuthoring?.().catch(() => {})
   }
 
   return (

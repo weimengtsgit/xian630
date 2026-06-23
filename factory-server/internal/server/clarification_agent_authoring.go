@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -95,38 +94,3 @@ func isAgentAuthoringMode(sess *model.ClarificationSession) bool {
 	return sess != nil && sess.Mode == "agent_authoring"
 }
 
-// agentAuthoringGuidedQuestions returns the structured questions for agent
-// authoring mode. Used by the clarification runner when mode is agent_authoring.
-func agentAuthoringGuidedQuestions(round int) []clarification.Question {
-	switch round {
-	case 1:
-		return []clarification.Question{
-			{
-				ID:       "agent_scenario",
-				Label:    "业务场景",
-				Question: "这个业务智能体关注什么业务场景？请描述核心关注点和应用场景。",
-				Options:  nil,
-			},
-		}
-	case 2:
-		return []clarification.Question{
-			{
-				ID:       "agent_name",
-				Label:    "智能体名称",
-				Question: "你希望这个智能体叫什么名字？",
-				Options:  nil,
-			},
-		}
-	case 3:
-		return []clarification.Question{
-			{
-				ID:       "agent_rules",
-				Label:    "判断标准",
-				Question: "这个智能体的判断标准和输出边界是什么？有哪些禁忌和约束？",
-				Options:  nil,
-			},
-		}
-	default:
-		return nil
-	}
-}

@@ -52,14 +52,6 @@ export function useAgents() {
     return updated
   }, [])
 
-  const createAuthoringSession = useCallback(body => factoryApi.createBusinessAgentAuthoring(body), [])
-  const sendAuthoringMessage = useCallback((id, content) => factoryApi.sendBusinessAgentAuthoringMessage(id, content), [])
-  const finalizeAuthoring = useCallback(async id => {
-    const created = await factoryApi.finalizeBusinessAgentAuthoring(id)
-    setAgents(current => appendCreatedAgentForDisplay(current, created))
-    return created
-  }, [])
-
   // No-op stubs kept for legacy component compatibility; Task 15 reworks the UI.
   const getWorkingAgents = useCallback(
     () => agents.filter(a => a.status === 'working'),
@@ -81,9 +73,6 @@ export function useAgents() {
     createBusinessAgent,
     updateBusinessAgent,
     setBusinessAgentEnabled,
-    createAuthoringSession,
-    sendAuthoringMessage,
-    finalizeAuthoring,
     getWorkingAgents,
     assignTask,
     stopAgent,
