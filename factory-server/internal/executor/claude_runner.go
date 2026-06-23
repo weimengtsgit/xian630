@@ -39,7 +39,7 @@ type codeGenerationStepOutput struct {
 	CreatedFiles   []string          `json:"createdFiles"`
 	NeedsUserInput bool              `json:"needsUserInput"`
 	Questions      []runner.Question `json:"questions"`
-	UsedSkills     []string          `json:"usedSkills"`
+	UsedSkills     runner.SkillPaths `json:"usedSkills"`
 	Warnings       []string          `json:"warnings,omitempty"`
 }
 
@@ -363,6 +363,20 @@ func skillsPromptBlock(skillPaths, blueprintPaths []string) string {
 		for _, p := range skillPaths {
 			b.WriteString("\n- " + p)
 		}
+	}
+	// When a data-acquisition skill is selected, force the agent to actually
+	// fetch real public data instead of shipping deterministic mock data. The
+	// data skills already say this, but the agent has been observed ignoring a
+	// soft "use real data by default" rule and shipping mock "to ensure build
+	// success" — so enforce it here, at the prompt the agent always sees.
+	hasDataSkill := false
+	for _, p := range skillPaths {
+		if strings.Contains(p, "data-skill") {
+			hasDataSkill = true
+		}
+	}
+	if hasDataSkill {
+		b.WriteString("\n\n[真实数据强制要求 — 违反即判定生成失败] 当任一 data-skill 被选中、且 confirmedRequirement.dataPolicy 为 live_api 或 mock_then_api 时，生成的应用**必须按该 data-skill 内的 Fetch Adapter 发起真实公开数据请求**（tide→NOAA CO-OPS，deck-wind→Open-Meteo GFS，ais→历史归档），并解析真实返回值填充数据层。**严禁**用合成/确定性公式/mock/假数据替代真实请求。取数失败时，应用应显示明确的错误或空状态（并记录到 output.json 的 warnings），**绝不**编造假数据「以保证构建成功」——交付假数据等同于本次生成失败。仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据。")
 	}
 	b.WriteString("\n若某个必需 skill 缺失，在 output.json 的 warnings 中记录，不要改用不相关 skill。")
 	if len(blueprintPaths) > 0 {
