@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -44,6 +45,31 @@ func TestBusinessAgentAuthoringFinalizeCreatesAgent(t *testing.T) {
 	}
 	if agent.Category != model.AgentCategoryBusiness || agent.Prompt == "" || agent.Key != "maritime-alert-expert" {
 		t.Fatalf("agent=%+v", agent)
+	}
+}
+
+func TestBusinessAgentAuthoringDraftUsesMultipleMessages(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	start := doJSON(t, r, http.MethodPost, "/api/business-agent-authoring", map[string]string{"mode": "create"})
+	var sess model.AgentAuthoringSession
+	if err := json.NewDecoder(start.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+
+	first := doJSON(t, r, http.MethodPost, "/api/business-agent-authoring/"+sess.ID+"/messages", map[string]string{"content": "watch service errors"})
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	second := doJSON(t, r, http.MethodPost, "/api/business-agent-authoring/"+sess.ID+"/messages", map[string]string{"content": "output severity and owner"})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status=%d body=%s", second.Code, second.Body.String())
+	}
+	var updated model.AgentAuthoringSession
+	if err := json.NewDecoder(second.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if !strings.Contains(updated.DraftJSON, "watch service errors") || !strings.Contains(updated.DraftJSON, "output severity and owner") {
+		t.Fatalf("draft does not include all messages: %s", updated.DraftJSON)
 	}
 }
 

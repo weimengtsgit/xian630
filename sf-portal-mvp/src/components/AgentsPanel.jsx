@@ -100,8 +100,16 @@ export function AgentsPanel({
   const canFinalize = authoring.session?.status === 'ready_to_save' && draft?.prompt
   const authoringBusy = authoring.initializing || authoring.sending || authoring.finalizing
   const hasAuthoringInput = Boolean(authoring.input.trim())
-  const canSaveAuthoring = Boolean(canFinalize || hasAuthoringInput)
+  const canSaveAuthoring = Boolean(canFinalize && !hasAuthoringInput)
   const sendAuthoringDisabled = authoring.sending || authoring.finalizing || !hasAuthoringInput
+  const authoringFieldRows = draft
+    ? [
+        ['名称', draft.name || '-'],
+        ['标识', draft.key || '-'],
+        ['状态', draft.enabled === false ? '停用' : '启用'],
+        ['描述', draft.description || '-'],
+      ]
+    : []
 
   const openAgentDetail = agent => {
     setPanelError('')
@@ -271,34 +279,16 @@ export function AgentsPanel({
 
   const finalizeAuthoring = async () => {
     if (!onCreateBusinessAgent || authoringBusy) return
-    let targetDraft = draft
-    if (hasAuthoringInput || !canFinalize) {
-      const content = authoring.input.trim()
-      if (!content || !onSendAuthoringMessage) return
-      try {
-        const session = await sendAuthoringContent(content)
-        if (!session?.id || session.status !== 'ready_to_save' || !parseDraft(session)?.prompt) {
-          setAuthoring(current => ({
-            ...current,
-            sending: false,
-            error: '请先生成业务智能体预览后再保存',
-          }))
-          return
-        }
-        targetDraft = parseDraft(session)
-      } catch (err) {
-        setAuthoring(current => ({
-          ...current,
-          initializing: false,
-          sending: false,
-          error: err.message || String(err),
-        }))
-        return
-      }
+    if (!canSaveAuthoring) {
+      setAuthoring(current => ({
+        ...current,
+        error: hasAuthoringInput ? '请先发送当前输入并刷新关键字段后再生成智能体' : '请先通过对话生成业务智能体关键字段',
+      }))
+      return
     }
     setAuthoring(current => ({ ...current, finalizing: true, error: '' }))
     try {
-      const payload = buildBusinessAgentPayload(targetDraft)
+      const payload = buildBusinessAgentPayload(draft)
       const created = await onCreateBusinessAgent({
         key: payload.key,
         name: payload.name,
@@ -609,16 +599,13 @@ export function AgentsPanel({
                     <span className="agent-enabled-badge on">待保存</span>
                   </div>
                   <dl className="agent-detail-grid">
-                    <div>
-                      <dt>名称</dt>
-                      <dd>{draft.name || '-'}</dd>
-                    </div>
-                    <div>
-                      <dt>标识</dt>
-                      <dd>{draft.key || '-'}</dd>
-                    </div>
+                    {authoringFieldRows.map(([label, value]) => (
+                      <div key={label}>
+                        <dt>{label}</dt>
+                        <dd>{value}</dd>
+                      </div>
+                    ))}
                   </dl>
-                  <p className="agent-detail-desc">{draft.description || '-'}</p>
                   <pre className="agent-skills">{draft.prompt || '暂无提示词'}</pre>
                 </div>
               )}
@@ -661,7 +648,7 @@ export function AgentsPanel({
                 disabled={authoringBusy || !canSaveAuthoring}
               >
                 <Check size={14} />
-                {canFinalize && !hasAuthoringInput ? '保存智能体' : '生成并保存'}
+                生成智能体
               </button>
             </div>
           </section>

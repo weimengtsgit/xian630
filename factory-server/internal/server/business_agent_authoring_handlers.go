@@ -93,7 +93,18 @@ func (s *Server) addBusinessAgentAuthoringMessage(w http.ResponseWriter, r *http
 		writeError(w, http.StatusInternalServerError, "create message")
 		return
 	}
-	draft := draftBusinessAgentFromText(content)
+	messages, err := s.store.ListAgentAuthoringMessages(r.Context(), sess.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list authoring messages")
+		return
+	}
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if strings.TrimSpace(msg.Content) != "" {
+			parts = append(parts, strings.TrimSpace(msg.Content))
+		}
+	}
+	draft := draftBusinessAgentFromText(strings.Join(parts, "\n"))
 	raw, _ := json.Marshal(draft)
 	if err := s.store.UpdateAgentAuthoringDraft(r.Context(), sess.ID, string(raw), model.AgentAuthoringReadyToSave); err != nil {
 		writeError(w, http.StatusInternalServerError, "update draft")
