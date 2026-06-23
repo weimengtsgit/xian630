@@ -93,6 +93,24 @@ LIMIT ?`, limit)
 	return out, rows.Err()
 }
 
+// DeleteClarificationSession removes one clarification session and its transcript
+// messages in a transaction. Linked jobs, apps, artifacts, and execution records
+// are intentionally left untouched.
+func (s *Store) DeleteClarificationSession(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM clarification_messages WHERE session_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM clarification_sessions WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // UpdateClarificationRound advances the persisted `round` column to the round
 // that actually ran and bumps updated_at. Without this the persisted round
 // stays at its creation value (0), so GET /api/clarifications/:id would

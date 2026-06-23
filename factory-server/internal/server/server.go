@@ -340,6 +340,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/clarifications", s.listClarifications)
 	r.Handle("GET", "/api/clarifications/active", s.getActiveClarification)
 	r.Handle("GET", "/api/clarifications/:id", s.getClarification)
+	r.Handle("DELETE", "/api/clarifications/:id", s.deleteClarification)
 	r.Handle("GET", "/api/clarifications/:id/messages", s.listClarificationMessages)
 	r.Handle("POST", "/api/clarifications/:id/messages", s.addClarificationMessage)
 	r.Handle("POST", "/api/clarifications/:id/answers", s.answerClarification)

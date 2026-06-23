@@ -29,6 +29,7 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'clarification.confirmed',
     'clarification.failed',
     'clarification.abandoned',
+    'clarification.deleted',
   ]
   types.forEach(type => {
     source.addEventListener(type, event => {

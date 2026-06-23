@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, MessageSquarePlus, History, Send } from 'lucide-react'
+import { AlertTriangle, Loader2, MessageSquarePlus, History, Send, X, Trash2 } from 'lucide-react'
 import { titleForSession } from '../hooks/conversationTimeline'
 import './ConversationWorkbench.css'
 
@@ -19,6 +19,7 @@ export function ConversationWorkbench({
   questions,
   error,
   submitting,
+  deletingSessionId,
   historyOpen,
   setHistoryOpen,
   onNewSession,
@@ -28,6 +29,7 @@ export function ConversationWorkbench({
   onConfirm,
   onRetry,
   onAbandon,
+  onDeleteSession,
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
@@ -113,7 +115,14 @@ export function ConversationWorkbench({
       </footer>
 
       {historyOpen ? (
-        <ConversationHistoryDrawer sessions={sessions} selectedId={session && session.id} onClose={() => setHistoryOpen(false)} onSelect={id => { onSelectSession(id); setHistoryOpen(false) }} />
+        <ConversationHistoryDrawer
+          sessions={sessions}
+          selectedId={session && session.id}
+          deletingSessionId={deletingSessionId}
+          onClose={() => setHistoryOpen(false)}
+          onSelect={id => { onSelectSession(id); setHistoryOpen(false) }}
+          onDeleteSession={onDeleteSession}
+        />
       ) : null}
     </section>
   )
@@ -171,12 +180,19 @@ function QuestionCard({ q, value, setValue }) {
     <div className="cw-question">
       <strong>{q.label || q.question || q.id}</strong>
       <div className="cw-options">
-        {(q.options || []).map(opt => (
-          <button key={opt.value} type="button" className={selected.includes(opt.value) ? 'selected' : ''} onClick={() => choose(opt.value)}>
-            <span>{opt.label || opt.value}</span>
-            {opt.reason ? <em>{opt.reason}</em> : null}
-          </button>
-        ))}
+        {(q.options || []).map(opt => {
+          const recommended = optionIsRecommended(q, opt)
+          const classes = ['cw-option', selected.includes(opt.value) ? 'selected' : '', recommended ? 'cw-option-recommended' : ''].filter(Boolean).join(' ')
+          return (
+            <button key={opt.value} type="button" className={classes} onClick={() => choose(opt.value)}>
+              <span className="cw-option-head">
+                <b>{opt.label || opt.value}</b>
+                {recommended ? <em className="cw-option-badge">推荐</em> : null}
+              </span>
+              {opt.reason ? <small>{opt.reason}</small> : null}
+            </button>
+          )
+        })}
       </div>
       {q.allowCustom ? <CustomAnswer onSubmit={v => q.multiSelect ? setValue([...selected, v]) : setValue(v)} /> : null}
       {customSelected.length > 0 ? <div className="cw-custom-selected">{customSelected.join('、')}</div> : null}
@@ -186,7 +202,30 @@ function QuestionCard({ q, value, setValue }) {
 
 function CustomAnswer({ onSubmit }) {
   const [value, setValue] = useState('')
-  return <div className="cw-custom"><input value={value} onChange={e => setValue(e.target.value)} /><button type="button" onClick={() => { if (value.trim()) { onSubmit(value.trim()); setValue('') } }}>添加</button></div>
+  const submit = () => {
+    const trimmed = value.trim()
+    if (!trimmed) return
+    onSubmit(trimmed)
+    setValue('')
+  }
+  return (
+    <div className="cw-custom">
+      <input
+        className="cw-custom-input"
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') submit() }}
+        placeholder="输入自定义答案"
+      />
+      <button type="button" className="cw-custom-submit" disabled={!value.trim()} onClick={submit}>添加</button>
+    </div>
+  )
+}
+
+function optionIsRecommended(q, opt) {
+  if (opt.recommended) return true
+  const values = Array.isArray(q.recommendation) ? q.recommendation : q.recommendation ? [q.recommendation] : []
+  return values.includes(opt.value)
 }
 
 function RequirementSummary({ requirement }) {
@@ -212,22 +251,81 @@ function RequirementSummary({ requirement }) {
   )
 }
 
-function ConversationHistoryDrawer({ sessions, selectedId, onClose, onSelect }) {
+function ConversationHistoryDrawer({ sessions, selectedId, deletingSessionId, onClose, onSelect, onDeleteSession }) {
   const list = Array.isArray(sessions) ? sessions : []
+  const [pendingDeleteSession, setPendingDeleteSession] = useState(null)
+  const pendingTitle = pendingDeleteSession ? titleForSession(pendingDeleteSession) : ''
+  const confirmingDelete = pendingDeleteSession && deletingSessionId === pendingDeleteSession.id
+
+  useEffect(() => {
+    if (!pendingDeleteSession) return
+    if (!list.some(sess => sess.id === pendingDeleteSession.id)) setPendingDeleteSession(null)
+  }, [pendingDeleteSession, list.map(sess => sess.id).join('|')])
+
+  const requestDeleteHistorySession = sess => {
+    if (!sess || sess.status === 'active') return
+    setPendingDeleteSession(sess)
+  }
+
+  const confirmDeleteHistorySession = async () => {
+    if (!pendingDeleteSession || pendingDeleteSession.status === 'active' || confirmingDelete) return
+    try {
+      await onDeleteSession(pendingDeleteSession.id)
+      setPendingDeleteSession(null)
+    } catch (_) {
+      // The hook surfaces the error in the workbench error bar.
+    }
+  }
+
   return (
     <aside className="cw-history">
-      <header><strong>历史会话</strong><button type="button" onClick={onClose}>关闭</button></header>
-      {list.map(sess => (
-        <button key={sess.id} type="button" className={sess.id === selectedId ? 'active' : ''} onClick={() => onSelect(sess.id)}>
-          <span className="cw-history-title">{titleForSession(sess)}</span>
-          <span className="cw-history-meta">
-            <em>{STATUS_TEXT[sess.status] || sess.status}</em>
-            <time dateTime={sess.updated_at}>{formatSessionTime(sess.updated_at)}</time>
-          </span>
-          <small>{summaryForSession(sess)}</small>
-          {resultForSession(sess) ? <b>{resultForSession(sess)}</b> : null}
-        </button>
-      ))}
+      <header>
+        <strong>历史会话</strong>
+        <button type="button" className="cw-history-close" onClick={onClose} title="关闭历史会话" aria-label="关闭历史会话"><X size={16} /></button>
+      </header>
+      <div className="cw-history-list">
+        {list.map(sess => (
+          <div key={sess.id} className={`cw-history-row${sess.id === selectedId ? ' active' : ''}`}>
+            <button type="button" className="cw-history-item" onClick={() => onSelect(sess.id)}>
+              <span className="cw-history-title">{titleForSession(sess)}</span>
+              <span className="cw-history-meta">
+                <em>{STATUS_TEXT[sess.status] || sess.status}</em>
+                <time dateTime={sess.updated_at}>{formatSessionTime(sess.updated_at)}</time>
+              </span>
+              <small>{summaryForSession(sess)}</small>
+              {resultForSession(sess) ? <b>{resultForSession(sess)}</b> : null}
+            </button>
+            <button
+              type="button"
+              className="cw-history-delete"
+              disabled={sess.status === 'active' || deletingSessionId === sess.id}
+              onClick={() => requestDeleteHistorySession(sess)}
+              title={sess.status === 'active' ? '分析中会话不可删除' : '删除历史会话'}
+              aria-label="删除历史会话"
+            >
+              {deletingSessionId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+            </button>
+          </div>
+        ))}
+      </div>
+      {pendingDeleteSession ? (
+        <div className="cw-delete-confirm" role="dialog" aria-labelledby="cw-delete-confirm-title">
+          <div className="cw-delete-confirm-card">
+            <span className="cw-delete-confirm-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
+            <div className="cw-delete-confirm-copy">
+              <strong id="cw-delete-confirm-title">删除历史会话</strong>
+              <p>将删除「{pendingTitle}」的会话记录和消息，不会删除已生成任务或应用。</p>
+            </div>
+            <div className="cw-delete-confirm-actions">
+              <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDeleteSession(null)} disabled={confirmingDelete}>取消</button>
+              <button type="button" className="cw-delete-confirm-danger" onClick={confirmDeleteHistorySession} disabled={confirmingDelete}>
+                {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </aside>
   )
 }

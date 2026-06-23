@@ -65,6 +65,9 @@ export function buildTimelineFromMessages(messages = [], session = null) {
 export function applyConversationEvent(state, type, ev) {
   const sessionId = ev && ev.session_id
   if (!sessionId) return state
+  if (type === 'clarification.deleted') {
+    return applyDeletedEvent(state, sessionId)
+  }
   if (state.selectedSessionId && sessionId !== state.selectedSessionId) {
     return {
       ...state,
@@ -92,6 +95,24 @@ export function applyConversationEvent(state, type, ev) {
       return applyStatusEvent(state, type, ev)
     default:
       return state
+  }
+}
+
+function applyDeletedEvent(state, sessionId) {
+  const sessions = (state.sessions || []).filter(sess => sess.id !== sessionId)
+  const sessionActivity = { ...state.sessionActivity }
+  delete sessionActivity[sessionId]
+  if (state.selectedSessionId === sessionId) {
+    return {
+      ...initialConversationState(),
+      sessions,
+      sessionActivity,
+    }
+  }
+  return {
+    ...state,
+    sessions,
+    sessionActivity,
   }
 }
 
