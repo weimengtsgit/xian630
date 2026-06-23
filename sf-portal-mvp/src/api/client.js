@@ -104,6 +104,18 @@ export const factoryApi = {
     request(`/api/dialogues/${id}/clarification/answers`, { method: 'POST', body: JSON.stringify(answers) }),
   answerDialogueClarificationBatch: (id, answers) =>
     request(`/api/dialogues/${id}/clarification/answers/batch`, { method: 'POST', body: JSON.stringify({ answers }) }),
+  // applyDialogueConsolidation drives the round-5/6 consolidation actions over the
+  // SAME batch endpoint but with top-level consolidation fields (NOT wrapped in
+  // {answers}, which the backend decodes as the normal round-answer path). accept
+  // => accept-all recommendations (ready_to_confirm); field+value => one-field
+  // round-6 override.
+  applyDialogueConsolidation: (id, { accept = false, field = '', value = '' } = {}) =>
+    request(`/api/dialogues/${id}/clarification/answers/batch`, {
+      method: 'POST',
+      body: JSON.stringify(
+        accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
+      ),
+    }),
   patchDialogueRequirement: (id, requirement) =>
     request(`/api/dialogues/${id}/clarification/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
   retryDialogueRound: id =>

@@ -56,9 +56,10 @@ type dialogueAnswerBody struct {
 }
 
 type dialogueBatchAnswersBody struct {
-	Answers            []dialogueAnswerBody `json:"answers"`
-	ConsolidationField string               `json:"consolidationField"`
-	ConsolidationValue string               `json:"consolidationValue"`
+	Answers             []dialogueAnswerBody `json:"answers"`
+	ConsolidationField  string               `json:"consolidationField"`
+	ConsolidationValue  string               `json:"consolidationValue"`
+	ConsolidationAccept bool                 `json:"consolidationAccept"`
 }
 
 type dialoguePatchRequirementBody struct {
@@ -1027,8 +1028,12 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Round-6 consolidation adjust path (no model turn).
-	if body.ConsolidationField != "" {
+	// Round-5/6 consolidation path (no model turn). consolidationAccept selects
+	// accept-all (ApplyConsolidationAdjustment with an empty selectedField merges
+	// every persisted recommendation); a non-empty consolidationField selects the
+	// single-field round-6 override. Either way the result is validated complete
+	// and marked ready_to_confirm.
+	if body.ConsolidationAccept || body.ConsolidationField != "" {
 		consolidation := s.loadChildConsolidation(ctx, childID)
 		if len(consolidation) == 0 {
 			writeError(w, http.StatusConflict, "no consolidation list for round 6")

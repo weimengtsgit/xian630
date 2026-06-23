@@ -741,6 +741,73 @@ func TestApplicationClarificationFullSixRounds(t *testing.T) {
 	}
 }
 
+// TestApplicationClarificationAcceptConsolidation is the regression for review P0
+// #3: the round-5 "接受推荐" (accept-all) action must reach ready_to_confirm. The
+// accept path merges every persisted recommendation (ApplyConsolidationAdjustment
+// with an empty selectedField) and validates completeness — no model turn, and
+// (unlike the prior __accept__ sentinel the frontend sent) a real backend path.
+func TestApplicationClarificationAcceptConsolidation(t *testing.T) {
+	seq := &clarSequenceRunner{
+		outputs: []string{
+			roundOutputOneQuestion(1, "appType"),
+			roundOutputOneQuestion(2, "primaryView"),
+			roundOutputOneQuestion(3, "dataPolicy"),
+			roundOutputOneQuestion(4, "targetUsers"),
+			roundOutputConsolidation(5),
+		},
+	}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+	var routed dialogueView
+	_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+	childID := routed.Session.ClarificationSessionID
+	if childID == "" {
+		t.Fatalf("no child clarification linked")
+	}
+
+	answerRound := func(questionID, value string) {
+		rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+			"questionId": questionID, "value": value,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+		}
+	}
+	answerRound("appType", "situation_replay")
+	answerRound("primaryView", "地图 + 时间轴")
+	answerRound("dataPolicy", "mock_data")
+	answerRound("targetUsers", "作战参谋")
+
+	// Accept all recommendations.
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	var acceptView dialogueView
+	json.NewDecoder(acceptRec.Body).Decode(&acceptView)
+	if acceptView.Child == nil || acceptView.Child.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("child status = %+v, want ready_to_confirm after accept-all", acceptView.Child)
+	}
+	// Persisted child must also be ready_to_confirm with a complete requirement.
+	child, _ := st.GetClarificationSession(context.Background(), childID)
+	if child == nil || child.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("persisted child status = %+v, want ready_to_confirm", child)
+	}
+	// No 7th model round — accept-all does not invoke the model.
+	if seq.calls > 5 {
+		t.Fatalf("model invoked %d times, want <= 5 (accept-all adds no round)", seq.calls)
+	}
+}
+
 // TestDialogueConfirmRollsBackOnMidSeedFailure asserts that when the job-seeding
 // transaction fails part-way through (a step insert errors), the confirm handler
 // leaves NO orphaned job row and moves the child clarification to a diagnosable

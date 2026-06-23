@@ -179,9 +179,9 @@ export function useDialogueSessions() {
       if (consolidation && consolidation.field) {
         // Round-6 single-field adjust path: the backend merges the persisted
         // consolidation with the override (no model turn) and marks ready_to_confirm.
-        view = await factoryApi.answerDialogueClarificationBatch(state.view.session.id, {
-          consolidationField: consolidation.field,
-          consolidationValue: consolidation.value,
+        view = await factoryApi.applyDialogueConsolidation(state.view.session.id, {
+          field: consolidation.field,
+          value: consolidation.value,
         })
       } else {
         view = await factoryApi.answerDialogueClarificationBatch(state.view.session.id, answers)
@@ -198,41 +198,21 @@ export function useDialogueSessions() {
   }, [loadView, refreshSessions, state.view, submitting])
 
   // acceptConsolidation handles the round-5 recommendation table actions. Called
-  // with no args => 接受推荐 (accept the merged draft, advance to ready_to_confirm).
-  // Called with {field, value} => one-field adjust (backend merges, no model turn).
+  // with no args => 接受推荐 (accept-all: merge every persisted recommendation and
+  // advance to ready_to_confirm). Called with {field, value} => one-field round-6
+  // adjust (backend merges, no model turn). Both go through applyDialogueConsolidation
+  // so the body carries top-level consolidation fields, not an {answers} wrapper.
   const acceptConsolidation = useCallback(async (adjust = null) => {
     if (!state.view || submitting) return null
     setSubmitting(true)
     setError(null)
     try {
-      let view
-      if (adjust && adjust.field) {
-        view = await factoryApi.answerDialogueClarificationBatch(state.view.session.id, {
-          consolidationField: adjust.field,
-          consolidationValue: adjust.value,
-        })
-      } else {
-        // Accept: empty adjust marks the requirement ready_to_confirm.
-        view = await factoryApi.answerDialogueClarificationBatch(state.view.session.id, {
-          consolidationField: '__accept__',
-          consolidationValue: '',
-        })
-      }
+      const view = adjust && adjust.field
+        ? await factoryApi.applyDialogueConsolidation(state.view.session.id, { field: adjust.field, value: adjust.value })
+        : await factoryApi.applyDialogueConsolidation(state.view.session.id, { accept: true })
       await loadView(view.session.id)
       return view
     } catch (err) {
-      // If the accept path 409s because there is no consolidation list (e.g. the
-      // round already advanced), fall back to an empty batch so the user can still
-      // proceed to confirm.
-      if (!adjust && err && err.status === 409) {
-        try {
-          const fallback = await factoryApi.answerDialogueClarificationBatch(state.view.session.id, [])
-          await loadView(fallback.session.id)
-          return fallback
-        } catch (_) {
-          // fall through to the original error surface
-        }
-      }
       if (mountedRef.current) setError(err.message || String(err))
       throw err
     } finally {
