@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -227,6 +228,7 @@ func TestRunStreamWithInputForwardsStdoutAndStderr(t *testing.T) {
 	var stdoutLines, stderrLines []string
 	var mu sync.Mutex
 	os := OSRunner{}
+	shell, shellArgs := testShell(`echo out1 && echo out2 && echo err1 1>&2 && echo err2 1>&2`)
 	// A portable shell one-liner: print two stdout lines + two stderr lines.
 	res, err := os.RunStreamWithInput(
 		context.Background(), "", "",
@@ -240,7 +242,7 @@ func TestRunStreamWithInputForwardsStdoutAndStderr(t *testing.T) {
 			defer mu.Unlock()
 			stderrLines = append(stderrLines, line)
 		},
-		"sh", "-c", "echo out1; echo out2; echo err1 1>&2; echo err2 1>&2",
+		shell, shellArgs...,
 	)
 	if err != nil {
 		t.Fatalf("RunStreamWithInput: %v", err)
@@ -250,10 +252,10 @@ func TestRunStreamWithInputForwardsStdoutAndStderr(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !contains(stdoutLines, "out1") || !contains(stdoutLines, "out2") {
+	if !containsTrimmed(stdoutLines, "out1") || !containsTrimmed(stdoutLines, "out2") {
 		t.Errorf("stdout callbacks = %v, want out1+out2", stdoutLines)
 	}
-	if !contains(stderrLines, "err1") || !contains(stderrLines, "err2") {
+	if !containsTrimmed(stderrLines, "err1") || !containsTrimmed(stderrLines, "err2") {
 		t.Errorf("stderr callbacks = %v, want err1+err2", stderrLines)
 	}
 	if !strings.Contains(res.Stdout, "out1") {
@@ -274,11 +276,12 @@ func TestRunStreamWithInputReturnsOutputOnNonZeroExit(t *testing.T) {
 	}
 	var stderrLines []string
 	os := OSRunner{}
+	shell, shellArgs := testShell("echo failing 1>&2 && exit 3")
 	res, err := os.RunStreamWithInput(
 		context.Background(), "", "",
 		func(line string) {},
 		func(line string) { stderrLines = append(stderrLines, line) },
-		"sh", "-c", "echo failing 1>&2; exit 3",
+		shell, shellArgs...,
 	)
 	if err != nil {
 		t.Fatalf("RunStreamWithInput err = %v, want nil (non-zero exit reported via ExitCode)", err)
@@ -289,7 +292,7 @@ func TestRunStreamWithInputReturnsOutputOnNonZeroExit(t *testing.T) {
 	if !strings.Contains(res.Stderr, "failing") {
 		t.Errorf("res.Stderr = %q, missing 'failing'", res.Stderr)
 	}
-	if !contains(stderrLines, "failing") {
+	if !containsTrimmed(stderrLines, "failing") {
 		t.Errorf("stderr callback = %v, want 'failing' forwarded", stderrLines)
 	}
 }
@@ -297,6 +300,15 @@ func TestRunStreamWithInputReturnsOutputOnNonZeroExit(t *testing.T) {
 func contains(s []string, want string) bool {
 	for _, v := range s {
 		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTrimmed(s []string, want string) bool {
+	for _, v := range s {
+		if strings.TrimSpace(v) == want {
 			return true
 		}
 	}
@@ -392,4 +404,11 @@ func TestHintIfMissingBinaryMatchesWrappedText(t *testing.T) {
 	if !strings.Contains(hinted.Error(), "FACTORY_CONTAINER_RUNTIME") {
 		t.Errorf("text-matched err should get the hint: %v", hinted)
 	}
+}
+
+func testShell(script string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/C", script}
+	}
+	return "sh", []string{"-c", script}
 }
