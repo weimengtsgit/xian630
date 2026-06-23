@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/catalog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
@@ -36,7 +37,7 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 	seen := make(map[string]bool)
 	apps := make([]model.Application, 0)
 
-	visibility := LoadPresetVisibility(s.Root)
+	cfg := catalog.Load(s.Root)
 
 	for _, pattern := range manifestGlobs {
 		matches, err := filepath.Glob(filepath.Join(s.Root, pattern))
@@ -74,10 +75,8 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 			}
 			seen[m.Slug] = true
 
-			if m.Source == "preset" {
-				if show, ok := visibility[m.Slug]; ok && !show {
-					continue
-				}
+			if !catalog.AppEnabled(cfg, m.Slug) {
+				continue
 			}
 
 			apps = append(apps, manifestToApp(m, relPath))

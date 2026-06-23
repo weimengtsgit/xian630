@@ -1,0 +1,21 @@
+{
+  "apps": {
+    "carrier-homeport-tide-window-preset": true,
+    "carrier-deck-wind-calculator": true,
+    "carrier-deck-wind-calculator-generated": false,
+    "merchant-density-grid-alert": false,
+    "social-sighting-cluster-alert": false,
+    "east-sea-situation": false,
+    "aircraft-carrier-track": false,
+    "carrier-formation-replay": false
+  },
+  "blueprints": {
+    "carrier-homeport-tide-window": true,
+    "carrier-deck-wind-calculator": true,
+    "merchant-density-grid-alert": false,
+    "social-sighting-cluster-alert": false,
+    "east-sea-situation": false,
+    "aircraft-carrier-track": false,
+    "carrier-formation-replay": false
+  }
+}
