@@ -291,6 +291,33 @@ func (c *ClaudeStepRunner) captureCommandLog(ctx context.Context, reg *artifactR
 }
 
 func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace, skillPaths, blueprintPaths []string) string {
+	if step.Kind == model.StepRequirementAnalysis {
+		return "You are the software-factory requirement_analysis agent.\n" +
+			"Read confirmedRequirement from input.json and freeze it into a single final JSON object.\n" +
+			"Validate field completeness, capability boundaries, generationProfile, and blueprintRefs used only as reference scene docs. Record unsupported or out-of-scope asks in validation.unsupportedRequests.\n" +
+			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
+			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
+			"All human-readable string values must be Simplified Chinese. This includes summary, scenario text, view descriptions, entity names, constraints, risks, and unsupported-request explanations. Only identifiers, slugs, enum keys, file paths, and code symbols may remain non-Chinese.\n" +
+			"Do not ask clarifying questions. Do not output needsUserInput or questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
+			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not attempt to write files or modify the workspace.\n" +
+			"If the requirement is incomplete, set validation.complete=false. If the request exceeds supported capability, set validation.supported=false.\n" +
+			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
+	}
+	if step.Kind == model.StepSolutionDesign {
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。用户需求：" + job.UserPrompt +
+			skillsPromptBlock(skillPaths, blueprintPaths)
+	}
+	if step.Kind == model.StepCodeGeneration {
+		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
+			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
+			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
+			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
+			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
+			"面向用户的页面文案、标题、标签、图表说明、详情说明，以及 output.json / output.md 中的人类可读文本，默认必须使用简体中文；只有标识符、slug、路径、枚举值、代码符号可以保留非中文。" +
+			"不要输出隐藏推理链。" +
+			skillsPromptBlock(skillPaths, blueprintPaths)
+	}
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +

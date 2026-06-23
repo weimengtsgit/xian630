@@ -44,16 +44,6 @@ const rejectsAnswers = st => isTerminal(st) || st === 'ready_to_confirm'
 const isQuestionClearingStatus = st =>
   st === 'ready_to_confirm' || st === 'confirmed' || st === 'abandoned' || st === 'failed'
 
-function mergeClarificationView(prev, result) {
-  if (!result) return prev
-  return {
-    ...prev,
-    session: result,
-    requirement: result.requirement || prev.requirement,
-    questions: isQuestionClearingStatus(result.status) ? [] : prev.questions,
-  }
-}
-
 function stateFromClarificationView(session, messages = []) {
   const visibleMessages = []
   const questions = []
@@ -95,33 +85,36 @@ export function useClarification() {
   const [error, setError] = useState(null)
   const mountedRef = useRef(true)
 
+  const hydrateSession = useCallback(async sessionOrId => {
+    const session =
+      typeof sessionOrId === 'string'
+        ? await factoryApi.getClarification(sessionOrId)
+        : sessionOrId
+    if (!session || !session.id) return session
+    const messages = await factoryApi.getClarificationMessages(session.id)
+    if (mountedRef.current) {
+      setState(stateFromClarificationView(session, messages))
+      setError(null)
+    }
+    return session
+  }, [])
+
   const hydrateActive = useCallback(async () => {
     try {
       const session = await factoryApi.getActiveClarification()
-      const messages = await factoryApi.getClarificationMessages(session.id)
-      if (mountedRef.current) {
-        setState(stateFromClarificationView(session, messages))
-        setError(null)
-      }
-      return session
+      return await hydrateSession(session)
     } catch (err) {
       if (err.status === 404) return null
       if (mountedRef.current) setError(err.message || String(err))
       throw err
     }
-  }, [])
+  }, [hydrateSession])
 
   const create = useCallback(async prompt => {
     setError(null)
     try {
       const session = await factoryApi.createClarification(prompt)
-      // The clarification.created SSE event will also arrive and re-set the
-      // session, but we set optimistically so the panel flips out of the
-      // empty state without waiting for the round-trip.
-      if (mountedRef.current) {
-        setState(prev => ({ ...prev, session }))
-      }
-      return session
+      return await hydrateSession(session)
     } catch (err) {
       if (err.status === 409 && err.data && err.data.session_id) {
         const active = await hydrateActive()
@@ -130,7 +123,12 @@ export function useClarification() {
       if (mountedRef.current) setError(err.message || String(err))
       throw err
     }
-  }, [hydrateActive])
+  }, [hydrateActive, hydrateSession])
+
+  const reset = useCallback(() => {
+    setState(initialClarificationState())
+    setError(null)
+  }, [])
 
   const send = useCallback(
     async content => {
@@ -149,13 +147,14 @@ export function useClarification() {
           if (mountedRef.current) setError(msg)
           return state.session
         }
-        return await factoryApi.sendClarificationMessage(state.session.id, content)
+        const result = await factoryApi.sendClarificationMessage(state.session.id, content)
+        return await hydrateSession(result)
       } catch (err) {
         if (mountedRef.current) setError(err.message || String(err))
         throw err
       }
     },
-    [state.session, create],
+    [state.session, create, reset, hydrateSession],
   )
 
   const answer = useCallback(
@@ -170,19 +169,13 @@ export function useClarification() {
           setState(prev => ({ ...prev, questions: [] }))
         }
         const result = await factoryApi.answerClarification(state.session.id, { questionId, value })
-        // SSE is the live path, but the POST response already contains the
-        // refreshed session view. Merge it so option clicks visibly advance even
-        // if the SSE event arrives late or the browser reconnects mid-round.
-        if (mountedRef.current && result) {
-          setState(prev => mergeClarificationView(prev, result))
-        }
-        return result
+        return await hydrateSession(result)
       } catch (err) {
         if (mountedRef.current) setError(err.message || String(err))
         throw err
       }
     },
-    [state.session],
+    [state.session, hydrateSession],
   )
 
   const answerBatch = useCallback(
@@ -195,16 +188,13 @@ export function useClarification() {
           setState(prev => ({ ...prev, questions: [] }))
         }
         const result = await factoryApi.answerClarificationBatch(state.session.id, answers)
-        if (mountedRef.current && result) {
-          setState(prev => mergeClarificationView(prev, result))
-        }
-        return result
+        return await hydrateSession(result)
       } catch (err) {
         if (mountedRef.current) setError(err.message || String(err))
         throw err
       }
     },
-    [state.session],
+    [state.session, hydrateSession],
   )
 
   const confirm = useCallback(async () => {
@@ -212,49 +202,36 @@ export function useClarification() {
     setError(null)
     try {
       const result = await factoryApi.confirmClarification(state.session.id)
-      // confirmation.confirmed SSE will also arrive and (defensively) set the
-      // session, but we set optimistically from the returned view so the panel
-      // flips to the confirmed session without waiting for the round-trip. The
-      // backend now publishes the confirmed *session* (not the requirement), so
-      // both paths agree on the session slot.
-      if (mountedRef.current && result) {
-        setState(prev => mergeClarificationView(prev, result))
-      }
-      return result
+      return await hydrateSession(result)
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
       throw err
     }
-  }, [state.session])
+  }, [state.session, hydrateSession])
 
   const retry = useCallback(async () => {
     if (!state.session) return null
     setError(null)
     try {
-      return await factoryApi.retryClarificationRound(state.session.id)
+      const result = await factoryApi.retryClarificationRound(state.session.id)
+      return await hydrateSession(result)
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
       throw err
     }
-  }, [state.session])
+  }, [state.session, hydrateSession])
 
   const abandon = useCallback(async () => {
     if (!state.session) return null
     setError(null)
     try {
       const result = await factoryApi.abandonClarification(state.session.id)
-      // clarification.abandoned SSE updates the session.
-      return result
+      return await hydrateSession(result)
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
       throw err
     }
-  }, [state.session])
-
-  const reset = useCallback(() => {
-    setState(initialClarificationState())
-    setError(null)
-  }, [])
+  }, [state.session, hydrateSession])
 
   useEffect(() => {
     mountedRef.current = true

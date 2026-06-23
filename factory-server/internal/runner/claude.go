@@ -80,9 +80,13 @@ func claudeArgv(codegen bool) []string {
 			"--disallowedTools", "Bash",
 		}, stream...)
 	}
+	// Read-only stages intentionally avoid plan mode. DeepSeek-on-Claude-compatible
+	// endpoints can turn plan mode into an approval loop and emit prose instead of
+	// the required JSON contract. acceptEdits here does not grant write ability
+	// because Edit/Write remain disallowed.
 	return append([]string{
 		"--print",
-		"--permission-mode", "plan",
+		"--permission-mode", "acceptEdits",
 		"--allowedTools", "Read,Grep,Glob",
 		"--disallowedTools", "Bash,Edit,Write",
 	}, stream...)

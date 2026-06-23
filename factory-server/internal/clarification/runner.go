@@ -41,7 +41,7 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if err := os.WriteFile(absInput, in, 0o644); err != nil {
 		return RoundOutput{}, err
 	}
-	prompt := r.prompt(absInput)
+	prompt := r.promptText(absInput)
 	if err := os.WriteFile(filepath.Join(dir, "prompt.md"), []byte(prompt), 0o644); err != nil {
 		return RoundOutput{}, err
 	}
@@ -60,13 +60,9 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if res.ExitCode != 0 {
 		return RoundOutput{}, fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
 	}
-	if strings.TrimSpace(assistantText) == "" {
-		assistantText = res.Stdout
-	}
-	extracted := extractJSONObject(assistantText)
-	var out RoundOutput
-	if err := json.Unmarshal([]byte(extracted), &out); err != nil {
-		return RoundOutput{}, fmt.Errorf("decode clarification output: %v: %w", err, runner.ErrOutputInvalidJSON)
+	out, err := decodeRoundOutput(assistantText, res.Stdout)
+	if err != nil {
+		return RoundOutput{}, err
 	}
 	out = normalizeRoundOutput(out)
 	outBytes, _ := json.MarshalIndent(out, "", "  ")
@@ -479,6 +475,209 @@ func extractJSONObject(s string) string {
 		}
 	}
 	return s[start:] // unbalanced; let json.Unmarshal report the error
+}
+
+func decodeRoundOutput(rawCandidates ...string) (RoundOutput, error) {
+	var lastErr error
+	for _, candidate := range clarificationJSONCandidates(rawCandidates...) {
+		var out RoundOutput
+		if err := json.Unmarshal([]byte(candidate), &out); err != nil {
+			lastErr = err
+			continue
+		}
+		if !looksLikeRoundOutput(out) {
+			lastErr = fmt.Errorf("decoded JSON does not match clarification contract")
+			continue
+		}
+		return out, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no clarification JSON found in Claude output")
+	}
+	return RoundOutput{}, fmt.Errorf("decode clarification output: %v: %w", lastErr, runner.ErrOutputInvalidJSON)
+}
+
+func clarificationJSONCandidates(rawCandidates ...string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	for _, raw := range rawCandidates {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		add(raw)
+		for _, obj := range extractJSONObjects(raw) {
+			add(obj)
+		}
+		scanner := bufio.NewScanner(strings.NewReader(raw))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			if _, result := parseClaudeStreamLine(line); result != "" {
+				add(result)
+				for _, obj := range extractJSONObjects(result) {
+					add(obj)
+				}
+			}
+			if candidate := extractAssistantMessageText(line); candidate != "" {
+				add(candidate)
+				for _, obj := range extractJSONObjects(candidate) {
+					add(obj)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func extractAssistantMessageText(line string) string {
+	var top struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content []struct {
+				Type  string         `json:"type"`
+				Text  string         `json:"text"`
+				Input map[string]any `json:"input"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &top); err != nil {
+		return ""
+	}
+	if top.Type != "assistant" {
+		return ""
+	}
+	var parts []string
+	for _, block := range top.Message.Content {
+		switch block.Type {
+		case "text":
+			if text := strings.TrimSpace(block.Text); text != "" {
+				parts = append(parts, text)
+			}
+		case "tool_use":
+			if text := toolUseInputText(block.Input); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func toolUseInputText(input map[string]any) string {
+	for _, key := range []string{"content", "prompt", "question", "message", "text"} {
+		value, ok := input[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractJSONObjects(s string) []string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+			s = strings.TrimSpace(s[nl+1:])
+		}
+		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+		s = strings.TrimSpace(s)
+	}
+
+	var out []string
+	for start := 0; start < len(s); {
+		open := strings.IndexByte(s[start:], '{')
+		if open < 0 {
+			break
+		}
+		open += start
+		depth := 0
+		inStr := false
+		esc := false
+		for i := open; i < len(s); i++ {
+			c := s[i]
+			if inStr {
+				if esc {
+					esc = false
+				} else if c == '\\' {
+					esc = true
+				} else if c == '"' {
+					inStr = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inStr = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					out = append(out, s[open:i+1])
+					start = i + 1
+					goto nextObject
+				}
+			}
+		}
+		break
+	nextObject:
+	}
+	return out
+}
+
+func looksLikeRoundOutput(out RoundOutput) bool {
+	if out.Round <= 0 {
+		return false
+	}
+	switch out.Status {
+	case "waiting_user", "ready_to_confirm", "confirmed", "active":
+	default:
+		return false
+	}
+	return len(out.WorkLog) > 0 ||
+		len(out.Questions) > 0 ||
+		len(out.RecommendedBlueprints) > 0 ||
+		!requirementIsZero(out.Requirement)
+}
+
+func requirementIsZero(req Requirement) bool {
+	return req.AppType == "" &&
+		req.AppName == "" &&
+		len(req.TargetUsers) == 0 &&
+		req.CoreScenario == "" &&
+		req.PrimaryView == "" &&
+		len(req.MainEntities) == 0 &&
+		len(req.BlueprintRefs) == 0 &&
+		req.DataPolicy == "" &&
+		len(req.AcceptanceFocus) == 0 &&
+		len(req.GenerationProfile) == 0
+}
+
+func (r Runner) promptText(inputPath string) string {
+	return "Use .claude/skills/requirement-clarification/SKILL.md as a reference for the clarification contract only. " +
+		fmt.Sprintf("The round input is at the absolute path %s and must be read with the Read tool. ", inputPath) +
+		"Do not call Write, Edit, Bash, or any file-modifying tool. Do not write output.json. Do not create a plan file. " +
+		"All human-readable output fields must use Simplified Chinese, including workLog content, question text, option labels, option descriptions, requirement summaries, and recommendation copy; only identifiers, slugs, file paths, enum keys, and code symbols may remain non-Chinese. " +
+		"Return the final clarification payload directly as raw JSON in the final assistant message only, with no markdown fences and no extra prose. " +
+		"Output ONLY valid JSON matching the requirement clarification contract. " +
+		"Consult .claude/skills/requirement-clarification/blueprints.json for the scene blueprint catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s) and emit recommendedBlueprints cards. Blueprints are style/structure references only and must never copy scene source."
 }
 
 func (r Runner) binary() string {

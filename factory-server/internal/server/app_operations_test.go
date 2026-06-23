@@ -145,7 +145,7 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	if dep.HostPort < 18000 || dep.HostPort > 18999 {
 		t.Errorf("host_port = %d, want in [18000,18999]", dep.HostPort)
 	}
-	wantURL := "http://127.0.0.1:" + itoaStr(dep.HostPort)
+	wantURL := containerHealthURL(dep.HostPort)
 	if dep.URL != wantURL {
 		t.Errorf("url = %q, want %q", dep.URL, wantURL)
 	}

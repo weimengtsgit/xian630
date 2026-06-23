@@ -182,6 +182,21 @@ func TestRunnerTreatsConfirmedOutputAsReadyToConfirm(t *testing.T) {
 	}
 }
 
+func TestPromptTextForcesSimplifiedChinese(t *testing.T) {
+	r := Runner{}
+	prompt := r.promptText(`C:\tmp\input.json`)
+	for _, want := range []string{
+		"Simplified Chinese",
+		"workLog content",
+		"question text",
+		"recommendation copy",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 // TestRunnerParsesFencedJSON proves RunRound tolerates claude wrapping its
 // stdout in a ```json … ``` markdown fence.
 func TestRunnerParsesFencedJSON(t *testing.T) {
@@ -403,6 +418,85 @@ func TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice(t *testing.T) {
 	}
 	if !strings.Contains(wl.Content, "需求澄清失败") || !strings.Contains(wl.Content, "529") {
 		t.Fatalf("completed event does not surface the real API error: %q", wl.Content)
+	}
+}
+
+func TestRunnerParsesToolUseWrappedJSONFromAssistantEvent(t *testing.T) {
+	root := t.TempDir()
+	payload := `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [
+    {
+      "type": "analysis",
+      "content": "Need one more clarification before generation."
+    }
+  ],
+  "questions": [
+    {
+      "id": "deck_scope",
+      "label": "Deck scope",
+      "question": "Should the app show all carrier activity areas or a selected subset?",
+      "required": true,
+      "recommendation": "all_known_areas",
+      "multiSelect": false,
+      "options": [
+        {
+          "value": "all_known_areas",
+          "label": "All known areas",
+          "reason": "Matches the current request."
+        }
+      ],
+      "allowCustom": false
+    }
+  ],
+  "requirement": {
+    "appType": "command_dashboard",
+    "appName": "Deck Wind Calculator",
+    "targetUsers": ["Operations staff"],
+    "coreScenario": "Assess deck-wind feasibility by area",
+    "primaryView": "Area list with wind and deck-wind range",
+    "mainEntities": ["activity area", "wind field", "carrier"],
+    "blueprintRefs": ["carrier-deck-wind-calculator"],
+    "dataPolicy": "live_api",
+    "acceptanceFocus": ["deck_wind_range"],
+    "generationProfile": {
+      "base": ["software-factory-app"],
+      "domain": ["defense-operations-ui"],
+      "pattern": ["command-dashboard"]
+    }
+  },
+  "recommendedBlueprints": [
+    {
+      "slug": "carrier-deck-wind-calculator",
+      "name": "Deck wind calculator",
+      "appType": "command_dashboard",
+      "reason": "Direct match for deck-wind monitoring.",
+      "referenceKind": "structure|interaction|data-model|style"
+    }
+  ]
+}`
+	content := "Plan notes\n```json\n" + payload + "\n```"
+	assistantLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"C:\\\\temp\\\\output.json","content":` + strconv.Quote(content) + `}}]}}`
+	fr := &fakeStreamCommandRunner{lines: []string{
+		`{"type":"system","subtype":"init"}`,
+		assistantLine,
+	}}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_tool_use", Round: 1, MaxRounds: 3, InitialPrompt: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if out.Status != "waiting_user" {
+		t.Fatalf("status = %q", out.Status)
+	}
+	if out.Requirement.AppName != "Deck Wind Calculator" {
+		t.Fatalf("appName = %q", out.Requirement.AppName)
+	}
+	if len(out.Questions) != 1 || out.Questions[0].ID != "deck_scope" {
+		t.Fatalf("questions = %#v", out.Questions)
 	}
 }
 

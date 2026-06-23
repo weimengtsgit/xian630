@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -301,7 +301,8 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 
 	// Health check; on failure stop+remove (best-effort), mark deployment failed,
 	// mark app error.
-	url := "http://127.0.0.1:" + strconv.Itoa(host)
+	healthIP := wslVMHealthIP()
+	url := fmt.Sprintf("http://%s:%d", healthIP, host)
 	health := f.Health
 	if health == nil {
 		health = deploy.CheckHTTP
@@ -382,4 +383,18 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, rt deploy.C
 		_, _ = rt.RemoveContainer(ctx, dep.ContainerName)
 		_ = f.Store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
 	}
+}
+
+// wslVMHealthIP returns the WSL2 VM's IPv4 address so health probes can reach
+// containers directly, bypassing unreliable wslrelay port forwarding.
+func wslVMHealthIP() string {
+	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
+		`ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+'`).Output()
+	if err == nil {
+		ip := strings.TrimSpace(string(out))
+		if ip != "" {
+			return ip
+		}
+	}
+	return "127.0.0.1"
 }

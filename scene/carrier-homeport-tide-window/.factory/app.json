@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "slug": "carrier-homeport-tide-window",
+  "slug": "carrier-homeport-tide-window-preset",
   "name": "航母母港潮汐窗口计算器",
   "type": "command-dashboard",
   "source": "preset",
