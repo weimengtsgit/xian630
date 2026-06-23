@@ -107,9 +107,9 @@ function App() {
             selectedBusinessAgentIds={conversation.selectedBusinessAgentIds}
             onAddBusinessAgent={conversation.addBusinessAgent}
             onRemoveBusinessAgent={conversation.removeBusinessAgent}
+            onCreateBusinessAgent={agents.createBusinessAgent}
             onCreateAuthoringSession={agents.createAuthoringSession}
             onSendAuthoringMessage={agents.sendAuthoringMessage}
-            onFinalizeAuthoring={agents.finalizeAuthoring}
             onUpdateBusinessAgent={agents.updateBusinessAgent}
             onSetBusinessAgentEnabled={agents.setBusinessAgentEnabled}
           />

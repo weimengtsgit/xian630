@@ -58,9 +58,9 @@ export function AgentsPanel({
   selectedBusinessAgentIds = [],
   onAddBusinessAgent,
   onRemoveBusinessAgent,
+  onCreateBusinessAgent,
   onCreateAuthoringSession,
   onSendAuthoringMessage,
-  onFinalizeAuthoring,
   onUpdateBusinessAgent,
   onSetBusinessAgentEnabled,
 }) {
@@ -236,6 +236,23 @@ export function AgentsPanel({
     return session
   }
 
+  const buildBusinessAgentPayload = sourceDraft => {
+    const key = String(sourceDraft?.key || '').trim()
+    const name = String(sourceDraft?.name || '').trim()
+    const description = String(sourceDraft?.description || '').trim()
+    const prompt = String(sourceDraft?.prompt || '').trim()
+    if (!key || !name || !prompt) {
+      throw new Error('生成结果缺少名称、标识或最终提示词')
+    }
+    return {
+      key,
+      name,
+      description,
+      prompt,
+      enabled: sourceDraft.enabled === undefined ? true : Boolean(sourceDraft.enabled),
+    }
+  }
+
   const submitAuthoringMessage = async event => {
     event.preventDefault()
     const content = authoring.input.trim()
@@ -253,8 +270,8 @@ export function AgentsPanel({
   }
 
   const finalizeAuthoring = async () => {
-    if (!onFinalizeAuthoring || authoringBusy) return
-    let sessionId = authoring.session?.id
+    if (!onCreateBusinessAgent || authoringBusy) return
+    let targetDraft = draft
     if (hasAuthoringInput || !canFinalize) {
       const content = authoring.input.trim()
       if (!content || !onSendAuthoringMessage) return
@@ -268,7 +285,7 @@ export function AgentsPanel({
           }))
           return
         }
-        sessionId = session.id
+        targetDraft = parseDraft(session)
       } catch (err) {
         setAuthoring(current => ({
           ...current,
@@ -281,7 +298,14 @@ export function AgentsPanel({
     }
     setAuthoring(current => ({ ...current, finalizing: true, error: '' }))
     try {
-      const created = await onFinalizeAuthoring(sessionId)
+      const payload = buildBusinessAgentPayload(targetDraft)
+      const created = await onCreateBusinessAgent({
+        key: payload.key,
+        name: payload.name,
+        description: payload.description,
+        prompt: payload.prompt,
+        enabled: payload.enabled,
+      })
       setSelectedId(created.id || created.key)
       setAuthoringOpen(false)
       setAuthoring(emptyAuthoringState)
