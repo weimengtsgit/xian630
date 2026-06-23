@@ -22,7 +22,12 @@ description: Fetch and normalize real tide forecast data for named ports or port
 Use sources in this order unless the caller overrides `sourcePriority`:
 
 1. `noaa-coops` for Norfolk, San Diego, and Bremerton
-2. `japan-tide-source` for Yokosuka
+2. `japan-tide-source` for Yokosuka — **currently unsupported**: there is no
+   reachable public, no-API-key endpoint (the JCG tide site is not reachable
+   from the deployment environment, and no clean public JSON source exists).
+   For Yokosuka, return `ok=false` with `error.code=ALL_SOURCES_FAILED` rather
+   than falling through to `shipxy`/`page-scraper` (both violate the no-key
+   policy). Re-enable only when a public source is wired.
 3. `shipxy`
 4. `page-scraper`
 5. fail
