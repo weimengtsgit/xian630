@@ -532,6 +532,82 @@ func TestApplyConsolidationAdjustmentRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+// TestRunnerRedactsBlueprintRefsFromUserFacingEvents proves the
+// clarification.summary.updated and clarification.ready_to_confirm events do
+// NOT leak the internal blueprintRefs (hidden Factory slugs). The persisted
+// RoundOutput.Requirement must STILL carry blueprintRefs server-side.
+func TestRunnerRedactsBlueprintRefsFromUserFacingEvents(t *testing.T) {
+	root := t.TempDir()
+	// A ready_to_confirm round whose persisted requirement carries an internal
+	// blueprint slug that must never reach the frontend.
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "workLog": [{"type":"ready","content":"ok"}],
+  "questions": [],
+  "requirement": {
+    "appType":"command_dashboard","appName":"潮汐窗口","targetUsers":["作战参谋"],
+    "coreScenario":"窗口计算","primaryView":"四格仪表盘","mainEntities":["港口","潮汐"],
+    "dataPolicy":"mock_data","acceptanceFocus":["窗口计算"],
+    "generationProfile":{"base":["software-factory-app"]},
+    "blueprintRefs":["carrier-homeport-tide-window"]
+  }
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_redact", Round: 1, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	// (3) Server-side retention: the returned requirement still has the slug.
+	if len(out.Requirement.BlueprintRefs) != 1 || out.Requirement.BlueprintRefs[0] != "carrier-homeport-tide-window" {
+		t.Fatalf("server-side BlueprintRefs must be retained, got %+v", out.Requirement.BlueprintRefs)
+	}
+	// output.json must also retain blueprintRefs (persisted metadata).
+	raw, err := os.ReadFile(filepath.Join(root, ".factory-runs", "clarifications", "clar_redact", "round-1", "output.json"))
+	if err != nil {
+		t.Fatalf("read output.json: %v", err)
+	}
+	if !strings.Contains(string(raw), "blueprintRefs") {
+		t.Fatalf("output.json must retain blueprintRefs server-side")
+	}
+	const slug = "carrier-homeport-tide-window"
+	var sawSummary, sawReady bool
+	for _, ev := range events {
+		switch ev.Type {
+		case "clarification.summary.updated":
+			sawSummary = true
+			b, _ := json.Marshal(ev.Data)
+			body := string(b)
+			if strings.Contains(body, "blueprintRefs") {
+				t.Fatalf("clarification.summary.updated leaks blueprintRefs: %s", body)
+			}
+			if strings.Contains(body, slug) {
+				t.Fatalf("clarification.summary.updated leaks blueprint slug: %s", body)
+			}
+		case "clarification.ready_to_confirm":
+			sawReady = true
+			b, _ := json.Marshal(ev.Data)
+			body := string(b)
+			if strings.Contains(body, "blueprintRefs") {
+				t.Fatalf("clarification.ready_to_confirm leaks blueprintRefs: %s", body)
+			}
+			if strings.Contains(body, slug) {
+				t.Fatalf("clarification.ready_to_confirm leaks blueprint slug: %s", body)
+			}
+		}
+	}
+	if !sawSummary {
+		t.Fatalf("missing clarification.summary.updated; got %v", eventTypes(events))
+	}
+	if !sawReady {
+		t.Fatalf("missing clarification.ready_to_confirm; got %v", eventTypes(events))
+	}
+}
+
+
 // TestRunnerSurfacesNormalizedScenarioName proves the scenario name is carried
 // on the round output for Task 4 to append the Base36 serial.
 func TestRunnerSurfacesNormalizedScenarioName(t *testing.T) {

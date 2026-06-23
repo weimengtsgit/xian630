@@ -310,6 +310,25 @@ type normalizeOptions struct {
 	SkipWorkLogs bool
 }
 
+// requirementWithoutBlueprintRefs projects a Requirement into its user-facing
+// form, stripping the internal BlueprintRefs. It is the ONLY shape that may
+// appear in a user-facing SSE event; the raw Requirement (with blueprintRefs)
+// is retained on the persisted RoundOutput returned to the caller and written
+// to output.json.
+func requirementWithoutBlueprintRefs(r Requirement) requirementView {
+	return requirementView{
+		AppType:           r.AppType,
+		AppName:           r.AppName,
+		TargetUsers:       r.TargetUsers,
+		CoreScenario:      r.CoreScenario,
+		PrimaryView:       r.PrimaryView,
+		MainEntities:      r.MainEntities,
+		DataPolicy:        r.DataPolicy,
+		AcceptanceFocus:   r.AcceptanceFocus,
+		GenerationProfile: r.GenerationProfile,
+	}
+}
+
 func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions) []StreamEvent {
 	var opt normalizeOptions
 	if len(opts) > 0 {
@@ -329,7 +348,12 @@ func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions
 	for _, q := range out.Questions {
 		events = append(events, StreamEvent{Type: "clarification.question.created", SessionID: sessionID, Data: q})
 	}
-	events = append(events, StreamEvent{Type: "clarification.summary.updated", SessionID: sessionID, Data: out.Requirement})
+	// Blueprints are internal server-side metadata (Requirement.BlueprintRefs).
+	// They MUST NOT appear in any user-facing SSE event. Emit a projection that
+	// omits the field entirely so it cannot leak by omission — the persisted
+	// RoundOutput.Requirement (returned to the caller and written to output.json)
+	// still carries blueprintRefs intact.
+	events = append(events, StreamEvent{Type: "clarification.summary.updated", SessionID: sessionID, Data: requirementWithoutBlueprintRefs(out.Requirement)})
 	// Adaptive: emit a consolidation event for the round-5 recommendation list.
 	// Blueprints are no longer surfaced in any user-facing event (the
 	// clarification.blueprint.recommended event has been removed); blueprints
@@ -342,7 +366,7 @@ func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions
 		})
 	}
 	if IsReadyToConfirmStatus(out.Status) {
-		events = append(events, StreamEvent{Type: "clarification.ready_to_confirm", SessionID: sessionID, Data: out.Requirement})
+		events = append(events, StreamEvent{Type: "clarification.ready_to_confirm", SessionID: sessionID, Data: requirementWithoutBlueprintRefs(out.Requirement)})
 	}
 	return events
 }

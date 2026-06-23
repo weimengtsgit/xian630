@@ -83,6 +83,23 @@ type Requirement struct {
 	BlueprintRefs     []string            `json:"blueprintRefs"`
 }
 
+// requirementView is the user-facing projection of Requirement. It intentionally
+// OMITS BlueprintRefs: blueprint slugs are internal Factory metadata persisted
+// server-side only and must never travel in a user-facing SSE event. Use
+// requirementView (not Requirement itself) for any event payload. This struct
+// cannot leak the field by omission, unlike a string-scrub.
+type requirementView struct {
+	AppType           string              `json:"appType"`
+	AppName           string              `json:"appName"`
+	TargetUsers       []string            `json:"targetUsers"`
+	CoreScenario      string              `json:"coreScenario"`
+	PrimaryView       string              `json:"primaryView"`
+	MainEntities      []string            `json:"mainEntities"`
+	DataPolicy        string              `json:"dataPolicy"`
+	AcceptanceFocus   []string            `json:"acceptanceFocus"`
+	GenerationProfile map[string][]string `json:"generationProfile"`
+}
+
 type RoundInput struct {
 	SessionID          string        `json:"sessionId"`
 	Round              int           `json:"round"`
