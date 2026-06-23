@@ -67,16 +67,15 @@ func TestSelectedSkillPathsOrderIgnoresUnknownGroups(t *testing.T) {
 
 // TestSelectedSkillPathsResolvesDataGroup proves selectedSkillPaths reads the
 // `data` group (added so data-acquisition skills can be surfaced to the
-// code-generation agent) and orders it after base/domain/pattern. The two
-// ACTIVE public data skills (tide + deck-wind) are the policy-compliant set;
-// ais-density-data-skill is shelved (no public no-key source) and intentionally
-// absent here — see requirement-clarification/SKILL.md.
+// code-generation agent) and orders it after base/domain/pattern. The three
+// active data skills are real checked-in skills (tide/deck-wind live, ais-density
+// historical), so the resolved paths must exist.
 func TestSelectedSkillPathsResolvesDataGroup(t *testing.T) {
 	ws := repoWorkspace(t)
 	profile := map[string][]string{
 		"base":    {"software-factory-app"},
 		"pattern": {"map-timeline-replay"},
-		"data":    {"tide-data-skill", "deck-wind-data-skill"},
+		"data":    {"tide-data-skill", "deck-wind-data-skill", "ais-density-data-skill"},
 	}
 	got := selectedSkillPaths(ws, profile)
 	want := []string{
@@ -84,6 +83,7 @@ func TestSelectedSkillPathsResolvesDataGroup(t *testing.T) {
 		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "map-timeline-replay", "SKILL.md")),
 		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "tide-data-skill", "SKILL.md")),
 		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "deck-wind-data-skill", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(ws, ".claude", "skills", "ais-density-data-skill", "SKILL.md")),
 	}
 	if len(got) != len(want) {
 		t.Fatalf("selectedSkillPaths = %v, want %d entries (data group read)", got, len(want))
@@ -173,10 +173,10 @@ func TestParseGenerationProfile(t *testing.T) {
 }
 
 // TestParseGenerationProfileSurfacesDataSkills is the end-to-end proof that the
-// ACTIVE public data skills are actually usable: it feeds a realistic confirmed
-// requirement (dataPolicy=live_api with the two policy-compliant data domains
-// in the `data` group) through the SAME production path ClaudeStepRunner.Run
-// uses (parseGenerationProfile -> selectedSkillPaths) and asserts every resolved
+// data skills are actually usable: it feeds a realistic confirmed requirement
+// (dataPolicy=live_api with all three data domains in the `data` group) through
+// the SAME production path ClaudeStepRunner.Run uses
+// (parseGenerationProfile -> selectedSkillPaths) and asserts every resolved
 // skill path points at a real SKILL.md on disk the generation agent can Read.
 // This closes the JSON->profile->path round-trip gap for the data group, which
 // the per-function tests above do not cover on their own.
@@ -189,16 +189,16 @@ func TestParseGenerationProfileSurfacesDataSkills(t *testing.T) {
 			"base": ["software-factory-app"],
 			"domain": ["defense-operations-ui"],
 			"pattern": ["command-dashboard"],
-			"data": ["tide-data-skill", "deck-wind-data-skill"]
+			"data": ["tide-data-skill", "deck-wind-data-skill", "ais-density-data-skill"]
 		},
 		"blueprintRefs": []
 	}`)
 	profile, _ := parseGenerationProfile(raw)
-	if got := profile["data"]; len(got) != 2 {
-		t.Fatalf("profile[data] = %v, want 2 active data skills to survive JSON round-trip", got)
+	if got := profile["data"]; len(got) != 3 {
+		t.Fatalf("profile[data] = %v, want 3 data skills to survive JSON round-trip", got)
 	}
 	paths := selectedSkillPaths(ws, profile)
-	for _, key := range []string{"tide-data-skill", "deck-wind-data-skill"} {
+	for _, key := range []string{"tide-data-skill", "deck-wind-data-skill", "ais-density-data-skill"} {
 		want := filepath.ToSlash(filepath.Join(ws, ".claude", "skills", key, "SKILL.md"))
 		found := false
 		for _, p := range paths {

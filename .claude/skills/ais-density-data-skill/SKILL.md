@@ -1,35 +1,50 @@
 ---
 name: ais-density-data-skill
-description: Fetch real AIS data for sea areas, normalize vessel points, and aggregate them into merchant-density grid results with baseline comparison. Use when a request mentions AIS, merchant density, shipping density, 50-nautical-mile grid, baseline comparison, merchant count, or grid-based maritime anomaly detection. Skip this skill only when the user explicitly requests mock or demo data.
+description: Download and process HISTORICAL AIS archives (MarineCadastre / DMA / GFW public data, all free and no-API-key) into merchant-density grids over a date range. Use when a request mentions AIS, merchant density, shipping density, 50-nautical-mile grid, vessel traffic analysis, or historical shipping density. This skill is historical-only — it does NOT fetch real-time data or call paid AIS APIs. Skip only when the user explicitly requests mock/demo data.
 ---
 
-# AIS Density Data Skill
+# AIS Density Skill
 
 ## Default Rule
 
-- Use real data by default.
-- Skip this skill only when the user explicitly asks for `mock`, `demo data`, or `sample data`.
-- Return failure when every real source fails. Do not generate fake vessel density.
+- Use **historical downloadable AIS archives** only. No real-time API, no live
+  site scraping, no API key.
+- Coverage is limited to the regions each free source publishes. If the
+  requested sea area is outside all free sources' coverage, return `ok=false`
+  with `COVERAGE_NOT_AVAILABLE` — do NOT fall back to paid sources (shipxy /
+  aishub).
+- Historical data is inherently stale; always report how recent it is.
+- Return failure when every applicable source fails. Do not fabricate vessel counts.
 
 ## Trigger Mapping
 
-- Trigger on intent about `AIS`, `merchant density`, `grid alert`, `50-nautical-mile`, or `30-day sliding average`.
-- Use this skill when the output must contain current merchant count, baseline, ratio, or red-yellow-green density status.
-- Ask for missing sea-area bounds only when the monitored zone cannot be inferred safely.
+- Trigger on intent about `AIS`, `merchant density`, `shipping density`,
+  `50-nautical-mile grid`, `historical vessel traffic`, or `shipping traffic
+  analysis`.
+- Use this skill when the output is a density grid over a historical period
+  (counts/means per cell), NOT a real-time alert.
 
 ## Source Priority
 
-Use sources in this order unless the caller overrides `sourcePriority`:
+Use sources in this order, picking the one whose coverage includes the requested zone:
 
-1. `shipxy`
-2. `aishub`
-3. fail
+1. `marinecadastre` — NOAA/BOEM U.S. AIS Vessel Traffic Data. Free, no key,
+   downloadable (ArcGIS hub / AWS Open Data). **Covers U.S. waters and EEZ
+   only.** Historical archives, typically weeks-to-months behind real time.
+2. `dma` — Danish Maritime Authority historical AIS. Free, no key, bulk CSV at
+   `aisdata.ais.dk`. **Covers Danish waters only.**
+3. `gfw` — Global Fishing Watch public data. Global coverage (includes merchant
+   tracks), but **fishing-analysis oriented and requires a free account/token**.
+   Use only when the caller accepts a free token.
+4. fail
 
 Rules:
 
-- Prefer structured AIS APIs over page scraping.
+- Prefer structured archives over rendered pages.
 - Filter to merchant-like vessel types before counting.
-- Set `meta.isFallback=true` when the winning source is not the first usable source.
+- Record the winning source in `meta.source` and its coverage limit in
+  `meta.coverageNote`.
+- If no source covers the requested zone, fail with `COVERAGE_NOT_AVAILABLE`.
 
 ## Input Contract
 
@@ -39,34 +54,28 @@ Expect a payload shaped like:
 {
   "zones": [
     {
-      "id": "philippine-sea",
-      "name": "Philippine Sea",
-      "bbox": {
-        "minLat": 14.0,
-        "maxLat": 18.0,
-        "minLon": 130.0,
-        "maxLon": 135.0
-      }
+      "id": "us-west-coast",
+      "name": "U.S. West Coast Approaches",
+      "bbox": {"minLat": 30.0, "maxLat": 48.0, "minLon": -128.0, "maxLon": -117.0}
     }
   ],
   "gridSizeNm": 50,
-  "baselineWindowDays": 30,
+  "dateRange": {"from": "2024-01-01", "to": "2024-12-31"},
   "shipFilter": {
     "includeTypes": ["merchant"],
     "excludeTypes": ["navy", "fishing", "unknown"]
   },
-  "sourcePriority": ["shipxy", "aishub"],
-  "useMock": false,
-  "timeoutMs": 10000
+  "source": "marinecadastre"
 }
 ```
 
 Interpretation:
 
-- `zones` is required.
+- `zones` is required (bbox per zone).
 - `gridSizeNm` defaults to `50`.
-- `baselineWindowDays` defaults to `30`.
-- `useMock=true` means do not use this skill.
+- `dateRange` is required — this is a historical skill; specify a period. If the
+  user says "recent", use the most recent full period the chosen source publishes.
+- `source` is optional; auto-select by zone coverage when omitted.
 
 ## Output Contract
 
@@ -76,35 +85,28 @@ Return:
 {
   "ok": true,
   "meta": {
-    "source": "shipxy",
-    "sourceLevel": "primary",
-    "isFallback": false,
-    "fetchedAt": "2026-06-23T15:00:00+08:00"
+    "source": "marinecadastre",
+    "dateRange": {"from": "2024-01-01", "to": "2024-12-31"},
+    "dataAsOf": "2024-12-31",
+    "freshnessNote": "Historical archive; not real-time. Source lags weeks-to-months.",
+    "coverageNote": "U.S. waters/EEZ only."
   },
   "data": {
-    "thresholds": {
-      "yellow": 0.7,
-      "red": 0.5
-    },
     "cells": [
       {
-        "id": "philippine-sea-r00-c00",
-        "zoneId": "philippine-sea",
-        "zoneName": "Philippine Sea",
-        "row": 0,
-        "col": 0,
-        "lat": 16.0,
-        "lon": 132.0,
+        "id": "us-west-coast-r03-c11",
+        "zoneId": "us-west-coast",
+        "zoneName": "U.S. West Coast Approaches",
+        "row": 3,
+        "col": 11,
+        "lat": 36.0,
+        "lon": -123.0,
         "sizeNm": 50,
-        "currentCount": 31,
-        "baseline30d": 64,
-        "ratio": 0.4844,
-        "status": {
-          "level": "red",
-          "label": "red"
-        },
-        "history": [62, 61, 63, 60, 59, 31],
-        "lastUpdated": "2026-06-23T15:00:00+08:00"
+        "periodCount": 18420,
+        "dailyMean": 50.4,
+        "daysWithCoverage": 365,
+        "status": {"level": "info", "label": "historical density"},
+        "lastUpdated": "2024-12-31"
       }
     ]
   }
@@ -113,29 +115,35 @@ Return:
 
 Requirements:
 
-- Normalize source vessel points before grid aggregation.
-- Count only merchant vessels after filtering.
-- Compute `ratio = currentCount / baseline30d` when baseline exists.
-- Use `green/yellow/red` with thresholds `0.7` and `0.5`.
-- Return `unknown` status when baseline is missing instead of inventing one.
+- Normalize source vessel messages before grid aggregation; count only merchant
+  vessels after type filtering.
+- `periodCount` = total merchant vessel-presence observations over the range;
+  `dailyMean` = periodCount / daysWithCoverage.
+- Use status `info` (historical density). Do NOT emit real-time red/yellow/green
+  alerts — there is no live baseline.
+- Mark cells with partial coverage (missing days) explicitly in
+  `daysWithCoverage`.
 
 ## Failure Rules
 
-- Return `ok=false` when all real sources fail.
+- Return `ok=false` when no free source covers the requested zone or every
+  source fails.
 - Include `sourceTried`, `error.code`, and per-source failure details.
-- Do not fall back to social data or text mentions for vessel density.
 
 Recommended error codes:
 
 - `INVALID_INPUT`
-- `SOURCE_TIMEOUT`
-- `SOURCE_AUTH_FAILED`
-- `SOURCE_RESPONSE_INVALID`
-- `BASELINE_MISSING`
+- `COVERAGE_NOT_AVAILABLE` (requested zone outside all free sources, e.g.
+  Philippine Sea / deep Western Pacific)
+- `SOURCE_UNREACHABLE`
+- `FORMAT_CHANGED` (archive layout changed; scraper needs updating)
+- `NO_DATA_FOR_RANGE`
 - `ALL_SOURCES_FAILED`
 
 ## Must Not Do
 
-- Do not return mock AIS density.
-- Do not mix social posts or text mentions into `currentCount`.
-- Do not hide baseline absence; mark the affected cell as `unknown`.
+- Do not call real-time AIS APIs (shipxy, aishub, etc.) — this is historical-only.
+- Do not scrape live tracking sites.
+- Do not fabricate or estimate vessel counts.
+- Do not present historical density as live or real-time.
+- Do not silently use a free-token source (GFW) without surfacing that it needs registration.
