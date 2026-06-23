@@ -83,12 +83,12 @@ func (r Runner) runClaude(ctx context.Context, input RoundInput, prompt string, 
 	if sr, ok := r.Cmd.(streamCommandRunner); ok {
 		return r.runClaudeStream(ctx, sr, input, prompt, emit)
 	}
-	args := []string{
+	args := append([]string{
 		"--print", prompt,
 		"--permission-mode", "plan",
 		"--allowedTools", "Read,Grep,Glob",
 		"--disallowedTools", "Bash,Edit,Write",
-	}
+	}, claudeModelArgs()...)
 	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(), args...)
 	// Non-streaming fallback: the captured stdout is still stream-json NDJSON,
@@ -111,7 +111,7 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	var resultText string
 	var resultIsError bool
 	var lastVisible string
-	args := []string{
+	args := append([]string{
 		"--print", prompt,
 		"--output-format", "stream-json",
 		"--include-partial-messages",
@@ -119,7 +119,7 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 		"--permission-mode", "plan",
 		"--allowedTools", "Read,Grep,Glob",
 		"--disallowedTools", "Bash,Edit,Write",
-	}
+	}, claudeModelArgs()...)
 	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
 		runner.LLMConsoleStreamLine(line)
@@ -482,8 +482,15 @@ func decodeRoundOutput(rawCandidates ...string) (RoundOutput, error) {
 	for _, candidate := range clarificationJSONCandidates(rawCandidates...) {
 		var out RoundOutput
 		if err := json.Unmarshal([]byte(candidate), &out); err != nil {
-			lastErr = err
-			continue
+			repaired, repairErr := repairLooseJSONStringQuotes(candidate)
+			if repairErr != nil {
+				lastErr = err
+				continue
+			}
+			if err := json.Unmarshal([]byte(repaired), &out); err != nil {
+				lastErr = err
+				continue
+			}
 		}
 		if !looksLikeRoundOutput(out) {
 			lastErr = fmt.Errorf("decoded JSON does not match clarification contract")
@@ -527,7 +534,7 @@ func clarificationJSONCandidates(rawCandidates ...string) []string {
 			if line == "" {
 				continue
 			}
-			if _, result := parseClaudeStreamLine(line); result != "" {
+			if _, result, _ := parseClaudeStreamLine(line); result != "" {
 				add(result)
 				for _, obj := range extractJSONObjects(result) {
 					add(obj)
@@ -642,6 +649,65 @@ func extractJSONObjects(s string) []string {
 	return out
 }
 
+// repairLooseJSONStringQuotes repairs a common non-JSON pattern from some
+// Anthropic-compatible providers: raw double quotes embedded inside a JSON
+// string value, e.g. `"content":"覆盖"全流程""`. The heuristic only escapes
+// quotes that appear while already inside a string and are clearly not acting
+// as the end delimiter because the next significant byte is not one of the
+// legal post-string tokens in JSON.
+func repairLooseJSONStringQuotes(s string) (string, error) {
+	var b strings.Builder
+	inString := false
+	escape := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !inString {
+			b.WriteByte(c)
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		if escape {
+			b.WriteByte(c)
+			escape = false
+			continue
+		}
+		switch c {
+		case '\\':
+			b.WriteByte(c)
+			escape = true
+		case '"':
+			if isLikelyStringTerminator(s, i+1) {
+				b.WriteByte(c)
+				inString = false
+			} else {
+				b.WriteString(`\"`)
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if inString || escape {
+		return "", fmt.Errorf("unterminated JSON string")
+	}
+	return b.String(), nil
+}
+
+func isLikelyStringTerminator(s string, next int) bool {
+	for ; next < len(s); next++ {
+		switch s[next] {
+		case ' ', '\n', '\r', '\t':
+			continue
+		case ',', '}', ']', ':':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func looksLikeRoundOutput(out RoundOutput) bool {
 	if out.Round <= 0 {
 		return false
@@ -699,4 +765,13 @@ func (r Runner) artifactRoot() string {
 		return ".factory-runs"
 	}
 	return r.ArtifactRoot
+}
+
+func claudeModelArgs() []string {
+	for _, key := range []string{"CLAUDE_CODE_MODEL", "ANTHROPIC_MODEL"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return []string{"--model", value}
+		}
+	}
+	return nil
 }

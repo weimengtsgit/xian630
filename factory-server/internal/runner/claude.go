@@ -67,29 +67,39 @@ func (r *ClaudeRunner) binary() string {
 // other hidden provider field — only tool_use + the public workLog in the final
 // result become records.
 func claudeArgv(codegen bool) []string {
+	modelArgs := claudeModelArgs()
 	stream := []string{
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
 	}
 	if codegen {
-		return append([]string{
+		return append(append([]string{
 			"--print",
 			"--permission-mode", "acceptEdits",
 			"--allowedTools", "Read,Grep,Glob,Edit,Write",
 			"--disallowedTools", "Bash",
-		}, stream...)
+		}, modelArgs...), stream...)
 	}
 	// Read-only stages intentionally avoid plan mode. DeepSeek-on-Claude-compatible
 	// endpoints can turn plan mode into an approval loop and emit prose instead of
 	// the required JSON contract. acceptEdits here does not grant write ability
 	// because Edit/Write remain disallowed.
-	return append([]string{
+	return append(append([]string{
 		"--print",
 		"--permission-mode", "acceptEdits",
 		"--allowedTools", "Read,Grep,Glob",
 		"--disallowedTools", "Bash,Edit,Write",
-	}, stream...)
+	}, modelArgs...), stream...)
+}
+
+func claudeModelArgs() []string {
+	for _, key := range []string{"CLAUDE_CODE_MODEL", "ANTHROPIC_MODEL"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return []string{"--model", value}
+		}
+	}
+	return nil
 }
 
 // Run writes the attempt input.json and prompt.md, then invokes the claude

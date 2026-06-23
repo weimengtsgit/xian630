@@ -60,7 +60,14 @@ func newWS(t *testing.T) AttemptWorkspace {
 
 func joinArgs(args []string) string { return strings.Join(args, " ") }
 
+func clearClaudeModelEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("CLAUDE_CODE_MODEL", "")
+	t.Setenv("ANTHROPIC_MODEL", "")
+}
+
 func TestClaudeRunReadOnlyArgv(t *testing.T) {
+	clearClaudeModelEnv(t)
 	fr := &fakeRunner{stdout: "hello stdout"}
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
 	ws := newWS(t)
@@ -117,6 +124,7 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 }
 
 func TestClaudeRunCodegenArgv(t *testing.T) {
+	clearClaudeModelEnv(t)
 	fr := &fakeRunner{stdout: "ok"}
 	workspace := t.TempDir()
 	r := ClaudeRunner{Runner: fr, Binary: "claude", WorkDir: workspace}
@@ -148,6 +156,22 @@ func TestClaudeRunCodegenArgv(t *testing.T) {
 	}
 	if _, err := os.Stat(ws.PromptPath()); err != nil {
 		t.Fatalf("prompt artifact missing: %v", err)
+	}
+}
+
+func TestClaudeRunAppendsModelArgFromEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_MODEL", "glm-5.1")
+	t.Setenv("ANTHROPIC_MODEL", "")
+	fr := &fakeRunner{stdout: "ok"}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	if err := r.Run(context.Background(), ws, "P", nil, false, nil); err != nil {
+		t.Fatalf("Run err = %v", err)
+	}
+	got := joinArgs(fr.argv)
+	if !strings.Contains(got, "--model glm-5.1") {
+		t.Fatalf("argv missing model override: %q", got)
 	}
 }
 
