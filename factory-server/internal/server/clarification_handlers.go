@@ -743,12 +743,9 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	if err := s.store.CreateJob(r.Context(), job); err != nil {
-		writeError(w, http.StatusInternalServerError, "create job")
-		return
-	}
+	steps := make([]model.JobStep, 0, len(stepPlan))
 	for i, sp := range stepPlan {
-		step := model.JobStep{
+		steps = append(steps, model.JobStep{
 			ID:       "step_" + idpkg.New(),
 			JobID:    jobID,
 			Kind:     sp.kind,
@@ -756,15 +753,14 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			AgentKey: sp.agentKey,
 			Status:   model.StepStatusPending,
 			Attempt:  0,
-		}
-		if err := s.store.CreateJobStep(r.Context(), step); err != nil {
-			writeError(w, http.StatusInternalServerError, "create step")
-			return
-		}
+		})
 	}
-
-	if err := s.store.LinkClarificationJob(r.Context(), id, jobID); err != nil {
-		writeError(w, http.StatusInternalServerError, "link job")
+	// Seed the job + steps + clarification link in ONE transaction: on failure
+	// there is NO orphaned job and the session is moved to a diagnosable failed
+	// state (never left ready_to_confirm with no linked job).
+	if err := s.store.SeedClarificationJob(r.Context(), job, steps, id); err != nil {
+		_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return
 	}
 	if err := s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusConfirmed, "", ""); err != nil {

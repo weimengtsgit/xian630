@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -257,6 +258,8 @@ func eventTypes(events []Event) []string {
 
 // TestCreateDialogueRejectsInventedSlug verifies the server validates the
 // router's returned slug against the candidate sets and rejects an invented slug.
+// On rejection the dialogue is marked failed, NO route record is persisted
+// (Route.Intent stays empty), and the invented slug never reaches the response.
 func TestCreateDialogueRejectsInventedSlug(t *testing.T) {
 	const invented = `{
   "intent": "existing_application",
@@ -265,24 +268,45 @@ func TestCreateDialogueRejectsInventedSlug(t *testing.T) {
   "userFacingReason": "x",
   "needsRouteConfirmation": false
 }`
-	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: invented})
+	srv, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: invented})
 
 	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "hi"})
-	if rec.Code >= 400 && rec.Code < 500 {
-		// 4xx acceptable — route validation rejected the invented slug.
-		return
-	}
+
+	// A routing failure returns 201 Created with the failed-session view (the
+	// handler marks the dialogue failed rather than rejecting the whole request).
 	if rec.Code != http.StatusCreated {
-		// A 500 with an error is also acceptable as long as NO route record with the
-		// invented slug is persisted.
+		t.Fatalf("status = %d, want 201 (failed-session view); body=%s", rec.Code, rec.Body.String())
 	}
 	var view dialogueView
-	_ = json.NewDecoder(rec.Body).Decode(&view)
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The dialogue MUST be in a diagnosable failed state.
+	if view.Session.Status != model.DialogueStatusFailed {
+		t.Fatalf("status = %q, want failed (invented slug must fail routing)", view.Session.Status)
+	}
+	// NO route record may be persisted: the redacted Route payload has no intent.
 	if view.Route.Intent != "" {
-		raw, _ := json.Marshal(view.Route)
-		if strings.Contains(string(raw), "this-app-does-not-exist") {
-			t.Fatalf("invented slug leaked into view: %s", raw)
-		}
+		t.Fatalf("route intent = %q, want empty (no route record after routing failure)", view.Route.Intent)
+	}
+	// The invented slug must not leak anywhere in the rendered response.
+	if strings.Contains(rec.Body.String(), "this-app-does-not-exist") {
+		t.Fatalf("invented slug leaked into response body: %s", rec.Body.String())
+	}
+
+	// Re-read from the store to confirm no route was persisted server-side.
+	persisted, err := srv.store.GetDialogueSession(context.Background(), view.Session.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("re-read dialogue: %v", err)
+	}
+	if persisted.Status != model.DialogueStatusFailed {
+		t.Fatalf("persisted status = %q, want failed", persisted.Status)
+	}
+	if persisted.Intent != "" && persisted.Intent != model.DialogueIntentRouting {
+		t.Fatalf("persisted intent = %q, want empty/routing (route must not be stamped)", persisted.Intent)
+	}
+	if strings.Contains(persisted.DraftJSON, "this-app-does-not-exist") {
+		t.Fatalf("invented slug persisted in DraftJSON: %s", persisted.DraftJSON)
 	}
 }
 
@@ -713,6 +737,98 @@ func TestApplicationClarificationFullSixRounds(t *testing.T) {
 	// App name must carry a Base36 suffix, not the client value.
 	if confirmView.SeededJob.AppName == "" {
 		t.Fatalf("seeded job has no app name")
+	}
+}
+
+// TestDialogueConfirmRollsBackOnMidSeedFailure asserts that when the job-seeding
+// transaction fails part-way through (a step insert errors), the confirm handler
+// leaves NO orphaned job row and moves the child clarification to a diagnosable
+// failed state — never ready_to_confirm with no linked job.
+func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
+	seq := &clarSequenceRunner{
+		outputs: []string{
+			roundOutputOneQuestion(1, "appType"),
+			roundOutputOneQuestion(2, "primaryView"),
+			roundOutputOneQuestion(3, "dataPolicy"),
+			roundOutputOneQuestion(4, "targetUsers"),
+			roundOutputConsolidation(5),
+		},
+	}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd:           &fakeDialogueRunner{routeStdout: routeAmbiguousOutput},
+		WorkspaceRoot: srv.cfg.WorkspaceRoot,
+		ArtifactRoot:  srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+	var routed dialogueView
+	_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+	childID := routed.Session.ClarificationSessionID
+	if childID == "" {
+		t.Fatalf("no child clarification linked")
+	}
+
+	answerRound := func(questionID, value string) {
+		rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+			"questionId": questionID, "value": value,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+		}
+	}
+	answerRound("appType", "situation_replay")
+	answerRound("primaryView", "地图 + 时间轴")
+	answerRound("dataPolicy", "mock_data")
+	answerRound("targetUsers", "作战参谋")
+	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
+		"consolidationField": "coreScenario",
+		"consolidationValue": "复盘近 1 个月航迹",
+	})
+
+	// Snapshot the job count before confirm so we can prove no job was added.
+	jobsBefore, err := st.ListJobs(context.Background(), "")
+	if err != nil {
+		t.Fatalf("list jobs before: %v", err)
+	}
+
+	// Inject a mid-seed failure: error on the 3rd step insert (after the job row
+	// and 2 steps would otherwise persist). The transaction must roll back.
+	srv.store.SetJobStepSeedHook(func(step model.JobStep) error {
+		if step.Seq == 3 {
+			return errors.New("injected mid-seed failure")
+		}
+		return nil
+	})
+
+	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/confirm", nil)
+	if confirmRec.Code != http.StatusInternalServerError {
+		t.Fatalf("confirm status = %d, want 500; body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+
+	// NO orphaned job: the job count is unchanged.
+	jobsAfter, err := st.ListJobs(context.Background(), "")
+	if err != nil {
+		t.Fatalf("list jobs after: %v", err)
+	}
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Fatalf("job count changed: before=%d after=%d (rollback must leave NO orphaned job)", len(jobsBefore), len(jobsAfter))
+	}
+
+	// The child clarification is in a diagnosable failed state.
+	child, err := st.GetClarificationSession(context.Background(), childID)
+	if err != nil || child == nil {
+		t.Fatalf("re-read child: %v", err)
+	}
+	if child.Status != model.ClarificationStatusFailed {
+		t.Fatalf("child status = %q, want failed after seed failure", child.Status)
+	}
+	if child.ErrorCode != "job_seed_failed" {
+		t.Fatalf("child error_code = %q, want job_seed_failed", child.ErrorCode)
 	}
 }
 

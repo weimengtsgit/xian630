@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	// Pure-Go SQLite driver — keeps the factory server a single static binary
 	// with no C toolchain dependency.
 	_ "modernc.org/sqlite"
@@ -26,6 +27,11 @@ var schemaSQL string
 // Store wraps a SQLite connection pool.
 type Store struct {
 	db *sql.DB
+	// jobOnCreateStepHook, when non-nil, is invoked once per job-step insert
+	// inside SeedClarificationJob. It is a test seam to inject a mid-seed failure
+	// so the atomic rollback contract can be verified; it is always nil in
+	// production.
+	jobOnCreateStepHook func(model.JobStep) error
 }
 
 // Open opens (and migrates) the database at path. For an in-memory database

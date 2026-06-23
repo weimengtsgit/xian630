@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -297,6 +298,28 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		InternalBlueprintSlug:    out.InternalBlueprintSlug,
 		UserFacingReason:         out.UserFacingReason,
 		NeedsRouteConfirmation:   out.NeedsRouteConfirmation,
+	}
+	// Validate every returned slug against the candidate sets BEFORE persisting.
+	// An invented slug (one the router hallucinated rather than chose from the
+	// supplied candidates) is a routing failure: the dialogue is marked failed
+	// and NO route record is persisted, so the slug can never leak into a
+	// response. This is the contract runRouting's doc comment promises.
+	for _, slug := range route.ExistingApplicationSlugs {
+		if _, ok := appsBySlug[slug]; !ok {
+			return persistedRoute{}, nil, fmt.Errorf("router returned unknown existing application slug %q", slug)
+		}
+	}
+	if route.InternalBlueprintSlug != "" {
+		knownBP := false
+		for _, bp := range bpCandidates {
+			if bp.Slug == route.InternalBlueprintSlug {
+				knownBP = true
+				break
+			}
+		}
+		if !knownBP {
+			return persistedRoute{}, nil, fmt.Errorf("router returned unknown blueprint slug %q", route.InternalBlueprintSlug)
+		}
 	}
 	// Build the user-facing recommendation cards from the validated slugs (max 3:
 	// 1 primary + ≤2 alternatives). The router returns them ordered by relevance.
@@ -740,13 +763,19 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		route.Intent = intent
 		routeBytes, _ := json.Marshal(route)
-		_ = s.store.UpdateDialogueRoute(ctx, id, model.DialogueIntentApplicationGeneration, model.DialogueStatusDraftingApplication, string(routeBytes), true)
+		if err := s.store.UpdateDialogueRoute(ctx, id, model.DialogueIntentApplicationGeneration, model.DialogueStatusDraftingApplication, string(routeBytes), true); err != nil {
+			writeError(w, http.StatusInternalServerError, "lock route")
+			return
+		}
 		s.runRoundAndPersist(ctx, childID, 1)
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
 
 	case dialogue.IntentBusinessProcessingAgent:
 		routeBytes, _ := json.Marshal(route)
-		_ = s.store.UpdateDialogueRoute(ctx, id, model.DialogueIntentBusinessProcessingAgent, model.DialogueStatusDraftingBusinessAgent, string(routeBytes), true)
+		if err := s.store.UpdateDialogueRoute(ctx, id, model.DialogueIntentBusinessProcessingAgent, model.DialogueStatusDraftingBusinessAgent, string(routeBytes), true); err != nil {
+			writeError(w, http.StatusInternalServerError, "lock route")
+			return
+		}
 		// Start business drafting round 1.
 		if rerr := s.runBusinessDraftRound(ctx, id, dlg, 1); rerr != nil {
 			writeError(w, http.StatusInternalServerError, "draft round")
@@ -1247,7 +1276,9 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 	factorySlug := slugify(factoryName)
 
 	// Seed the fixed 6-step job, mirroring confirmClarification. The job carries
-	// the CONFIRMED requirement + child session id.
+	// the CONFIRMED requirement + child session id. The job + steps + child link
+	// are committed in a SINGLE transaction: on failure there is NO orphaned job
+	// and the child is moved to a diagnosable failed state.
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
 	job := model.Job{
@@ -1262,22 +1293,19 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	if err := s.store.CreateJob(ctx, job); err != nil {
-		writeError(w, http.StatusInternalServerError, "create job")
-		return
-	}
+	steps := make([]model.JobStep, 0, len(stepPlan))
 	for i, sp := range stepPlan {
-		step := model.JobStep{
+		steps = append(steps, model.JobStep{
 			ID: "step_" + idpkg.New(), JobID: jobID, Kind: sp.kind, Seq: i + 1,
 			AgentKey: sp.agentKey, Status: model.StepStatusPending, Attempt: 0,
-		}
-		if err := s.store.CreateJobStep(ctx, step); err != nil {
-			writeError(w, http.StatusInternalServerError, "create step")
-			return
-		}
+		})
 	}
-	if err := s.store.LinkClarificationJob(ctx, childID, jobID); err != nil {
-		writeError(w, http.StatusInternalServerError, "link job")
+	if err := s.store.SeedClarificationJob(ctx, job, steps, childID); err != nil {
+		// Atomic rollback already discarded any half-seeded job/steps. Move the
+		// child to a diagnosable failed state so the session is never left in
+		// ready_to_confirm with no linked job.
+		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return
 	}
 	_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusConfirmed, "", "")
