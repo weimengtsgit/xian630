@@ -100,7 +100,8 @@ export function AgentsPanel({
   const canFinalize = authoring.session?.status === 'ready_to_save' && draft?.prompt
   const authoringBusy = authoring.initializing || authoring.sending || authoring.finalizing
   const hasAuthoringInput = Boolean(authoring.input.trim())
-  const canSaveAuthoring = Boolean(canFinalize || (authoring.session?.id && hasAuthoringInput))
+  const canSaveAuthoring = Boolean(canFinalize || hasAuthoringInput)
+  const sendAuthoringDisabled = authoring.sending || authoring.finalizing || !hasAuthoringInput
 
   const openAgentDetail = agent => {
     setPanelError('')
@@ -193,19 +194,10 @@ export function AgentsPanel({
     }
   }
 
-  const openAuthoringDialog = async () => {
+  const openAuthoringDialog = () => {
     setPanelError('')
-    setAuthoring({ ...emptyAuthoringState, initializing: true })
+    setAuthoring(emptyAuthoringState)
     setAuthoringOpen(true)
-    try {
-      const session = await onCreateAuthoringSession?.({ mode: 'create' })
-      setAuthoring({ ...emptyAuthoringState, session })
-    } catch (err) {
-      setAuthoring({
-        ...emptyAuthoringState,
-        error: err.message || String(err),
-      })
-    }
   }
 
   const closeAuthoringDialog = () => {
@@ -213,11 +205,23 @@ export function AgentsPanel({
     setAuthoring(emptyAuthoringState)
   }
 
+  const ensureAuthoringSession = async () => {
+    if (authoring.session?.id) return authoring.session
+    if (!onCreateAuthoringSession) throw new Error('当前服务不支持创建业务智能体会话')
+    setAuthoring(current => ({ ...current, initializing: true, error: '' }))
+    const session = await onCreateAuthoringSession({ mode: 'create' })
+    setAuthoring(current => ({ ...current, session, initializing: false }))
+    return session
+  }
+
   const sendAuthoringContent = async content => {
-    if (!content || !authoring.session?.id || !onSendAuthoringMessage) return null
+    if (!content || !onSendAuthoringMessage) return null
+    setAuthoring(current => ({ ...current, sending: true, error: '' }))
+    const baseSession = await ensureAuthoringSession()
+    if (!baseSession?.id) return null
     const messages = [...authoring.messages, { role: 'user', content }]
     setAuthoring(current => ({ ...current, messages, input: '', sending: true, error: '' }))
-    const session = await onSendAuthoringMessage(authoring.session.id, content)
+    const session = await onSendAuthoringMessage(baseSession.id, content)
     setAuthoring({
       ...emptyAuthoringState,
       session,
@@ -235,12 +239,13 @@ export function AgentsPanel({
   const submitAuthoringMessage = async event => {
     event.preventDefault()
     const content = authoring.input.trim()
-    if (!content || !authoring.session?.id || !onSendAuthoringMessage || authoringBusy) return
+    if (!content || !onSendAuthoringMessage || authoring.sending || authoring.finalizing) return
     try {
       await sendAuthoringContent(content)
     } catch (err) {
       setAuthoring(current => ({
         ...current,
+        initializing: false,
         sending: false,
         error: err.message || String(err),
       }))
@@ -248,8 +253,8 @@ export function AgentsPanel({
   }
 
   const finalizeAuthoring = async () => {
-    if (!authoring.session?.id || !onFinalizeAuthoring || authoringBusy) return
-    let sessionId = authoring.session.id
+    if (!onFinalizeAuthoring || authoringBusy) return
+    let sessionId = authoring.session?.id
     if (hasAuthoringInput || !canFinalize) {
       const content = authoring.input.trim()
       if (!content || !onSendAuthoringMessage) return
@@ -267,6 +272,7 @@ export function AgentsPanel({
       } catch (err) {
         setAuthoring(current => ({
           ...current,
+          initializing: false,
           sending: false,
           error: err.message || String(err),
         }))
@@ -606,7 +612,7 @@ export function AgentsPanel({
               <button
                 type="submit"
                 className="agent-icon-button"
-                disabled={authoringBusy || !authoring.session?.id || !authoring.input.trim()}
+                disabled={sendAuthoringDisabled}
                 title={authoring.initializing ? '正在初始化' : '发送'}
                 aria-label={authoring.initializing ? '正在初始化' : '发送'}
               >
