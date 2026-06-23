@@ -325,6 +325,10 @@ assert.match(workbenchJsx, /consolidation_table|consolidation/, 'round-5 table m
 // Business recommendation with explicit confirm + re-describe.
 assert.match(workbenchJsx, /确认创建|确认配置/, 'business recommendation must offer an explicit confirm/create action')
 assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation must offer a re-describe action')
+// TimelineItem MUST receive onSend (regression for review P1 #5): the business
+// recommendation branch references onRedescribe={onSend}, so an unthreaded onSend
+// threw a ReferenceError and crashed the whole workbench render.
+assert.match(workbenchJsx, /onSend=\{onSend\}/, 'TimelineItem must receive onSend so the business re-describe action does not crash')
 
 // Resolved state non-editable with a clear 新建会话 action (already present, re-assert).
 assert.match(workbenchJsx, /新建会话/, 'resolved state must keep a clear 新建会话 action')

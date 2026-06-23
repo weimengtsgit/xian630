@@ -106,6 +106,7 @@ export function ConversationWorkbench({
               onSelectRoute={onSelectRoute}
               onOpenApp={onOpenApp}
               onAcceptConsolidation={onAcceptConsolidation}
+              onSend={onSend}
             />
           ))
         )}
@@ -169,7 +170,7 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
   if (item.type === 'analysis_stream') {
     return (
