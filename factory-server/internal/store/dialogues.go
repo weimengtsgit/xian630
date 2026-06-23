@@ -237,9 +237,12 @@ func scanDialogueSession(sc scanner) (*model.DialogueSession, error) {
 // generation). Re-running is safe: FindDialogueByClarificationID skips rows
 // that already have a dialogue.
 func (s *Store) BackfillClarificationDialogues(ctx context.Context) error {
-	// Fetch every legacy session in one pass; the list is bounded by prior
-	// clarification traffic and this runs once per startup.
-	legacy, err := s.ListClarificationSessions(ctx, 200)
+	// Fetch every legacy session in one pass, uncapped. ListAllClarificationSessions
+	// intentionally has no row cap (unlike ListClarificationSessions, which the
+	// API uses for paginated history): a deployment with >200 legacy sessions
+	// must visit them all so the oldest rows still get a parent dialogue. This
+	// runs once per startup.
+	legacy, err := s.ListAllClarificationSessions(ctx)
 	if err != nil {
 		return err
 	}

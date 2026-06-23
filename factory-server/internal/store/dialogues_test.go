@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -279,5 +280,68 @@ func TestLegacyClarificationBackfillDialogue(t *testing.T) {
 	all, _ := st.ListDialogueSessions(ctx, 200)
 	if len(all) != 4 {
 		t.Fatalf("after re-run len = %d, want 4", len(all))
+	}
+}
+
+// TestLegacyClarificationBackfillExceedsListCap asserts the backfill visits
+// EVERY legacy session even when there are more than the ListClarificationSessions
+// cap of 200. A deployment with >200 rows must not silently leave the oldest
+// sessions without a parent dialogue, and re-running must stay idempotent.
+func TestLegacyClarificationBackfillExceedsListCap(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Insert more than the 200-row list cap.
+	const total = 250
+	for i := 0; i < total; i++ {
+		cs := model.ClarificationSession{
+			ID:            fmt.Sprintf("clar_cap_%03d", i),
+			Status:        model.ClarificationStatusActive,
+			InitialPrompt: "legacy prompt",
+			Round:         0,
+			MaxRounds:     3,
+			CreatedAt:     now.Add(time.Duration(i) * time.Microsecond),
+			UpdatedAt:     now.Add(time.Duration(i) * time.Microsecond),
+		}
+		if err := st.CreateClarificationSession(ctx, cs); err != nil {
+			t.Fatalf("create %s: %v", cs.ID, err)
+		}
+	}
+
+	// Sanity: the capped list would miss rows.
+	capped, _ := st.ListClarificationSessions(ctx, 200)
+	if len(capped) != 200 {
+		t.Fatalf("capped list len = %d, want 200 (test precondition)", len(capped))
+	}
+
+	// First backfill: every one of the 250 sessions gets a dialogue.
+	if err := st.BackfillClarificationDialogues(ctx); err != nil {
+		t.Fatalf("BackfillClarificationDialogues: %v", err)
+	}
+	for i := 0; i < total; i++ {
+		clarID := fmt.Sprintf("clar_cap_%03d", i)
+		dlgID, ok := st.FindDialogueByClarificationID(ctx, clarID)
+		if !ok {
+			t.Fatalf("no dialogue linked for %s (oldest rows not backfilled)", clarID)
+		}
+		if _, err := st.GetDialogueSession(ctx, dlgID); err != nil {
+			t.Fatalf("dialogue %s for %s missing: %v", dlgID, clarID, err)
+		}
+	}
+
+	// Second backfill: idempotent, count unchanged, no duplicates.
+	if err := st.BackfillClarificationDialogues(ctx); err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	gotCount := 0
+	for i := 0; i < total; i++ {
+		clarID := fmt.Sprintf("clar_cap_%03d", i)
+		if _, ok := st.FindDialogueByClarificationID(ctx, clarID); ok {
+			gotCount++
+		}
+	}
+	if gotCount != total {
+		t.Fatalf("dialogue count after re-run = %d, want %d (not idempotent or missing rows)", gotCount, total)
 	}
 }
