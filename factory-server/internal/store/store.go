@@ -64,6 +64,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.confirmed_requirement_json: %w", err)
 	}
+	if err := s.ensureColumn(ctx, "applications", "display_order",
+		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate applications.display_order: %w", err)
+	}
 	return s, nil
 }
 

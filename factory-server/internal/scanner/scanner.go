@@ -26,17 +26,28 @@ var manifestGlobs = []string{
 // Scan reads every manifest under Root's scene/ and generated-apps/ trees,
 // validates each, and returns the resulting applications. It returns an error
 // (rather than silently dropping) if any manifest fails to parse or validate,
-// or if two manifests declare the same slug. The returned application IDs are
-// deterministic ("app-<slug>") so re-scans upsert instead of duplicating.
+// or if two manifests declare the same slug, or if the validated scene catalog
+// cannot be loaded. The returned application IDs are deterministic
+// ("app-<slug>") so re-scans upsert instead of duplicating.
+//
+// Surface filtering is catalog-driven (fail-closed): a preset whose catalog
+// surface is blueprint or hidden is dropped from the scan output; an
+// application-surface preset carries its catalog display_order. Generated apps
+// are never filtered (they are not preset scenes) and retain display_order 0.
 func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
+	// First pass: discover all manifests and collect the known preset-slug set
+	// the catalog is validated against.
+	type found struct {
+		relPath string
+		m       Manifest
+	}
 	seen := make(map[string]bool)
-	apps := make([]model.Application, 0)
-
-	visibility := LoadPresetVisibility(s.Root)
+	presetSlugs := make(map[string]bool)
+	pending := make([]found, 0)
 
 	for _, pattern := range manifestGlobs {
 		matches, err := filepath.Glob(filepath.Join(s.Root, pattern))
@@ -73,15 +84,30 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 				return nil, fmt.Errorf("duplicate slug %q (from manifest %s)", m.Slug, relPath)
 			}
 			seen[m.Slug] = true
-
 			if m.Source == "preset" {
-				if show, ok := visibility[m.Slug]; ok && !show {
-					continue
-				}
+				presetSlugs[m.Slug] = true
 			}
-
-			apps = append(apps, manifestToApp(m, relPath))
+			pending = append(pending, found{relPath: relPath, m: m})
 		}
+	}
+
+	// Validate the scene catalog against the discovered preset-slug set. This is
+	// the single fail-closed source of surface assignment.
+	catalog, err := LoadSceneCatalog(s.Root, presetSlugs)
+	if err != nil {
+		return nil, err
+	}
+
+	apps := make([]model.Application, 0, len(pending))
+	for _, f := range pending {
+		if f.m.Source == "preset" {
+			// Drop non-application presets from the scan output; they live only
+			// in the blueprint catalog / on disk, never as app-list rows.
+			if !catalog.IsVisibleApplication(f.m.Slug) {
+				continue
+			}
+		}
+		apps = append(apps, manifestToApp(f.m, f.relPath, catalog))
 	}
 
 	// Keep output stable and deterministic for callers / tests.
@@ -91,10 +117,11 @@ func (s Scanner) Scan(ctx context.Context) ([]model.Application, error) {
 
 // manifestToApp converts a validated manifest into a model.Application. The ID
 // is derived deterministically from the slug so that repeated scans upsert the
-// same row instead of creating duplicates.
-func manifestToApp(m Manifest, manifestPath string) model.Application {
+// same row instead of creating duplicates. Application-surface presets carry
+// their catalog display_order; everything else gets 0.
+func manifestToApp(m Manifest, manifestPath string, catalog SceneCatalog) model.Application {
 	now := time.Now()
-	return model.Application{
+	app := model.Application{
 		ID:           appID(m.Slug),
 		Slug:         m.Slug,
 		Name:         m.Name,
@@ -107,6 +134,10 @@ func manifestToApp(m Manifest, manifestPath string) model.Application {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	if m.Source == "preset" {
+		app.DisplayOrder = catalog.ApplicationOrder(m.Slug)
+	}
+	return app
 }
 
 // appID returns the deterministic row id for a given slug.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "slug": "social-sighting-cluster-alert",
-  "name": "海域网格商船密度异常告警器",
+  "name": "开源社区异常监测",
   "type": "command-dashboard",
   "source": "preset",
   "description": "社媒海上目击聚合告警地图",

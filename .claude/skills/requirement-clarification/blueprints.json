@@ -94,8 +94,8 @@
     },
     {
       "slug": "social-sighting-cluster-alert",
-      "displayName": "海域网格商船密度异常告警器",
-      "description": "社媒海上目击聚合告警地图（与 merchant-density-grid-alert 同名，按 slug+description 区分）。",
+      "displayName": "开源社区异常监测",
+      "description": "社媒海上目击聚合告警地图。",
       "appType": "command_dashboard",
       "type": "command-dashboard",
       "tags": ["maritime", "dashboard", "social", "sighting", "cluster", "osint"],

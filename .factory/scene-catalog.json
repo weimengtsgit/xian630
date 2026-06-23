@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "scenes": {
+    "carrier-formation-replay": { "surface": "application", "order": 1 },
+    "aircraft-carrier-track": { "surface": "application", "order": 2 },
+    "east-sea-situation": { "surface": "application", "order": 3 },
+    "carrier-homeport-tide-window": { "surface": "blueprint" },
+    "carrier-deck-wind-calculator": { "surface": "blueprint" },
+    "merchant-density-grid-alert": { "surface": "blueprint" },
+    "social-sighting-cluster-alert": { "surface": "blueprint" }
+  }
+}

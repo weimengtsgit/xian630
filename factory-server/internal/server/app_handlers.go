@@ -7,14 +7,22 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 )
 
-// listApps handles GET /api/apps — returns every known application as JSON.
+// listApps handles GET /api/apps — returns the catalog application-surface
+// presets plus every generated application. Fail-closed: if the validated
+// scene catalog cannot be loaded the endpoint errors rather than falling back
+// to a permissive list.
 func (s *Server) listApps(w http.ResponseWriter, r *http.Request) {
 	apps, err := s.store.ListApplications(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list apps")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.filterVisibleApplications(apps))
+	visible, err := s.filterVisibleApplications(apps)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load scene catalog")
+		return
+	}
+	writeJSON(w, http.StatusOK, visible)
 }
 
 // getApp handles GET /api/apps/:id — returns a single application or 404.
@@ -32,19 +40,28 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, app)
 }
 
-func (s *Server) filterVisibleApplications(apps []model.Application) []model.Application {
-	visibility := scanner.LoadPresetVisibility(s.cfg.WorkspaceRoot)
-	if len(visibility) == 0 {
-		return apps
+// filterVisibleApplications keeps only catalog application-surface presets and
+// all generated apps. The scene catalog is validated against the preset slugs
+// present in the store so a missing or malformed catalog is fail-closed.
+func (s *Server) filterVisibleApplications(apps []model.Application) ([]model.Application, error) {
+	presetSlugs := make(map[string]bool)
+	for _, app := range apps {
+		if app.Source == model.AppSourcePreset {
+			presetSlugs[app.Slug] = true
+		}
+	}
+	catalog, err := scanner.LoadSceneCatalog(s.cfg.WorkspaceRoot, presetSlugs)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]model.Application, 0, len(apps))
 	for _, app := range apps {
 		if app.Source == model.AppSourcePreset {
-			if show, ok := visibility[app.Slug]; ok && !show {
+			if !catalog.IsVisibleApplication(app.Slug) {
 				continue
 			}
 		}
 		out = append(out, app)
 	}
-	return out
+	return out, nil
 }

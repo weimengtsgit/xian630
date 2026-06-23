@@ -138,6 +138,10 @@ type Application struct {
 	ManifestPath string    `json:"manifest_path"`
 	Status       AppStatus `json:"status"`
 	RuntimeURL   string    `json:"runtime_url,omitempty"`
+	// DisplayOrder is the catalog-assigned display position for application-
+	// surface presets (from .factory/scene-catalog.json). Generated applications
+	// and non-application presets retain 0.
+	DisplayOrder int       `json:"display_order"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

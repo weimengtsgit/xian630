@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS applications (
     manifest_path TEXT    NOT NULL DEFAULT '',
     status        TEXT    NOT NULL,            -- stopped|running|error|building|missing
     runtime_url   TEXT    NOT NULL DEFAULT '',
+    display_order INTEGER NOT NULL DEFAULT 0,   -- catalog order for application-surface presets; 0 otherwise
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );

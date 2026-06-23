@@ -22,6 +22,17 @@ func writeManifest(t *testing.T, root, relPath, content string) {
 	}
 }
 
+// writeCatalogJSON writes the validated scene catalog under root's .factory/.
+func writeCatalogJSON(t *testing.T, root, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir .factory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".factory", "scene-catalog.json"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+}
+
 const presetManifest = `{
   "schemaVersion": 1,
   "slug": "east-sea-situation",
@@ -39,6 +50,7 @@ const presetManifest = `{
 func TestScanFindsPresetManifest(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, "scene/east-sea-situation/.factory/app.json", presetManifest)
+	writeCatalogJSON(t, root, `{"version":1,"scenes":{"east-sea-situation":{"surface":"application","order":1}}}`)
 
 	s := Scanner{Root: root}
 	apps, err := s.Scan(context.Background())
@@ -67,6 +79,9 @@ func TestScanFindsPresetManifest(t *testing.T) {
 	if got.ID != "app-east-sea-situation" {
 		t.Fatalf("id = %q, want app-east-sea-situation", got.ID)
 	}
+	if got.DisplayOrder != 1 {
+		t.Fatalf("display_order = %d, want 1", got.DisplayOrder)
+	}
 }
 
 func TestScanGeneratedManifest(t *testing.T) {
@@ -81,6 +96,8 @@ func TestScanGeneratedManifest(t *testing.T) {
   "path": "generated-apps/my-gen"
 }`
 	writeManifest(t, root, "generated-apps/my-gen/.factory/app.json", gen)
+	// No preset scenes, so an empty scenes map is a valid catalog.
+	writeCatalogJSON(t, root, `{"version":1,"scenes":{}}`)
 
 	s := Scanner{Root: root}
 	apps, err := s.Scan(context.Background())
@@ -89,6 +106,9 @@ func TestScanGeneratedManifest(t *testing.T) {
 	}
 	if len(apps) != 1 || apps[0].Source != model.AppSourceGenerated {
 		t.Fatalf("apps = %#v", apps)
+	}
+	if apps[0].DisplayOrder != 0 {
+		t.Fatalf("generated display_order = %d, want 0", apps[0].DisplayOrder)
 	}
 }
 
@@ -119,6 +139,7 @@ func TestScanInvalidManifestFails(t *testing.T) {
 
 func TestScanNoManifests(t *testing.T) {
 	root := t.TempDir()
+	writeCatalogJSON(t, root, `{"version":1,"scenes":{}}`)
 	s := Scanner{Root: root}
 	apps, err := s.Scan(context.Background())
 	if err != nil {
@@ -141,7 +162,10 @@ func TestScanRespectsContextCancellation(t *testing.T) {
 	}
 }
 
-func TestScannerHidesConfiguredPresetApps(t *testing.T) {
+// TestScannerFiltersByCatalogSurface is the catalog-driven integration test: a
+// generated app is visible even though absent from the catalog, a blueprint
+// preset is dropped, and application-surface presets carry their order.
+func TestScannerFiltersByCatalogSurface(t *testing.T) {
 	root := t.TempDir()
 	writeManifest := func(rel, source, slug string) {
 		t.Helper()
@@ -154,16 +178,19 @@ func TestScannerHidesConfiguredPresetApps(t *testing.T) {
 			t.Fatalf("write manifest: %v", err)
 		}
 	}
-	writeManifest("scene/hidden-preset", "preset", "hidden-preset")
+	writeManifest("scene/blueprint-preset", "preset", "blueprint-preset")
 	writeManifest("scene/visible-preset", "preset", "visible-preset")
 	writeManifest("generated-apps/generated-demo", "generated", "generated-demo")
-	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	config := `{"presetApps":{"hidden-preset":{"showInAppList":false},"visible-preset":{"showInAppList":true}}}`
-	if err := os.WriteFile(filepath.Join(root, ".factory", "preset-apps.json"), []byte(config), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	// Catalog: only visible-preset is an application surface; blueprint-preset is
+	// a blueprint (must be dropped); generated-demo is not a preset so it is never
+	// catalog-keyed and is always returned.
+	writeCatalogJSON(t, root, `{
+  "version": 1,
+  "scenes": {
+    "blueprint-preset": { "surface": "blueprint" },
+    "visible-preset": { "surface": "application", "order": 1 }
+  }
+}`)
 
 	apps, err := Scanner{Root: root}.Scan(context.Background())
 	if err != nil {
@@ -173,11 +200,24 @@ func TestScannerHidesConfiguredPresetApps(t *testing.T) {
 	for _, app := range apps {
 		slugs = append(slugs, app.Slug)
 	}
-	if containsString(slugs, "hidden-preset") {
-		t.Fatalf("hidden preset was returned: %v", slugs)
+	if containsString(slugs, "blueprint-preset") {
+		t.Fatalf("blueprint preset was returned: %v", slugs)
 	}
 	if !containsString(slugs, "visible-preset") || !containsString(slugs, "generated-demo") {
 		t.Fatalf("visible apps missing: %v", slugs)
+	}
+	// The application preset carries its catalog order; the generated app keeps 0.
+	for _, app := range apps {
+		switch app.Slug {
+		case "visible-preset":
+			if app.DisplayOrder != 1 {
+				t.Fatalf("visible-preset display_order = %d, want 1", app.DisplayOrder)
+			}
+		case "generated-demo":
+			if app.DisplayOrder != 0 {
+				t.Fatalf("generated-demo display_order = %d, want 0", app.DisplayOrder)
+			}
+		}
 	}
 }
 
