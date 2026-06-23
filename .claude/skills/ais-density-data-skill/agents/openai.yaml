@@ -1,4 +1,4 @@
 interface:
-  display_name: "Real AIS Density Data"
-  short_description: "Select real AIS sources by sea area, aggregate density grids, and return alert states."
-  default_prompt: "Use $ais-density-data-skill to fetch real AIS data and compute merchant-density grid alerts."
+  display_name: "Historical AIS Density Data"
+  short_description: "Aggregate merchant-density grids from free historical AIS archives (no real-time API)."
+  default_prompt: "Use $ais-density-data-skill to download/process historical AIS archives and compute merchant-density grids over a date range."

@@ -156,12 +156,7 @@ is `mock_data`, do not add any data skill.
 
 - Tide / tidal height / departure window / draft threshold / port tide level: `tide-data-skill`
 - 10 m wind / deck wind / wind speed & direction / launch or recovery conditions: `deck-wind-data-skill`
-
-> `ais-density-data-skill` is **shelved (not auto-loaded)**: real-time
-> merchant-vessel density has no public, no-API-key source — every viable
-> source (shipxy, aishub) requires keys, which this project does not use. The
-> skill file stays on disk for reuse, but do NOT place it into
-> `requirement.generationProfile.data` from intent until a public source is wired.
+- AIS / merchant density / shipping density / 50-nautical-mile grid / historical vessel traffic: `ais-density-data-skill` (**historical mode**: uses free downloadable AIS archives only, no real-time API; coverage limited to free-source regions — U.S. waters via MarineCadastre, Danish waters via DMA, global-but-fishing via GFW)
 
 These rules apply to **any** app whose intent matches a domain, including novel
 apps that are not preset scenarios and regardless of `appType`. If no domain
