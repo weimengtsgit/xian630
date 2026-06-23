@@ -76,6 +76,9 @@ function App() {
             questions={conversation.questions}
             error={conversation.error || jobs.error}
             submitting={conversation.submitting}
+            selectedBusinessAgents={conversation.selectedBusinessAgents}
+            onRemoveBusinessAgent={conversation.removeBusinessAgent}
+            onMoveBusinessAgent={conversation.moveBusinessAgent}
             historyOpen={conversation.historyOpen}
             setHistoryOpen={conversation.setHistoryOpen}
             onNewSession={conversation.newSession}
@@ -96,9 +99,19 @@ function App() {
         <div className="wb-col wb-right">
           <AgentsPanel
             agents={agents.agents}
+            softwareAgents={agents.softwareAgents}
+            businessAgents={agents.businessAgents}
             loading={agents.loading}
             error={agents.error}
             onCreateAgent={agents.createAgent}
+            selectedBusinessAgentIds={conversation.selectedBusinessAgentIds}
+            onAddBusinessAgent={conversation.addBusinessAgent}
+            onRemoveBusinessAgent={conversation.removeBusinessAgent}
+            onCreateAuthoringSession={agents.createAuthoringSession}
+            onSendAuthoringMessage={agents.sendAuthoringMessage}
+            onFinalizeAuthoring={agents.finalizeAuthoring}
+            onUpdateBusinessAgent={agents.updateBusinessAgent}
+            onSetBusinessAgentEnabled={agents.setBusinessAgentEnabled}
           />
         </div>
       </div>

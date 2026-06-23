@@ -7,6 +7,7 @@ import {
   initialConversationState,
   questionsFromMessages,
 } from './conversationTimeline'
+import { moveSelectedBusinessAgent } from './agentList'
 
 const CLARIFICATION_TYPES = new Set([
   'clarification.created',
@@ -29,7 +30,19 @@ export function useConversationSessions() {
   const [error, setError] = useState(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [selectedBusinessAgents, setSelectedBusinessAgents] = useState([])
   const mountedRef = useRef(true)
+
+  const loadBusinessAgentsForSession = useCallback(async sessionId => {
+    if (!sessionId) {
+      if (mountedRef.current) setSelectedBusinessAgents([])
+      return []
+    }
+    const agents = await factoryApi.getClarificationBusinessAgents(sessionId)
+    const list = Array.isArray(agents) ? agents : []
+    if (mountedRef.current) setSelectedBusinessAgents(list)
+    return list
+  }, [])
 
   const refreshSessions = useCallback(async () => {
     const data = await factoryApi.listClarifications(50)
@@ -42,6 +55,7 @@ export function useConversationSessions() {
 
   const selectSession = useCallback(async id => {
     if (!id) {
+      setSelectedBusinessAgents([])
       setState(prev => ({
         ...initialConversationState(),
         sessions: prev.sessions,
@@ -51,11 +65,13 @@ export function useConversationSessions() {
       return null
     }
     setError(null)
-    const [session, messages] = await Promise.all([
+    const [session, messages, businessAgents] = await Promise.all([
       factoryApi.getClarification(id),
       factoryApi.getClarificationMessages(id),
+      loadBusinessAgentsForSession(id).catch(() => []),
     ])
     if (mountedRef.current) {
+      setSelectedBusinessAgents(businessAgents)
       setState(prev => ({
         ...prev,
         selectedSessionId: session.id,
@@ -67,10 +83,11 @@ export function useConversationSessions() {
       }))
     }
     return session
-  }, [])
+  }, [loadBusinessAgentsForSession])
 
   const newSession = useCallback(() => {
     setError(null)
+    setSelectedBusinessAgents([])
     setState(prev => ({
       ...initialConversationState(),
       sessions: prev.sessions,
@@ -78,6 +95,31 @@ export function useConversationSessions() {
       session: null,
     }))
   }, [])
+
+  const replaceBusinessAgents = useCallback(async agentIds => {
+    if (!state.session?.id) return []
+    const agents = await factoryApi.replaceClarificationBusinessAgents(state.session.id, agentIds)
+    const list = Array.isArray(agents) ? agents : []
+    if (mountedRef.current) setSelectedBusinessAgents(list)
+    return list
+  }, [state.session?.id])
+
+  const addBusinessAgent = useCallback(agent => {
+    if (!agent?.id) return Promise.resolve(selectedBusinessAgents)
+    const selectedIds = selectedBusinessAgents.map(item => item.id)
+    if (selectedIds.includes(agent.id)) return Promise.resolve(selectedBusinessAgents)
+    return replaceBusinessAgents([...selectedIds, agent.id])
+  }, [replaceBusinessAgents, selectedBusinessAgents])
+
+  const removeBusinessAgent = useCallback(agentId => {
+    const selectedIds = selectedBusinessAgents.map(item => item.id).filter(id => id !== agentId)
+    return replaceBusinessAgents(selectedIds)
+  }, [replaceBusinessAgents, selectedBusinessAgents])
+
+  const moveBusinessAgent = useCallback((agentId, delta) => {
+    const selectedIds = selectedBusinessAgents.map(item => item.id)
+    return replaceBusinessAgents(moveSelectedBusinessAgent(selectedIds, agentId, delta))
+  }, [replaceBusinessAgents, selectedBusinessAgents])
 
   const send = useCallback(async content => {
     const prompt = String(content || '').trim()
@@ -192,6 +234,8 @@ export function useConversationSessions() {
 
   return {
     ...state,
+    selectedBusinessAgents,
+    selectedBusinessAgentIds: selectedBusinessAgents.map(agent => agent.id),
     error,
     submitting,
     historyOpen,
@@ -204,5 +248,9 @@ export function useConversationSessions() {
     confirm,
     retry,
     abandon,
+    addBusinessAgent,
+    removeBusinessAgent,
+    moveBusinessAgent,
+    replaceBusinessAgents,
   }
 }
