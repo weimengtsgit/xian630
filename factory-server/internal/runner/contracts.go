@@ -72,7 +72,13 @@ func ReadAndDecode(path string, target any) error {
 	}
 	payload := extractJSONObject(string(raw))
 	if err := json.Unmarshal([]byte(payload), target); err != nil {
-		return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)
+		repaired := repairUnescapedStringQuotes(payload)
+		if repaired == payload {
+			return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)
+		}
+		if err := json.Unmarshal([]byte(repaired), target); err != nil {
+			return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)
+		}
 	}
 	return nil
 }
@@ -123,6 +129,63 @@ func extractJSONObject(s string) string {
 		}
 	}
 	return s[start:]
+}
+
+func repairUnescapedStringQuotes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inStr := false
+	esc := false
+	changed := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !inStr {
+			b.WriteByte(c)
+			if c == '"' {
+				inStr = true
+			}
+			continue
+		}
+		if esc {
+			b.WriteByte(c)
+			esc = false
+			continue
+		}
+		if c == '\\' {
+			b.WriteByte(c)
+			esc = true
+			continue
+		}
+		if c == '"' {
+			if quoteTerminatesString(s, i) {
+				b.WriteByte(c)
+				inStr = false
+			} else {
+				b.WriteString(`\"`)
+				changed = true
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	if !changed {
+		return s
+	}
+	return b.String()
+}
+
+func quoteTerminatesString(s string, quote int) bool {
+	for i := quote + 1; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case ':', ',', '}', ']':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // requirementAnalysisOutput mirrors the FROZEN requirement shape the
