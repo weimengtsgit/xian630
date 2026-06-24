@@ -3,6 +3,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 )
@@ -327,5 +328,49 @@ func TestCarrierAirWingIsBlueprintNotApplication(t *testing.T) {
 		if app.Slug == "carrier-air-wing-affiliation-inference" {
 			t.Fatalf("carrier-air-wing-affiliation-inference must not appear in VisibleApplications, got %+v", app)
 		}
+	}
+}
+
+// TestRealRepoSceneCatalogLoads is the regression for the GET /api/apps startup
+// 500 {"error":"load scene catalog"}. It runs the EXACT runtime loader
+// (LoadSceneCatalogForSurface — the function app_handlers.go calls) against the
+// REAL workspace. The unit tests above use synthetic temp dirs in which a scene
+// manifest's slug always equals its directory name, so they cannot detect a real
+// manifest whose declared slug drifts from its catalog key. That is what happened
+// with carrier-homeport-tide-window: its manifest slug was
+// "carrier-homeport-tide-window-preset" while the catalog key and directory were
+// "carrier-homeport-tide-window", so discoverPresetSceneSlugs never registered
+// the key LoadSceneCatalog then fail-closed on — 500ing every catalog-dependent
+// endpoint. Only a real-repo load can catch this class of drift.
+func TestRealRepoSceneCatalogLoads(t *testing.T) {
+	root := findRepoRoot(t)
+	cat, err := LoadSceneCatalogForSurface(root)
+	if err != nil {
+		t.Fatalf("LoadSceneCatalogForSurface against real repo root %s: %v", root, err)
+	}
+	if len(cat.VisibleApplications()) == 0 {
+		t.Fatalf("real repo catalog resolved no visible applications at %s", root)
+	}
+}
+
+// findRepoRoot walks up from this test file to the workspace root: the nearest
+// ancestor directory containing .factory/scene-catalog.json. This keeps the
+// real-repo regression independent of the package's install path.
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	dir := filepath.Dir(file)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".factory", "scene-catalog.json")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not locate repo root (.factory/scene-catalog.json) above the scanner test")
+		}
+		dir = parent
 	}
 }
