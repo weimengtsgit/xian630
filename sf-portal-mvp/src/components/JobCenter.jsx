@@ -36,6 +36,24 @@ const JOB_STATUS_LABEL = {
   cancelled: '已取消',
 }
 
+// formatJobTime renders a job timestamp as HH:mm:ss (or MM-dd HH:mm when the
+// job predates today). Used for both created_at (queue time) and started_at
+// (actual exec start) — the two are kept visually distinct in the header.
+function formatJobTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  if (sameDay) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 export function JobCenter({
   activeJob,
   steps,
@@ -204,6 +222,22 @@ export function JobCenter({
         <div className="jc-title-block">
           <span className="jc-label">当前任务</span>
           <h2 className="jc-prompt">{displayJobTitle(activeJob)}</h2>
+          {/* started_at (actual exec start) vs created_at (queue time) — Constraint #10.
+              Show both, distinctly, when present. */}
+          <div className="jc-time-block">
+            {activeJob.created_at ? (
+              <span className="jc-time jc-time-queued" title="排队时间">
+                <small>排队</small>
+                <time dateTime={activeJob.created_at}>{formatJobTime(activeJob.created_at)}</time>
+              </span>
+            ) : null}
+            {activeJob.started_at ? (
+              <span className="jc-time jc-time-started" title="开始执行">
+                <small>开始执行</small>
+                <time dateTime={activeJob.started_at}>{formatJobTime(activeJob.started_at)}</time>
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="jc-header-right">
           <span className={`jc-status-badge jc-status-${jobStatus}`}>

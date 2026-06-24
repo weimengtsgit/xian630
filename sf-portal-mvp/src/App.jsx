@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { ApplicationsPanel } from './components/ApplicationsPanel'
@@ -20,6 +21,14 @@ function App() {
   const agents = useAgents()
   const jobs = useJobs()
   const dialogue = useDialogueSessions()
+
+  // Feed the live job list into the dialogue hook so it can select a dialogue-
+  // scoped focus task (Constraint #10). The hook filters by dialogue_id
+  // server-side; passing the full list is cheap and stays in sync on every
+  // job.created/updated SSE.
+  useEffect(() => {
+    dialogue.setJobsForFocus(jobs.jobs)
+  }, [jobs.jobs, dialogue.setJobsForFocus])
 
   // Regeneration is another generate request. Task 5 gates bare POST /api/jobs
   // to require a confirmed requirement, so regeneration MUST flow through
@@ -81,6 +90,9 @@ function App() {
             deletingDialogueId={dialogue.deletingDialogueId}
             historyOpen={dialogue.historyOpen}
             setHistoryOpen={dialogue.setHistoryOpen}
+            workTrace={dialogue.workTrace}
+            pendingTurn={dialogue.pendingTurn}
+            focusTask={dialogue.focusTask}
             onNewSession={dialogue.newDialogue}
             onSelectSession={dialogue.selectDialogue}
             onSend={prompt => {
@@ -97,6 +109,10 @@ function App() {
             onRetry={dialogue.retry}
             onAbandon={dialogue.abandon}
             onDeleteSession={dialogue.deleteDialogue}
+            onCancelTurn={dialogue.cancelTurn}
+            onConfirmChange={() => dialogue.refreshSessions().then(() => dialogue.view && dialogue.selectDialogue(dialogue.session && dialogue.session.id))}
+            onRollback={dialogue.rollback}
+            onArchive={dialogue.archive}
           />
         </div>
 

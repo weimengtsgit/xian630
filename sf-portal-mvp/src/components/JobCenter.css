@@ -934,3 +934,10 @@
 .spin {
   animation: jcSpin 1s linear infinite;
 }
+
+/* ---- started_at vs created_at time block (Task 7, Constraint #10) ---- */
+.jc-time-block { display: flex; gap: 10px; margin-top: 4px; }
+.jc-time { display: inline-flex; align-items: baseline; gap: 4px; }
+.jc-time small { color: rgba(104, 221, 255, 0.6); font-size: 10px; }
+.jc-time time { color: rgba(215, 238, 248, 0.7); font-size: 11px; }
+.jc-time-started time { color: #9df3a6; }
