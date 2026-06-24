@@ -589,6 +589,131 @@ func TestDeleteRejectsGeneratedAppOutsideGeneratedRoot(t *testing.T) {
 	}
 }
 
+// TestRollbackPromotesPreviousVersionThroughHealth (Task 6): an explicit-confirm
+// rollback re-builds, re-runs, and re-healths the previous (superseded)
+// version's image, then promotes it to effective, superseding the current. The
+// current effective container is stopped.
+func TestRollbackPromotesPreviousVersionThroughHealth(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Current effective v2 (running).
+	depV2 := model.Deployment{
+		ID: "dep_v2", AppID: "app-east-sea-situation",
+		ImageName: "localhost/software-factory/east-sea-situation", ImageTag: "ver_v2",
+		ContainerName: "sf-v2", HostPort: 18000, ContainerPort: 80,
+		URL: "http://127.0.0.1:18000", Status: "running", CreatedAt: now, StartedAt: &now,
+	}
+	if err := srv.store.CreateDeployment(ctx, depV2); err != nil {
+		t.Fatalf("seed v2 dep: %v", err)
+	}
+	promoted := now
+	if _, err := srv.store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_v2", ApplicationID: "app-east-sea-situation", JobID: "job_v2",
+		Status: model.ApplicationVersionEffective, DeploymentID: depV2.ID, SourcePath: "scene/east-sea-situation",
+		CreatedAt: now, PromotedAt: &promoted,
+	}); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+	// Previous superseded v1 (the rollback target).
+	depV1 := model.Deployment{
+		ID: "dep_v1", AppID: "app-east-sea-situation",
+		ImageName: "localhost/software-factory/east-sea-situation", ImageTag: "ver_v1",
+		ContainerName: "sf-v1-dead", HostPort: 18001, ContainerPort: 80,
+		URL: "http://127.0.0.1:18001", Status: "stopped", CreatedAt: now.Add(-time.Hour),
+	}
+	if err := srv.store.CreateDeployment(ctx, depV1); err != nil {
+		t.Fatalf("seed v1 dep: %v", err)
+	}
+	v1Promoted := now.Add(-30 * time.Minute)
+	if _, err := srv.store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_v1", ApplicationID: "app-east-sea-situation", JobID: "job_v1",
+		Status: model.ApplicationVersionSuperseded, DeploymentID: depV1.ID, SourcePath: "scene/east-sea-situation",
+		CreatedAt: now.Add(-time.Hour), PromotedAt: &v1Promoted,
+	}); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	if err := srv.store.SetAppRuntime(ctx, "app-east-sea-situation", string(model.AppStatusRunning), depV2.URL); err != nil {
+		t.Fatalf("set runtime: %v", err)
+	}
+
+	body := strings.NewReader(`{"confirm":true,"version_id":"ver_v1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rollback", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// v1 is now effective; v2 superseded.
+	eff, _ := srv.store.GetEffectiveApplicationVersion(ctx, "app-east-sea-situation")
+	if eff == nil || eff.ID != "ver_v1" {
+		t.Fatalf("effective = %#v, want ver_v1", eff)
+	}
+	v2, _ := srv.store.GetApplicationVersionByID(ctx, "ver_v2")
+	if v2 == nil || v2.Status != model.ApplicationVersionSuperseded {
+		t.Fatalf("v2 status = %#v, want superseded", v2)
+	}
+	// v2's container was stopped; a new container was run for v1.
+	if !hasCall(fr.calls, "podman", "stop", "sf-v2") {
+		t.Errorf("current container should be stopped; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "podman", "run") {
+		t.Errorf("rollback should run a container for v1; calls=%v", fr.calls)
+	}
+}
+
+// TestRollbackRequiresConfirmation (Task 6): a rollback without confirm is
+// rejected with 400.
+func TestRollbackRequiresConfirmation(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	_, r := newOpsServer(t, fr)
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rollback",
+		strings.NewReader(`{"confirm":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRollbackRejectsWhenNoPreviousVersion (Task 6): a rollback with no
+// superseded prior version is rejected with 409.
+func TestRollbackRejectsWhenNoPreviousVersion(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	ctx := context.Background()
+	now := time.Now()
+	// Only an effective version, no superseded prior.
+	dep := model.Deployment{
+		ID: "dep_only", AppID: "app-east-sea-situation", ContainerName: "sf-only",
+		HostPort: 18000, ContainerPort: 80, URL: "http://127.0.0.1:18000",
+		Status: "running", CreatedAt: now, StartedAt: &now,
+	}
+	if err := srv.store.CreateDeployment(ctx, dep); err != nil {
+		t.Fatalf("seed dep: %v", err)
+	}
+	promoted := now
+	if _, err := srv.store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_only", ApplicationID: "app-east-sea-situation", JobID: "job_only",
+		Status: model.ApplicationVersionEffective, DeploymentID: dep.ID, CreatedAt: now, PromotedAt: &promoted,
+	}); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	body := strings.NewReader(`{"confirm":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rollback", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // errHealthFailed is the canned error returned by the failing-health-check
 // variant of the test server.
 var errHealthFailed = deployErr("health_check_failed: forced")

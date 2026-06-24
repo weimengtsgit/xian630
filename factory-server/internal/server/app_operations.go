@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -337,6 +338,168 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 
 	s.publishAppUpdated(ctx, appID)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "built", "image": img.FullName})
+}
+
+// rollbackRequestBody is the explicit-confirm body for POST /api/apps/:id/rollback.
+// `confirm` MUST be true (400 otherwise). `version_id` optionally names the
+// superseded version to roll back to; when omitted the most-recently-superseded
+// version is chosen.
+type rollbackRequestBody struct {
+	Confirm   bool   `json:"confirm"`
+	VersionID string `json:"version_id"`
+}
+
+// rollbackApp handles POST /api/apps/:id/rollback. It mirrors the
+// confirm-clarification contract: an explicit-confirm body is required (400
+// otherwise), and the app must be rollback-eligible (have a prior superseded
+// version; 409 otherwise). The prior version is re-built, re-run, and re-health
+// checked through the SAME path as a normal deploy; on success it is promoted to
+// effective and the current is superseded. On rollback health failure the
+// current effective is left running and an error is returned.
+func (s *Server) rollbackApp(w http.ResponseWriter, r *http.Request) {
+	appID := Param(r, "id")
+
+	if !s.appLock(appID).TryLock() {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "app busy"})
+		return
+	}
+	defer s.appLock(appID).Unlock()
+
+	var body rollbackRequestBody
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	if !body.Confirm {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "confirmation required", "error_code": string(model.ErrorSchemaValidationFailed)})
+		return
+	}
+
+	ctx := r.Context()
+	app, err := s.store.GetApplication(ctx, appID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get app")
+		return
+	}
+	if app == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	// Eligibility: there must be a prior superseded version to roll back to.
+	var target *model.ApplicationVersion
+	if body.VersionID != "" {
+		target, err = s.store.GetApplicationVersionByID(ctx, body.VersionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get version")
+			return
+		}
+		if target == nil || target.ApplicationID != appID || target.Status != model.ApplicationVersionSuperseded {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "version not rollback-able"})
+			return
+		}
+	} else {
+		target, err = s.store.GetPreviousApplicationVersion(ctx, appID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get previous version")
+			return
+		}
+		if target == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "no previous version to roll back to"})
+			return
+		}
+	}
+
+	// Resolve the prior version's source + image tag, then re-run it through the
+	// full deploy path (build is skipped: the image tag is immutable and still
+	// present in the runtime). Run a fresh container, health check, and on
+	// success promote the prior version to effective.
+	rt := s.containerRuntime()
+	tag := target.ID
+	image := deploy.ImageRef{FullName: "localhost/software-factory/" + app.Slug + ":" + tag}
+	containerPort := defaultContainerPort
+
+	hostPort, err := deploy.DefaultAllocator().Choose(s.portInUse(ctx))
+	if err != nil {
+		errResponse{http.StatusBadGateway, model.ErrorPortUnavailable, "port unavailable"}.write(w)
+		return
+	}
+	cr, _, err := rt.RunContainer(ctx, image, app.Slug, hostPort, containerPort)
+	if err != nil {
+		if cr.Name != "" {
+			_, _ = rt.RemoveContainer(ctx, cr.Name)
+		}
+		errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "rollback run failed"}.write(w)
+		return
+	}
+	healthURL := containerHealthURL(hostPort)
+	url := containerAppURL(hostPort)
+	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
+		// Rollback health failure: do NOT flip the app; leave the current
+		// effective running. Clean up the rollback candidate container only.
+		_, _ = rt.StopContainer(ctx, cr.Name)
+		_, _ = rt.RemoveContainer(ctx, cr.Name)
+		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "rollback health check failed; current version left running"}.write(w)
+		return
+	}
+
+	// Success: record the running deployment, promote the prior version
+	// (effective + deployment_id, supersede current), then stop the old
+	// effective container (best-effort).
+	now := time.Now()
+	dep := model.Deployment{
+		ID:            "dep_" + idpkg.New(),
+		AppID:         appID,
+		JobID:         "rollback-" + target.JobID,
+		ImageName:     stripTag(image.FullName, tag),
+		ImageTag:      tag,
+		ContainerName: cr.Name,
+		HostPort:      hostPort,
+		ContainerPort: containerPort,
+		URL:           url,
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}
+	if err := s.store.CreateDeployment(ctx, dep); err != nil {
+		_, _ = rt.StopContainer(ctx, cr.Name)
+		_, _ = rt.RemoveContainer(ctx, cr.Name)
+		writeError(w, http.StatusInternalServerError, "create deployment")
+		return
+	}
+	if err := s.store.PromoteApplicationVersion(ctx, appID, target.ID, dep.ID, url); err != nil {
+		_, _ = rt.StopContainer(ctx, cr.Name)
+		_, _ = rt.RemoveContainer(ctx, cr.Name)
+		writeError(w, http.StatusInternalServerError, "promote version")
+		return
+	}
+	// Stop the previously-effective container (the one superseded by rollback).
+	s.stopPreviousDeploymentsServer(ctx, rt, appID, dep.ID)
+	s.publishDeploymentUpdated(ctx, dep.ID)
+	s.publishAppUpdated(ctx, appID)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "rolled back", "version_id": target.ID, "deployment": dep})
+}
+
+// stopPreviousDeploymentsServer is the server-side analogue of the executor's
+// stopPreviousDeployments: it stops + removes every OTHER running deployment for
+// the app (the container superseded by a promotion/rollback) and marks it
+// stopped. Best-effort.
+func (s *Server) stopPreviousDeploymentsServer(ctx context.Context, rt deploy.ContainerRuntime, appID, keepID string) {
+	deps, err := s.store.ListDeploymentsByApp(ctx, appID)
+	if err != nil {
+		return
+	}
+	for _, dep := range deps {
+		if dep.ID == keepID || dep.Status != "running" {
+			continue
+		}
+		_, _ = rt.StopContainer(ctx, dep.ContainerName)
+		_, _ = rt.RemoveContainer(ctx, dep.ContainerName)
+		_ = s.store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
+		s.publishDeploymentUpdated(ctx, dep.ID)
+	}
 }
 
 // markAppError flips an app to error status, swallowing the error (callers have

@@ -178,7 +178,10 @@ func (f *FactoryRunner) runCmd(ctx context.Context, job model.Job, step model.Jo
 	return res, true
 }
 
-// runTestVerification implements design §5.4.
+// runTestVerification implements design §5.4. Task 6: it runs in the isolated
+// candidate version dir so it never mutates the effective source. The candidate
+// version is created here (the first factory step, seq 4) and reused by the
+// later image_build/deploy steps via the job_id UNIQUE link.
 func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	app, fail, ok := f.resolveApp(ctx, job)
 	if !ok {
@@ -188,15 +191,24 @@ func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, 
 	if !ok {
 		return fail, nil
 	}
-	projectDir := filepath.Join(f.Workspace, app.Path)
+
+	// Resolve the isolated candidate dir (created + populated from the effective
+	// source on first use). The npm/build commands run HERE, not in the
+	// effective source, so candidate generation never mutates the effective tree.
+	projectDir, fail, ok := f.resolveCandidateDir(ctx, app, job)
+	if !ok {
+		return fail, nil
+	}
 
 	// 1. Dependency install: npm ci when a lockfile is present, else npm install.
 	if _, err := os.Stat(filepath.Join(projectDir, "package-lock.json")); err == nil {
 		if _, ok := f.runCmd(ctx, job, step, emit, projectDir, "npm", "ci"); !ok {
+			f.markCandidateFailed(ctx, job)
 			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorDependencyInstallFailed, ErrorMessage: "npm ci failed"}, nil
 		}
 	} else {
 		if _, ok := f.runCmd(ctx, job, step, emit, projectDir, "npm", "install"); !ok {
+			f.markCandidateFailed(ctx, job)
 			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorDependencyInstallFailed, ErrorMessage: "npm install failed"}, nil
 		}
 	}
@@ -211,6 +223,7 @@ func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, 
 		buildArgs = []string{"npm", "run", "build"}
 	}
 	if _, ok := f.runCmd(ctx, job, step, emit, projectDir, buildArgs[0], buildArgs[1:]...); !ok {
+		f.markCandidateFailed(ctx, job)
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBuildFailed, ErrorMessage: "build command failed"}, nil
 	}
 
@@ -220,49 +233,141 @@ func (f *FactoryRunner) runTestVerification(ctx context.Context, job model.Job, 
 		outDir = "dist"
 	}
 	if _, err := os.Stat(filepath.Join(projectDir, outDir, "index.html")); err != nil {
+		f.markCandidateFailed(ctx, job)
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBuildFailed, ErrorMessage: fmt.Sprintf("build output missing index.html in %s: %v", outDir, err)}, nil
 	}
 
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
-// runImageBuild implements design §5.5.
+// resolveCandidateDir returns the workspace-rooted isolated candidate dir for
+// this job's version, creating + populating it from the effective source on
+// first use. All factory build/verify steps operate in this dir so candidate
+// generation never mutates the effective source tree. It is idempotent: a
+// re-attempt reuses the existing candidate dir.
+func (f *FactoryRunner) resolveCandidateDir(ctx context.Context, app model.Application, job model.Job) (string, StepResult, bool) {
+	priorEff, _ := f.Store.GetEffectiveApplicationVersion(ctx, app.ID)
+	version, vres, ok := f.ensureCandidateVersion(ctx, app.ID, job.ID, priorEff)
+	if !ok {
+		return "", vres, false
+	}
+	srcDir := filepath.Join(f.Workspace, app.Path)
+	candidateDir := filepath.Join(srcDir, "versions", version.ID)
+	// Populate the candidate dir from the effective source on first use. A
+	// re-attempt (candidate dir already present) keeps it as-is so the build is
+	// reproducible and the effective source is untouched.
+	if _, statErr := os.Stat(candidateDir); os.IsNotExist(statErr) {
+		if err := f.prepareCandidateSource(srcDir, candidateDir); err != nil {
+			_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
+			return "", StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBuildFailed, ErrorMessage: fmt.Sprintf("prepare candidate source: %v", err)}, false
+		}
+	}
+	return candidateDir, StepResult{}, true
+}
+
+// markCandidateFailed flips this job's candidate version to failed (best-effort).
+func (f *FactoryRunner) markCandidateFailed(ctx context.Context, job model.Job) {
+	if v, _ := f.Store.GetApplicationVersionByJob(ctx, job.ID); v != nil {
+		_ = f.Store.MarkApplicationVersionStatus(ctx, v.ID, model.ApplicationVersionFailed)
+	}
+}
+
+// runImageBuild implements design §5.5. Task 6 builds each candidate in an
+// isolated versioned dir generated-apps/<slug>/versions/<version-id>/ so the
+// candidate build NEVER mutates the effective source. The image tag is
+// version-keyed (localhost/software-factory/<slug>:<version-id>) so candidate +
+// effective images coexist. An application_versions row (status=building) is
+// recorded for this candidate, linked by job_id, with ParentVersionID = the
+// app's current effective version (the baseline).
 func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	app, fail, ok := f.resolveApp(ctx, job)
 	if !ok {
 		return fail, nil
 	}
-	if _, fail, ok := f.readManifest(app); !ok {
+	manifest, fail, ok := f.readManifest(app)
+	if !ok {
 		return fail, nil
 	}
-	tag := "job-" + job.ID
+
+	// Resolve the isolated candidate dir (created + populated by the earlier
+	// test_verification step, or here on first use if verification was skipped).
+	candidateDir, fail, ok := f.resolveCandidateDir(ctx, app, job)
+	if !ok {
+		return fail, nil
+	}
+	version, _ := f.Store.GetApplicationVersionByJob(ctx, job.ID)
+
 	rt := f.runtime()
-	// BuildImage runs `<docker|podman> build .` with dir = app.Path. app.Path
-	// is a relative path against the workspace root (e.g. "generated-apps/demo"),
-	// so resolve it to a workspace-rooted dir — mirroring what the npm steps
-	// do — before handing it to BuildImage. In production the server's cwd is
-	// factory-server/, not the workspace root, so a bare relative Path would
-	// resolve against the wrong directory and the build would fail.
 	buildApp := app
-	buildApp.Path = filepath.Join(f.Workspace, app.Path)
+	buildApp.Path = candidateDir
 	var res deploy.CommandResult
 	var err error
 	if f.StreamCmds != nil {
 		b := newCommandStreamBatcher(ctx, emit)
 		b.start()
-		_, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, tag, b.addStdout, b.addStderr)
+		_, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, version.ID, b.addStdout, b.addStderr)
 		b.close()
 	} else {
-		_, res, err = rt.BuildImage(ctx, buildApp, tag)
+		_, res, err = rt.BuildImage(ctx, buildApp, version.ID)
 	}
 	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
+		_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorImageBuildFailed, ErrorMessage: fmt.Sprintf("%s build failed: %v", rt.Name(), err)}, nil
 	}
+	// manifest is used to confirm the build context is valid for this app; the
+	// actual output verification is the deploy step's health check.
+	_ = manifest
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
-// runDeployment implements design §5.6.
+// ensureCandidateVersion returns the application_versions row for this job,
+// creating it (status=building) on first use. It is idempotent on job_id: a
+// re-attempt of the same job reuses its version. The parent is the app's current
+// effective version (the baseline), captured at candidate-creation time.
+func (f *FactoryRunner) ensureCandidateVersion(ctx context.Context, appID, jobID string, priorEff *model.ApplicationVersion) (*model.ApplicationVersion, StepResult, bool) {
+	if existing, err := f.Store.GetApplicationVersionByJob(ctx, jobID); err != nil {
+		return nil, StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("lookup version for job %s: %v", jobID, err)}, false
+	} else if existing != nil {
+		return existing, StepResult{}, true
+	}
+	parentID := ""
+	if priorEff != nil {
+		parentID = priorEff.ID
+	}
+	created, err := f.Store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID:            "ver_" + id.New(),
+		ApplicationID: appID,
+		ParentVersionID: parentID,
+		JobID:         jobID,
+		Status:        model.ApplicationVersionBuilding,
+	})
+	if err != nil {
+		return nil, StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("create version for job %s: %v", jobID, err)}, false
+	}
+	return created, StepResult{}, true
+}
+
+// prepareCandidateSource populates the isolated versioned build dir with a copy
+// of the effective source so the candidate build does not mutate the effective
+// source. Any pre-existing versions dir is left intact (sibling versions); only
+// this candidate's own dir is recreated.
+func (f *FactoryRunner) prepareCandidateSource(srcDir, candidateDir string) error {
+	if err := os.RemoveAll(candidateDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(candidateDir, 0o755); err != nil {
+		return err
+	}
+	return copyDir(srcDir, candidateDir)
+}
+
+// runDeployment implements design §5.6. Task 6: the candidate version is
+// promoted to effective ONLY after it passes the health check. On health
+// failure, a prior effective version is RETAINED (the app stays running on it,
+// its container is NOT stopped) and ONLY the candidate is marked failed. When no
+// prior effective version exists (fresh app), the legacy behavior holds (app →
+// error) so the first-deploy failure tests stay green.
 func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	app, fail, ok := f.resolveApp(ctx, job)
 	if !ok {
@@ -273,7 +378,27 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		return fail, nil
 	}
 
-	tag := "job-" + job.ID
+	// Capture the prior effective version BEFORE creating/promoting so the
+	// retain path knows whether to keep it alive.
+	priorEff, _ := f.Store.GetEffectiveApplicationVersion(ctx, app.ID)
+
+	// The candidate version this job produced (created in runImageBuild). If the
+	// deployment step is entered without a build (e.g. a direct deploy, or a test
+	// that drives steps in isolation), ensure the version exists here so the
+	// version lifecycle is robust to the entry point.
+	version, verr := f.Store.GetApplicationVersionByJob(ctx, job.ID)
+	if verr != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("lookup version for job %s: %v", job.ID, verr)}, nil
+	}
+	if version == nil {
+		v, vres, ok := f.ensureCandidateVersion(ctx, app.ID, job.ID, priorEff)
+		if !ok {
+			return vres, nil
+		}
+		version = v
+	}
+
+	tag := version.ID
 	image := deploy.ImageRef{FullName: "localhost/software-factory/" + app.Slug + ":" + tag}
 	containerPort := manifest.Docker.RuntimePort
 	if containerPort <= 0 {
@@ -307,11 +432,12 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		if container.Name != "" {
 			_, _ = rt.RemoveContainer(ctx, container.Name)
 		}
+		_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPodmanRunFailed, ErrorMessage: fmt.Sprintf("%s run failed: %v", rt.Name(), err)}, nil
 	}
 
-	// Health check; on failure stop+remove (best-effort), mark deployment failed,
-	// mark app error.
+	// Health check. On failure, the candidate is marked failed; the prior
+	// effective version (if any) is RETAINED.
 	healthURL := fmt.Sprintf("http://%s:%d", wslVMHealthIP(), host)
 	url := fmt.Sprintf("http://%s:%d", appURLHost(), host)
 	health := f.Health
@@ -321,6 +447,7 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	if herr := health(ctx, healthURL, 10*time.Second); herr != nil {
 		_, _ = rt.StopContainer(ctx, container.Name)
 		_, _ = rt.RemoveContainer(ctx, container.Name)
+		now := time.Now()
 		_ = f.Store.CreateDeployment(ctx, model.Deployment{
 			ID:            "dep_" + id.New(),
 			AppID:         app.ID,
@@ -332,13 +459,22 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 			ContainerPort: containerPort,
 			URL:           url,
 			Status:        "failed",
-			CreatedAt:     time.Now(),
+			CreatedAt:     now,
 		})
-		_ = f.Store.SetAppRuntime(ctx, app.ID, string(model.AppStatusError), "")
+		_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
+		if priorEff == nil {
+			// Fresh app, no prior effective version to retain: keep the legacy
+			// behavior so the first-deploy failure tests stay green.
+			_ = f.Store.SetAppRuntime(ctx, app.ID, string(model.AppStatusError), "")
+		}
+		// When a prior effective version exists it is RETAINED: the app keeps
+		// serving on it and its container is NOT stopped.
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorHealthCheckFailed, ErrorMessage: herr.Error()}, nil
 	}
 
-	// Success: record a running deployment + flip app to running.
+	// Success: record the running deployment, then transactionally promote the
+	// candidate (effective + deployment_id), supersede the prior effective, and
+	// flip the app to running on the new URL.
 	now := time.Now()
 	dep := model.Deployment{
 		ID:            "dep_" + id.New(),
@@ -354,10 +490,52 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		CreatedAt:     now,
 		StartedAt:     &now,
 	}
-	_ = f.Store.CreateDeployment(ctx, dep)
-	_ = f.Store.SetAppRuntime(ctx, app.ID, string(model.AppStatusRunning), url)
+	if err := f.Store.CreateDeployment(ctx, dep); err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("create deployment: %v", err)}, nil
+	}
+	if err := f.Store.PromoteApplicationVersion(ctx, app.ID, version.ID, dep.ID, url); err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("promote version: %v", err)}, nil
+	}
+	// Stop the OLD effective container (best-effort, outside the tx). The new
+	// one is already running + recorded.
 	f.stopPreviousDeployments(ctx, rt, app.ID, dep.ID)
 	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+// copyDir recursively copies src into dst, skipping any "versions" subdir (so a
+// candidate copy never recursively includes sibling versions or itself). It does
+// not follow symlinks beyond the top level. Best-effort: a copy error aborts.
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		// Never copy the versions subtree: it holds isolated candidate builds
+		// (including, potentially, this one) and would cause recursion.
+		if e.Name() == "versions" {
+			continue
+		}
+		s := filepath.Join(src, e.Name())
+		d := filepath.Join(dst, e.Name())
+		if e.IsDir() {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				return err
+			}
+			if err := copyDir(s, d); err != nil {
+				return err
+			}
+		} else {
+			data, rerr := os.ReadFile(s)
+			if rerr != nil {
+				return rerr
+			}
+			if err := os.WriteFile(d, data, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
