@@ -156,7 +156,7 @@ func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T)
 		Attempt:  1,
 	}
 	r := &ClaudeStepRunner{Workspace: workspace}
-	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepCodeGeneration}, ws, nil, nil)
+	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepCodeGeneration}, ws, nil, nil, "live_api")
 
 	for _, want := range []string{
 		"工作区根目录：" + workspace,
@@ -169,6 +169,18 @@ func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T)
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("codegen prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	// live_api must inject the honest-data contract (forbids synthetic/mock/
+	// Math.random/fallback; demands error+warnings on failure).
+	for _, want := range []string{
+		"[诚实数据契约 — 违反即判定生成失败]",
+		"Math.random",
+		"fallback 到 mock",
+		"warnings",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("codegen live_api prompt missing honest-data contract %q:\n%s", want, prompt)
 		}
 	}
 }
@@ -270,7 +282,7 @@ func TestRequirementAnalysisPromptForcesRawJSONOnly(t *testing.T) {
 		Attempt:  1,
 	}
 
-	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepRequirementAnalysis}, ws, nil, nil)
+	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepRequirementAnalysis}, ws, nil, nil, "")
 	for _, want := range []string{
 		"raw JSON object",
 		"Simplified Chinese",

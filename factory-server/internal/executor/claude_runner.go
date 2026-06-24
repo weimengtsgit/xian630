@@ -74,6 +74,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// input.json is harmless (it ignores unknown keys). Resolution is best-effort
 	// against the configured workspace root.
 	profile, blueprintRefs := parseGenerationProfile(confirmedReq)
+	dataPolicy := parseDataPolicy(confirmedReq)
 	skillPaths := selectedSkillPaths(c.workspace(), profile)
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
 
@@ -97,7 +98,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// every code_generation run. Captured for all steps but consumed only by
 	// code_generation's audit.
 	baseline := c.Claude.BaselineStatus(ctx, c.AuditRunner)
-	if err := c.Claude.Run(ctx, ws, c.prompt(job, step, ws, skillPaths, blueprintPaths), input, step.Kind == model.StepCodeGeneration, emit); err != nil {
+	if err := c.Claude.Run(ctx, ws, c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy), input, step.Kind == model.StepCodeGeneration, emit); err != nil {
 		// Even on failure, capture sanitized audit copies of whatever operational
 		// files exist (input/prompt are always written by ClaudeRunner.Run before
 		// the agent runs; output may or may not exist). Best-effort: a capture
@@ -160,6 +161,20 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, job model.J
 	}
 	if out.NeedsUserInput {
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
+	}
+
+	// Honest-data audit: when the confirmed requirement is a real-data policy
+	// (live_api / mock_then_api), the generated app must not ship mock or
+	// synthetic data. dataPolicy and the declared data skills are parsed from the
+	// confirmed requirement carried on the job. A violation fails the step as a
+	// schema_validation_failed with the offending file(s).
+	confirmedReq := json.RawMessage(job.ConfirmedRequirementJSON)
+	if len(bytes.TrimSpace(confirmedReq)) == 0 {
+		confirmedReq = json.RawMessage("{}")
+	}
+	genProfile, _ := parseGenerationProfile(confirmedReq)
+	if err := runner.AuditHonestData(projectDir, parseDataPolicy(confirmedReq), genProfile["data"]); err != nil {
+		return c.failureFromError(err)
 	}
 
 	if audit := c.AuditRunner; audit != nil {
@@ -290,7 +305,7 @@ func (c *ClaudeStepRunner) captureCommandLog(ctx context.Context, reg *artifactR
 	_ = reg.registerCappedLog(ctx, kind, path, raw, false, summary)
 }
 
-func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace, skillPaths, blueprintPaths []string) string {
+func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace, skillPaths, blueprintPaths []string, dataPolicy string) string {
 	if step.Kind == model.StepRequirementAnalysis {
 		return "You are the software-factory requirement_analysis agent.\n" +
 			"Read confirmedRequirement from input.json and freeze it into a single final JSON object.\n" +
@@ -305,7 +320,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 	}
 	if step.Kind == model.StepSolutionDesign {
 		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。用户需求：" + job.UserPrompt +
-			skillsPromptBlock(skillPaths, blueprintPaths)
+			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
 	if step.Kind == model.StepCodeGeneration {
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
@@ -316,7 +331,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"面向用户的页面文案、标题、标签、图表说明、详情说明，以及 output.json / output.md 中的人类可读文本，默认必须使用简体中文；只有标识符、slug、路径、枚举值、代码符号可以保留非中文。" +
 			"不要输出隐藏推理链。" +
-			skillsPromptBlock(skillPaths, blueprintPaths)
+			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
@@ -326,7 +341,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
 	case model.StepSolutionDesign:
 		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n用户需求：" + job.UserPrompt +
-			skillsPromptBlock(skillPaths, blueprintPaths)
+			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
 			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
@@ -335,7 +350,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"不要输出隐藏推理链。" +
-			skillsPromptBlock(skillPaths, blueprintPaths)
+			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	default:
 		return job.UserPrompt
 	}
@@ -353,7 +368,7 @@ func absolutePath(path string) string {
 // skills selected by the confirmed requirement's generationProfile and to treat
 // any matched 场景蓝本 docs as read-only style/structure references. It lists
 // concrete, workspace-relative file paths so Claude can Read them directly.
-func skillsPromptBlock(skillPaths, blueprintPaths []string) string {
+func skillsPromptBlock(skillPaths, blueprintPaths []string, dataPolicy string) string {
 	var b strings.Builder
 	b.WriteString("\n\n[generationProfile 指令] ")
 	if len(skillPaths) == 0 {
@@ -364,19 +379,35 @@ func skillsPromptBlock(skillPaths, blueprintPaths []string) string {
 			b.WriteString("\n- " + p)
 		}
 	}
-	// When a data-acquisition skill is selected, force the agent to actually
-	// fetch real public data instead of shipping deterministic mock data. The
-	// data skills already say this, but the agent has been observed ignoring a
-	// soft "use real data by default" rule and shipping mock "to ensure build
-	// success" — so enforce it here, at the prompt the agent always sees.
-	hasDataSkill := false
-	for _, p := range skillPaths {
-		if strings.Contains(p, "data-skill") {
-			hasDataSkill = true
+	// Honest-data contract: enforced whenever dataPolicy is a real-data policy
+	// (live_api or mock_then_api), REGARDLESS of whether a data-skill happens to
+	// be in the profile. The data skills already say "real data is mandatory",
+	// but the agent has been observed ignoring a soft "use real data by default"
+	// rule and shipping mock "to ensure build success", so the rule that the
+	// agent always sees is keyed on the authoritative dataPolicy, not on skill
+	// presence. mock_data / empty policy is not bound by this contract.
+	realData := dataPolicy == "live_api" || dataPolicy == "mock_then_api"
+	if realData {
+		b.WriteString("\n\n[诚实数据契约 — 违反即判定生成失败] confirmedRequirement.dataPolicy 为 " + dataPolicy + "，生成的应用必须以真实数据为准。")
+		// When data-acquisition skills ARE selected, name them so the agent fetches
+		// through the right real adapter rather than inventing one.
+		var dataSkills []string
+		for _, p := range skillPaths {
+			if strings.Contains(p, "data-skill") {
+				dataSkills = append(dataSkills, p)
+			}
 		}
-	}
-	if hasDataSkill {
-		b.WriteString("\n\n[真实数据强制要求 — 违反即判定生成失败] 当任一 data-skill 被选中、且 confirmedRequirement.dataPolicy 为 live_api 或 mock_then_api 时，生成的应用**必须按该 data-skill 内的 Fetch Adapter 发起真实公开数据请求**（tide→NOAA CO-OPS，deck-wind→Open-Meteo GFS，ais→历史归档），并解析真实返回值填充数据层。**严禁**用合成/确定性公式/mock/假数据替代真实请求。取数失败时，应用应显示明确的错误或空状态（并记录到 output.json 的 warnings），**绝不**编造假数据「以保证构建成功」——交付假数据等同于本次生成失败。仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据。")
+		if len(dataSkills) > 0 {
+			b.WriteString("先 Read 并严格遵循下列 data-skill 的 Fetch Adapter 发起真实公开数据请求（tide→NOAA CO-OPS，deck-wind→Open-Meteo GFS，ais→历史归档，carrier→已提交的 ontology/公开源），解析真实返回值填充数据层：")
+			for _, p := range dataSkills {
+				b.WriteString("\n- " + p)
+			}
+			b.WriteString(" ")
+		}
+		b.WriteString("**严禁**：用 synthetic/mock/fake/demo 数据替代真实请求；用 Math.random、确定性公式或 Math.sin/Math.cos 曲线合成潮汐/风/密度/航迹等核心序列；取数失败后 fallback 到 mock；为「保证构建成功」而硬编码看似真实的数据。")
+		b.WriteString("真实取数失败时（源不可达、覆盖范围不支持、鉴权缺失），应用必须显示明确的错误或空状态，并把失败原因记入 output.json 的 warnings——交付假数据等同于本次生成失败。")
+		b.WriteString("仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据（且 UI 须明确标注 mock/演示）。")
+		b.WriteString("注意：mock_then_api 表示「真实优先、失败诚实报错」，**不是**失败后回退 mock。")
 	}
 	b.WriteString("\n若某个必需 skill 缺失，在 output.json 的 warnings 中记录，不要改用不相关 skill。")
 	if len(blueprintPaths) > 0 {
@@ -536,6 +567,22 @@ func parseGenerationProfile(confirmedReq json.RawMessage) (map[string][]string, 
 		return nil, nil
 	}
 	return shape.GenerationProfile, shape.BlueprintRefs
+}
+
+// parseDataPolicy extracts confirmedRequirement.dataPolicy. It is defensive like
+// parseGenerationProfile: blank/garbage yields "". The honest-data contract in
+// the generative prompt and the post-code-gen audit both gate on this value.
+func parseDataPolicy(confirmedReq json.RawMessage) string {
+	if len(bytes.TrimSpace(confirmedReq)) == 0 {
+		return ""
+	}
+	var shape struct {
+		DataPolicy string `json:"dataPolicy"`
+	}
+	if err := json.Unmarshal(confirmedReq, &shape); err != nil {
+		return ""
+	}
+	return shape.DataPolicy
 }
 
 func (c *ClaudeStepRunner) artifactRoot() string {

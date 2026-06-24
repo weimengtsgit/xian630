@@ -385,7 +385,7 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
-	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
+	req.GenerationProfile = recomputeGenerationProfile(req)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -459,7 +459,7 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 		}
 	}
 	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
-	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
+	req.GenerationProfile = recomputeGenerationProfile(req)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -550,7 +550,7 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	// Always (re)compute the profile from the application type and internal
 	// blueprint refs — never trust the client-supplied skill list — while
 	// preserving the server-derived `data` group selected during clarification.
-	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs, current.GenerationProfile)
+	current.GenerationProfile = recomputeGenerationProfile(current)
 
 	reqBytes, _ := json.Marshal(current)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
@@ -707,7 +707,7 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		// plus internal blueprint refs, while preserving the persisted `data`
 		// skill group across the recompute.
 		incoming.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
-		incoming.GenerationProfile = generationProfileForRequirement(incoming.AppType, incoming.BlueprintRefs, req.GenerationProfile)
+		incoming.GenerationProfile = recomputeGenerationProfile(incoming, req.GenerationProfile)
 		req = incoming
 	} else {
 		if !blueprintRefsAllSafe(req.BlueprintRefs) {
@@ -718,7 +718,7 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		// preserving the server-derived `data` skill group and blueprint-derived
 		// pattern skills.
 		req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
-		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
+		req.GenerationProfile = recomputeGenerationProfile(req)
 	}
 
 	if missing := missingRequiredFields(req); len(missing) > 0 {
@@ -898,7 +898,7 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// The LLM may suggest business fields and safe blueprint refs, but the skill
 	// profile is always Factory-derived from those refs, while preserving the
 	// LLM-selected `data` group.
-	out.Requirement.GenerationProfile = generationProfileForRequirement(out.Requirement.AppType, out.Requirement.BlueprintRefs, out.Requirement.GenerationProfile)
+	out.Requirement.GenerationProfile = recomputeGenerationProfile(out.Requirement)
 	now := time.Now()
 	reqBytes, _ := json.Marshal(out.Requirement)
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
@@ -1194,7 +1194,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "appType", "app_type":
 		if value != "" {
 			req.AppType = value
-			req.GenerationProfile = generationProfileForRequirement(value, req.BlueprintRefs, req.GenerationProfile)
+			req.GenerationProfile = recomputeGenerationProfile(*req)
 		}
 	case "appName", "app_name":
 		if value != "" {
@@ -1220,7 +1220,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
 	case "blueprintRefs", "blueprint_refs":
 		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
-		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
+		req.GenerationProfile = recomputeGenerationProfile(*req)
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
@@ -1397,4 +1397,107 @@ func appendUniqueSkills(current, additions []string) []string {
 		}
 	}
 	return current
+}
+
+// dataDomainKeywords maps each data-acquisition skill to the intent keywords
+// (ASCII matched case-insensitively, Chinese verbatim) that indicate the
+// requirement needs that real-data capability. Sets are deliberately inclusive:
+// over-deriving only makes a real-data skill available to the generator
+// (benign), whereas UNDER-deriving is the bug this fixes — a real-data app that
+// silently ships with no data capability. Keywords come from each skill's Trigger
+// Mapping + description.
+var dataDomainKeywords = []struct {
+	skill    string
+	keywords []string
+}{
+	{"tide-data-skill", []string{
+		"潮汐", "潮位", "潮高", "潮水", "涨潮", "落潮", "吃水", "水位",
+		"离港窗口", "出港窗口", "departure window", "draft threshold",
+		"tide", "tidal", "tide level", "port forecast",
+	}},
+	{"deck-wind-data-skill", []string{
+		"甲板风", "风速", "风向", "起飞风", "着舰风", "弹射风", "回收风",
+		"deck wind", "10 m wind", "10m wind", "wind speed", "wind direction",
+		"launch wind", "recovery wind", "风力", "海面风",
+	}},
+	{"ais-density-data-skill", []string{
+		"ais", "商船密度", "航运密度", "船舶密度", "船舶交通", "50海里", "50 海里",
+		"50-nautical-mile", "merchant density", "shipping density", "vessel traffic",
+		"船舶流量", "船流密度",
+	}},
+	{"carrier-affiliation-data-skill", []string{
+		"舰载机", "归属推断", "归属", "ads-b", "adsb", "icao", "航母位置",
+		"航母已知位置", "离舰判定", "离舰", "起降识别", "海陆掩膜", "海陆分类",
+		"ontology", "aviationcarrier", "carrieraviation", "rawads",
+		"aircraftcarriertracklog", "opensky", "usni", "航母舰载机",
+	}},
+}
+
+// deriveDataSkills returns the data-acquisition skills a real-data requirement
+// needs, inferred from its text fields (MainEntities, AppName, CoreScenario,
+// PrimaryView, AcceptanceFocus). This is the server-side derivation that
+// guarantees a live_api/mock_then_api requirement hitting a data domain always
+// carries the matching data skill, so confirm never silently passes a real-data
+// app that lacks its data capability.
+//
+// It returns nil when dataPolicy is mock_data (mock is explicit — never auto-add
+// a data skill for it) or when no domain matches. Matching is substring-based
+// and case-insensitive for ASCII.
+func deriveDataSkills(req clarification.Requirement) []string {
+	if req.DataPolicy == "mock_data" {
+		return nil
+	}
+	haystack := strings.ToLower(strings.Join(req.MainEntities, " ") + " " +
+		req.AppName + " " + req.CoreScenario + " " + req.PrimaryView + " " +
+		strings.Join(req.AcceptanceFocus, " "))
+	var out []string
+	for _, domain := range dataDomainKeywords {
+		for _, kw := range domain.keywords {
+			if strings.Contains(haystack, strings.ToLower(kw)) {
+				out = append(out, domain.skill)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// recomputeGenerationProfile is the single server-side entrypoint for deriving a
+// requirement's generationProfile. It builds base/domain/pattern from appType +
+// blueprint refs (via generationProfileForRequirement, preserving any existing
+// data group), then merges in the data skills derived from the requirement's
+// dataPolicy + text fields. mock_data derives nothing; live_api/mock_then_api add
+// the matching data skills so a real-data domain is never left without its
+// capability. The optional existing map lets the confirm path preserve a
+// persisted data group while deriving from an incoming requirement body.
+func recomputeGenerationProfile(req clarification.Requirement, existing ...map[string][]string) map[string][]string {
+	base := req.GenerationProfile
+	if len(existing) > 0 {
+		base = existing[0]
+	}
+	// generationProfileForRequirement derives base/domain/pattern (+ blueprint
+	// pattern skills) and preserves the existing `data` group UNCONDITIONALLY.
+	// Real-data skills are only valid under a real-data policy, so we re-apply the
+	// data group under our own policy rules here: live_api / mock_then_api keep the
+	// inherited group and merge newly-derived skills (deduped); mock_data and an
+	// empty/unknown policy must NOT carry a real-data capability, so any inherited
+	// data group is dropped. This prevents a requirement that was live_api (and
+	// derived e.g. tide-data-skill) from keeping that skill after the user switches
+	// it to mock_data via PATCH/confirm.
+	profile := generationProfileForRequirement(req.AppType, req.BlueprintRefs, base)
+	switch req.DataPolicy {
+	case "live_api", "mock_then_api":
+		if derived := deriveDataSkills(req); len(derived) > 0 {
+			if profile == nil {
+				profile = map[string][]string{}
+			}
+			profile["data"] = appendUniqueSkills(profile["data"], derived)
+		}
+	default:
+		// mock_data / "" / unknown: drop any inherited real-data capability.
+		if profile != nil {
+			delete(profile, "data")
+		}
+	}
+	return profile
 }

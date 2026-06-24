@@ -1712,6 +1712,53 @@ func TestHandlerRedactsBlueprintRefsFromSSEEvents(t *testing.T) {
 	}
 }
 
+// TestPatchRequirementMockDataClearsInheritedDataSkill is the handler-level
+// regression for the mock_data bug: a persisted live_api requirement that carries
+// a data skill must have its data group cleared when PATCHed to mock_data, so
+// mock_data never loads a real-data capability.
+func TestPatchRequirementMockDataClearsInheritedDataSkill(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: waitingUserOutput})
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成潮汐应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	// Seed a persisted live_api requirement that already carries a data skill.
+	liveReq := `{"appType":"command_dashboard","appName":"潮汐应用","targetUsers":["指挥员"],"coreScenario":"港口潮汐窗口监控","primaryView":"2×2 看板","mainEntities":["港口","潮汐"],"dataPolicy":"live_api","acceptanceFocus":["窗口计算"],"generationProfile":{"base":["software-factory-app"],"domain":["defense-operations-ui"],"pattern":["command-dashboard"],"data":["tide-data-skill"]}}`
+	if err := st.UpdateClarificationRequirement(context.Background(), sess.ID, liveReq); err != nil {
+		t.Fatalf("seed live_api requirement: %v", err)
+	}
+
+	// PATCH the same editable fields but switch dataPolicy to mock_data.
+	// generationProfile is server-derived and never sent by the client.
+	patch := doPost(t, r, http.MethodPatch, "/api/clarifications/"+sess.ID+"/requirement", map[string]any{
+		"requirement": json.RawMessage(`{"appType":"command_dashboard","appName":"潮汐应用","targetUsers":["指挥员"],"coreScenario":"港口潮汐窗口监控","primaryView":"2×2 看板","mainEntities":["港口","潮汐"],"dataPolicy":"mock_data","acceptanceFocus":["窗口计算"]}`),
+	})
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch status = %d body=%s", patch.Code, patch.Body.String())
+	}
+
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	var req clarification.Requirement
+	if err := json.Unmarshal([]byte(got.RequirementJSON), &req); err != nil {
+		t.Fatalf("decode persisted requirement: %v", err)
+	}
+	if data := req.GenerationProfile["data"]; len(data) != 0 {
+		t.Fatalf("persisted data = %v, want empty after switching to mock_data", data)
+	}
+	if len(req.GenerationProfile["base"]) == 0 || len(req.GenerationProfile["pattern"]) == 0 {
+		t.Fatalf("base/pattern dropped on mock_data switch: %#v", req.GenerationProfile)
+	}
+}
+
 // itoa avoids importing strconv solely for an index label.
 func itoa(i int) string {
 	if i == 0 {

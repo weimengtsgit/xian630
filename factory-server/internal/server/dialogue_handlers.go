@@ -1341,7 +1341,7 @@ func (s *Server) patchDialogueRequirement(w http.ResponseWriter, r *http.Request
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
-	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs, current.GenerationProfile)
+	current.GenerationProfile = recomputeGenerationProfile(current)
 	reqBytes, _ := json.Marshal(current)
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	s.publishDialogueChild(ctx, id, childID, current)
@@ -1414,7 +1414,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
-	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
+	req.GenerationProfile = recomputeGenerationProfile(req)
 	if missing := missingRequiredFields(req); len(missing) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "confirmed requirement missing required fields", "missing": missing})
 		return
