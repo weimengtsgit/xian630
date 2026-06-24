@@ -35,6 +35,8 @@ COPY --from=build /out/factory-server /usr/local/bin/factory-server
 # Reference-only skill tree + scene blueprints the generator/clarifier reads.
 COPY .claude/skills /workspace/.claude/skills
 COPY scene /workspace/scene
+# Scene catalog (preset-app visibility) the scanner loads at startup.
+COPY .factory /workspace/.factory
 
 ENV FACTORY_ADDR=0.0.0.0:8787 \
     FACTORY_WORKSPACE_ROOT=/workspace \
