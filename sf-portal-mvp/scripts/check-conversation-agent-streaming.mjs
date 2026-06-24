@@ -232,3 +232,57 @@ assert.equal(
 )
 
 console.log('check-conversation-agent-streaming: live analysis streaming + fold OK')
+
+// ============================================================================
+// Task 5: User-facing 智能体 label (D4)
+//
+// The user-facing noun for the produced product is 智能体; the internal entity
+// stays 应用. We assert the workbench's RENDERED (user-facing) product strings
+// use 智能体, while leaving internal identifiers (appType, appName,
+// resolvedApplication, onOpenApp, ...), API paths, and code comments that refer
+// to the internal 应用 entity untouched.
+//
+// Strategy: scan the workbench source, strip line/block comments so an internal
+// reference in a comment never trips the check, then assert that none of the
+// known user-facing product phrases (the route card, empty hint, app list
+// heading, open-app action, delete-confirm copy, history fallback, requirement
+// summary field labels) still carry the old 应用 noun.
+// ============================================================================
+const wbRaw = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+// Strip // line comments and /* */ block comments so only executable/rendered
+// source remains. A user-facing string still present after stripping means it
+// is actually rendered, not merely mentioned in a doc comment.
+const wbRendered = wbRaw
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/[^\n]*/g, '')
+
+// The renamed user-facing phrases MUST be present (proves the rename happened).
+const expectedUserFacing = [
+  '生成新智能体',
+  '通过需求澄清生成助手智能体或业务智能体',
+  '复用已有智能体',
+  '推荐智能体',
+]
+for (const phrase of expectedUserFacing) {
+  assert.ok(
+    wbRendered.includes(phrase),
+    `ConversationWorkbench must use the user-facing noun 智能体 for the produced product (missing: "${phrase}")`,
+  )
+}
+
+// The old user-facing product phrases MUST be gone from rendered source.
+const forbiddenUserFacing = [
+  '生成新应用',
+  '助手应用或业务应用',
+  '复用已有应用',
+  '打开匹配的现有应用',
+  '<strong>推荐应用</strong>',
+]
+for (const phrase of forbiddenUserFacing) {
+  assert.equal(
+    wbRendered.includes(phrase), false,
+    `ConversationWorkbench must not show the old product noun 应用 to users (still present: "${phrase}")`,
+  )
+}
+
+console.log('check-conversation-agent-streaming: user-facing 智能体 label OK')

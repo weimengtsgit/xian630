@@ -143,7 +143,7 @@ export function ConversationWorkbench({
 
       <div className="cw-body">
         {timeline.length === 0 && traceItems.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有应用，还是生成新应用。</div>
+          <div className="cw-empty">输入需求后，将自动识别是复用已有智能体，还是生成新智能体。</div>
         ) : null}
         {timeline.map(item => (
           <TimelineItem
@@ -363,13 +363,13 @@ function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, s
       <div className="cw-route-options">
         {canReuseExistingApplication ? (
           <button type="button" disabled={submitting} onClick={() => onSelectRoute('existing_application')}>
-            <b>复用已有应用</b>
-            <small>打开匹配的现有应用</small>
+            <b>复用已有智能体</b>
+            <small>打开匹配的现有智能体</small>
           </button>
         ) : null}
         <button type="button" disabled={submitting} onClick={() => onSelectRoute('application_generation')}>
-          <b>生成新应用</b>
-          <small>通过需求澄清生成助手应用或业务应用</small>
+          <b>生成新智能体</b>
+          <small>通过需求澄清生成助手智能体或业务智能体</small>
         </button>
       </div>
     </div>
@@ -381,7 +381,7 @@ function AppRecommendationList({ cards, onOpenApp, submitting }) {
   if (list.length === 0) return null
   return (
     <div className="cw-apps">
-      <strong>推荐应用</strong>
+      <strong>推荐智能体</strong>
       <div className="cw-app-list">
         {list.map(card => (
           <AppRecommendationCard key={card.applicationId || card.slug} card={card} onOpenApp={onOpenApp} submitting={submitting} />
@@ -407,9 +407,9 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
       {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
       <div className="cw-app-actions">
         {running ? (
-          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开应用">
+          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开智能体">
             <ExternalLink size={14} />
-            <span>打开应用</span>
+            <span>打开智能体</span>
           </button>
         ) : stopped ? (
           <button type="button" className="cw-app-action cw-app-action-primary" onClick={open} disabled={submitting} title="启动并打开">
@@ -571,8 +571,8 @@ function CustomAnswer({ onSubmit }) {
 
 function RequirementSummary({ requirement }) {
   const rows = [
-    ['应用类型', requirement.appType],
-    ['应用名称', requirement.appName],
+    ['智能体类型', requirement.appType],
+    ['智能体名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
     ['数据策略', requirement.dataPolicy],
@@ -658,7 +658,7 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
             <span className="cw-delete-confirm-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
             <div className="cw-delete-confirm-copy">
               <strong id="cw-delete-confirm-title">删除历史会话</strong>
-              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的应用或 Agent。</p>
+              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
             </div>
             <div className="cw-delete-confirm-actions">
               <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>取消</button>
@@ -703,7 +703,7 @@ function summaryForEntry(entry) {
 function resultForEntry(entry) {
   if (!entry) return ''
   const sess = entry.session || {}
-  if (entry.resolvedApplication) return entry.resolvedApplication.name || '应用已就绪'
+  if (entry.resolvedApplication) return entry.resolvedApplication.name || '智能体已就绪'
   if (entry.createdAgent) return entry.createdAgent.name || 'Agent 已创建'
   if (entry.seededJob) return entry.seededJob.app_name ? `生成任务：${entry.seededJob.app_name}` : '生成任务已创建'
   if (sess.status === 'resolved') return '已完成'
@@ -712,8 +712,8 @@ function resultForEntry(entry) {
 
 function fieldLabel(field) {
   const map = {
-    appType: '应用类型',
-    appName: '应用名称',
+    appType: '智能体类型',
+    appName: '智能体名称',
     coreScenario: '核心场景',
     primaryView: '主视图',
     dataPolicy: '数据策略',
