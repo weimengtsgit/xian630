@@ -140,6 +140,9 @@ const retainedChildAnalysis = openTimeline.find(
 assert.ok(retainedChildAnalysis, 'child analysis_work_log must render as an analysis_stream item (thinking process retained)')
 assert.equal(retainedChildAnalysis.folded, true, 'retained child analysis renders FOLDED (collapsed) above the conclusion (D6)')
 assert.equal(retainedChildAnalysis.expanded, true, 'analysis defaults to EXPANDED so the reasoning is visible without an extra click')
+// waiting_user boundary: analysis + open questions, NO answer yet, must still
+// flush the round-1 analysis block (labeled 第1轮) above the question group.
+assert.equal(retainedChildAnalysis.label, '分析过程 · 第1轮', 'round-1 analysis flushes as 第1轮 before any answer (waiting_user boundary)')
 
 // ---- 2c. Child analysis groups into ONE folded block per round --------------
 //

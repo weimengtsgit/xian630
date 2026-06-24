@@ -316,7 +316,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     return (
       <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`}>
         <span className="cw-item-label">
-          {item.pending ? <Loader2 size={12} className="spin" /> : null}
+          {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
           {item.kind === 'step' ? '生成过程' : '分析过程'}
         </span>
         <pre className="cw-live-text">{item.content}</pre>
