@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1334,6 +1336,66 @@ func TestRunRoundSanitizesUnsafeBlueprintRefs(t *testing.T) {
 	}
 }
 
+func TestRunRoundDropsDisabledBlueprintRefsFromUnifiedCatalog(t *testing.T) {
+	const disabledBlueprintOutput = `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"收敛"}],
+  "questions": [],
+  "requirement": {
+    "appType": "situation_replay",
+    "appName": "航母编队复盘应用",
+    "targetUsers": ["作战参谋"],
+    "coreScenario": "复盘近 1 个月航迹",
+    "primaryView": "地图 + 时间轴",
+    "mainEntities": ["编队","事件"],
+    "dataPolicy": "mock_data",
+    "acceptanceFocus": ["轨迹联动"],
+    "blueprintRefs": ["carrier-formation-replay"],
+    "generationProfile": {"base":["software-factory-app"]}
+  },
+  "recommendedBlueprints": [
+    {
+      "slug":"carrier-formation-replay",
+      "name":"航母编队月度航迹复盘",
+      "appType":"situation_replay",
+      "reason":"匹配",
+      "referenceKind":"reference"
+    }
+  ]
+}`
+	srv, r, st := newClarTestServer(t, fakeClarRunner{stdout: disabledBlueprintOutput})
+	if err := os.MkdirAll(filepath.Join(srv.cfg.WorkspaceRoot, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	rawConfig := `{"blueprints":{"carrier-formation-replay":false}}`
+	if err := os.WriteFile(filepath.Join(srv.cfg.WorkspaceRoot, ".factory", "catalog.json"), []byte(rawConfig), 0o644); err != nil {
+		t.Fatalf("write catalog config: %v", err)
+	}
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	var persisted struct {
+		BlueprintRefs []string `json:"blueprintRefs"`
+	}
+	if err := json.Unmarshal([]byte(got.RequirementJSON), &persisted); err != nil {
+		t.Fatalf("unmarshal persisted requirement: %v", err)
+	}
+	if len(persisted.BlueprintRefs) != 0 {
+		t.Fatalf("persisted blueprintRefs = %#v, want none for disabled blueprint", persisted.BlueprintRefs)
+	}
+}
+
 func TestListClarificationsReturnsParsedRequirement(t *testing.T) {
 	_, r, _ := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
 
@@ -1674,5 +1736,88 @@ func TestNormalClarificationUnaffectedByMode(t *testing.T) {
 	}
 	if sess.Status != model.ClarificationStatusWaitingUser {
 		t.Fatalf("status = %q, want waiting_user", sess.Status)
+	}
+}
+
+func TestDeleteClarificationDeletesSessionMessagesButKeepsJob(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	ctx := context.Background()
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID:              "clar_delete",
+		Status:          model.ClarificationStatusConfirmed,
+		InitialPrompt:   "生成历史会话",
+		Round:           2,
+		MaxRounds:       3,
+		RequirementJSON: `{}`,
+		CreatedJobID:    "job_delete_keep",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ConfirmedAt:     &now,
+	}
+	if err := st.CreateClarificationSession(ctx, sess); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if err := st.AddClarificationMessage(ctx, model.ClarificationMessage{
+		ID: "cmsg_delete", SessionID: sess.ID, Role: "agent", Kind: "analysis_work_log",
+		Content: "历史内容", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	job := model.Job{
+		ID: "job_delete_keep", UserPrompt: "生成历史会话", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAt: now, UpdatedAt: now,
+		ClarificationSessionID: sess.ID,
+	}
+	if err := st.CreateJob(ctx, job); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/clarifications/"+sess.ID, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetClarificationSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get deleted session: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("session still exists: %#v", got)
+	}
+	msgs, err := st.ListClarificationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want none", msgs)
+	}
+	gotJob, err := st.GetJob(ctx, job.ID)
+	if err != nil || gotJob == nil {
+		t.Fatalf("linked job was deleted: %#v err=%v", gotJob, err)
+	}
+}
+
+func TestDeleteClarificationRejectsActiveSession(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID: "clar_active_delete", Status: model.ClarificationStatusActive, InitialPrompt: "分析中",
+		Round: 1, MaxRounds: 3, RequirementJSON: `{}`, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateClarificationSession(context.Background(), sess); err != nil {
+		t.Fatalf("seed active session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/clarifications/"+sess.ID, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete active status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("active session should remain: %#v err=%v", got, err)
 	}
 }

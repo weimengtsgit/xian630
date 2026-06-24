@@ -76,6 +76,7 @@ function App() {
             questions={conversation.questions}
             error={conversation.error || jobs.error}
             submitting={conversation.submitting}
+            deletingSessionId={conversation.deletingSessionId}
             selectedBusinessAgents={conversation.selectedBusinessAgents}
             onRemoveBusinessAgent={conversation.removeBusinessAgent}
             onMoveBusinessAgent={conversation.moveBusinessAgent}
@@ -93,6 +94,7 @@ function App() {
             onConfirm={conversation.confirm}
             onRetry={conversation.retry}
             onAbandon={conversation.abandon}
+            onDeleteSession={conversation.deleteSession}
             onSaveAuthoring={conversation.saveAuthoringAgent}
             onRefreshAgents={agents.refresh}
           />

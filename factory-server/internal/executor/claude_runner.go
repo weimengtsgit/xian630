@@ -39,7 +39,7 @@ type codeGenerationStepOutput struct {
 	CreatedFiles   []string          `json:"createdFiles"`
 	NeedsUserInput bool              `json:"needsUserInput"`
 	Questions      []runner.Question `json:"questions"`
-	UsedSkills     []string          `json:"usedSkills"`
+	UsedSkills     runner.SkillPaths `json:"usedSkills"`
 	Warnings       []string          `json:"warnings,omitempty"`
 }
 
@@ -301,6 +301,33 @@ func (c *ClaudeStepRunner) captureCommandLog(ctx context.Context, reg *artifactR
 }
 
 func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace, skillPaths, blueprintPaths []string) string {
+	if step.Kind == model.StepRequirementAnalysis {
+		return "You are the software-factory requirement_analysis agent.\n" +
+			"Read confirmedRequirement from input.json and freeze it into a single final JSON object.\n" +
+			"Validate field completeness, capability boundaries, generationProfile, and blueprintRefs used only as reference scene docs. Record unsupported or out-of-scope asks in validation.unsupportedRequests.\n" +
+			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
+			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
+			"All human-readable string values must be Simplified Chinese. This includes summary, scenario text, view descriptions, entity names, constraints, risks, and unsupported-request explanations. Only identifiers, slugs, enum keys, file paths, and code symbols may remain non-Chinese.\n" +
+			"Do not ask clarifying questions. Do not output needsUserInput or questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
+			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not attempt to write files or modify the workspace.\n" +
+			"If the requirement is incomplete, set validation.complete=false. If the request exceeds supported capability, set validation.supported=false.\n" +
+			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
+	}
+	if step.Kind == model.StepSolutionDesign {
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。用户需求：" + job.UserPrompt +
+			skillsPromptBlock(skillPaths, blueprintPaths)
+	}
+	if step.Kind == model.StepCodeGeneration {
+		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
+			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
+			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
+			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
+			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
+			"面向用户的页面文案、标题、标签、图表说明、详情说明，以及 output.json / output.md 中的人类可读文本，默认必须使用简体中文；只有标识符、slug、路径、枚举值、代码符号可以保留非中文。" +
+			"不要输出隐藏推理链。" +
+			skillsPromptBlock(skillPaths, blueprintPaths)
+	}
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
@@ -379,6 +406,20 @@ func skillsPromptBlock(skillPaths, blueprintPaths []string) string {
 			b.WriteString("\n- " + p)
 		}
 	}
+	// When a data-acquisition skill is selected, force the agent to actually
+	// fetch real public data instead of shipping deterministic mock data. The
+	// data skills already say this, but the agent has been observed ignoring a
+	// soft "use real data by default" rule and shipping mock "to ensure build
+	// success" — so enforce it here, at the prompt the agent always sees.
+	hasDataSkill := false
+	for _, p := range skillPaths {
+		if strings.Contains(p, "data-skill") {
+			hasDataSkill = true
+		}
+	}
+	if hasDataSkill {
+		b.WriteString("\n\n[真实数据强制要求 — 违反即判定生成失败] 当任一 data-skill 被选中、且 confirmedRequirement.dataPolicy 为 live_api 或 mock_then_api 时，生成的应用**必须按该 data-skill 内的 Fetch Adapter 发起真实公开数据请求**（tide→NOAA CO-OPS，deck-wind→Open-Meteo GFS，ais→历史归档），并解析真实返回值填充数据层。**严禁**用合成/确定性公式/mock/假数据替代真实请求。取数失败时，应用应显示明确的错误或空状态（并记录到 output.json 的 warnings），**绝不**编造假数据「以保证构建成功」——交付假数据等同于本次生成失败。仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据。")
+	}
 	b.WriteString("\n若某个必需 skill 缺失，在 output.json 的 warnings 中记录，不要改用不相关 skill。")
 	if len(blueprintPaths) > 0 {
 		b.WriteString("\n[场景蓝本引用] 当 generationProfile/blueprintRefs 存在时，把以下 scene 文档作为 STYLE / STRUCTURE / INTERACTION / DATA-MODEL 的参考（布局、控件、交互、mock 数据形态），")
@@ -426,9 +467,10 @@ func SafeName(s string) bool {
 }
 
 // selectedSkillPaths maps a confirmed requirement's generationProfile
-// (base/domain/pattern → skill keys) to the concrete project-local SKILL.md
-// file paths under <workspace>/.claude/skills/<key>/SKILL.md. The order is
-// base → domain → pattern so downstream prompts list foundational skills first.
+// (base/domain/pattern/data → skill keys) to the concrete project-local
+// SKILL.md file paths under <workspace>/.claude/skills/<key>/SKILL.md. The
+// order is base → domain → pattern → data so downstream prompts list
+// foundational/UI skills first and data-acquisition skills last.
 // Paths are slash-normalised so they can be embedded verbatim in input.json and
 // prompt text for Claude to Read. Missing files are NOT filtered out here: the
 // prompt instructs Claude to report a missing required skill in warnings rather
@@ -440,7 +482,7 @@ func SafeName(s string) bool {
 // names that simply do not exist on disk are still surfaced (existing behavior).
 func selectedSkillPaths(workspace string, profile map[string][]string) []string {
 	keys := []string{}
-	for _, group := range []string{"base", "domain", "pattern"} {
+	for _, group := range []string{"base", "domain", "pattern", "data"} {
 		keys = append(keys, profile[group]...)
 	}
 	allowedRoot := filepath.Clean(filepath.Join(workspace, ".claude", "skills"))

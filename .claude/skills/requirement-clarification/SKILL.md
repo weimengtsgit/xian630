@@ -69,7 +69,8 @@ You must write `output.json` with this shape:
     "generationProfile": {
       "base": ["software-factory-app"],
       "domain": ["defense-operations-ui"],
-      "pattern": ["map-timeline-replay"]
+      "pattern": ["map-timeline-replay"],
+      "data": []
     }
   },
   "recommendedBlueprints": [
@@ -145,3 +146,20 @@ When clarifying a user request:
 - `situation_replay`: `software-factory-app`, `defense-operations-ui`, `map-timeline-replay`
 - `operations_management`: `software-factory-app`, `defense-operations-ui`, `operations-management-console`
 - `command_dashboard`: `software-factory-app`, `defense-operations-ui`, `command-dashboard`
+
+## Data Skill Mapping
+
+When `dataPolicy` is `live_api` or `mock_then_api` (the app fetches real data)
+**and** the requirement matches one of the data domains below, put the
+corresponding skill into `requirement.generationProfile.data`. When `dataPolicy`
+is `mock_data`, do not add any data skill.
+
+- Tide / tidal height / departure window / draft threshold / port tide level: `tide-data-skill`
+- 10 m wind / deck wind / wind speed & direction / launch or recovery conditions: `deck-wind-data-skill`
+- AIS / merchant density / shipping density / 50-nautical-mile grid / historical vessel traffic: `ais-density-data-skill` (**historical mode**: uses free downloadable AIS archives only, no real-time API; coverage limited to free-source regions — U.S. waters via MarineCadastre, Danish waters via DMA, global-but-fishing via GFW)
+
+These rules apply to **any** app whose intent matches a domain, including novel
+apps that are not preset scenarios and regardless of `appType`. If no domain
+matches, emit an empty `data` array. Set `dataPolicy` from intent: when the user
+wants real-time / live data, use `live_api` or `mock_then_api`; otherwise
+`mock_data`.

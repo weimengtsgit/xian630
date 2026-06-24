@@ -293,6 +293,30 @@ func TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen(t *testing.T) {
 	}
 }
 
+func TestRequirementAnalysisPromptForcesRawJSONOnly(t *testing.T) {
+	r := &ClaudeStepRunner{Workspace: t.TempDir()}
+	ws := runner.AttemptWorkspace{
+		Root:     filepath.Join(t.TempDir(), ".factory-runs"),
+		JobID:    "job_prompt_ra",
+		StepKind: model.StepRequirementAnalysis,
+		Attempt:  1,
+	}
+
+	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepRequirementAnalysis}, ws, nil, nil)
+	for _, want := range []string{
+		"raw JSON object",
+		"Simplified Chinese",
+		"Do not call ExitPlanMode",
+		"Do not use code fences",
+		"Do not add any prose before or after the JSON",
+		"Factory saves stdout as output.json",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("requirement_analysis prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 // TestSafeName exercises the canonical path-segment validator: only single safe
 // segments are accepted; traversal, separators, and absolute-ish markers are
 // rejected. This guards both the executor path builders and the server's

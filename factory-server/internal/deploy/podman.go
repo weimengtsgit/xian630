@@ -26,6 +26,34 @@ import (
 // image_build_failed / podman_run_failed.
 var ErrRunnerFailed = errors.New("runner command failed")
 
+// hintIfMissingBinary augments a runtime command error with an actionable hint
+// when the container engine binary is not on PATH. The factory defaults to
+// podman; on hosts that only have Docker (e.g. Windows via Docker Desktop) the
+// raw error `exec: "podman": executable file not found in %PATH%` gives no
+// indication that FACTORY_CONTAINER_RUNTIME=docker switches backends, so
+// image_build_failed became a confusing dead end after a long generation run.
+// The original error is preserved (wrapped) and the one-line fix appended.
+func hintIfMissingBinary(binary string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !isExecutableNotFound(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %s not found on PATH (set FACTORY_CONTAINER_RUNTIME to an installed runtime — docker or podman — then restart): %w", ErrRunnerFailed, binary, err)
+}
+
+// isExecutableNotFound reports whether err is the os/exec "binary not found"
+// failure. It checks the typed *exec.Error first, then falls back to a text
+// match so a wrapped/obscured error still matches the canonical message.
+func isExecutableNotFound(err error) bool {
+	var ee *exec.Error
+	if errors.As(err, &ee) {
+		return errors.Is(ee.Err, exec.ErrNotFound)
+	}
+	return strings.Contains(err.Error(), "executable file not found")
+}
+
 // CommandRunner runs a named command in an optional working directory. The
 // signature mirrors os/exec.CommandContext but returns a structured result so
 // callers can inspect stdout/stderr/exit code without parsing.
@@ -94,10 +122,16 @@ const imageRepo = "localhost/software-factory"
 // semantics as Run (non-zero exit → ExitCode set, nil error), so error-code
 // mapping is identical on both paths.
 func (p *Podman) runWithCallbacks(ctx context.Context, dir string, onStdout, onStderr func(string), name string, args ...string) (CommandResult, error) {
+	var (
+		res CommandResult
+		err error
+	)
 	if sr, ok := p.Runner.(StreamCommandRunner); ok && (onStdout != nil || onStderr != nil) {
-		return sr.RunStreamWithInput(ctx, dir, "", onStdout, onStderr, name, args...)
+		res, err = sr.RunStreamWithInput(ctx, dir, "", onStdout, onStderr, name, args...)
+	} else {
+		res, err = p.Runner.Run(ctx, dir, name, args...)
 	}
-	return p.Runner.Run(ctx, dir, name, args...)
+	return res, hintIfMissingBinary(name, err)
 }
 
 // BuildImage runs `podman build -t <repo>/<slug>:<tag> .` from the app's Path
@@ -168,6 +202,11 @@ func (p *Podman) RemoveContainer(ctx context.Context, containerName string) (Com
 		return res, err
 	}
 	return res, nil
+}
+
+// Name returns "podman" for logging and error messages.
+func (p *Podman) Name() string {
+	return "podman"
 }
 
 // OSRunner is the production CommandRunner backed by os/exec. It is the default

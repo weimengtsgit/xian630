@@ -1,4 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'
+// `??` (not `||`): in production the portal is built with
+// VITE_FACTORY_API_BASE_URL="" so calls go same-origin (/api) through the edge
+// reverse proxy; empty string is not nullish so it is kept. In `npm run dev` the
+// var is unset, so the local factory address is used as before.
+const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL ?? 'http://127.0.0.1:8787'
 const DEFAULT_TIMEOUT_MS = 15000
 
 async function request(path, options = {}) {
@@ -126,5 +130,6 @@ export const factoryApi = {
   confirmClarification: id => request(`/api/clarifications/${id}/confirm`, { method: 'POST' }),
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
   listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
+  deleteClarification: id => request(`/api/clarifications/${id}`, { method: 'DELETE' }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

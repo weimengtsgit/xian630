@@ -51,9 +51,14 @@
 .cw-question-group, .cw-summary, .cw-blueprints { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; padding: 10px; background: rgba(11, 29, 44, 0.55); }
 .cw-question { display: flex; flex-direction: column; gap: 8px; }
 .cw-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.cw-options button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 6px 9px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.28); background: rgba(3, 17, 29, 0.7); color: #d7eef8; }
+.cw-options button { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 7px 9px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.28); background: rgba(3, 17, 29, 0.7); color: #d7eef8; cursor: pointer; }
 .cw-options button.selected { border-color: rgba(104, 221, 255, 0.78); background: rgba(25, 83, 112, 0.58); }
-.cw-options em { color: rgba(215, 238, 248, 0.58); font-style: normal; font-size: 11px; }
+.cw-option-recommended { border-color: rgba(126, 231, 135, 0.56); background: rgba(20, 64, 50, 0.54); }
+.cw-options button.selected.cw-option-recommended { border-color: rgba(104, 221, 255, 0.9); background: rgba(25, 83, 112, 0.68); box-shadow: inset 0 0 0 1px rgba(104, 221, 255, 0.36); }
+.cw-option-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cw-option-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: #edfaff; }
+.cw-option-badge { flex: 0 0 auto; padding: 1px 5px; border-radius: 999px; background: rgba(126, 231, 135, 0.16); border: 1px solid rgba(126, 231, 135, 0.42); color: #9df3a6; font-style: normal; font-size: 10px; line-height: 1.4; }
+.cw-options small { color: rgba(215, 238, 248, 0.58); font-size: 11px; line-height: 1.35; }
 .cw-summary { display: grid; gap: 5px; font-size: 12px; }
 .cw-summary div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
 .cw-summary span { color: rgba(215, 238, 248, 0.55); }
@@ -69,17 +74,40 @@
 .cw-error { padding: 6px 12px; color: #ff9a9a; background: rgba(255, 102, 94, 0.08); font-size: 12px; }
 .cw-composer textarea { flex: 1; min-height: 42px; max-height: 120px; resize: vertical; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.24); background: rgba(3, 17, 29, 0.8); color: #edfaff; padding: 8px; font-family: inherit; }
 .cw-send { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; }
-.cw-history { position: absolute; top: 45px; right: 10px; bottom: 62px; width: 320px; z-index: 8; background: rgba(9, 24, 38, 0.98); border: 1px solid rgba(111, 218, 255, 0.32); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35); }
-.cw-history header { display: flex; justify-content: space-between; align-items: center; }
-.cw-history > button { text-align: left; padding: 8px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.18); background: rgba(11, 29, 44, 0.72); color: #d7eef8; display: flex; flex-direction: column; gap: 4px; }
-.cw-history > button.active { border-color: rgba(104, 221, 255, 0.66); }
+.cw-history { position: absolute; top: 45px; right: 10px; bottom: 62px; width: 320px; z-index: 8; background: rgba(9, 24, 38, 0.98); border: 1px solid rgba(111, 218, 255, 0.32); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35); }
+.cw-history header { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.cw-history-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+.cw-history-row { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 6px; align-items: stretch; }
+.cw-history-item { min-width: 0; text-align: left; padding: 8px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.18); background: rgba(11, 29, 44, 0.72); color: #d7eef8; display: flex; flex-direction: column; gap: 4px; cursor: pointer; }
+.cw-history-row.active .cw-history-item { border-color: rgba(104, 221, 255, 0.66); }
+.cw-history-close { width: 28px; height: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(111, 218, 255, 0.24); border-radius: 6px; background: rgba(11, 29, 44, 0.72); color: #d7eef8; cursor: pointer; }
+.cw-history-close:hover, .cw-history-close:focus-visible { border-color: rgba(104, 221, 255, 0.62); background: rgba(25, 83, 112, 0.48); outline: none; }
+.cw-history-delete { width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(255, 130, 120, 0.24); border-radius: 6px; background: rgba(57, 22, 28, 0.54); color: #ffb1aa; cursor: pointer; }
+.cw-history-delete:hover:not(:disabled), .cw-history-delete:focus-visible:not(:disabled) { border-color: rgba(255, 130, 120, 0.58); background: rgba(83, 29, 36, 0.68); outline: none; }
+.cw-history-delete:disabled { cursor: not-allowed; opacity: 0.42; }
+.cw-delete-confirm { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3; }
+.cw-delete-confirm-card { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; padding: 10px; border-radius: 8px; border: 1px solid rgba(255, 130, 120, 0.44); background: rgba(15, 23, 32, 0.98); box-shadow: 0 16px 34px rgba(0, 0, 0, 0.42); }
+.cw-delete-confirm-icon { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: rgba(255, 130, 120, 0.12); color: #ffb1aa; }
+.cw-delete-confirm-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cw-delete-confirm-copy strong { color: #fff3f1; font-size: 13px; }
+.cw-delete-confirm-copy p { margin: 0; color: rgba(255, 223, 220, 0.72); font-size: 11px; line-height: 1.45; word-break: break-word; }
+.cw-delete-confirm-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 6px; }
+.cw-delete-confirm-actions button { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.cw-delete-confirm-cancel { border: 1px solid rgba(111, 218, 255, 0.26); background: rgba(11, 29, 44, 0.78); color: #d7eef8; }
+.cw-delete-confirm-cancel:hover:not(:disabled), .cw-delete-confirm-cancel:focus-visible:not(:disabled) { border-color: rgba(104, 221, 255, 0.62); background: rgba(25, 83, 112, 0.48); outline: none; }
+.cw-delete-confirm-danger { border: 1px solid rgba(255, 130, 120, 0.56); background: rgba(119, 36, 43, 0.76); color: #fff3f1; }
+.cw-delete-confirm-danger:hover:not(:disabled), .cw-delete-confirm-danger:focus-visible:not(:disabled) { border-color: rgba(255, 180, 172, 0.82); background: rgba(150, 45, 52, 0.84); outline: none; }
+.cw-delete-confirm-actions button:disabled { cursor: not-allowed; opacity: 0.5; }
 .cw-history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #edfaff; }
 .cw-history-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .cw-history em, .cw-history time, .cw-history small, .cw-history b { font-style: normal; font-size: 11px; color: rgba(215, 238, 248, 0.58); }
 .cw-history small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-history b { color: rgba(104, 221, 255, 0.82); font-weight: 500; }
-.cw-custom { display: flex; gap: 6px; }
-.cw-custom input { min-width: 0; flex: 1; }
+.cw-custom { display: flex; gap: 6px; align-items: stretch; padding: 6px; border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 6px; background: rgba(3, 17, 29, 0.48); }
+.cw-custom-input { min-width: 0; flex: 1; height: 32px; border: 1px solid rgba(111, 218, 255, 0.26); border-radius: 5px; background: rgba(3, 17, 29, 0.78); color: #edfaff; padding: 0 9px; font-family: inherit; font-size: 12px; outline: none; }
+.cw-custom-input:focus { border-color: rgba(104, 221, 255, 0.72); box-shadow: 0 0 0 2px rgba(104, 221, 255, 0.1); }
+.cw-custom-submit { min-width: 54px; height: 32px; padding: 0 10px; border-radius: 5px; border: 1px solid rgba(104, 221, 255, 0.36); background: rgba(25, 83, 112, 0.58); color: #edfaff; }
+.cw-custom-submit:disabled { cursor: not-allowed; opacity: 0.45; background: rgba(11, 29, 44, 0.72); }
 .cw-custom-selected { color: rgba(215, 238, 248, 0.68); font-size: 11px; }
 .cw-terminal-hint { margin: 0; color: rgba(215, 238, 248, 0.58); font-size: 12px; }
 

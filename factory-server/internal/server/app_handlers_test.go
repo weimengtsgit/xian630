@@ -73,7 +73,7 @@ func TestListApplications(t *testing.T) {
 	}
 }
 
-func TestListApplicationsFiltersConfiguredHiddenPresetAlreadyInStore(t *testing.T) {
+func TestListApplicationsFiltersAppsByUnifiedCatalog(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -103,8 +103,8 @@ func TestListApplicationsFiltersConfiguredHiddenPresetAlreadyInStore(t *testing.
 	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
-	rawConfig := `{"presetApps":{"hidden-preset":{"showInAppList":false},"visible-preset":{"showInAppList":true}}}`
-	if err := os.WriteFile(filepath.Join(root, ".factory", "preset-apps.json"), []byte(rawConfig), 0o644); err != nil {
+	rawConfig := `{"apps":{"hidden-preset":false,"visible-preset":{"enabled":true,"showInAppList":true}}}`
+	if err := os.WriteFile(filepath.Join(root, ".factory", "catalog.json"), []byte(rawConfig), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

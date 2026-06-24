@@ -90,10 +90,27 @@ state = applyConversationEvent(state, 'clarification.blueprint.recommended', {
 assert.equal(state.timeline.at(-1).type, 'blueprint_recommendation')
 assert.equal(state.timeline.at(-1).blueprints[0].id, 'carrier-formation-replay')
 
+state = {
+  ...state,
+  session: { id: 'clar_1', status: 'confirmed' },
+  sessions: [{ id: 'clar_1' }, { id: 'clar_2' }],
+}
+state = applyConversationEvent(state, 'clarification.deleted', {
+  type: 'clarification.deleted',
+  session_id: 'clar_1',
+})
+assert.equal(state.selectedSessionId, null)
+assert.equal(state.session, null)
+assert.deepEqual(state.sessions.map(sess => sess.id), ['clar_2'])
+
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const appCss = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
 const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
 const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
+const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
+const apiClientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
+const eventsJs = readFileSync(new URL('../src/api/events.js', import.meta.url), 'utf8')
+const sessionsHookJs = readFileSync(new URL('../src/hooks/useConversationSessions.js', import.meta.url), 'utf8')
 
 assert.match(appJsx, /<ConversationWorkbench/, 'App must render ConversationWorkbench')
 assert.doesNotMatch(appJsx, /<ClarificationPanel/, 'App must not render the old ClarificationPanel')
@@ -104,6 +121,31 @@ assert.match(workbenchJsx, /新建会话/, 'ConversationWorkbench must expose ne
 assert.match(workbenchJsx, /模型分析过程/, 'ConversationWorkbench must label user-facing model analysis process')
 assert.match(workbenchJsx, /blueprint_recommendation/, 'ConversationWorkbench must render blueprint recommendation timeline items')
 assert.match(workbenchJsx, /参考蓝本/, 'ConversationWorkbench must label blueprint recommendations')
+assert.match(workbenchJsx, /optionIsRecommended/, 'question options must derive recommended state')
+assert.match(workbenchJsx, /cw-option-recommended/, 'recommended question options must have a visual class')
+assert.match(workbenchJsx, /cw-option-badge/, 'recommended question options must render a badge')
+assert.match(workbenchJsx, /cw-custom-input/, 'custom clarification input must use a styled input class')
+assert.match(workbenchJsx, /cw-custom-submit/, 'custom clarification add button must use a styled button class')
+assert.match(workbenchCss, /\.cw-options button[\s\S]*cursor:\s*pointer/, 'question options must visibly afford clicking')
+assert.match(workbenchCss, /selected\.cw-option-recommended|cw-option-recommended\.selected/, 'selected recommended options must keep visible selected state')
+assert.match(workbenchJsx, /cw-history-list/, 'history drawer must wrap sessions in a scrollable list')
+assert.match(workbenchJsx, /cw-history-close/, 'history drawer close action must have a dedicated styled control')
+assert.match(workbenchCss, /\.cw-history\s*\{[\s\S]*overflow:\s*hidden/, 'history drawer must clip overflowing content')
+assert.match(workbenchCss, /\.cw-history-list\s*\{[\s\S]*overflow-y:\s*auto/, 'history drawer list must scroll independently')
+assert.match(workbenchCss, /\.cw-history-close/, 'history close button must have dedicated styles')
+assert.match(apiClientJs, /deleteClarification/, 'API client must expose clarification history deletion')
+assert.match(eventsJs, /clarification\.deleted/, 'SSE event registry must include clarification.deleted')
+assert.match(sessionsHookJs, /deleteSession/, 'session hook must expose history deletion')
+assert.match(workbenchJsx, /onDeleteSession/, 'ConversationWorkbench must accept a delete history callback')
+assert.match(workbenchJsx, /cw-history-delete/, 'history drawer must render a dedicated delete button')
+assert.match(workbenchJsx, /Trash2/, 'history drawer delete button must use a delete icon')
+assert.doesNotMatch(workbenchJsx, /window\.confirm/, 'history deletion must use an in-app confirmation instead of browser native confirm')
+assert.match(workbenchJsx, /pendingDeleteSession/, 'history deletion must keep pending confirmation state')
+assert.match(workbenchJsx, /cw-delete-confirm/, 'history deletion must render a custom confirmation panel')
+assert.match(workbenchJsx, /sess\.status === 'active'/, 'active analysis sessions must not be deletable from history')
+assert.match(workbenchCss, /\.cw-history-delete/, 'history delete button must have dedicated styles')
+assert.match(workbenchCss, /\.cw-delete-confirm\s*\{[\s\S]*position:\s*absolute/, 'custom delete confirmation must be positioned inside the workbench')
+assert.match(workbenchCss, /\.cw-delete-confirm-actions/, 'custom delete confirmation must style action buttons')
 assert.match(workbenchJsx, /updated_at/, 'history drawer must show updated time')
 assert.match(workbenchJsx, /coreScenario/, 'history drawer must show requirement summary')
 assert.match(workbenchJsx, /应用已删除/, 'history drawer must show deleted application state')

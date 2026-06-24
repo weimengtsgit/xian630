@@ -110,3 +110,59 @@ func TestListClarificationSessionsNewestFirst(t *testing.T) {
 		t.Fatalf("order = %s,%s; want clar_new,clar_old", got[0].ID, got[1].ID)
 	}
 }
+
+func TestDeleteClarificationSessionDeletesMessagesButKeepsJob(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID:              "clar_delete",
+		Status:          model.ClarificationStatusConfirmed,
+		InitialPrompt:   "生成历史会话",
+		Round:           2,
+		MaxRounds:       3,
+		RequirementJSON: `{}`,
+		CreatedJobID:    "job_delete_keep",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := st.CreateClarificationSession(ctx, sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if err := st.AddClarificationMessage(ctx, model.ClarificationMessage{
+		ID: "cmsg_delete", SessionID: sess.ID, Role: "agent", Kind: "analysis_work_log",
+		Content: "历史内容", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("add message: %v", err)
+	}
+	job := model.Job{
+		ID: "job_delete_keep", UserPrompt: "生成历史会话", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAt: now, UpdatedAt: now,
+		ClarificationSessionID: sess.ID,
+	}
+	if err := st.CreateJob(ctx, job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	if err := st.DeleteClarificationSession(ctx, sess.ID); err != nil {
+		t.Fatalf("DeleteClarificationSession: %v", err)
+	}
+	got, err := st.GetClarificationSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get deleted session: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("session still exists: %#v", got)
+	}
+	msgs, err := st.ListClarificationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list deleted messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want none", msgs)
+	}
+	gotJob, err := st.GetJob(ctx, job.ID)
+	if err != nil || gotJob == nil {
+		t.Fatalf("linked job was deleted: %#v err=%v", gotJob, err)
+	}
+}

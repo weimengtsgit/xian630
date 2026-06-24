@@ -21,6 +21,7 @@ const CLARIFICATION_TYPES = new Set([
   'clarification.confirmed',
   'clarification.failed',
   'clarification.abandoned',
+  'clarification.deleted',
   'agent_authoring.draft.updated',
 ])
 
@@ -32,6 +33,7 @@ export function useConversationSessions() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedBusinessAgents, setSelectedBusinessAgents] = useState([])
+  const [deletingSessionId, setDeletingSessionId] = useState(null)
   const mountedRef = useRef(true)
 
   const loadBusinessAgentsForSession = useCallback(async sessionId => {
@@ -213,6 +215,31 @@ export function useConversationSessions() {
     }
   }, [refreshSessions, selectSession, state.session, submitting])
 
+  const deleteSession = useCallback(async id => {
+    const sessionId = String(id || '').trim()
+    if (!sessionId || deletingSessionId) return null
+    setDeletingSessionId(sessionId)
+    setError(null)
+    try {
+      await factoryApi.deleteClarification(sessionId)
+      const sessions = await refreshSessions()
+      if (mountedRef.current && state.selectedSessionId === sessionId) {
+        setState(prev => ({
+          ...initialConversationState(),
+          sessions,
+          selectedSessionId: null,
+          session: null,
+        }))
+      }
+      return true
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setDeletingSessionId(null)
+    }
+  }, [deletingSessionId, refreshSessions, state.selectedSessionId])
+
   const startAuthoring = useCallback(async () => {
     setError(null)
     setSelectedBusinessAgents([])
@@ -289,6 +316,7 @@ export function useConversationSessions() {
     selectedBusinessAgentIds: selectedBusinessAgents.map(agent => agent.id),
     error,
     submitting,
+    deletingSessionId,
     historyOpen,
     setHistoryOpen,
     refreshSessions,
@@ -305,5 +333,6 @@ export function useConversationSessions() {
     removeBusinessAgent,
     moveBusinessAgent,
     replaceBusinessAgents,
+    deleteSession,
   }
 }

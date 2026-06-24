@@ -77,6 +77,9 @@ export function buildTimelineFromMessages(messages = [], session = null) {
 export function applyConversationEvent(state, type, ev) {
   const sessionId = ev && ev.session_id
   if (!sessionId) return state
+  if (type === 'clarification.deleted') {
+    return applyDeletedEvent(state, sessionId)
+  }
   if (state.selectedSessionId && sessionId !== state.selectedSessionId) {
     return {
       ...state,
@@ -106,6 +109,24 @@ export function applyConversationEvent(state, type, ev) {
       return applyAgentDraftEvent(state, ev)
     default:
       return state
+  }
+}
+
+function applyDeletedEvent(state, sessionId) {
+  const sessions = (state.sessions || []).filter(sess => sess.id !== sessionId)
+  const sessionActivity = { ...state.sessionActivity }
+  delete sessionActivity[sessionId]
+  if (state.selectedSessionId === sessionId) {
+    return {
+      ...initialConversationState(),
+      sessions,
+      sessionActivity,
+    }
+  }
+  return {
+    ...state,
+    sessions,
+    sessionActivity,
   }
 }
 
@@ -160,8 +181,13 @@ function appendQuestionEvent(state, ev) {
 function applyRequirementEvent(state, type, ev) {
   const requirement = ev.data || null
   const timeline = state.timeline.filter(item => item.type !== 'requirement_summary' || item.live !== true)
+  const session =
+    type === 'clarification.ready_to_confirm' && state.session
+      ? { ...state.session, status: 'ready_to_confirm' }
+      : state.session
   return {
     ...state,
+    session,
     requirement,
     questions: typeClearsQuestions(type) ? [] : state.questions,
     timeline: requirement ? [...timeline, { id: `${ev.session_id}_requirement_live`, type: 'requirement_summary', live: true, requirement }] : timeline,

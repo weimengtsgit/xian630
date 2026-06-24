@@ -190,6 +190,25 @@ func TestReadAndDecodeToleratesProseLeadingFencedJSON(t *testing.T) {
 	}
 }
 
+func TestReadAndDecodeRepairsUnescapedQuotesInsideStringValues(t *testing.T) {
+	doc := "Here is the solution design:\n\n```json\n" +
+		`{"needsUserInput":false,"questions":[],"usedSkills":["skill"],` +
+		`"app":{"description":"区分"无弹射器辅助起飞"与"安全着舰"双条件判定"}}` +
+		"\n```"
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(doc))
+	var got struct {
+		App struct {
+			Description string `json:"description"`
+		} `json:"app"`
+	}
+	if err := ReadAndDecode(p, &got); err != nil {
+		t.Fatalf("ReadAndDecode: %v, want nil for unescaped quotes inside a string value", err)
+	}
+	if got.App.Description != `区分"无弹射器辅助起飞"与"安全着舰"双条件判定` {
+		t.Fatalf("Description = %q", got.App.Description)
+	}
+}
+
 // TestValidateRequirementAnalysisRejectedRequirement proves the hard-fail rule:
 // a structurally-valid frozen output whose validation reports complete=false or
 // supported=false is rejected with ErrSchemaValidationFailed (the step must NOT

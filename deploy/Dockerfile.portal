@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+# Portal front end (sf-portal-mvp): build the Vite app same-origin
+# (VITE_FACTORY_API_BASE_URL="" → calls go to /api through edge nginx), then
+# serve the static dist and reverse-proxy /api to factory-server.
+# Build context = repository root.
+FROM docker.m.daocloud.io/library/node:20-alpine AS build
+WORKDIR /app
+COPY sf-portal-mvp/package.json sf-portal-mvp/package-lock.json ./
+RUN npm ci
+COPY sf-portal-mvp/ ./
+# Empty value = same-origin /api (see src/api/client.js `??` handling). Override
+# via build arg to bake an absolute origin instead.
+ARG VITE_FACTORY_API_BASE_URL=""
+ENV VITE_FACTORY_API_BASE_URL=${VITE_FACTORY_API_BASE_URL}
+RUN npm run build
+
+FROM docker.m.daocloud.io/library/nginx:1.27-alpine
+COPY deploy/nginx/portal.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80

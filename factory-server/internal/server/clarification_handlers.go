@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/catalog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -263,6 +264,37 @@ func (s *Server) getClarification(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.viewFromSession(sess))
 }
 
+// deleteClarification handles DELETE /api/clarifications/:id. It removes only
+// the clarification history row and transcript messages; generated jobs/apps and
+// execution artifacts remain intact. A currently-active analysis round is not
+// deletable because the runner may still be appending messages.
+func (s *Server) deleteClarification(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	sess, err := s.store.GetClarificationSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get session")
+		return
+	}
+	if sess == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if sess.Status == model.ClarificationStatusActive {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "active session cannot be deleted", "status": sess.Status})
+		return
+	}
+	if err := s.store.DeleteClarificationSession(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete session")
+		return
+	}
+	s.publishClarificationEvent(clarification.StreamEvent{
+		Type:      "clarification.deleted",
+		SessionID: id,
+		Data:      map[string]string{"id": id},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
 // listClarificationMessages handles GET /api/clarifications/:id/messages.
 func (s *Server) listClarificationMessages(w http.ResponseWriter, r *http.Request) {
 	msgs, err := s.store.ListClarificationMessages(r.Context(), Param(r, "id"))
@@ -359,6 +391,7 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add answer message")
 		return
 	}
+	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -431,6 +464,7 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -517,9 +551,10 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
-	current.BlueprintRefs = incoming.BlueprintRefs
-	// Always (re)compute the profile from appType — never trust the client.
-	current.GenerationProfile = generationProfileForAppType(current.AppType)
+	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
+	// Always (re)compute the profile from appType — never trust the client —
+	// but preserve the server-derived `data` skill group across the recompute.
+	current.GenerationProfile = recomputeGenerationProfile(current.GenerationProfile, current.AppType)
 
 	reqBytes, _ := json.Marshal(current)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
@@ -690,12 +725,15 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The confirmed requirement may carry business fields; recompute the
-		// profile from appType so a client can never inject one at confirm time.
-		incoming.GenerationProfile = generationProfileForAppType(incoming.AppType)
+		// profile from appType so a client can never inject one at confirm time,
+		// but preserve the persisted `data` skill group (req is still the
+		// persisted requirement here) across the recompute.
+		incoming.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, incoming.AppType)
 		req = incoming
 	} else {
-		// Recompute the profile defensively even on the persisted requirement.
-		req.GenerationProfile = generationProfileForAppType(req.AppType)
+		// Recompute the profile defensively even on the persisted requirement,
+		// preserving the server-derived `data` skill group.
+		req.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, req.AppType)
 	}
 
 	// Fail closed on unsafe blueprintRef slugs (P2#1): unified check covers BOTH
@@ -851,7 +889,10 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 		CurrentRequirement: s.parseRequirement(sess.RequirementJSON),
 	}
 
-	out, err := s.clarifier.RunRound(ctx, input, s.publishClarificationEvent)
+	cfg := catalog.Load(s.cfg.WorkspaceRoot)
+	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
+		s.publishClarificationEvent(s.filterClarificationEvent(cfg, ev))
+	})
 	if err != nil {
 		// Round failed: advance the persisted round to the round we attempted so
 		// retry-current-round re-runs the right round, mark the session failed,
@@ -887,7 +928,8 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// not fail: a single bad slug should not abort the round; the executor drops
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
-	out.Requirement.BlueprintRefs = sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
+	out.Requirement.BlueprintRefs = s.sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
+	out.RecommendedBlueprints = s.filterRecommendedBlueprints(cfg, out.RecommendedBlueprints)
 	now := time.Now()
 	reqBytes, _ := json.Marshal(out.Requirement)
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
@@ -1079,11 +1121,41 @@ func blueprintRefsAllSafe(refs []string) bool {
 // sanitizeBlueprintRefs drops any unsafe blueprintRef slug, keeping only safe
 // ones. Used on LLM-produced refs (semi-trusted): a single bad slug should not
 // abort the whole round; the executor drops unsafe refs for Reads regardless.
-func sanitizeBlueprintRefs(refs []string) []string {
+func (s *Server) sanitizeBlueprintRefs(refs []string) []string {
 	out := refs[:0:0]
+	cfg := catalog.Load(s.cfg.WorkspaceRoot)
 	for _, slug := range refs {
-		if executor.SafeName(slug) {
+		if executor.SafeName(slug) && catalog.BlueprintEnabled(cfg, slug) {
 			out = append(out, slug)
+		}
+	}
+	return out
+}
+
+func (s *Server) filterClarificationEvent(cfg catalog.Config, ev clarification.StreamEvent) clarification.StreamEvent {
+	switch ev.Type {
+	case "clarification.summary.updated", "clarification.ready_to_confirm":
+		req, ok := ev.Data.(clarification.Requirement)
+		if !ok {
+			return ev
+		}
+		req.BlueprintRefs = catalog.FilterBlueprintRefs(cfg, req.BlueprintRefs)
+		ev.Data = req
+	case "clarification.blueprint.recommended":
+		refs, ok := ev.Data.([]clarification.BlueprintRef)
+		if !ok {
+			return ev
+		}
+		ev.Data = s.filterRecommendedBlueprints(cfg, refs)
+	}
+	return ev
+}
+
+func (s *Server) filterRecommendedBlueprints(cfg catalog.Config, refs []clarification.BlueprintRef) []clarification.BlueprintRef {
+	out := refs[:0:0]
+	for _, bp := range refs {
+		if catalog.BlueprintEnabled(cfg, bp.Slug) {
+			out = append(out, bp)
 		}
 	}
 	return out
@@ -1153,7 +1225,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "appType", "app_type":
 		if value != "" {
 			req.AppType = value
-			req.GenerationProfile = generationProfileForAppType(value)
+			req.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, value)
 		}
 	case "appName", "app_name":
 		if value != "" {
@@ -1178,7 +1250,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "acceptanceFocus", "acceptance_focus":
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
 	case "blueprintRefs", "blueprint_refs":
-		req.BlueprintRefs = sanitizeBlueprintRefs(mergeAnswerList(req.BlueprintRefs, value))
+		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
@@ -1307,4 +1379,22 @@ func generationProfileForAppType(appType string) map[string][]string {
 	default:
 		return nil
 	}
+}
+
+// recomputeGenerationProfile rebuilds base/domain/pattern from appType while
+// preserving the data-skill group the clarification runner already derived.
+// generationProfile is server-derived and never client-supplied: base/domain/
+// pattern always come from appType, but the `data` group is selected during
+// clarification (per the requirement-clarification Data Skill Mapping) and MUST
+// survive the appType recompute at patch/confirm time — otherwise the selected
+// data skills are stripped before the job reaches code_generation.
+func recomputeGenerationProfile(existing map[string][]string, appType string) map[string][]string {
+	fresh := generationProfileForAppType(appType)
+	if dataGroup := existing["data"]; len(dataGroup) > 0 {
+		if fresh == nil {
+			fresh = map[string][]string{}
+		}
+		fresh["data"] = append([]string(nil), dataGroup...)
+	}
+	return fresh
 }

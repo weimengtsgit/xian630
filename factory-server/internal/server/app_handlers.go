@@ -3,8 +3,8 @@ package server
 import (
 	"net/http"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/catalog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
-	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 )
 
 // listApps handles GET /api/apps — returns every known application as JSON.
@@ -33,16 +33,14 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) filterVisibleApplications(apps []model.Application) []model.Application {
-	visibility := scanner.LoadPresetVisibility(s.cfg.WorkspaceRoot)
-	if len(visibility) == 0 {
-		return apps
-	}
+	cfg := catalog.Load(s.cfg.WorkspaceRoot)
 	out := make([]model.Application, 0, len(apps))
 	for _, app := range apps {
-		if app.Source == model.AppSourcePreset {
-			if show, ok := visibility[app.Slug]; ok && !show {
-				continue
-			}
+		if !catalog.AppEnabled(cfg, app.Slug) {
+			continue
+		}
+		if !catalog.AppVisibleInList(cfg, app.Slug) {
+			continue
 		}
 		out = append(out, app)
 	}

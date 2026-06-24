@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+# factory-server: build the Go binary, then a node20 runtime carrying the claude
+# CLI, git, and BOTH podman + docker CLIs so the SAME image runs under a Podman or
+# Docker host — FACTORY_CONTAINER_RUNTIME selects which CLI factory shells out to,
+# and DOCKER_HOST/CONTAINER_HOST point it at the mounted host runtime socket.
+# Build context = repository root.
+FROM docker.m.daocloud.io/library/golang:1.26-alpine AS build
+WORKDIR /src
+ENV GOPROXY=https://goproxy.cn,direct
+COPY factory-server/go.mod factory-server/go.sum ./
+RUN go mod download
+COPY factory-server/ ./
+RUN CGO_ENABLED=0 go build -trimpath -o /out/factory-server ./cmd/factory-server
+
+# docker CLI (for Docker-host deployments) — pulled via mirror, no apt needed.
+FROM docker.m.daocloud.io/library/docker:cli AS dockercli
+
+FROM docker.m.daocloud.io/library/node:20-bookworm
+# China-friendly Debian mirror for apt (podman install).
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
+    fi
+RUN apt-get update && apt-get install -y --no-install-recommends podman ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+# Claude Code CLI (npmmirror is faster/reliable from the CN host).
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm install -g @anthropic-ai/claude-code
+
+WORKDIR /workspace
+COPY --from=build /out/factory-server /usr/local/bin/factory-server
+# Reference-only skill tree + scene blueprints the generator/clarifier reads.
+COPY .claude/skills /workspace/.claude/skills
+COPY scene /workspace/scene
+
+ENV FACTORY_ADDR=0.0.0.0:8787 \
+    FACTORY_WORKSPACE_ROOT=/workspace \
+    FACTORY_DBPATH=/data/state.db \
+    FACTORY_ARTIFACT_ROOT=/data/runs \
+    FACTORY_LOG_PATH=/data/runs/factory-server.jsonl \
+    HOME=/root
+EXPOSE 8787
+ENTRYPOINT ["/usr/local/bin/factory-server"]
