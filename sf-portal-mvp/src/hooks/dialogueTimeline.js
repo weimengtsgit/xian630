@@ -77,10 +77,37 @@ export function lockedFromView(view) {
 // buildDialogueTimeline maps a composed DialogueView to an ordered list of
 // semantic UI items. Items are plain objects; the workbench renders them. Every
 // item is built from EXPLICITLY NAMED fields so internal keys cannot leak.
-export function buildDialogueTimeline(view) {
+//
+// The optional `optimisticUserMessage` ({ id, content }) is a transient in-flight
+// user message the send path sets SYNCHRONOUSLY (before any network await) so the
+// user sees their own message immediately. It is prepended as a user_message item
+// UNLESS the reloaded persisted view already contains a user message with identical
+// content for this turn — then it is DEDUPED (the persisted message is authoritative).
+export function buildDialogueTimeline(view, optimisticUserMessage = null) {
   if (!view) return []
   const items = []
   const parentMessages = Array.isArray(view.messages) ? view.messages : []
+
+  // Determine whether the persisted view already carries a user message with the
+  // SAME content as the optimistic one for this turn. If so the optimistic entry
+  // is dropped (dedupe) — the persisted message is authoritative on reload.
+  let optimisticDropped = false
+  if (optimisticUserMessage && optimisticUserMessage.content) {
+    const optimisticContent = String(optimisticUserMessage.content).trim()
+    const hasMatchingPersisted = parentMessages.some(
+      msg => msg && msg.role === 'user' && String(msg.content).trim() === optimisticContent,
+    )
+    if (hasMatchingPersisted) {
+      optimisticDropped = true
+    } else {
+      items.push({
+        id: optimisticUserMessage.id,
+        type: 'user_message',
+        content: safeString(optimisticUserMessage.content),
+        optimistic: true,
+      })
+    }
+  }
 
   // 1. Parent thread: user messages + analysis work logs, in persisted order.
   for (const msg of parentMessages) {

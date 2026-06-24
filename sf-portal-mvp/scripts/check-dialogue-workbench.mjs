@@ -409,4 +409,83 @@ assert.match(workbenchJsx, /onSend=\{onSend\}/, 'TimelineItem must receive onSen
 // Resolved state non-editable with a clear 新建会话 action (already present, re-assert).
 assert.match(workbenchJsx, /新建会话/, 'resolved state must keep a clear 新建会话 action')
 
+// ---- Task 1 (D5): optimistic user-message insert + faster send ---------------
+
+// buildDialogueTimeline must accept an optional optimistic user message and
+// PREPEND it as a user_message item, so the user sees their own message
+// immediately (before any server round-trip).
+const baseSendView = {
+  session: { id: 'dlg_opt', status: 'drafting_application', intent: 'application_generation', route_locked: true, initial_prompt: 'gen' },
+  messages: [{ id: 'a1', role: 'agent', kind: 'analysis_work_log', content: '正在分析...' }],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+}
+const optimisticTimeline = buildDialogueTimeline(baseSendView, { id: 'opt_1', content: '帮我做一个排班应用' })
+const optTypes = optimisticTimeline.map(item => item.type)
+assert.equal(optTypes[0], 'user_message', `optimistic message must be prepended as a user_message; got ${JSON.stringify(optTypes)}`)
+assert.equal(optimisticTimeline[0].id, 'opt_1', 'optimistic user_message must keep its client id')
+assert.equal(optimisticTimeline[0].content, '帮我做一个排班应用', 'optimistic user_message must carry the typed content')
+assert.equal(optimisticTimeline[0].optimistic, true, 'optimistic user_message must be flagged so the UI can style/rollback it')
+
+// When the reloaded persisted view ALREADY contains a user message with identical
+// content for this turn, the optimistic message must be DEDUPED (not rendered
+// twice) — the persisted message is authoritative.
+const reloadedView = {
+  ...baseSendView,
+  messages: [
+    { id: 'u_real', role: 'user', kind: 'prompt', content: '帮我做一个排班应用' },
+    { id: 'a1', role: 'agent', kind: 'analysis_work_log', content: '正在分析...' },
+  ],
+}
+const dedupedTimeline = buildDialogueTimeline(reloadedView, { id: 'opt_1', content: '帮我做一个排班应用' })
+const userMsgItems = dedupedTimeline.filter(item => item.type === 'user_message')
+assert.equal(userMsgItems.length, 1, `persisted+identical optimistic must dedupe to one user_message; got ${userMsgItems.length}`)
+assert.equal(userMsgItems[0].id, 'u_real', 'deduped user_message must keep the PERSISTED id (authoritative)')
+
+// A DIFFERENT content optimistic message is NOT deduped (it is a distinct turn's
+// in-flight message), so it still prepends.
+const distinctTimeline = buildDialogueTimeline(reloadedView, { id: 'opt_2', content: '另一个问题' })
+const distinctUserMsgs = distinctTimeline.filter(item => item.type === 'user_message')
+assert.equal(distinctUserMsgs.length, 2, 'a distinct-content optimistic message must NOT be deduped')
+assert.equal(distinctUserMsgs[0].id, 'opt_2', 'distinct optimistic message prepends first')
+
+// A null/empty optimistic message must be a no-op (no phantom user_message item).
+const nullOptTimeline = buildDialogueTimeline(reloadedView, null)
+assert.equal(nullOptTimeline.filter(item => item.type === 'user_message').length, 1, 'null optimistic message must not add a phantom item')
+
+// ---- Static checks on the send path in useDialogueSessions.js ----------------
+
+// The send path must set the optimistic message SYNCHRONOUSLY before the first
+// network await (so the user message renders before any round-trip).
+assert.match(dialogueHookJs, /optimisticUserMessage/, 'send must reference optimisticUserMessage state')
+// Extract ONLY the send function body so the refresh-ordering assertion does not
+// trip on the other mutating actions (selectRoute/openApp/...) which legitimately
+// await refreshSessions before loadView.
+const sendFnMatch = dialogueHookJs.match(/const send = useCallback\(async content => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+assert.ok(sendFnMatch, 'could not locate the send useCallback body for static checks')
+const sendBody = sendFnMatch[0]
+assert.ok(
+  /setOptimisticUserMessage\([^)]*\)[\s\S]*?await\s+factoryApi/.test(sendBody),
+  'send must set the optimistic message BEFORE the first factoryApi await',
+)
+// refreshSessions must NOT be awaited before loadView in the send happy path —
+// the history list refresh must not block the selected-view load. The hook still
+// kicks the refresh (fire-and-forget) so the list updates on its own.
+assert.doesNotMatch(
+  sendBody,
+  /await refreshSessions\(\)[\s\S]{0,120}await loadView\(/,
+  'send must NOT await refreshSessions() before loadView() — the history refresh must not block the view load',
+)
+assert.match(
+  sendBody,
+  /refreshSessions\(\)\.catch/,
+  'send must still kick the history refresh (fire-and-forget) so the list updates',
+)
+// On error the optimistic message must be rolled back (cleared). A finally block
+// clearing it guarantees both the success and failure paths reconcile.
+assert.match(
+  dialogueHookJs,
+  /setOptimisticUserMessage\(null\)/,
+  'send must clear the optimistic message (rollback) — on error and once the persisted view loads',
+)
+
 console.log('check-dialogue-workbench: OK')

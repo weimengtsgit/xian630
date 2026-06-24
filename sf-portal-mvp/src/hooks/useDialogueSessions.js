@@ -66,6 +66,12 @@ export function useDialogueSessions() {
   // cancel-current-turn control against it. Cleared when the trace shows the
   // turn completing, or on cancel.
   const [pendingTurn, setPendingTurn] = useState(null)
+  // optimisticUserMessage (D5): a transient { id, content } the send path sets
+  // SYNCHRONOUSLY (before the first network await) so the user sees their own
+  // message immediately. The timeline builder prepends it as a user_message and
+  // DEDUPES it once the reloaded persisted view contains an identical user
+  // message. Cleared once the persisted view loads (send's finally / on error).
+  const [optimisticUserMessage, setOptimisticUserMessage] = useState(null)
   // focusTask: the active-or-newest-terminal job scoped to the selected
   // dialogue (Constraint #10 — switching history syncs the focus task). Driven
   // by the job list the App passes in via setJobsForFocus; null when no list.
@@ -84,6 +90,17 @@ export function useDialogueSessions() {
   useEffect(() => {
     selectedDialogueIdRef.current = state.selectedDialogueId
   }, [state.selectedDialogueId])
+
+  // Rebuild the timeline whenever the persisted view OR the optimistic user
+  // message changes (D5). The builder prepends the optimistic message (with a
+  // dedupe against an identical persisted user message) so the user sees their
+  // own message immediately, and drops it once the reload brings the real one.
+  useEffect(() => {
+    if (!state.view) return
+    setState(prev => (prev.view === state.view
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage) }
+      : prev))
+  }, [state.view, optimisticUserMessage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -115,6 +132,11 @@ export function useDialogueSessions() {
     }
     const view = await factoryApi.getDialogue(id)
     if (mountedRef.current) {
+      // A successful view load reconciles any optimistic user message: the
+      // persisted message is authoritative, so clear the transient entry. (The
+      // timeline builder also dedupes by content, but clearing here keeps state
+      // clean and rolls back a stale optimistic message from a prior turn.)
+      setOptimisticUserMessage(null)
       setState(prev => ({
         ...prev,
         selectedDialogueId: id,
@@ -177,6 +199,13 @@ export function useDialogueSessions() {
     if (!prompt || submitting) return null
     setSubmitting(true)
     setError(null)
+    // Optimistic user-message insert (D5): show the user's own message
+    // SYNCHRONOUSLY, before any network await. A client-generated id (not a
+    // persisted id — the server assigns those) keys the transient timeline item.
+    // Cleared once a persisted view containing the message loads (loadView) and
+    // on error (rollback below). Set BEFORE the first await so it renders first.
+    const optimisticId = `opt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    if (mountedRef.current) setOptimisticUserMessage({ id: optimisticId, content: prompt })
     try {
       let view
       let ack = null
@@ -198,7 +227,10 @@ export function useDialogueSessions() {
           ack = result
         }
       }
-      await refreshSessions()
+      // History-list refresh must NOT block the selected-view load (D5): kick it
+      // without awaiting before loadView so the workbench renders the persisted
+      // turn immediately; the list updates on its own.
+      if (mountedRef.current) refreshSessions().catch(() => {})
       if (view) {
         await loadView(view.session.id)
       } else if (ack && sess) {
@@ -206,11 +238,17 @@ export function useDialogueSessions() {
         // cancel-current-turn control and the trace stream drives progress. We
         // DO NOT reload the view synchronously — the per-dialogue SSE events
         // (needsRefresh) will refresh it once the worker advances the state.
+        // The optimistic message stays visible until that SSE-driven reload.
         if (mountedRef.current) setPendingTurn(ack)
       }
       return view || ack
     } catch (err) {
-      if (mountedRef.current) setError(err.message || String(err))
+      // Rollback: the optimistic message had no persisted counterpart, so drop it
+      // and surface the error.
+      if (mountedRef.current) {
+        setOptimisticUserMessage(null)
+        setError(err.message || String(err))
+      }
       throw err
     } finally {
       if (mountedRef.current) setSubmitting(false)
