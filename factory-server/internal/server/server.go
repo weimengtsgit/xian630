@@ -19,6 +19,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runlog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
@@ -285,6 +286,17 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// it verbatim over SSE does not leak artifact content.
 	s.exec.OnRecord = func(ctx context.Context, u runner.ExecutionRecordUpdate) {
 		s.hub.Publish(Event{Type: "step.record.appended", Data: u.Record})
+	}
+	// OnTrace routes every SAFE work-trace event the runner produces through the
+	// centralized persist-before-publish gate (recordAndPublishWorkTrace). This
+	// is the ONLY path a trace reaches the store/SSE: the gate enforces the
+	// allowlist + cap + sensitive-key stripping, persists the row (allocating
+	// its dialogue sequence) BEFORE publishing, and the SSE forwarder re-
+	// validates persisted rows. The runner produces safe, allowlisted payloads;
+	// raw hidden thinking never reaches here (dropped at the source in
+	// stream.go:emitStreamLine). No trace data is published any other way.
+	s.exec.OnTrace = func(ctx context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
+		return s.recordAndPublishWorkTrace(ctx, ev)
 	}
 	return s
 }

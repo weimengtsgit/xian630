@@ -1569,6 +1569,11 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		CurrentStepKind:          model.StepRequirementAnalysis,
 		ClarificationSessionID:   childID,
 		ConfirmedRequirementJSON: string(reqBytes),
+		// DialogueID links the job to the dialogue its safe agent activity is
+		// surfaced under (Task 4). It is the work_trace_events sequence-
+		// partition key: the executor stamps it onto every trace the runner
+		// produces, so the dialogue-scoped SSE stream can filter them.
+		DialogueID:               id,
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}

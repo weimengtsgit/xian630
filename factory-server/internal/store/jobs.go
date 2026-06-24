@@ -11,12 +11,13 @@ import (
 // CreateJob inserts a new job row.
 func (s *Store) CreateJob(ctx context.Context, job model.Job) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
 		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
 		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
-		job.ClarificationSessionID, job.ConfirmedRequirementJSON)
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind)
 	return err
 }
 
@@ -61,12 +62,13 @@ func (s *Store) SeedClarificationJob(ctx context.Context, job model.Job, steps [
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
 		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
 		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
-		job.ClarificationSessionID, job.ConfirmedRequirementJSON); err != nil {
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind); err != nil {
 		return err
 	}
 	for _, step := range steps {
@@ -147,7 +149,8 @@ func scanJob(sc scanner) (*model.Job, error) {
 	if err := sc.Scan(&j.ID, &j.UserPrompt, &j.NormalizedPrompt, &j.AppSlug, &j.AppName,
 		&status, &stepKind, &j.CreatedAppID, &j.LockOwner,
 		&createdMs, &started, &ended, &updatedMs,
-		&j.ClarificationSessionID, &j.ConfirmedRequirementJSON); err != nil {
+		&j.ClarificationSessionID, &j.ConfirmedRequirementJSON,
+		&j.DialogueID, &j.ApplicationID, &j.BaseVersionID, &j.Kind); err != nil {
 		return nil, err
 	}
 	j.Status = model.JobStatus(status)
@@ -161,7 +164,7 @@ func scanJob(sc scanner) (*model.Job, error) {
 
 // jobSelectCols lists the jobs columns in scan order, shared by GetJob and
 // ListJobs to keep the SELECT and scanJob in sync.
-const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json`
+const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind`
 
 // GetJob returns the job with the given id. It returns (nil, nil) on a miss —
 // a missing row is not an error — mirroring GetApplication/GetAgent.

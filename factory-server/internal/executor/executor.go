@@ -52,7 +52,16 @@ type Executor struct {
 	// appended to the store, carrying the fully-populated record (with the
 	// executor-assigned attempt+sequence). Task 4 wires it to the SSE fan-out.
 	OnRecord func(context.Context, runner.ExecutionRecordUpdate)
-	RunLog   *runlog.Logger
+	// OnTrace is invoked for every SAFE work-trace event the runner produces
+	// (Task 4). The server wires it to recordAndPublishWorkTrace, which
+	// PERSISTS the trace (through the security gate) BEFORE publishing it over
+	// SSE. This is the ONLY path a trace event reaches the store/SSE: the runner
+	// produces safe, allowlisted, redacted payloads; the gate enforces
+	// allowlist + cap + sensitive-key stripping + persist-before-publish; and
+	// the SSE forwarder re-validates persisted rows. Thinking never reaches here
+	// (dropped at the source in stream.go).
+	OnTrace func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	RunLog  *runlog.Logger
 
 	// cancel of the currently-running step (if any), so Cancel can kill it.
 	currentCancel atomic.Value // func()
@@ -92,8 +101,16 @@ type stepEmitter struct {
 	jobID  string
 	stepID string
 
+	// Trace-attribution context: the dialogue the job belongs to (the gate's
+	// sequence-partition key) + the task id (job id) + attempt, stamped onto
+	// every WorkTraceEvent so recordAndPublishWorkTrace can partition and the
+	// dialogue-scoped SSE can filter. dialogueID is "" for legacy jobs with no
+	// dialogue link; in that case the trace is dropped (no partition key).
+	dialogueID string
+	attempt    int
+	onTrace    func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+
 	mu       sync.Mutex
-	attempt  int
 	nextSeq  int
 	firstErr error
 }
@@ -101,15 +118,18 @@ type stepEmitter struct {
 // newStepEmitter builds a scoped emitter for one (job, step, attempt). attempt
 // is the step's CURRENT attempt number (already incremented by the executor
 // before the runner runs), so records are tagged with the same attempt the
-// job_steps row carries.
-func (e *Executor) newStepEmitter(jobID, stepID string, attempt int) *stepEmitter {
+// job_steps row carries. dialogueID is the job's dialogue link (the trace
+// sequence-partition key); empty for legacy jobs.
+func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int) *stepEmitter {
 	return &stepEmitter{
-		store:    e.store,
-		onRecord: e.OnRecord,
-		jobID:    jobID,
-		stepID:   stepID,
-		attempt:  attempt,
-		nextSeq:  1,
+		store:      e.store,
+		onRecord:   e.OnRecord,
+		jobID:      jobID,
+		stepID:     stepID,
+		dialogueID: dialogueID,
+		attempt:    attempt,
+		onTrace:    e.OnTrace,
+		nextSeq:    1,
 	}
 }
 
@@ -180,6 +200,37 @@ func (s *stepEmitter) FirstError() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.firstErr
+}
+
+// Trace is the runner.TraceEmitter implementation: it forwards one SAFE trace
+// event (already redacted/capped/allowlisted by the producer) to the server's
+// recordAndPublishWorkTrace gate via OnTrace, stamped with this step's dialogue
+// + task + step + attempt attribution. This is the SINGLE path a trace event
+// reaches the store/SSE: persist-before-publish + the security gate apply here.
+// It is idempotent-safe: a nil OnTrace, an empty dialogue id (legacy job), or a
+// gate error never aborts the agent run (best-effort, like Emit). The producer
+// is responsible for never passing disallowed types (thinking etc.); the gate
+// rejects them anyway.
+func (s *stepEmitter) Trace(ctx context.Context, traceType, payload string) error {
+	if s.onTrace == nil {
+		return nil
+	}
+	if s.dialogueID == "" {
+		// No dialogue partition key: the trace cannot be sequenced or streamed.
+		// Drop it rather than emit an unattributable row. This preserves the
+		// invariant that every persisted trace is dialogue-scoped.
+		return nil
+	}
+	ev := model.WorkTraceEvent{
+		DialogueID: s.dialogueID,
+		TaskID:     s.jobID,
+		StepID:     s.stepID,
+		Attempt:    s.attempt,
+		Type:       traceType,
+		PayloadJSON: payload,
+	}
+	_, _ = s.onTrace(ctx, ev) // best-effort: a gate error never aborts the run
+	return nil
 }
 
 // emit is a helper that runs under the executor's own (non-scoped) system
@@ -329,7 +380,7 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	// persistence; the runner only forwards safe records through it. System
 	// lifecycle records are emitted through the same emitter so they interleave
 	// with activity records by sequence.
-	emitter := e.newStepEmitter(job.ID, step.ID, currentStep.Attempt)
+	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt)
 	emitter.emit(runCtx, model.ExecutionRecordSystem, systemRecordStarted)
 
 	res, runErr := e.runner.Run(runCtx, *current, currentStep, emitter)
@@ -517,7 +568,7 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	// shows the retry decision inline. Best-effort: a failure here does not block
 	// the retry (the job is already re-queued).
 	if step != nil {
-		emitter := e.newStepEmitter(jobID, step.ID, step.Attempt)
+		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt)
 		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
 	}
 	updated, err := e.store.GetJob(ctx, jobID)

@@ -130,10 +130,13 @@ const (
 	ExecutionRecordCommandStdout ExecutionRecordKind = "command_stdout"
 	ExecutionRecordCommandStderr ExecutionRecordKind = "command_stderr"
 	ExecutionRecordError         ExecutionRecordKind = "error"
-	// ExecutionRecordThinking carries the model's reasoning/thinking (方案 B:
-	// constraint #5 is relaxed so hidden reasoning IS shown). It still passes
-	// through the stepEmitter redaction chokepoint, so any credential echoed in
-	// a thought is masked before persist+SSE. Chunked to ≤4 KiB per record.
+	// ExecutionRecordThinking carried the model's reasoning/thinking under the
+	// earlier 方案 B policy. As of Task 4 it is RETAINED as a const for backward
+	// compatibility but is NEVER produced: stream.go:emitStreamLine drops thinking
+	// blocks at the source (Constraint #9 HARD SECURITY), so no thinking record is
+	// ever emitted, persisted, or published over SSE. It remains defined only so
+	// the string value stays stable for any historical consumer; no producer in
+	// the runner or executor calls Emit with this kind.
 	ExecutionRecordThinking ExecutionRecordKind = "thinking"
 	// ExecutionRecordFileDelta carries a single file's generation delta during
 	// code_generation: which file was Written/Edited and the +added/-removed line
@@ -239,11 +242,28 @@ type Job struct {
 	// ConfirmedRequirementJSON is the frozen, server-finalized requirement the
 	// requirement_analysis step audits (it no longer clarifies). Empty for legacy
 	// jobs; the requirement_analysis step guards the empty case by substituting {}.
-	ConfirmedRequirementJSON string     `json:"confirmed_requirement_json,omitempty"`
-	CreatedAt                time.Time  `json:"created_at"`
-	StartedAt                *time.Time `json:"started_at,omitempty"`
-	EndedAt                  *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt                time.Time  `json:"updated_at"`
+	ConfirmedRequirementJSON string `json:"confirmed_requirement_json,omitempty"`
+	// DialogueID links the job to the dialogue whose work-trace its safe agent
+	// activity is surfaced under (Task 4). It is the sequence-partition key for
+	// work_trace_events: every trace the executor emits is stamped with this id
+	// so the dialogue-scoped SSE stream can filter it. Empty for legacy/direct
+	// jobs with no dialogue link; the stepEmitter drops traces with an empty
+	// dialogue id (no partition key) rather than emit an unattributable row.
+	// Task 1 added the column; Task 4 surfaces it through the model + store.
+	DialogueID string `json:"dialogue_id,omitempty"`
+	// ApplicationID links the job to the application it produces (Task 5 wires
+	// the value; Task 4 surfaces the field so CreateJob/scanJob read/write it).
+	ApplicationID string `json:"application_id,omitempty"`
+	// BaseVersionID is the version this job's application forks from, when it is
+	// a revise/rebuild (Task 6). Empty for a fresh generation.
+	BaseVersionID string `json:"base_version_id,omitempty"`
+	// Kind is the job kind (e.g. "generate", "revise"). Reserved for later tasks;
+	// surfaced now so the column is read/written rather than orphaned.
+	Kind string `json:"kind,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	EndedAt       *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type JobStep struct {
