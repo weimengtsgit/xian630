@@ -79,6 +79,10 @@ func newOpsServer(t *testing.T, fr *srvRunner) (*Server, *Router) {
 
 	srv := New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
 	srv.runner = fr
+	// Preset start/stop/rebuild/delete use s.runtime (the configured container
+	// runtime). New() wired it to a real podman+osRunner; rebind to the fake so
+	// container ops go through fr, matching how the handlers derive the runtime.
+	srv.runtime = deploy.NewPodman(fr)
 	srv.healthCheck = func(context.Context, string, time.Duration) error { return nil }
 	return srv, srv.routes()
 }

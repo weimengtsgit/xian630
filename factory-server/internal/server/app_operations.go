@@ -84,7 +84,7 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	pod := deploy.NewPodman(s.runner)
+	pod := s.runtime // configured runtime (docker/podman), same as the generated-app path
 	// Idempotent fast path, but only after confirming the recorded deployment is
 	// reachable. The DB can be stale after a manual podman stop or a server
 	// restart, so a blind return would show "running" while nothing is usable.
@@ -227,7 +227,7 @@ func (s *Server) stopApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pod := deploy.NewPodman(s.runner)
+	pod := s.runtime // configured runtime (docker/podman), same as the generated-app path
 	// Best-effort cleanup: a missing container must not fail the stop.
 	_, _ = pod.StopContainer(ctx, active.ContainerName)
 	_, _ = pod.RemoveContainer(ctx, active.ContainerName)
@@ -281,7 +281,7 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
-	img, _, err := deploy.NewPodman(s.runner).BuildImage(ctx, buildApp, tag)
+	img, _, err := s.runtime.BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
@@ -376,7 +376,7 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list deployments")
 		return
 	}
-	pod := deploy.NewPodman(s.runner)
+	pod := s.runtime // configured runtime (docker/podman), same as the generated-app path
 	for _, dep := range deps {
 		if dep.ContainerName == "" {
 			continue
