@@ -127,6 +127,20 @@ type ConsolidationEntry struct {
 	Alternatives     []string        `json:"alternatives"`
 }
 
+// HighImpactItem is one CURRENTLY UNRESOLVED high-impact requirement decision
+// the user must confirm before the session may reach ready_to_confirm (D3 / ADR
+// 0006). It is USER-FACING ONLY: id and label are plain-language identifiers,
+// never internal blueprint/catalog slugs or raw model reasoning. The runner
+// validates structure (non-empty id/label, at most 3 options) and drops anything
+// disallowed. A field filled from a blueprint assumption is NOT a confirmed
+// high-impact decision — only an explicit user confirmation closes the item.
+type HighImpactItem struct {
+	ID             string   `json:"id"`
+	Label          string   `json:"label"`
+	Recommendation string   `json:"recommendation,omitempty"`
+	Options        []Option `json:"options"`
+}
+
 type RoundOutput struct {
 	Status                 string               `json:"status"`
 	Round                  int                  `json:"round"`
@@ -135,6 +149,13 @@ type RoundOutput struct {
 	Requirement            Requirement          `json:"requirement"`
 	NormalizedScenarioName string               `json:"normalizedScenarioName"`
 	Consolidation          []ConsolidationEntry `json:"consolidation,omitempty"`
+	// OpenHighImpact lists the currently-unresolved high-impact confirmation
+	// items. While non-empty, the session may NOT reach ready_to_confirm,
+	// regardless of how complete the requirement is. Each round surfaces exactly
+	// one of these as questions[0] (reused through the existing question
+	// pipeline); this list carries the full remaining set so the gate and
+	// history can re-check without a model turn.
+	OpenHighImpact []HighImpactItem `json:"openHighImpact,omitempty"`
 }
 
 type StreamEvent struct {

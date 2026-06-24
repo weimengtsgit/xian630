@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -181,6 +182,42 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agent)
+}
+
+// deleteAgent handles DELETE /api/agents/:id. Only business_processing agents
+// (user/dialogue-created) may be deleted; the six registry-seeded
+// software_development pipeline agents are protected (409) — they are re-seeded
+// on every startup, so a hard delete is both pointless and would break the
+// pipeline. Clears created_agent_id on dialogues referencing the agent (no
+// dangling pointer) and publishes agent.deleted.
+func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	agent, err := s.store.GetAgent(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get agent")
+		return
+	}
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if agent.Category == model.AgentCategorySoftwareDevelopment {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "built-in pipeline agents cannot be deleted"})
+		return
+	}
+	if err := s.store.DeleteAgent(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete agent")
+		return
+	}
+	if _, err := s.store.ClearDialoguesReferencingAgent(r.Context(), id); err != nil {
+		// The agent row is already gone; a failed reference cleanup is logged but
+		// not fatal — it leaves a harmless dangling id, not data loss.
+		log.Printf("delete agent %s: clear dialogue references: %v", id, err)
+	}
+	if s.hub != nil {
+		s.hub.Publish(Event{Type: "agent.deleted", Data: map[string]string{"id": id}})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
 // agentRunsResponse is the shape of GET /api/agents/:id/runs. The contract is

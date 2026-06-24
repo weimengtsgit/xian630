@@ -688,18 +688,6 @@ button {
   border-color: rgba(104,221,255,0.6);
 }
 
-/* map event pulse */
-.cai-ev-pulse {
-  transform-origin: center;
-  transform-box: fill-box;
-  animation: cai-ev-ring 2.4s ease-out infinite;
-}
-@keyframes cai-ev-ring {
-  0% { opacity: 0.5; }
-  70% { opacity: 0.04; }
-  100% { opacity: 0.5; }
-}
-
 /* event detail popover */
 .cai-popover {
   position: absolute;

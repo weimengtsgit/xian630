@@ -48,14 +48,14 @@ const (
 // version to its baseline. The UNIQUE(job_id) constraint enforces one version
 // per job.
 type ApplicationVersion struct {
-	ID              string                  `json:"id"`
-	ApplicationID   string                  `json:"application_id"`
-	ParentVersionID string                  `json:"parent_version_id,omitempty"`
-	JobID           string                  `json:"job_id"`
+	ID              string                   `json:"id"`
+	ApplicationID   string                   `json:"application_id"`
+	ParentVersionID string                   `json:"parent_version_id,omitempty"`
+	JobID           string                   `json:"job_id"`
 	Status          ApplicationVersionStatus `json:"status"`
-	SourcePath      string                  `json:"source_path,omitempty"`
-	DeploymentID    string                  `json:"deployment_id,omitempty"`
-	CreatedAt       time.Time               `json:"created_at"`
+	SourcePath      string                   `json:"source_path,omitempty"`
+	DeploymentID    string                   `json:"deployment_id,omitempty"`
+	CreatedAt       time.Time                `json:"created_at"`
 	// PromotedAt is set when (and only when) the version becomes Effective; it
 	// is nil for queued/building/failed/superseded versions.
 	PromotedAt *time.Time `json:"promoted_at,omitempty"`
@@ -222,6 +222,10 @@ type Agent struct {
 	Prompt    string `json:"prompt"`
 	Enabled   bool   `json:"enabled"`
 	SortOrder int    `json:"sort_order"`
+	// CreatedAt is when the agent was generated (registry-seeded or created
+	// from a dialogue). INTEGER unix ms at the store boundary; 0 for rows that
+	// predate the column (the UI renders those as no time).
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Job struct {
@@ -259,11 +263,11 @@ type Job struct {
 	BaseVersionID string `json:"base_version_id,omitempty"`
 	// Kind is the job kind (e.g. "generate", "revise"). Reserved for later tasks;
 	// surfaced now so the column is read/written rather than orphaned.
-	Kind string `json:"kind,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	Kind      string     `json:"kind,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type JobStep struct {
@@ -346,19 +350,20 @@ const (
 // that runs before a Job is created. RequirementJSON holds the evolving
 // structured requirement; CreatedJobID is set once the session produces a Job.
 type ClarificationSession struct {
-	ID              string              `json:"id"`
-	Status          ClarificationStatus `json:"status"`
-	InitialPrompt   string              `json:"initial_prompt"`
-	Round           int                 `json:"round"`
-	MaxRounds       int                 `json:"max_rounds"`
-	RequirementJSON string              `json:"requirement_json"`
-	CreatedJobID    string              `json:"created_job_id,omitempty"`
-	ErrorCode       string              `json:"error_code,omitempty"`
-	ErrorMessage    string              `json:"error_message,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	ConfirmedAt     *time.Time          `json:"confirmed_at,omitempty"`
-	AbandonedAt     *time.Time          `json:"abandoned_at,omitempty"`
+	ID                 string              `json:"id"`
+	Status             ClarificationStatus `json:"status"`
+	InitialPrompt      string              `json:"initial_prompt"`
+	Round              int                 `json:"round"`
+	MaxRounds          int                 `json:"max_rounds"`
+	RequirementJSON    string              `json:"requirement_json"`
+	OpenHighImpactJSON string              `json:"open_high_impact_json,omitempty"`
+	CreatedJobID       string              `json:"created_job_id,omitempty"`
+	ErrorCode          string              `json:"error_code,omitempty"`
+	ErrorMessage       string              `json:"error_message,omitempty"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+	ConfirmedAt        *time.Time          `json:"confirmed_at,omitempty"`
+	AbandonedAt        *time.Time          `json:"abandoned_at,omitempty"`
 }
 
 // ClarificationMessage is one entry in a clarification session's message
@@ -525,15 +530,15 @@ const (
 // oldest pending turn per dialogue, runs the turn-intent round, and marks it
 // terminal before the next turn begins.
 type DialogueTurn struct {
-	ID         string     `json:"id"`
-	DialogueID string     `json:"dialogue_id"`
-	MessageID  string     `json:"message_id"`
-	Intent     TurnIntent `json:"intent"`
-	Status     TurnStatus `json:"status"`
-	SummaryJSON string    `json:"summary_json,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	ID          string     `json:"id"`
+	DialogueID  string     `json:"dialogue_id"`
+	MessageID   string     `json:"message_id"`
+	Intent      TurnIntent `json:"intent"`
+	Status      TurnStatus `json:"status"`
+	SummaryJSON string     `json:"summary_json,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
 }
 
 // WorkTraceEvent is one durable, immutable, VISIBLE line of a dialogue's
@@ -551,17 +556,17 @@ type DialogueTurn struct {
 // NEVER reach this table with raw hidden reasoning — that must never leave the
 // producer, and the gate rejects it if it does.
 type WorkTraceEvent struct {
-	ID           string    `json:"id"`
-	DialogueID   string    `json:"dialogue_id"`
-	Sequence     int64     `json:"sequence"`
-	TaskID       string    `json:"task_id,omitempty"`
-	ApplicationID string   `json:"application_id,omitempty"`
-	VersionID    string    `json:"version_id,omitempty"`
-	StepID       string    `json:"step_id,omitempty"`
-	Attempt      int       `json:"attempt,omitempty"`
-	Type         string    `json:"type"`
-	PayloadJSON  string    `json:"payload_json"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	DialogueID    string    `json:"dialogue_id"`
+	Sequence      int64     `json:"sequence"`
+	TaskID        string    `json:"task_id,omitempty"`
+	ApplicationID string    `json:"application_id,omitempty"`
+	VersionID     string    `json:"version_id,omitempty"`
+	StepID        string    `json:"step_id,omitempty"`
+	Attempt       int       `json:"attempt,omitempty"`
+	Type          string    `json:"type"`
+	PayloadJSON   string    `json:"payload_json"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // WorkTraceType is the category of a visible work-trace event. Only values in
@@ -574,18 +579,18 @@ type WorkTraceEvent struct {
 type WorkTraceType string
 
 const (
-	WorkTraceIntent        WorkTraceType = "intent"        // recognized user intent surfaced
-	WorkTraceApproach      WorkTraceType = "approach"      // chosen approach/plan surfaced
-	WorkTraceAssumption    WorkTraceType = "assumption"    // stated assumption surfaced
-	WorkTraceClarification WorkTraceType = "clarification" // clarification question/answer
-	WorkTraceTool          WorkTraceType = "tool"          // tool action summary (not raw I/O)
-	WorkTraceData          WorkTraceType = "data"          // data gathered/produced summary
-	WorkTraceValidation    WorkTraceType = "validation"    // validation/check result
+	WorkTraceIntent        WorkTraceType = "intent"              // recognized user intent surfaced
+	WorkTraceApproach      WorkTraceType = "approach"            // chosen approach/plan surfaced
+	WorkTraceAssumption    WorkTraceType = "assumption"          // stated assumption surfaced
+	WorkTraceClarification WorkTraceType = "clarification"       // clarification question/answer
+	WorkTraceTool          WorkTraceType = "tool"                // tool action summary (not raw I/O)
+	WorkTraceData          WorkTraceType = "data"                // data gathered/produced summary
+	WorkTraceValidation    WorkTraceType = "validation"          // validation/check result
 	WorkTraceChangeConfirm WorkTraceType = "change_confirmation" // proposed change awaiting user confirm
-	WorkTraceTask          WorkTraceType = "task"          // task status transition
-	WorkTraceVersion       WorkTraceType = "version"       // application version transition
-	WorkTraceDeployment    WorkTraceType = "deployment"    // deployment transition
-	WorkTraceWarning       WorkTraceType = "warning"       // non-fatal warning surfaced
-	WorkTraceError         WorkTraceType = "error"         // error surfaced
-	WorkTraceAssistant     WorkTraceType = "assistant_output" // assistant text output
+	WorkTraceTask          WorkTraceType = "task"                // task status transition
+	WorkTraceVersion       WorkTraceType = "version"             // application version transition
+	WorkTraceDeployment    WorkTraceType = "deployment"          // deployment transition
+	WorkTraceWarning       WorkTraceType = "warning"             // non-fatal warning surfaced
+	WorkTraceError         WorkTraceType = "error"               // error surfaced
+	WorkTraceAssistant     WorkTraceType = "assistant_output"    // assistant text output
 )

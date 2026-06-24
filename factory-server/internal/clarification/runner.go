@@ -71,14 +71,12 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if err := os.WriteFile(filepath.Join(dir, "output.json"), outBytes, 0o644); err != nil {
 		return RoundOutput{}, err
 	}
-	// Adaptive invariant: rounds 1–4 accept ZERO questions or EXACTLY ONE
-	// required question. A model round emitting more than one question is a
-	// contract violation — reject it rather than silently truncating. Round 5
-	// (consolidation) emits no questions by construction; this guard still
-	// holds it to the same discipline.
-	if !IsReadyToConfirmStatus(out.Status) && len(out.Questions) > 1 {
-		return RoundOutput{}, fmt.Errorf("clarification round %d emitted %d questions; adaptive contract allows at most one: %w", out.Round, len(out.Questions), ErrAdaptiveTooManyQuestions)
-	}
+	// A clarification round may return ZERO questions (ready) OR ALL open
+	// high-impact questions at once so the user can answer them in a single
+	// batch (the portal renders them as one question_group and the batch-answer
+	// handler persists them together, then advances once). The D3 gate — not
+	// this count — keeps ready_to_confirm withheld while openHighImpact is
+	// non-empty, so batching does not let a high-impact item slip through.
 	events := normalizeEvents(input.SessionID, out, normalizeOptions{SkipWorkLogs: streamed})
 	if err := writeStream(filepath.Join(dir, "stream.jsonl"), events); err != nil {
 		return RoundOutput{}, err
@@ -118,9 +116,11 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 		Data:      WorkLog{Type: "analysis_work_log", Content: "需求分析 agent 已连接 Claude Code 流式输出。"},
 	})
 	var assistantText strings.Builder
+	var assistantThinking strings.Builder
 	var resultText string
 	var resultIsError bool
 	var lastVisible string
+	var lastVisibleThinking string
 	args := append([]string{
 		"--print", prompt,
 		"--output-format", "stream-json",
@@ -133,26 +133,40 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
 		runner.LLMConsoleStreamLine(line)
-		delta, result, isErr := parseClaudeStreamLine(line)
+		delta, thinking, result, isErr := parseClaudeStreamLine(line)
 		if result != "" {
 			resultText = result
 			resultIsError = isErr
 		}
-		if delta == "" {
-			return
+		if delta != "" {
+			assistantText.WriteString(delta)
+			visible := extractWorkLogStreamText(assistantText.String())
+			if visible != "" && visible != lastVisible {
+				lastVisible = visible
+				emit(StreamEvent{
+					Type:      "clarification.message.delta",
+					SessionID: input.SessionID,
+					MessageID: messageID,
+					Delta:     visible,
+				})
+			}
 		}
-		assistantText.WriteString(delta)
-		visible := extractWorkLogStreamText(assistantText.String())
-		if visible == "" || visible == lastVisible {
-			return
+		// Surface the model's raw reasoning (thinking_delta) as a parallel
+		// clarification.message.thinking stream so the workbench renders a live
+		// 思考过程 block. Set, not append (full-so-far), mirroring the .delta emit.
+		if thinking != "" {
+			assistantThinking.WriteString(thinking)
+			visibleThinking := assistantThinking.String()
+			if visibleThinking != "" && visibleThinking != lastVisibleThinking {
+				lastVisibleThinking = visibleThinking
+				emit(StreamEvent{
+					Type:      "clarification.message.thinking",
+					SessionID: input.SessionID,
+					MessageID: messageID,
+					Delta:     visibleThinking,
+				})
+			}
 		}
-		lastVisible = visible
-		emit(StreamEvent{
-			Type:      "clarification.message.delta",
-			SessionID: input.SessionID,
-			MessageID: messageID,
-			Delta:     visible,
-		})
 	}, args...)
 	finalText := assistantText.String()
 	if strings.TrimSpace(finalText) == "" {
@@ -180,7 +194,7 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	return res, finalText, true, err
 }
 
-func parseClaudeStreamLine(line string) (textDelta, result string, resultIsError bool) {
+func parseClaudeStreamLine(line string) (textDelta, thinkingDelta, result string, resultIsError bool) {
 	var top struct {
 		Type    string          `json:"type"`
 		Event   json.RawMessage `json:"event"`
@@ -188,28 +202,35 @@ func parseClaudeStreamLine(line string) (textDelta, result string, resultIsError
 		IsError bool            `json:"is_error"`
 	}
 	if err := json.Unmarshal([]byte(line), &top); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	if top.Type == "result" {
-		return "", top.Result, top.IsError
+		return "", "", top.Result, top.IsError
 	}
 	if top.Type != "stream_event" || len(top.Event) == 0 {
-		return "", "", false
+		return "", "", "", false
 	}
 	var ev struct {
 		Type  string `json:"type"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(top.Event, &ev); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	if ev.Type != "content_block_delta" || ev.Delta.Type != "text_delta" {
-		return "", "", false
+	if ev.Type != "content_block_delta" {
+		return "", "", "", false
 	}
-	return ev.Delta.Text, "", false
+	if ev.Delta.Type == "thinking_delta" {
+		return "", ev.Delta.Thinking, "", false
+	}
+	if ev.Delta.Type == "text_delta" {
+		return ev.Delta.Text, "", "", false
+	}
+	return "", "", "", false
 }
 
 func extractWorkLogStreamText(s string) string {
@@ -355,15 +376,10 @@ func (r Runner) prompt(inputPath string) string {
 	return "Use .claude/skills/requirement-clarification/SKILL.md. " +
 		fmt.Sprintf("The round input is at the absolute path %s — read it with the Read tool. ", inputPath) +
 		"Output ONLY valid JSON matching the adaptive requirement clarification contract. " +
-		"Emit at most ONE required question per round (rounds 1–4), each with 2–3 options. " +
+		"Emit ALL open high-impact questions in one round (rounds 1–4), each with 2–3 options, so the user confirms them in a single batch. " +
 		"At round 5 (only if still incomplete) emit a consolidation list recommending a value for every remaining field. " +
 		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs."
 }
-
-// ErrAdaptiveTooManyQuestions is returned when a clarification round emits more
-// than one question. The adaptive contract allows at most one required question
-// per round.
-var ErrAdaptiveTooManyQuestions = errors.New("adaptive contract allows at most one question per round")
 
 type normalizeOptions struct {
 	SkipWorkLogs bool
@@ -445,6 +461,7 @@ func normalizeRoundOutput(out RoundOutput) RoundOutput {
 	if IsReadyToConfirmStatus(out.Status) {
 		out.Status = "ready_to_confirm"
 	}
+	out.OpenHighImpact = normalizeHighImpact(out.OpenHighImpact)
 	for i := range out.Questions {
 		q := &out.Questions[i]
 		if len(q.Recommendation) > 1 {
@@ -457,6 +474,80 @@ func normalizeRoundOutput(out RoundOutput) RoundOutput {
 		}
 	}
 	return out
+}
+
+// normalizeHighImpact validates and redacts the model's openHighImpact list,
+// enforcing the user-facing contract (D3). Each item must have a non-empty id
+// and label and at most 3 options, each option a non-empty value+label. Items
+// or options that fail structural validation are dropped rather than failing the
+// whole round (best-effort: a single malformed entry must not abort a usable
+// round). Known internal blueprint/catalog slug patterns are best-effort
+// excluded from id/label — the skill is instructed not to emit them, but the
+// structural gate is the required one. An empty/nil input returns nil so the
+// JSON field stays omitted.
+func normalizeHighImpact(items []HighImpactItem) []HighImpactItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]HighImpactItem, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, it := range items {
+		id := strings.TrimSpace(it.ID)
+		label := strings.TrimSpace(it.Label)
+		if id == "" || label == "" {
+			continue
+		}
+		if looksLikeInternalSlug(id) || looksLikeInternalSlug(label) {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		var opts []Option
+		for _, opt := range it.Options {
+			v := strings.TrimSpace(opt.Value)
+			l := strings.TrimSpace(opt.Label)
+			if v == "" || l == "" {
+				continue
+			}
+			if looksLikeInternalSlug(v) {
+				continue
+			}
+			opts = append(opts, Option{Value: v, Label: l, Reason: opt.Reason, Recommended: opt.Recommended})
+		}
+		if len(opts) > 3 {
+			opts = opts[:3]
+		}
+		seen[id] = struct{}{}
+		out = append(out, HighImpactItem{ID: id, Label: label, Recommendation: strings.TrimSpace(it.Recommendation), Options: opts})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// looksLikeInternalSlug is a best-effort guard that rejects values matching the
+// factory's internal slug conventions (snake_case catalog/blueprint names such
+// as software-factory-app or carrier-formation-replay). It is conservative: it
+// only flags strings that contain a hyphen AND look like a slug (lowercase +
+// hyphens/digits only, length >= 4) — plain user language like "数据策略" or
+// "Mock 数据优先" is never matched. The skill is instructed not to emit internal
+// names; this is a backstop, not the primary gate.
+func looksLikeInternalSlug(s string) bool {
+	if len(s) < 4 || !strings.ContainsRune(s, '-') {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func writeStream(path string, events []StreamEvent) error {
@@ -590,7 +681,7 @@ func clarificationJSONCandidates(rawCandidates ...string) []string {
 			if line == "" {
 				continue
 			}
-			if _, result, _ := parseClaudeStreamLine(line); result != "" {
+			if _, _, result, _ := parseClaudeStreamLine(line); result != "" {
 				add(result)
 				for _, obj := range extractJSONObjects(result) {
 					add(obj)

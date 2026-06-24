@@ -554,6 +554,53 @@ func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 	expectEvent(t, ch, "app.deleted")
 }
 
+// TestDeleteGeneratedAppClearsReferencingDialogue verifies that deleting an app
+// reconciles dialogues whose resolved_application_id points at it. Without this,
+// composeDialogueView silently drops resolvedApplication (GetApplication -> nil)
+// and the continuous loop stalls on a dangling reference to a deleted app.
+func TestDeleteGeneratedAppClearsReferencingDialogue(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	appDir := filepath.Join(root, "generated-apps", "demo-dlg-ref")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-dlg-ref", Slug: "demo-dlg-ref", Name: "Demo Dlg Ref", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-dlg-ref",
+		ManifestPath: "generated-apps/demo-dlg-ref/.factory/app.json", Status: model.AppStatusRunning,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	dlg := model.DialogueSession{
+		ID: "dlg_demo_dlg_ref", InitialPrompt: "p", Status: model.DialogueStatusActive,
+		Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true,
+		ResolvedApplicationID: app.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.CreateDialogueSession(context.Background(), dlg); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-dlg-ref", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := srv.store.GetDialogueSession(context.Background(), dlg.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get dialogue: %v %v", err, got != nil)
+	}
+	if got.ResolvedApplicationID != "" {
+		t.Fatalf("deleting app must clear the referencing dialogue's resolved_application_id, got %q", got.ResolvedApplicationID)
+	}
+}
+
 func TestDeleteRejectsPresetApp(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
 	_, r := newOpsServer(t, fr)

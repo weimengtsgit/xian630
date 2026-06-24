@@ -371,6 +371,17 @@ func TestRunnerUsesClaudeStreamJSONAndEmitsLiveOutputDeltas(t *testing.T) {
 	if !sawStarted || !sawPartialText || !sawCompleted {
 		t.Fatalf("live stream events missing started=%v partialText=%v completed=%v; got %v", sawStarted, sawPartialText, sawCompleted, eventTypes(events))
 	}
+	// The model's raw reasoning streams on a dedicated .thinking channel (the
+	// 思考过程 block) — separate from the safe .delta work-log above.
+	var sawThinking bool
+	for _, ev := range events {
+		if ev.Type == "clarification.message.thinking" && strings.Contains(ev.Delta, "hidden reasoning") {
+			sawThinking = true
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("clarification.message.thinking must surface the model's reasoning (conversation streams thinking); events=%v", eventTypes(events))
+	}
 }
 
 // TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice proves that when the Claude
@@ -518,9 +529,10 @@ func contains(xs []string, want string) bool {
 
 // --- adaptive 6-round contract (Step 4) ---
 
-// TestRunnerRejectsMoreThanOneQuestion proves the runner rejects a model round
-// that emits more than one question rather than silently truncating.
-func TestRunnerRejectsMoreThanOneQuestion(t *testing.T) {
+// TestRunnerAcceptsAllQuestionsInOneRound proves the runner accepts a model
+// round that emits ALL open high-impact questions at once (batch clarification)
+// and passes every question through — the user confirms them in a single group.
+func TestRunnerAcceptsAllQuestionsInOneRound(t *testing.T) {
 	root := t.TempDir()
 	fr := &fakeCommandRunner{rawStdout: `{
   "status": "waiting_user",
@@ -534,17 +546,24 @@ func TestRunnerRejectsMoreThanOneQuestion(t *testing.T) {
 }`}
 	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
 	var events []StreamEvent
-	_, err := r.RunRound(context.Background(), RoundInput{
+	out, err := r.RunRound(context.Background(), RoundInput{
 		SessionID: "clar_multi_q", Round: 1, MaxRounds: 6, InitialPrompt: "x",
 	}, func(ev StreamEvent) { events = append(events, ev) })
-	if err == nil {
-		t.Fatalf("expected error for >1 question")
+	if err != nil {
+		t.Fatalf("runner must accept multiple questions in one round (batch clarification): %v", err)
 	}
-	// No question.created events should leak for a rejected round.
+	if len(out.Questions) != 2 {
+		t.Fatalf("both questions must pass through, got %d", len(out.Questions))
+	}
+	// Both questions emit a created event so the portal renders them in one group.
+	var created int
 	for _, ev := range events {
 		if ev.Type == "clarification.question.created" {
-			t.Fatalf("rejected round must not emit question events: %#v", ev)
+			created++
 		}
+	}
+	if created != 2 {
+		t.Fatalf("expected 2 question.created events (one per batched question), got %d", created)
 	}
 }
 
@@ -773,5 +792,171 @@ func TestRunnerSurfacesNormalizedScenarioName(t *testing.T) {
 	// Must NOT contain a Base36 serial appended here (Factory does that in Task 4).
 	if strings.ContainsAny(out.NormalizedScenarioName, "0123456789") {
 		t.Fatalf("scenario name must not include serial here: %q", out.NormalizedScenarioName)
+	}
+}
+
+// TestNormalizeHighImpactStructuralValidation asserts the runner parses and
+// validates openHighImpact entries (D3). Each surviving entry must have a
+// non-empty id+label, at most 3 options each with a value+label, and no internal
+// slug patterns. Malformed entries are dropped, not fatal.
+func TestNormalizeHighImpactStructuralValidation(t *testing.T) {
+	t.Run("keeps valid entries and caps options at 3", func(t *testing.T) {
+		got := normalizeHighImpact([]HighImpactItem{
+			{
+				ID: "data_policy", Label: "数据来源策略", Recommendation: "mock_data",
+				Options: []Option{
+					{Value: "mock_data", Label: "Mock 数据优先"},
+					{Value: "api_first", Label: "接口数据优先"},
+					{Value: "manual", Label: "手动录入"},
+					{Value: "extra", Label: "多余选项应被截断"},
+				},
+			},
+			{ID: "scope", Label: "应用范围"},
+		})
+		if len(got) != 2 {
+			t.Fatalf("len = %d, want 2: %#v", len(got), got)
+		}
+		if len(got[0].Options) != 3 {
+			t.Fatalf("options = %d, want capped at 3", len(got[0].Options))
+		}
+		if got[0].Recommendation != "mock_data" {
+			t.Fatalf("recommendation lost: %q", got[0].Recommendation)
+		}
+	})
+
+	t.Run("drops entries missing id or label", func(t *testing.T) {
+		got := normalizeHighImpact([]HighImpactItem{
+			{ID: "", Label: "无 id"},
+			{ID: "no_label", Label: "  "},
+			{ID: "ok", Label: "正常"},
+		})
+		if len(got) != 1 || got[0].ID != "ok" {
+			t.Fatalf("got = %#v, want only the ok entry", got)
+		}
+	})
+
+	t.Run("drops internal slug-looking values", func(t *testing.T) {
+		got := normalizeHighImpact([]HighImpactItem{
+			{ID: "software-factory-app", Label: "内部 slug 当 id"},
+			{ID: "ok", Label: "normal"},
+		})
+		if len(got) != 1 || got[0].ID != "ok" {
+			t.Fatalf("got = %#v, want internal-slug id dropped", got)
+		}
+		// An option value that is an internal slug must also be dropped.
+		got2 := normalizeHighImpact([]HighImpactItem{
+			{ID: "ok", Label: "正常", Options: []Option{
+				{Value: "carrier-formation-replay", Label: "slug option"},
+				{Value: "real_value", Label: "真选项"},
+			}},
+		})
+		if len(got2[0].Options) != 1 || got2[0].Options[0].Value != "real_value" {
+			t.Fatalf("slug option not dropped: %#v", got2[0].Options)
+		}
+	})
+
+	t.Run("dedupes by id", func(t *testing.T) {
+		got := normalizeHighImpact([]HighImpactItem{
+			{ID: "dup", Label: "一"},
+			{ID: "dup", Label: "二"},
+		})
+		if len(got) != 1 {
+			t.Fatalf("got = %#v, want deduped to 1", got)
+		}
+	})
+
+	t.Run("nil/empty in returns nil", func(t *testing.T) {
+		if got := normalizeHighImpact(nil); got != nil {
+			t.Fatalf("nil in must yield nil, got %#v", got)
+		}
+		if got := normalizeHighImpact([]HighImpactItem{{ID: "", Label: ""}}); got != nil {
+			t.Fatalf("all-invalid in must yield nil, got %#v", got)
+		}
+	})
+
+	t.Run("plain Chinese user language is never treated as a slug", func(t *testing.T) {
+		if looksLikeInternalSlug("数据策略") {
+			t.Fatal("Chinese must not match slug heuristic")
+		}
+		if looksLikeInternalSlug("Mock 数据优先") {
+			t.Fatal("mixed Chinese must not match slug heuristic")
+		}
+		if !looksLikeInternalSlug("command-dashboard") {
+			t.Fatal("snake/kebab slug must match")
+		}
+	})
+}
+
+// TestRunnerParsesOpenHighImpact proves RunRound decodes openHighImpact from the
+// skill JSON and validates it, and that a round returning BOTH a complete
+// requirement AND a non-empty openHighImpact does NOT short-circuit: the output
+// still carries the open list (the handler, not the runner, decides the gate).
+func TestRunnerParsesOpenHighImpact(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "workLog": [{"type":"ready","content":"需求已收敛"}],
+  "questions": [],
+  "requirement": {
+    "appType": "command_dashboard","appName": "潮汐窗口","targetUsers": ["作战指挥人员"],
+    "coreScenario": "潮汐监控","primaryView": "卡片","mainEntities": ["港口"],
+    "dataPolicy": "mock_data","acceptanceFocus": ["窗口"],"generationProfile": {"base":["software-factory-app"]}
+  },
+  "openHighImpact": [
+    {"id": "data_policy","label": "数据来源策略","recommendation": "mock_data",
+     "options": [{"value":"mock_data","label":"Mock 数据优先"},{"value":"api_first","label":"接口优先"}]},
+    {"id": "scope","label": "应用范围","options": [{"value":"all","label":"全部"},{"value":"part","label":"部分"}]}
+  ]
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_hi", Round: 1, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	// The complete requirement does NOT clear openHighImpact: the runner carries
+	// it verbatim (validated) so the handler can apply the gate. This is the core
+	// D3 invariant: a complete requirement is not a confirmed high-impact decision.
+	if len(out.OpenHighImpact) != 2 {
+		t.Fatalf("openHighImpact len = %d, want 2: %#v", len(out.OpenHighImpact), out.OpenHighImpact)
+	}
+	if out.OpenHighImpact[0].ID != "data_policy" {
+		t.Fatalf("first item id = %q", out.OpenHighImpact[0].ID)
+	}
+	if out.OpenHighImpact[0].Recommendation != "mock_data" {
+		t.Fatalf("recommendation lost: %q", out.OpenHighImpact[0].Recommendation)
+	}
+	if len(out.OpenHighImpact[0].Options) != 2 {
+		t.Fatalf("options len = %d", len(out.OpenHighImpact[0].Options))
+	}
+}
+
+// TestRunnerDropsMalformedHighImpact proves a model round emitting a malformed
+// openHighImpact entry (missing label, internal slug) still produces a usable
+// round: the malformed entry is dropped, the valid one survives.
+func TestRunnerDropsMalformedHighImpact(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: `{
+  "status": "waiting_user","round": 1,
+  "workLog": [{"type":"analysis","content":"x"}],
+  "questions": [],
+  "requirement": {"appType":"command_dashboard","generationProfile": {"base":["software-factory-app"]}},
+  "openHighImpact": [
+    {"id": "","label": "no id"},
+    {"id": "software-factory-app","label": "slug"},
+    {"id": "real","label": "真高影响项","options": [{"value":"a","label":"甲"},{"value":"b","label":"乙"}]}
+  ]
+}`}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_hi_mal", Round: 1, MaxRounds: 6, InitialPrompt: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if len(out.OpenHighImpact) != 1 || out.OpenHighImpact[0].ID != "real" {
+		t.Fatalf("only the valid item should survive: %#v", out.OpenHighImpact)
 	}
 }

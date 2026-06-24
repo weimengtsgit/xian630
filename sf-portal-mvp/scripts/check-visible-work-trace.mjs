@@ -119,4 +119,20 @@ assert.match(workbenchJsx, /taskPanel/, 'ConversationWorkbench must render its f
 assert.match(appJsx, /taskPanel=\{[\s\S]*focusTask/, 'App must pass a dialogue focusTask-driven task panel into the workbench')
 assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must not remain a global task panel outside the dialogue workbench')
 
+// WorkTraceList (执行轨迹) is collapsible like FoldedAnalysis: a fold toggle
+// with an expand/collapse hint, defaulting collapsed, plus a live step count in
+// the header so a collapsed trace still signals in-flight progress.
+const workTraceFn = workbenchJsx.match(/function WorkTraceList[\s\S]*?\n\/\//)
+assert.ok(workTraceFn, 'WorkTraceList component must exist')
+assert.match(workTraceFn[0], /cw-fold-toggle/, 'WorkTraceList (执行轨迹) must be collapsible via a fold toggle')
+assert.match(workTraceFn[0], /list\.length/, 'collapsed WorkTraceList header must show a live step count')
+
+// The composer must stay active in the continuous loop once a job is seeded for
+// the dialogue (queued/running/completed), not ONLY when an app is deployed and
+// running — otherwise the composer locks right after generation (route_locked,
+// versionDeployed still false) and the user can't iterate on the result.
+assert.match(workbenchJsx, /seededJob/, 'ConversationWorkbench must read view.seededJob for the continuous-loop unlock')
+assert.match(workbenchJsx, /continuousLoop/, 'ConversationWorkbench must derive a continuousLoop flag from the seeded job status')
+assert.match(workbenchJsx, /composerActive/, 'ConversationWorkbench composer gate must use composerActive (versionDeployed || continuousLoop)')
+
 console.log('check-visible-work-trace: OK')

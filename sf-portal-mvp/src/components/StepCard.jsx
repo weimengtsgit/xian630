@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   Loader2,
   Clock,
@@ -70,6 +71,26 @@ function formatDuration(ms) {
   return s > 0 ? `${m}m${s}s` : `${m}m`
 }
 
+// stepDurationMs returns the elapsed run time (ms) for a step, derived from its
+// own started_at / ended_at timestamps (the backend StepExecutionSummary carries
+// no duration field). Ended steps return their fixed duration; a RUNNING step
+// returns the live elapsed time against `now` (StepCard re-renders each second
+// so it counts up). null when the step has not started.
+function stepDurationMs(step, status, now) {
+  if (!step) return null
+  const startedRaw = step.started_at || step.startedAt
+  if (!startedRaw) return null
+  const start = Date.parse(startedRaw)
+  if (!Number.isFinite(start)) return null
+  const endedRaw = step.ended_at || step.endedAt
+  if (endedRaw) {
+    const end = Date.parse(endedRaw)
+    if (Number.isFinite(end)) return Math.max(0, end - start)
+  }
+  if (status === 'running') return Math.max(0, now - start)
+  return null
+}
+
 /**
  * One card in the 3x2 step matrix. Renders a single fixed stage with:
  *   - Lucide status icon + status text label (color is never the sole signal)
@@ -95,10 +116,19 @@ export function StepCard({
     (summary && (summary.attempt ?? summary.latest_attempt)) ??
     (step && (step.attempt ?? step.latest_attempt)) ??
     null
-  const durationMs =
-    (summary && (summary.duration_ms ?? summary.durationMs)) ||
-    (step && (step.duration_ms ?? step.durationMs)) ||
-    null
+  // Elapsed run time for this step. Ended steps show their fixed duration
+  // (ended_at − started_at); a RUNNING step shows the live elapsed time, which
+  // the tick below re-renders every second so the value counts up in real time.
+  // The backend StepExecutionSummary has no duration field, so we derive it from
+  // the step's own started_at / ended_at timestamps.
+  const startedAt = step && (step.started_at || step.startedAt)
+  const [, setDurationTick] = useState(0)
+  useEffect(() => {
+    if (status !== 'running' || !startedAt) return undefined
+    const id = setInterval(() => setDurationTick(v => v + 1), 1000)
+    return () => clearInterval(id)
+  }, [status, startedAt])
+  const durationMs = stepDurationMs(step, status, Date.now())
 
   const unread = Number.isFinite(unreadCount) ? unreadCount : 0
 
