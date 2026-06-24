@@ -18,6 +18,8 @@ import {
   initialWorkTraceState,
   applyTraceEvent,
 } from '../src/hooks/workTraceState.js'
+import { resolveWorkbenchTitle } from '../src/hooks/dialogueTimeline.js'
+import { displayJobTitle } from '../src/hooks/jobSelection.js'
 
 // ---- reducer: ordering, isolation, dedup (the verbatim brief test) -----------
 
@@ -102,18 +104,12 @@ assert.match(jobCenterJsx, /created_at|排队时间|创建时间/, 'JobCenter mu
 // The focus-task selector exists and prefers active jobs, else newest terminal.
 const focusTaskJs = readFileSync(new URL('../src/hooks/focusTask.js', import.meta.url), 'utf8')
 assert.match(focusTaskJs, /selectFocusTask/, 'a focus-task selector (selectFocusTask) must exist')
-const jobSelectionJs = readFileSync(new URL('../src/hooks/jobSelection.js', import.meta.url), 'utf8')
-assert.match(
-  workbenchJsx,
-  /const applicationHeaderTitle = resolvedApplication &&\s*\(\s*resolvedApplication\.name \|\| resolvedApplication\.slug\s*\)/,
-  'applicationHeaderTitle must resolve the application name, then slug',
-)
-assert.match(
-  workbenchJsx,
-  /const workbenchTitle = applicationHeaderTitle \|\| \(session \? titleForDialogue\(session\) : '新会话'\)/,
-  'workbenchTitle must fall back to the dialogue title or 新会话',
-)
-assert.match(workbenchJsx, /<strong>\{workbenchTitle\}<\/strong>/, 'workbench header must render workbenchTitle')
-assert.doesNotMatch(jobSelectionJs, /\bapp_name\b/, 'task title selection must not use app_name')
+assert.equal(resolveWorkbenchTitle({ resolvedApplication: { name: '航迹复盘', slug: 'track-replay' } }, { initial_prompt: '旧需求' }), '航迹复盘')
+assert.equal(resolveWorkbenchTitle({ resolvedApplication: { slug: 'track-replay' } }, { initial_prompt: '旧需求' }), 'track-replay')
+assert.equal(resolveWorkbenchTitle({}, { initial_prompt: '旧需求' }), '旧需求')
+assert.equal(resolveWorkbenchTitle({}, null), '新会话')
+assert.equal(displayJobTitle({ app_name: '航迹复盘', user_prompt: '将阈值改为 150 海里', id: 'job_1' }), '将阈值改为 150 海里')
+assert.equal(displayJobTitle({ app_name: '航迹复盘', id: 'job_1' }), 'job_1')
+assert.match(workbenchJsx, /resolveWorkbenchTitle\(view,\s*session\)/, 'workbench must resolve its header title through the pure helper')
 
 console.log('check-visible-work-trace: OK')

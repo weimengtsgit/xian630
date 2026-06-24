@@ -53,6 +53,11 @@ export function titleForDialogue(session) {
   return `${raw.slice(0, 32)}...`
 }
 
+export function resolveWorkbenchTitle(view, session) {
+  const resolvedApplication = view && view.resolvedApplication
+  return (resolvedApplication && (resolvedApplication.name || resolvedApplication.slug)) || titleForDialogue(session)
+}
+
 // lockedFromView returns true when the composer's free-text input must be
 // non-editable: the route is locked OR confirmation is needed OR the dialogue is
 // terminal. When locked the user interacts via the rendered cards/controls, not a

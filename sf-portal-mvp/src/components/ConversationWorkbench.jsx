@@ -17,7 +17,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { statusText, titleForDialogue } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import './ConversationWorkbench.css'
 
 export function ConversationWorkbench({
@@ -76,10 +76,7 @@ export function ConversationWorkbench({
   // ---- continuous-workbench derived state (Task 7) ------------------------
   const traceItems = Array.isArray(workTrace) ? workTrace : []
   const hasPendingTurn = !!(pendingTurn && pendingTurn.turnId)
-  const resolvedApplication = view && view.resolvedApplication
-  const applicationHeaderTitle = resolvedApplication &&
-    (resolvedApplication.name || resolvedApplication.slug)
-  const workbenchTitle = applicationHeaderTitle || (session ? titleForDialogue(session) : '新会话')
+  const workbenchTitle = resolveWorkbenchTitle(view, session)
   // A version has deployed when the view carries a resolved application with a
   // runtime url, OR the trace shows a deployment/version event. We render the
   // "vN 已生效，可继续描述修改需求" hint then, and keep the composer active.
