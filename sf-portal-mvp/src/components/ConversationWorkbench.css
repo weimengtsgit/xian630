@@ -192,3 +192,10 @@
 .cw-pending-turn { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(9, 24, 38, 0.94); border-top: 1px solid rgba(111, 218, 255, 0.18); font-size: 12px; color: #d7eef8; }
 .cw-pending-turn span { flex: 1; }
 .cw-cancel-turn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 5px; border: 1px solid rgba(255, 150, 150, 0.4); background: rgba(60, 24, 30, 0.4); color: #ffb0b0; font-size: 11px; cursor: pointer; }
+
+/* In-flight "thinking" indicator shown the instant a send is accepted, before
+   the first view lands (covers the routing CLI wait so it never looks frozen). */
+.cw-live-pending .cw-live-text { animation: cw-live-pulse 1.2s ease-in-out infinite; }
+.cw-item-label .spin { animation: cw-spin 0.9s linear infinite; display: inline-flex; vertical-align: -2px; margin-right: 4px; }
+@keyframes cw-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes cw-spin { to { transform: rotate(360deg); } }

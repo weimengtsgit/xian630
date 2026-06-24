@@ -41,7 +41,17 @@ import { liveStepFromTrace } from '../src/hooks/workTraceState.js'
   // A streaming live analysis also surfaces beneath the optimistic message pre-view.
   const withLive = buildDialogueTimeline(null, { id: 'opt_2', content: 'hi' }, { key: 't1', content: '识别需求', kind: 'round' })
   assert.ok(withLive.some(it => it.type === 'user_message'), 'optimistic message still leads when a live analysis streams pre-view')
-  assert.ok(withLive.some(it => it.type === 'live_analysis'), 'streaming live analysis renders beneath the optimistic message before the view lands')
+  const withLiveItem = withLive.find(it => it.type === 'live_analysis')
+  assert.ok(withLiveItem, 'streaming live analysis renders beneath the optimistic message before the view lands')
+  assert.equal(withLiveItem.pending, false, 'a real streaming live item is not pending')
+
+  // In-flight "thinking" indicator: with no view AND no streaming yet, a send
+  // just accepted must still show a pending live_analysis ("正在理解你的需求…")
+  // so the workbench never looks frozen during the routing CLI wait.
+  const pending = buildDialogueTimeline(null, { id: 'opt_3', content: 'hi' }, null).find(it => it.type === 'live_analysis')
+  assert.ok(pending, 'a pending live_analysis indicator renders before the view lands and before any stream')
+  assert.equal(pending.pending, true, 'the pre-stream indicator is marked pending (spinner)')
+  assert.equal(pending.content, '正在理解你的需求…', 'pending indicator copy')
 }
 
 // ---- 1. Static check: ConversationWorkbench keeps the confirm action gated --

@@ -310,10 +310,15 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   if (item.type === 'live_analysis') {
     // D1/D2: the transient streaming safe analysis work log. Monospace,
     // plaintext `<pre>`-safe, NEVER dangerouslySetInnerHTML. Rendered as a
-    // distinct "分析过程" block while the round/step is in flight.
+    // distinct "分析过程" block while the round/step is in flight. When `pending`
+    // (no view yet, send just accepted) a spinner marks it as actively working
+    // so the workbench does not look frozen during the routing wait.
     return (
-      <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}`}>
-        <span className="cw-item-label">{item.kind === 'step' ? '生成过程' : '分析过程'}</span>
+      <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`}>
+        <span className="cw-item-label">
+          {item.pending ? <Loader2 size={12} className="spin" /> : null}
+          {item.kind === 'step' ? '生成过程' : '分析过程'}
+        </span>
         <pre className="cw-live-text">{item.content}</pre>
       </div>
     )

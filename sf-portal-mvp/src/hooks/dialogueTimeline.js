@@ -127,18 +127,26 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   }
 
   // D5: before the first persisted view lands (first message of a brand-new
-  // dialogue, while createDialogue is in flight) still surface the optimistic
-  // user message — and any streaming live analysis beneath it — so the composer
-  // is not visually stuck. Once the view loads, the full thread renders below.
+  // dialogue, while createDialogue is in flight) surface the optimistic user
+  // message PLUS an in-flight "thinking" indicator beneath it, so the workbench
+  // never looks frozen during the routing CLI call (which blocks the
+  // createDialogue POST; its streaming cannot be attributed to this
+  // not-yet-selected dialogue, so it would otherwise be dropped). The moment
+  // the view loads, the full thread — with real per-round streaming — takes
+  // over. Prefer real streaming if it has already folded into liveAnalysis.
   if (!view) {
-    if (liveAnalysis && liveAnalysis.content) {
-      items.push({
-        id: `live_${safeString(liveAnalysis.key)}`,
-        type: 'live_analysis',
-        content: safeString(liveAnalysis.content),
-        kind: liveAnalysis.kind === 'step' ? 'step' : 'round',
-      })
-    }
+    // Idle (no send pending, no view) stays empty.
+    if (!optimisticUserMessage && !(liveAnalysis && liveAnalysis.content)) return items
+    const la = liveAnalysis && liveAnalysis.content
+      ? liveAnalysis
+      : { key: 'pending', content: '正在理解你的需求…', kind: 'round' }
+    items.push({
+      id: `live_${safeString(la.key)}`,
+      type: 'live_analysis',
+      content: safeString(la.content),
+      kind: la.kind === 'step' ? 'step' : 'round',
+      pending: !(liveAnalysis && liveAnalysis.content),
+    })
     return items
   }
 
