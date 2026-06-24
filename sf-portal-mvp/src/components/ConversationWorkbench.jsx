@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Archive,
@@ -46,6 +46,7 @@ export function ConversationWorkbench({
   workTrace,
   pendingTurn,
   focusTask,
+  taskPanel,
   onCancelTurn,
   onConfirmChange,
   onRollback,
@@ -53,6 +54,16 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const textareaRef = useRef(null)
+  // Auto-grow the composer textarea with its content (capped by the CSS
+  // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
+  const resizeTextarea = () => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(resizeTextarea, [input])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
@@ -124,6 +135,11 @@ export function ConversationWorkbench({
           <button type="button" className="cw-icon-btn" onClick={() => setHistoryOpen(true)} title="历史会话" aria-label="历史会话"><History size={16} /></button>
         </div>
       </header>
+
+      {/* The focus task belongs to the selected dialogue. Keeping the task
+          panel inside this workbench makes a history-session switch change the
+          conversation, task status, timing, and task actions as one unit. */}
+      {focusTask && taskPanel ? <div className="cw-focus-task">{taskPanel}</div> : null}
 
       <div className="cw-body">
         {timeline.length === 0 && traceItems.length === 0 ? (
@@ -234,6 +250,7 @@ export function ConversationWorkbench({
         ) : (
           <>
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               placeholder={versionDeployed ? '继续描述修改需求' : '输入需求或补充说明'}

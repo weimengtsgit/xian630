@@ -9,7 +9,6 @@ import {
   Ban,
 } from 'lucide-react'
 import { factoryApi } from '../api/client'
-import { displayJobTitle } from '../hooks/jobSelection'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
@@ -221,7 +220,6 @@ export function JobCenter({
       <header className="jc-header">
         <div className="jc-title-block">
           <span className="jc-label">当前任务</span>
-          <h2 className="jc-prompt">{displayJobTitle(activeJob)}</h2>
           {/* started_at (actual exec start) vs created_at (queue time) — Constraint #10.
               Show both, distinctly, when present. */}
           <div className="jc-time-block">
@@ -317,22 +315,19 @@ export function JobCenter({
         </div>
       )}
 
-      {jobStatus === 'completed' && (
+      {jobStatus === 'completed' && (activeJob.runtime_url || activeJob.url) ? (
         <div className="jc-completed">
           <CheckCircle2 size={18} />
-          <span>任务已完成</span>
-          {activeJob.runtime_url || activeJob.url ? (
-            <a
-              className="jc-open"
-              href={activeJob.runtime_url || activeJob.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <ExternalLink size={14} /> 打开应用
-            </a>
-          ) : null}
+          <a
+            className="jc-open"
+            href={activeJob.runtime_url || activeJob.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink size={14} /> 打开应用
+          </a>
         </div>
-      )}
+      ) : null}
 
       {loading && <div className="jc-loading-hint">同步任务状态中...</div>}
 

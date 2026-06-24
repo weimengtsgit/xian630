@@ -328,7 +328,11 @@ func (w *TurnWorker) completeTurn(ctx context.Context, dialogueID string, turn *
 	if err := w.store.CompleteDialogueTurn(ctx, turn.ID, model.TurnStatusCompleted); err != nil {
 		failTransition("complete", dialogueID, turn.ID, err)
 	}
-	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusActive)
+	status := model.DialogueStatusActive
+	if out.Intent == model.TurnIntentApplicationModification {
+		status = model.DialogueStatusChangeConfirmation
+	}
+	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, status)
 	if w.server != nil {
 		w.server.publishDialogueSimple("dialogue.turn.completed", dialogueID, map[string]any{
 			"turn_id": turn.ID, "intent": string(out.Intent),
@@ -400,6 +404,12 @@ func (w *TurnWorker) applyTurnIntent(ctx context.Context, dialogueID string, tur
 	case model.TurnIntentApplicationModification:
 		_ = w.serverUpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusChangeConfirmation)
 		if w.server != nil {
+			payload, _ := json.Marshal(map[string]string{
+				"turn_id": turn.ID, "summary": out.Summary.ChangeDescription,
+			})
+			_, _ = w.server.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+				DialogueID: dialogueID, Type: string(model.WorkTraceChangeConfirm), PayloadJSON: string(payload),
+			})
 			w.server.publishDialogueSimple("dialogue.change.proposed", dialogueID, map[string]any{
 				"turn_id":            turn.ID,
 				"change_description": out.Summary.ChangeDescription,

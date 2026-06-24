@@ -30,6 +30,12 @@ function App() {
     dialogue.setJobsForFocus(jobs.jobs)
   }, [jobs.jobs, dialogue.setJobsForFocus])
 
+  // A session switch is also a task-context switch. Hydrate details only for
+  // this dialogue's focus task; never retain the previous session's global job.
+  useEffect(() => {
+    jobs.selectJob(dialogue.focusTask ? dialogue.focusTask.id : null).catch(() => {})
+  }, [dialogue.focusTask, jobs.selectJob])
+
   // Regeneration is another generate request. Task 5 gates bare POST /api/jobs
   // to require a confirmed requirement, so regeneration MUST flow through
   // clarification -> confirm (the server creates the Job on confirm, surfaced
@@ -62,22 +68,6 @@ function App() {
         </div>
 
         <div className="wb-col wb-center">
-          <JobCenter
-            activeJob={jobs.activeJob}
-            steps={jobs.steps}
-            loading={jobs.loading}
-            onCancel={jobs.cancelJob}
-            onRetry={jobs.retryCurrentStep}
-            summary={jobs.summary}
-            artifacts={jobs.artifacts}
-            selectedStepId={jobs.selectedStepId}
-            selectedAttempt={jobs.selectedAttempt}
-            selectStepAttempt={jobs.selectStepAttempt}
-            getRecords={jobs.getRecords}
-            getUnreadCount={jobs.getUnreadCount}
-            loadStepRecords={jobs.loadStepRecords}
-            getArtifactContent={factoryApiGetArtifactContent}
-          />
           <ConversationWorkbench
             session={dialogue.session}
             view={dialogue.view}
@@ -93,11 +83,29 @@ function App() {
             workTrace={dialogue.workTrace}
             pendingTurn={dialogue.pendingTurn}
             focusTask={dialogue.focusTask}
+            taskPanel={
+              <JobCenter
+                activeJob={dialogue.focusTask || null}
+                steps={jobs.steps}
+                loading={jobs.loading}
+                onCancel={jobs.cancelJob}
+                onRetry={jobs.retryCurrentStep}
+                summary={jobs.summary}
+                artifacts={jobs.artifacts}
+                selectedStepId={jobs.selectedStepId}
+                selectedAttempt={jobs.selectedAttempt}
+                selectStepAttempt={jobs.selectStepAttempt}
+                getRecords={jobs.getRecords}
+                getUnreadCount={jobs.getUnreadCount}
+                loadStepRecords={jobs.loadStepRecords}
+                getArtifactContent={factoryApiGetArtifactContent}
+              />
+            }
             onNewSession={dialogue.newDialogue}
             onSelectSession={dialogue.selectDialogue}
             onSend={prompt => {
-              if (jobs.activeJob && jobs.activeJob.status === 'waiting_user') {
-                return jobs.answerJob(jobs.activeJob.id, prompt)
+              if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
+                return jobs.answerJob(dialogue.focusTask.id, prompt)
               }
               return dialogue.send(prompt)
             }}
@@ -110,7 +118,7 @@ function App() {
             onAbandon={dialogue.abandon}
             onDeleteSession={dialogue.deleteDialogue}
             onCancelTurn={dialogue.cancelTurn}
-            onConfirmChange={() => dialogue.refreshSessions().then(() => dialogue.view && dialogue.selectDialogue(dialogue.session && dialogue.session.id))}
+            onConfirmChange={dialogue.confirmChange}
             onRollback={dialogue.rollback}
             onArchive={dialogue.archive}
           />

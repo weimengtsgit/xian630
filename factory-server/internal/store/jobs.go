@@ -47,6 +47,71 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	return err
 }
 
+func createJobInTx(ctx context.Context, tx *sql.Tx, job model.Job) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
+		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
+		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind)
+	return err
+}
+
+func (s *Store) seedJobInTx(ctx context.Context, tx *sql.Tx, job model.Job, steps []model.JobStep) error {
+	if err := createJobInTx(ctx, tx, job); err != nil {
+		return err
+	}
+	for _, step := range steps {
+		if s.jobOnCreateStepHook != nil {
+			if err := s.jobOnCreateStepHook(step); err != nil {
+				return err
+			}
+		}
+		if err := createJobStepInTx(ctx, tx, step); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SeedJob atomically creates a job and its full fixed step plan. It is used by
+// revision generation as well as initial generation so either path rolls back
+// completely when an individual step insert fails.
+func (s *Store) SeedJob(ctx context.Context, job model.Job, steps []model.JobStep) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SeedJobWithApplicationVersion atomically creates a revision job, its steps,
+// and the queued immutable candidate version. The caller derives application
+// and parent-version ids from server-side lineage before invoking this method.
+func (s *Store) SeedJobWithApplicationVersion(ctx context.Context, job model.Job, steps []model.JobStep, version model.ApplicationVersion) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+		return err
+	}
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = time.Now()
+	}
+	if err := createApplicationVersion(ctx, tx, version); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // SeedClarificationJob atomically creates a confirmed clarification's generation
 // job: it inserts the job row, all of its steps, and links the clarification
 // session to the job inside a SINGLE transaction. If any statement fails the
@@ -61,25 +126,8 @@ func (s *Store) SeedClarificationJob(ctx context.Context, job model.Job, steps [
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
-		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
-		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
-		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
-		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind); err != nil {
+	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
 		return err
-	}
-	for _, step := range steps {
-		if s.jobOnCreateStepHook != nil {
-			if err := s.jobOnCreateStepHook(step); err != nil {
-				return err
-			}
-		}
-		if err := createJobStepInTx(ctx, tx, step); err != nil {
-			return err
-		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE clarification_sessions SET created_job_id = ?, updated_at = ? WHERE id = ?`,
@@ -315,17 +363,19 @@ SELECT j.id FROM jobs j
 WHERE j.status = ?
   AND NOT EXISTS (
     SELECT 1 FROM jobs r
-    WHERE r.status = ? AND r.app_slug = j.app_slug AND r.app_slug <> ''
+    WHERE r.status IN (?, ?) AND r.app_slug = j.app_slug AND r.app_slug <> ''
   )
   AND NOT EXISTS (
     SELECT 1 FROM jobs r
-    WHERE r.status = ? AND r.app_slug = '' AND j.app_slug = ''
+    WHERE r.status IN (?, ?) AND r.app_slug = '' AND j.app_slug = ''
   )
 ORDER BY j.created_at ASC
 LIMIT 1`,
 		string(model.JobStatusQueued),
 		string(model.JobStatusRunning),
-		string(model.JobStatusRunning)).Scan(&jobID)
+		string(model.JobStatusWaitingUser),
+		string(model.JobStatusRunning),
+		string(model.JobStatusWaitingUser)).Scan(&jobID)
 	if err == sql.ErrNoRows {
 		// Nothing eligible: commit the read tx (no write lock held) and return.
 		if err := tx.Commit(); err != nil {
@@ -435,10 +485,43 @@ UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
 // CreatedAppID instead of relying on the slug alone.
 func (s *Store) SetJobCreatedApp(ctx context.Context, jobID, appID, slug, name string) error {
 	now := ms(time.Now())
-	_, err := s.db.ExecContext(ctx, `
-UPDATE jobs SET created_app_id = ?, app_slug = ?, app_name = ?, updated_at = ? WHERE id = ?`,
-		appID, slug, name, now, jobID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs SET created_app_id = ?, application_id = ?, app_slug = ?, app_name = ?, updated_at = ? WHERE id = ?`,
+		appID, appID, slug, name, now, jobID); err != nil {
+		return err
+	}
+	var dialogueID string
+	if err := tx.QueryRowContext(ctx, `SELECT dialogue_id FROM jobs WHERE id = ?`, jobID).Scan(&dialogueID); err != nil {
+		return err
+	}
+	if dialogueID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET resolved_application_id = ?, status = CASE WHEN status = ? THEN ? ELSE status END, updated_at = ?
+WHERE id = ?`, appID, string(model.DialogueStatusTaskRunning), string(model.DialogueStatusActive), now, dialogueID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetLatestJobForApplication returns the newest job that produced or targets
+// appID. Revision confirmation reuses its server-confirmed requirement rather
+// than accepting a requirement payload from the browser.
+func (s *Store) GetLatestJobForApplication(ctx context.Context, appID string) (*model.Job, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobSelectCols+`
+FROM jobs WHERE application_id = ? OR created_app_id = ?
+ORDER BY created_at DESC LIMIT 1`, appID, appID)
+	j, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return j, err
 }
 
 // MarkStepRunning flips a step to running, bumps attempt, and stamps started_at

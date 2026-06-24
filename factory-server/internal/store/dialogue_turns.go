@@ -37,6 +37,20 @@ func (s *Store) GetDialogueTurn(ctx context.Context, id string) (*model.Dialogue
 	return t, nil
 }
 
+// GetLatestCompletedDialogueTurnByIntent returns the latest completed turn of
+// one intent. Change confirmation uses this server-owned record instead of
+// accepting a client supplied modification summary.
+func (s *Store) GetLatestCompletedDialogueTurnByIntent(ctx context.Context, dialogueID string, intent model.TurnIntent) (*model.DialogueTurn, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+dialogueTurnCols+`
+FROM dialogue_turns WHERE dialogue_id = ? AND intent = ? AND status = ?
+ORDER BY created_at DESC LIMIT 1`, dialogueID, string(intent), string(model.TurnStatusCompleted))
+	t, err := scanDialogueTurn(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return t, err
+}
+
 // ListDialogueTurns returns the turns for a dialogue, oldest-first. It is the
 // ordered view the worker drains and the audit view the portal renders.
 func (s *Store) ListDialogueTurns(ctx context.Context, dialogueID string) ([]model.DialogueTurn, error) {

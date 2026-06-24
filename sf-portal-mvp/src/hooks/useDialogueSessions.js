@@ -76,6 +76,14 @@ export function useDialogueSessions() {
   useEffect(() => {
     pendingTurnRef.current = pendingTurn
   }, [pendingTurn])
+  // selectedDialogueIdRef mirrors state.selectedDialogueId so the loadView
+  // closure (a stable useCallback([]) that cannot read `state` without a stale
+  // closure) can distinguish a real dialogue SWITCH (reset the trace stream)
+  // from a same-dialogue refresh.
+  const selectedDialogueIdRef = useRef(null)
+  useEffect(() => {
+    selectedDialogueIdRef.current = state.selectedDialogueId
+  }, [state.selectedDialogueId])
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -118,7 +126,10 @@ export function useDialogueSessions() {
       }))
       // Switching the selected dialogue resets the trace stream (Constraint #10):
       // the per-dialogue SSE effect re-subscribes and re-hydrates from scratch.
-      if (prev.selectedDialogueId !== id) {
+      // Compare against the ref: loadView is a stable useCallback, so `state`
+      // would be a stale closure here, and `prev` is only the setState-updater
+      // parameter (out of scope outside that arrow).
+      if (selectedDialogueIdRef.current !== id) {
         setWorkTrace(resetWorkTraceState(id))
         setPendingTurn(null)
       }
@@ -437,6 +448,24 @@ export function useDialogueSessions() {
     }
   }, [loadView, refreshSessions, state.selectedDialogueId, submitting])
 
+  const confirmChange = useCallback(async () => {
+    const sess = state.view && state.view.session
+    if (!sess || submitting) return null
+    setSubmitting(true)
+    setError(null)
+    try {
+      const result = await factoryApi.confirmDialogueChange(sess.id)
+      await refreshSessions()
+      await loadView(sess.id)
+      return result
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [loadView, refreshSessions, state.view, submitting])
+
   // archive marks the selected dialogue as archived. The backend endpoint
   // (POST /api/dialogues/:id/archive) is idempotent and sets status to
   // `archived`, emitting `dialogue.archived`. On success we refresh the list +
@@ -554,7 +583,11 @@ export function useDialogueSessions() {
   const locked = lockedFromView(state.view)
   // Focus task for the SELECTED dialogue (Constraint #10 — switching a history
   // session syncs its focus task). Memoized cheaply over the job list + dialogue.
-  const focusTask = selectFocusTask(jobsForFocus, state.selectedDialogueId)
+  // No selected session (e.g. just clicked "新建会话") ⇒ no focus task, so the
+  // task panel shows its empty placeholder instead of the cross-session fallback
+  // (which would otherwise surface the previous session's task in a workbench
+  // whose conversation has already been cleared).
+  const focusTask = state.view ? selectFocusTask(jobsForFocus, state.selectedDialogueId) : null
 
   return {
     ...state,
@@ -586,6 +619,7 @@ export function useDialogueSessions() {
     setJobsForFocus,
     cancelTurn,
     rollback,
+    confirmChange,
     archive,
   }
 }

@@ -86,6 +86,8 @@ assert.match(appJsx, /selectStepAttempt/, 'App must pass selectStepAttempt throu
 // latest_record:{ ...content... } }. There is NO `attempts` array and NO
 // `summary`/`latest_summary` string. Pin the corrected primary-read so a
 // regression that drops latest_attempt / latest_record fails the harness.
+// (The latest_record excerpt is rendered in the StepExecutionDrawer; the card
+// itself shows only the attempt + duration to keep its height compact.)
 assert.match(
   jobCenterJsx,
   /sm\.latest_attempt/,
@@ -93,8 +95,8 @@ assert.match(
 )
 assert.match(
   stepCardJsx,
-  /summary\.latest_record\.content/,
-  'StepCard must read the excerpt from summary.latest_record.content',
+  /summary\.latest_attempt/,
+  'StepCard must read summary.latest_attempt for the inline attempt badge (the excerpt is rendered only in the drawer)',
 )
 assert.match(
   drawerJsx,

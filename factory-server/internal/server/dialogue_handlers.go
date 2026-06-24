@@ -434,8 +434,9 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		view.AgentDraftStatus = record.Status
 		view.AgentConsolidation = s.latestBusinessConsolidation(ctx, id)
 	}
-	// Seeded job for a resolved application-generation dialogue.
-	if dlg.Status == model.DialogueStatusResolved && dlg.Intent == model.DialogueIntentApplicationGeneration {
+	// Seeded job for an application-generation dialogue, including its continuing
+	// task_running/active phases.
+	if dlg.Intent == model.DialogueIntentApplicationGeneration {
 		view.SeededJob = s.findJobForDialogue(ctx, dlg)
 	}
 	return view, nil
@@ -847,16 +848,16 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.publishDialogueSimple("dialogue.message.accepted", id, map[string]any{
-			"turn_id":   turnID,
+			"turn_id":    turnID,
 			"message_id": msg.ID,
 		})
 		if s.turnWorker != nil {
 			s.turnWorker.Signal()
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{
-			"dialogueId":  id,
-			"turnId":      turnID,
-			"acceptedAt":  now.UTC().Format(time.RFC3339),
+			"dialogueId": id,
+			"turnId":     turnID,
+			"acceptedAt": now.UTC().Format(time.RFC3339),
 		})
 		return
 	}
@@ -931,6 +932,80 @@ func (s *Server) cancelDialogueTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = canceledID
 	writeJSON(w, http.StatusAccepted, map[string]any{"turnId": turnID, "status": string(model.TurnStatusCanceled)})
+}
+
+// confirmDialogueChange creates a revision job from the latest completed
+// application-modification turn. The browser supplies no application id,
+// version id, requirement, or prompt: all four are derived from durable server
+// records so a confirmation cannot revise a different application lineage.
+func (s *Server) confirmDialogueChange(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dialogueID := Param(r, "id")
+	dlg, err := s.store.GetDialogueSession(ctx, dialogueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get dialogue")
+		return
+	}
+	if dlg == nil || dlg.Status != model.DialogueStatusChangeConfirmation {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "no change awaiting confirmation"})
+		return
+	}
+	if dlg.ResolvedApplicationID == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "initial application is not ready"})
+		return
+	}
+	turn, err := s.store.GetLatestCompletedDialogueTurnByIntent(ctx, dialogueID, model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "change proposal not found"})
+		return
+	}
+	app, err := s.store.GetApplication(ctx, dlg.ResolvedApplicationID)
+	if err != nil || app == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "linked application not found"})
+		return
+	}
+	base, err := s.store.GetEffectiveApplicationVersion(ctx, app.ID)
+	if err != nil || base == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "no effective application version"})
+		return
+	}
+	source, err := s.store.GetLatestJobForApplication(ctx, app.ID)
+	if err != nil || source == nil || source.ConfirmedRequirementJSON == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "confirmed requirement unavailable"})
+		return
+	}
+	var summary dialogue.TurnSummary
+	_ = json.Unmarshal([]byte(turn.SummaryJSON), &summary)
+	prompt := strings.TrimSpace(summary.ChangeDescription)
+	if prompt == "" {
+		prompt = "修改应用"
+	}
+	now := time.Now()
+	jobID := "job_" + idpkg.New()
+	versionID := "ver_" + idpkg.New()
+	job := model.Job{
+		ID: jobID, UserPrompt: prompt, AppName: app.Name, AppSlug: app.Slug,
+		Status: model.JobStatusQueued, CurrentStepKind: model.StepRequirementAnalysis,
+		ConfirmedRequirementJSON: source.ConfirmedRequirementJSON, DialogueID: dialogueID,
+		ApplicationID: app.ID, BaseVersionID: base.ID, Kind: "revise", CreatedAt: now, UpdatedAt: now,
+	}
+	steps := make([]model.JobStep, 0, len(stepPlan))
+	for i, sp := range stepPlan {
+		steps = append(steps, model.JobStep{ID: "step_" + idpkg.New(), JobID: jobID, Kind: sp.kind, Seq: i + 1, AgentKey: sp.agentKey, Status: model.StepStatusPending})
+	}
+	version := model.ApplicationVersion{
+		ID: versionID, ApplicationID: app.ID, ParentVersionID: base.ID, JobID: jobID,
+		Status: model.ApplicationVersionQueued, CreatedAt: now,
+	}
+	if err := s.store.SeedJobWithApplicationVersion(ctx, job, steps, version); err != nil {
+		writeError(w, http.StatusInternalServerError, "seed revision job")
+		return
+	}
+	_ = s.store.UpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusTaskRunning, "", "")
+	s.publishDialogueSimple("dialogue.change.confirmed", dialogueID, map[string]any{"turn_id": turn.ID, "job_id": jobID, "base_version_id": base.ID})
+	s.hub.Publish(Event{Type: "job.created", Data: job})
+	s.exec.Signal()
+	writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID})
 }
 
 // forkDialogue creates a new dialogue draft seeded by a fork target prompt,
@@ -1601,9 +1676,9 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		// surfaced under (Task 4). It is the work_trace_events sequence-
 		// partition key: the executor stamps it onto every trace the runner
 		// produces, so the dialogue-scoped SSE stream can filter them.
-		DialogueID:               id,
-		CreatedAt:                now,
-		UpdatedAt:                now,
+		DialogueID: id,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	steps := make([]model.JobStep, 0, len(stepPlan))
 	for i, sp := range stepPlan {
@@ -1621,10 +1696,16 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusConfirmed, "", "")
-	// Resolve the parent. The resolved application is created by the job pipeline
-	// (not here), so ResolvedApplicationID stays empty; the seeded job is the link.
+	// Keep the parent interactive while its initial task runs. The application id
+	// is filled atomically by SetJobCreatedApp once code generation registers it.
+	// Marking this as task_running (rather than terminal resolved) makes follow-up
+	// messages use the continuing-turn path immediately.
 	if err := s.store.SetDialogueResolved(ctx, id, "", ""); err != nil {
 		writeError(w, http.StatusInternalServerError, "resolve dialogue")
+		return
+	}
+	if err := s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusTaskRunning, "", ""); err != nil {
+		writeError(w, http.StatusInternalServerError, "set dialogue task running")
 		return
 	}
 	s.hub.Publish(Event{Type: "job.created", Data: job})
@@ -1634,7 +1715,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		"clarification_session_id": job.ClarificationSessionID,
 		"source":                   "dialogue_confirm",
 	})
-	s.publishDialogueSimple("dialogue.resolved", id, map[string]any{
+	s.publishDialogueSimple("dialogue.task.running", id, map[string]any{
 		"seeded_job_id": jobID,
 		"app_name":      factoryName,
 	})

@@ -35,7 +35,7 @@ type Server struct {
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
 	runner      deploy.CommandRunner                                               // default: &deploy.OSRunner{}
-	runtime     deploy.ContainerRuntime                                             // container runtime (Podman or Docker)
+	runtime     deploy.ContainerRuntime                                            // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
 
@@ -219,7 +219,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	factory := &executor.FactoryRunner{
 		Store:        st,
 		Cmds:         osRunner,
-		Runtime:      runtime, // docker or podman, per FACTORY_CONTAINER_RUNTIME (defaults podman)
+		Runtime:      runtime,  // docker or podman, per FACTORY_CONTAINER_RUNTIME (defaults podman)
 		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/container emit live command_stdout/command_stderr records
 		Alloc:        deploy.DefaultAllocator(),
 		Health:       deploy.CheckHTTP,
@@ -441,6 +441,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/dialogues/:id/archive", s.archiveDialogue)
 	r.Handle("POST", "/api/dialogues/:id/messages", s.addDialogueMessage)
 	r.Handle("POST", "/api/dialogues/:id/turns/:turnId/cancel", s.cancelDialogueTurn)
+	r.Handle("POST", "/api/dialogues/:id/changes/confirm", s.confirmDialogueChange)
 	r.Handle("POST", "/api/dialogues/:id/route", s.selectDialogueRoute)
 	r.Handle("POST", "/api/dialogues/:id/applications/:applicationID/open", s.openDialogueApp)
 	r.Handle("POST", "/api/dialogues/:id/clarification/answers", s.answerDialogueClarification)

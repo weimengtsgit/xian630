@@ -165,6 +165,8 @@ export const factoryApi = {
   // session. Returns the cancel status (202 accepted / 200 already-terminal).
   cancelDialogueTurn: (id, turnId) =>
     request(`/api/dialogues/${id}/turns/${turnId}/cancel`, { method: 'POST' }),
+  confirmDialogueChange: id =>
+    request(`/api/dialogues/${id}/changes/confirm`, { method: 'POST' }),
   // getDialogueTrace is the REST hydration / replay endpoint for a dialogue's
   // visible work-trace rows, ascending by sequence, honoring afterSequence.
   // Used on open + on a detected replay gap (sequence jump) to re-sync.

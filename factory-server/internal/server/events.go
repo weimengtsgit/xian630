@@ -258,7 +258,13 @@ func (s *Server) dialogueTraceStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// REPLAY persisted rows first. This runs BEFORE the SSE headers are flushed
+	// Subscribe BEFORE reading the replay snapshot. Otherwise an event persisted
+	// between ListDialogueTrace and Hub.Subscribe is in neither the snapshot nor
+	// the live channel and can remain invisible until a later reconnect.
+	ch := s.hub.Subscribe()
+	defer s.hub.Unsubscribe(ch)
+
+	// Read the persisted replay snapshot before the SSE headers are flushed
 	// so a store error can still be reported as a proper HTTP error (Fix 6: an
 	// http.Error after the text/event-stream headers are committed is a no-op).
 	rows, err := s.store.ListDialogueTrace(r.Context(), dialogueID, startAfter, 0)
@@ -290,10 +296,6 @@ func (s *Server) dialogueTraceStream(w http.ResponseWriter, r *http.Request) {
 		fl.Flush()
 		lastEmitted = row.Sequence
 	}
-
-	// Subscribe to live events and forward only this dialogue's.
-	ch := s.hub.Subscribe()
-	defer s.hub.Unsubscribe(ch)
 
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()

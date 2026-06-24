@@ -21,14 +21,23 @@ func (s *Store) CreateApplicationVersion(ctx context.Context, v model.Applicatio
 	if v.CreatedAt.IsZero() {
 		v.CreatedAt = time.Now()
 	}
-	if _, err := s.db.ExecContext(ctx, `
-INSERT INTO application_versions(id, app_id, parent_version_id, job_id, status, source_path, deployment_id, created_at, promoted_at)
-VALUES(?,?,?,?,?,?,?,?,?)`,
-		v.ID, v.ApplicationID, v.ParentVersionID, v.JobID, string(v.Status),
-		v.SourcePath, v.DeploymentID, ms(v.CreatedAt), nullableMs(v.PromotedAt)); err != nil {
+	if err := createApplicationVersion(ctx, s.db, v); err != nil {
 		return nil, err
 	}
 	return &v, nil
+}
+
+type applicationVersionExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func createApplicationVersion(ctx context.Context, exec applicationVersionExecutor, v model.ApplicationVersion) error {
+	_, err := exec.ExecContext(ctx, `
+INSERT INTO application_versions(id, app_id, parent_version_id, job_id, status, source_path, deployment_id, created_at, promoted_at)
+VALUES(?,?,?,?,?,?,?,?,?)`,
+		v.ID, v.ApplicationID, v.ParentVersionID, v.JobID, string(v.Status),
+		v.SourcePath, v.DeploymentID, ms(v.CreatedAt), nullableMs(v.PromotedAt))
+	return err
 }
 
 // GetEffectiveApplicationVersion returns the single currently-effective version

@@ -999,8 +999,8 @@ func TestApplicationClarificationFullSixRounds(t *testing.T) {
 	}
 	var confirmView dialogueView
 	json.NewDecoder(confirmRec.Body).Decode(&confirmView)
-	if confirmView.Session.Status != model.DialogueStatusResolved {
-		t.Fatalf("status = %q, want resolved", confirmView.Session.Status)
+	if confirmView.Session.Status != model.DialogueStatusTaskRunning {
+		t.Fatalf("status = %q, want task_running", confirmView.Session.Status)
 	}
 	if confirmView.SeededJob == nil {
 		t.Fatalf("no seeded job in confirm response")
@@ -1825,8 +1825,8 @@ func TestDialogueAcceptsModificationAfterDeployment(t *testing.T) {
 	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
 		Intent: model.TurnIntentApplicationModification,
 		Summary: dialogue.TurnSummary{
-			UserFacingText:      "将告警阈值修改为 150 海里",
-			ChangeDescription:   "将告警阈值从默认值修改为 150 海里",
+			UserFacingText:    "将告警阈值修改为 150 海里",
+			ChangeDescription: "将告警阈值从默认值修改为 150 海里",
 		},
 	}))
 	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
@@ -1853,6 +1853,87 @@ func TestDialogueAcceptsModificationAfterDeployment(t *testing.T) {
 		// ok: accepted and being processed asynchronously
 	default:
 		t.Fatalf("turn status = %q, want pending or running (must not be terminal right after accept)", turn.Status)
+	}
+}
+
+// TestConfirmDialogueChangeRollsBackRevisionSeedFailure protects the continuing
+// modification path: a failed revision-step insert must not leave an orphaned
+// revision job behind. Initial-generation confirmation already has this
+// transaction guarantee; revisions must have the identical guarantee.
+func TestConfirmDialogueChangeRollsBackRevisionSeedFailure(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent:  model.TurnIntentApplicationModification,
+		Summary: dialogue.TurnSummary{ChangeDescription: "将告警阈值改为 150 海里"},
+	}))
+	ctx := context.Background()
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+	now := time.Now()
+	if err := st.CreateJob(ctx, model.Job{
+		ID: "job_v1", AppSlug: "app_1", AppName: "已部署的复盘应用", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, ApplicationID: "app_1", DialogueID: "dlg_1",
+		ConfirmedRequirementJSON: `{"coreScenario":"航迹复盘"}`, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed source job: %v", err)
+	}
+	if _, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_1", ApplicationID: "app_1", JobID: "job_v1", Status: model.ApplicationVersionEffective,
+		CreatedAt: now, PromotedAt: &now,
+	}); err != nil {
+		t.Fatalf("seed effective version: %v", err)
+	}
+
+	accepted := acceptMessage(t, r, "dlg_1", "把告警阈值改成 150 海里")
+	clf.releaseOne()
+	waitForTurnStatus(t, st, accepted["turnId"], model.TurnStatusCompleted)
+	if dlg, _ := st.GetDialogueSession(ctx, "dlg_1"); dlg == nil || dlg.Status != model.DialogueStatusChangeConfirmation {
+		t.Fatalf("dialogue status = %+v, want change_confirmation", dlg)
+	}
+	jobsBefore, _ := st.ListJobs(ctx, "")
+	st.SetJobStepSeedHook(func(step model.JobStep) error {
+		if step.Seq == 3 {
+			return errors.New("inject revision seed failure")
+		}
+		return nil
+	})
+	defer st.SetJobStepSeedHook(nil)
+
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_1/changes/confirm", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("confirm revision = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	jobsAfter, _ := st.ListJobs(ctx, "")
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Fatalf("revision seed left orphan job: before=%d after=%d", len(jobsBefore), len(jobsAfter))
+	}
+
+	// Retrying the same confirmed proposal after the transient seed error creates
+	// one complete revision job with lineage derived on the server.
+	st.SetJobStepSeedHook(nil)
+	rec = doPost(t, r, http.MethodPost, "/api/dialogues/dlg_1/changes/confirm", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry confirm revision = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	jobsAfter, _ = st.ListJobs(ctx, "")
+	if len(jobsAfter) != len(jobsBefore)+1 {
+		t.Fatalf("revision job count = %d, want %d", len(jobsAfter), len(jobsBefore)+1)
+	}
+	var revision *model.Job
+	for i := range jobsAfter {
+		if jobsAfter[i].Kind == "revise" {
+			revision = &jobsAfter[i]
+			break
+		}
+	}
+	if revision == nil || revision.DialogueID != "dlg_1" || revision.ApplicationID != "app_1" || revision.BaseVersionID != "ver_1" {
+		t.Fatalf("revision lineage = %+v", revision)
+	}
+	version, err := st.GetApplicationVersionByJob(ctx, revision.ID)
+	if err != nil || version == nil || version.ApplicationID != "app_1" || version.ParentVersionID != "ver_1" || version.Status != model.ApplicationVersionQueued {
+		t.Fatalf("revision version = %+v err=%v", version, err)
+	}
+	steps, err := st.ListJobSteps(ctx, revision.ID)
+	if err != nil || len(steps) != len(stepPlan) {
+		t.Fatalf("revision steps = %d err=%v, want %d", len(steps), err, len(stepPlan))
 	}
 }
 
@@ -2405,4 +2486,3 @@ func TestScenarioArchiveThenExplicitDeletePreservesAudit(t *testing.T) {
 		t.Fatalf("trace lost on app deletion (audit violated): err=%v len=%d", err, len(trace))
 	}
 }
-
