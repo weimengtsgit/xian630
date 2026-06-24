@@ -46,6 +46,29 @@ func writeServerCatalog(t *testing.T, root, content string) {
 	}
 }
 
+func writeServerSceneManifest(t *testing.T, root, slug string) {
+	t.Helper()
+	dir := filepath.Join(root, "scene", slug, ".factory")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir scene manifest %s: %v", slug, err)
+	}
+	raw := `{
+  "schemaVersion": 1,
+  "slug": "` + slug + `",
+  "name": "` + slug + `",
+  "type": "command_dashboard",
+  "source": "preset",
+  "description": "` + slug + `",
+  "entry": "static-vite",
+  "path": "scene/` + slug + `",
+  "build": { "command": "npm run build", "outputDir": "dist" },
+  "runtime": { "devCommand": "npm run dev", "defaultPort": 5173 }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "app.json"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write scene manifest %s: %v", slug, err)
+	}
+}
+
 // newTestServer builds a Server backed by an in-memory store seeded with one
 // preset app, returning the server and its configured router for httptest. The
 // workspace root carries a catalog that marks the seed preset as an application
@@ -54,6 +77,7 @@ func newTestServer(t *testing.T) (*Server, *Router) {
 	t.Helper()
 	root := t.TempDir()
 	writeServerCatalog(t, root, `{"version":1,"scenes":{"east-sea-situation":{"surface":"application","order":1}}}`)
+	writeServerSceneManifest(t, root, "east-sea-situation")
 
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -133,6 +157,8 @@ func TestListApplicationsFiltersBlueprintPresetAndKeepsGenerated(t *testing.T) {
     "visible-preset": { "surface": "application", "order": 1 }
   }
 }`)
+	writeServerSceneManifest(t, root, "blueprint-preset")
+	writeServerSceneManifest(t, root, "visible-preset")
 
 	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
 	req := httptest.NewRequest(http.MethodGet, "/api/apps", nil)

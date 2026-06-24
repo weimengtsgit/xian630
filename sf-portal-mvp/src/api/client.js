@@ -132,5 +132,12 @@ export const factoryApi = {
   // dedicated answer/refine path.
   continueDialogueBusiness: (id, content) =>
     request(`/api/dialogues/${id}/business-agent/continue`, { method: 'POST', body: JSON.stringify({ content }) }),
+  applyDialogueBusinessConsolidation: (id, { accept = false, field = '', value = '' } = {}) =>
+    request(`/api/dialogues/${id}/business-agent/consolidation`, {
+      method: 'POST',
+      body: JSON.stringify(
+        accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
+      ),
+    }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

@@ -54,7 +54,7 @@ Output ONLY this JSON object (no prose, no markdown fences):
   surface — but you must still populate it correctly for generation routes.
 - `userFacingReason` — a concise, positive explanation for the user. For an
   `application_generation` route, explain that Factory will clarify the
-  requirement and generate a runnable assistant application.
+  requirement and generate a runnable application.
 - `needsRouteConfirmation` — true when the route should be confirmed with the
   user before proceeding.
 

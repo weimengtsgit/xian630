@@ -16,8 +16,18 @@ import {
 const DIALOGUE_TYPES = new Set([
   'dialogue.created',
   'dialogue.intent.updated',
+  'dialogue.route.started',
+  'dialogue.route.delta',
+  'dialogue.route.completed',
   'dialogue.application.recommended',
   'dialogue.route.confirmed',
+  'dialogue.draft.started',
+  'dialogue.draft.delta',
+  'dialogue.draft.completed',
+  'dialogue.draft.question.created',
+  'dialogue.draft.consolidation.updated',
+  'dialogue.draft.summary.updated',
+  'dialogue.draft.ready_to_confirm',
   'dialogue.agent_draft.updated',
   'dialogue.agent.created',
   'dialogue.clarification.updated',
@@ -186,11 +196,18 @@ export function useDialogueSessions() {
       let view
       const sess = state.view.session
       if (sess.intent === 'business_processing_agent') {
-        // Business drafting: the selected answer(s) become a refinement that
-        // continues the draft round (the route is locked; there is no separate
-        // answer endpoint).
-        const content = answers.map(a => a.value).filter(Boolean).join('；')
-        view = await factoryApi.continueDialogueBusiness(sess.id, content)
+        if (consolidation && consolidation.field) {
+          view = await factoryApi.applyDialogueBusinessConsolidation(sess.id, {
+            field: consolidation.field,
+            value: consolidation.value,
+          })
+        } else {
+          // Business drafting: the selected answer(s) become a refinement that
+          // continues the draft round (the route is locked; there is no separate
+          // answer endpoint).
+          const content = answers.map(a => a.value).filter(Boolean).join('；')
+          view = await factoryApi.continueDialogueBusiness(sess.id, content)
+        }
       } else if (consolidation && consolidation.field) {
         // Round-6 single-field adjust path: the backend merges the persisted
         // consolidation with the override (no model turn) and marks ready_to_confirm.
@@ -222,9 +239,11 @@ export function useDialogueSessions() {
     setSubmitting(true)
     setError(null)
     try {
+      const isBusiness = state.view.session.intent === 'business_processing_agent'
+      const apply = isBusiness ? factoryApi.applyDialogueBusinessConsolidation : factoryApi.applyDialogueConsolidation
       const view = adjust && adjust.field
-        ? await factoryApi.applyDialogueConsolidation(state.view.session.id, { field: adjust.field, value: adjust.value })
-        : await factoryApi.applyDialogueConsolidation(state.view.session.id, { accept: true })
+        ? await apply(state.view.session.id, { field: adjust.field, value: adjust.value })
+        : await apply(state.view.session.id, { accept: true })
       await loadView(view.session.id)
       return view
     } catch (err) {

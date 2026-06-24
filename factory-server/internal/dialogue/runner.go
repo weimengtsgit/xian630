@@ -276,6 +276,15 @@ func normalizeRouteOutput(out RouteOutput) RouteOutput {
 		out.ExistingApplicationSlugs = nil
 		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的助手应用。"
 	}
+	if out.Intent == IntentExistingApplication && len(out.ExistingApplicationSlugs) == 0 {
+		out.Intent = IntentApplicationGeneration
+		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
+	}
+	if out.Intent == IntentApplicationGeneration {
+		// Application generation has no immediately actionable application card.
+		// Keep its route selection visible so the user can start clarification.
+		out.NeedsRouteConfirmation = true
+	}
 	return out
 }
 

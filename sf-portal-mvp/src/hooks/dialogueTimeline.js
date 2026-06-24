@@ -106,6 +106,7 @@ export function buildDialogueTimeline(view) {
       id: `${view.session.id || 'dlg'}_route`,
       type: 'route_recommendation',
       reason: safeString(route.userFacingReason),
+      canReuseExistingApplication: Array.isArray(route.existingApplicationSlugs) && route.existingApplicationSlugs.length > 0,
     })
   }
 
@@ -146,6 +147,14 @@ export function buildDialogueTimeline(view) {
       id: `${view.session.id || 'dlg'}_bizquestions`,
       type: 'question_group',
       questions: bizQuestions.map(safeQuestion),
+    })
+  }
+  const bizConsolidation = latestBusinessConsolidation(view)
+  if (bizConsolidation && bizConsolidation.length > 0) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_bizconsolidation`,
+      type: 'consolidation_table',
+      rows: bizConsolidation.map(safeConsolidationRow),
     })
   }
   // 5b. The in-progress agentDraft card (重新描述 / 确认创建).
@@ -217,6 +226,14 @@ function openBusinessQuestions(view) {
     }
   }
   return out
+}
+
+function latestBusinessConsolidation(view) {
+  const explicit = Array.isArray(view && view.agentConsolidation) ? view.agentConsolidation : []
+  if (explicit.length > 0) return explicit
+  const msgs = Array.isArray(view && view.messages) ? view.messages : []
+  const lastUserIndex = findLastIndex(msgs, m => m && m.role === 'user')
+  return latestConsolidation(msgs.slice(lastUserIndex + 1))
 }
 
 // appendChildItems maps the child clarification view (parent's child field) into

@@ -226,6 +226,59 @@ func TestRouteIntentNormalizesDormantBusinessIntentToApplicationGeneration(t *te
 	}
 }
 
+func TestRouteIntentRequiresConfirmationForApplicationGeneration(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent:                 IntentApplicationGeneration,
+		Confidence:             ConfidenceHigh,
+		UserFacingReason:       "我会澄清需求并生成一个可运行的新应用。",
+		NeedsRouteConfirmation: false,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID:           "dia_generation_confirmation",
+		UserMessage:          "创建一个新的态势看板",
+		ExistingApplications: sampleApps(),
+		Blueprints:           sampleBlueprints(),
+	}, func(StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if !out.NeedsRouteConfirmation {
+		t.Fatal("application_generation must provide a route-selection action")
+	}
+}
+
+func TestRouteIntentNormalizesEmptyExistingApplicationToGeneration(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: mustJSON(t, RouteOutput{
+		Intent:                   IntentExistingApplication,
+		Confidence:               ConfidenceHigh,
+		ExistingApplicationSlugs: nil,
+		UserFacingReason:         "已有应用可复用。",
+		NeedsRouteConfirmation:   false,
+	})}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID:           "dia_empty_existing",
+		UserMessage:          "创建一个新的排班应用",
+		ExistingApplications: sampleApps(),
+		Blueprints:           sampleBlueprints(),
+	}, func(StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if out.Intent != IntentApplicationGeneration {
+		t.Fatalf("intent = %q, want application_generation", out.Intent)
+	}
+	if !out.NeedsRouteConfirmation {
+		t.Fatal("empty existing-application result must offer application generation")
+	}
+	if strings.Contains(out.UserFacingReason, "已有应用") {
+		t.Fatalf("empty existing-application reason leaked into generation route: %q", out.UserFacingReason)
+	}
+}
+
 // --- intent routing: valid generation route keeps internal slug in output but redacts from events ---
 
 func TestRouteIntentKeepsInternalSlugInOutputButRedactsFromEvents(t *testing.T) {

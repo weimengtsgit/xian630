@@ -847,6 +847,13 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(dlg.DraftJSON), &route)
 	}
 	route.Intent = intent
+	if intent == dialogue.IntentExistingApplication && len(route.ExistingApplicationSlugs) == 0 {
+		// A legacy or stale client can still choose reuse after the router found no
+		// candidate. Do not lock the user into an empty recommendation view.
+		intent = dialogue.IntentApplicationGeneration
+		route.Intent = intent
+		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
+	}
 
 	switch intent {
 	case dialogue.IntentExistingApplication:
@@ -1334,7 +1341,7 @@ func (s *Server) patchDialogueRequirement(w http.ResponseWriter, r *http.Request
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
 	current.BlueprintRefs = incoming.BlueprintRefs
-	current.GenerationProfile = generationProfileForAppType(current.AppType)
+	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs)
 	reqBytes, _ := json.Marshal(current)
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	s.publishDialogueChild(ctx, id, childID, current)
@@ -1402,7 +1409,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	req := s.parseRequirement(sess.RequirementJSON)
-	req.GenerationProfile = generationProfileForAppType(req.AppType)
+	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs)
 	if !blueprintRefsAllSafe(req.BlueprintRefs) {
 		writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
 		return

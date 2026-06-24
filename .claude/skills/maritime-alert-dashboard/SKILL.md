@@ -28,6 +28,7 @@ Use this skill with `software-factory-app`, `defense-operations-ui`, and `comman
 | Carrier deck wind calculator | Carrier activity regions; 10 m wind speed/direction; 20 kt deck-wind minimum; carrier max speed 30 kt; achievable deck-wind range; "无弹射器辅助" and "安全着舰" conditions per carrier. |
 | Merchant-density grid alert | 50-nautical-mile grid cells; current merchant count; 30-day sliding-average baseline; green/yellow/red status; yellow below 70%; red below 50%; small count curve per grid. |
 | Social sighting cluster alert | Global sea-area scatter map; Twitter/Instagram post stream; multilingual keywords; GPS and image EXIF coordinate sources; cluster highlight when multiple accounts post similar content in the same sea area during a short time window. |
+| Carrier air-wing affiliation inference | ADS-B historical tracks; sea takeoff/landing extraction; carrier-position binding within the configured distance threshold; affiliation confidence; suspected cross-deployment; departed-aircraft alert; aircraft table + carrier relationship tree + takeoff/landing heat map. |
 
 ## Must Not Do
 
@@ -37,6 +38,8 @@ Use this skill with `software-factory-app`, `defense-operations-ui`, and `comman
 - Do not hide mock/demo status; make the data boundary clear without changing the customer judgement framing.
 - Do not create a marketing landing page, hero page, or decorative-only data screen.
 - Do not show alert cards without the values that triggered them.
+- Do not use `demo01` / `demo02` generated names; generated application names
+  use the model's normalized scenario name plus a Factory-owned random serial.
 
 ## Output Checklist
 

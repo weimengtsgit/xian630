@@ -7,6 +7,7 @@
     "carrier-homeport-tide-window": { "surface": "blueprint" },
     "carrier-deck-wind-calculator": { "surface": "blueprint" },
     "merchant-density-grid-alert": { "surface": "blueprint" },
-    "social-sighting-cluster-alert": { "surface": "blueprint" }
+    "social-sighting-cluster-alert": { "surface": "blueprint" },
+    "carrier-air-wing-affiliation-inference": { "surface": "blueprint" }
   }
 }

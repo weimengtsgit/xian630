@@ -542,8 +542,9 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
 	current.BlueprintRefs = incoming.BlueprintRefs
-	// Always (re)compute the profile from appType — never trust the client.
-	current.GenerationProfile = generationProfileForAppType(current.AppType)
+	// Always (re)compute the profile from the application type and internal
+	// blueprint refs — never trust the client-supplied skill list.
+	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs)
 
 	reqBytes, _ := json.Marshal(current)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
@@ -692,12 +693,13 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// The confirmed requirement may carry business fields; recompute the
-		// profile from appType so a client can never inject one at confirm time.
-		incoming.GenerationProfile = generationProfileForAppType(incoming.AppType)
+		// profile from appType plus internal blueprint refs so a client can never
+		// inject one at confirm time.
+		incoming.GenerationProfile = generationProfileForRequirement(incoming.AppType, incoming.BlueprintRefs)
 		req = incoming
 	} else {
 		// Recompute the profile defensively even on the persisted requirement.
-		req.GenerationProfile = generationProfileForAppType(req.AppType)
+		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs)
 	}
 
 	// Fail closed on unsafe blueprintRef slugs (P2#1): unified check covers BOTH
@@ -879,6 +881,9 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
 	out.Requirement.BlueprintRefs = sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
+	// The LLM may suggest business fields and safe blueprint refs, but the skill
+	// profile is always Factory-derived from those refs.
+	out.Requirement.GenerationProfile = generationProfileForRequirement(out.Requirement.AppType, out.Requirement.BlueprintRefs)
 	now := time.Now()
 	reqBytes, _ := json.Marshal(out.Requirement)
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
@@ -1147,7 +1152,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "appType", "app_type":
 		if value != "" {
 			req.AppType = value
-			req.GenerationProfile = generationProfileForAppType(value)
+			req.GenerationProfile = generationProfileForRequirement(value, req.BlueprintRefs)
 		}
 	case "appName", "app_name":
 		if value != "" {
@@ -1301,4 +1306,43 @@ func generationProfileForAppType(appType string) map[string][]string {
 	default:
 		return nil
 	}
+}
+
+// generationProfileForRequirement derives the Factory-owned profile from the
+// supported application type, then augments it with capabilities required by
+// internal scene blueprints. Blueprint refs remain server-side metadata and are
+// validated separately before a requirement can be confirmed.
+func generationProfileForRequirement(appType string, blueprintRefs []string) map[string][]string {
+	profile := generationProfileForAppType(appType)
+	if len(profile) == 0 {
+		return nil
+	}
+	for _, slug := range blueprintRefs {
+		for group, additions := range blueprintProfileAdditions[slug] {
+			profile[group] = appendUniqueSkills(profile[group], additions)
+		}
+	}
+	return profile
+}
+
+var blueprintProfileAdditions = map[string]map[string][]string{
+	"carrier-air-wing-affiliation-inference": {
+		"pattern": {"maritime-alert-dashboard", "affiliation-inference-dashboard"},
+	},
+}
+
+func appendUniqueSkills(current, additions []string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, existing := range current {
+			if existing == addition {
+				found = true
+				break
+			}
+		}
+		if !found {
+			current = append(current, addition)
+		}
+	}
+	return current
 }

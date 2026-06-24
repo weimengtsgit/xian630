@@ -18,16 +18,47 @@ func writeCatalog(t *testing.T, root, content string) {
 	}
 }
 
-// canonicalKnownSlugs is the 7 preset slugs that the real workspace ships.
+func writeSceneManifest(t *testing.T, root, slug string) {
+	t.Helper()
+	dir := filepath.Join(root, "scene", slug, ".factory")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir scene manifest dir: %v", err)
+	}
+	raw := `{
+  "schemaVersion": 1,
+  "slug": "` + slug + `",
+  "name": "` + slug + `",
+  "type": "command_dashboard",
+  "source": "preset",
+  "description": "` + slug + `",
+  "entry": "static-vite",
+  "path": "scene/` + slug + `",
+  "build": { "command": "npm run build", "outputDir": "dist" },
+  "runtime": { "devCommand": "npm run dev", "defaultPort": 5173 }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "app.json"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write scene manifest: %v", err)
+	}
+}
+
+func writeCanonicalSceneManifests(t *testing.T, root string) {
+	t.Helper()
+	for slug := range canonicalKnownSlugs() {
+		writeSceneManifest(t, root, slug)
+	}
+}
+
+// canonicalKnownSlugs is the 8 preset slugs that the real workspace ships.
 func canonicalKnownSlugs() map[string]bool {
 	return map[string]bool{
-		"carrier-formation-replay":      true,
-		"aircraft-carrier-track":        true,
-		"east-sea-situation":            true,
-		"carrier-homeport-tide-window":  true,
-		"carrier-deck-wind-calculator":  true,
-		"merchant-density-grid-alert":   true,
-		"social-sighting-cluster-alert": true,
+		"carrier-formation-replay":              true,
+		"aircraft-carrier-track":                true,
+		"east-sea-situation":                    true,
+		"carrier-homeport-tide-window":          true,
+		"carrier-deck-wind-calculator":          true,
+		"merchant-density-grid-alert":           true,
+		"social-sighting-cluster-alert":         true,
+		"carrier-air-wing-affiliation-inference": true,
 	}
 }
 
@@ -40,7 +71,8 @@ const canonicalCatalog = `{
     "carrier-homeport-tide-window": { "surface": "blueprint" },
     "carrier-deck-wind-calculator": { "surface": "blueprint" },
     "merchant-density-grid-alert": { "surface": "blueprint" },
-    "social-sighting-cluster-alert": { "surface": "blueprint" }
+    "social-sighting-cluster-alert": { "surface": "blueprint" },
+    "carrier-air-wing-affiliation-inference": { "surface": "blueprint" }
   }
 }`
 
@@ -196,8 +228,8 @@ func TestSceneCatalogBlueprintSlugsSorted(t *testing.T) {
 		t.Fatalf("LoadSceneCatalog: %v", err)
 	}
 	bps := cat.BlueprintSlugs()
-	if len(bps) != 4 {
-		t.Fatalf("BlueprintSlugs = %d, want 4: %+v", len(bps), bps)
+	if len(bps) != 5 {
+		t.Fatalf("BlueprintSlugs = %d, want 5: %+v", len(bps), bps)
 	}
 	// Deterministic order (sorted by slug) for stable downstream consumers.
 	sortedCopy := append([]string(nil), bps...)
@@ -218,17 +250,19 @@ func TestSceneCatalogBlueprintSlugsSorted(t *testing.T) {
 func TestLoadSceneCatalogForSurfaceIgnoresPresetMembership(t *testing.T) {
 	root := t.TempDir()
 	writeCatalog(t, root, canonicalCatalog)
+	writeCanonicalSceneManifests(t, root)
 
-	// An empty/incomplete known-slug set must still succeed and surface the
-	// blueprint slugs — this is exactly the runtime condition (store has only
-	// the application-surface presets).
+	// Runtime must succeed without consulting the application store and still
+	// validate membership against the scene manifests on disk. This is exactly the
+	// runtime condition: store has only application-surface presets, while the
+	// blueprint-surface presets exist on disk but are not stored as app rows.
 	cat, err := LoadSceneCatalogForSurface(root)
 	if err != nil {
 		t.Fatalf("LoadSceneCatalogForSurface with no preset context: %v", err)
 	}
 	bps := cat.BlueprintSlugs()
-	if len(bps) != 4 {
-		t.Fatalf("BlueprintSlugs = %d, want 4 (blueprints must resolve without store membership): %+v", len(bps), bps)
+	if len(bps) != 5 {
+		t.Fatalf("BlueprintSlugs = %d, want 5 (blueprints must resolve without store membership): %+v", len(bps), bps)
 	}
 	apps := cat.VisibleApplications()
 	if len(apps) != 3 {
@@ -238,6 +272,15 @@ func TestLoadSceneCatalogForSurfaceIgnoresPresetMembership(t *testing.T) {
 	// preserved for the scanner, which has the full on-disk preset set).
 	if _, err := LoadSceneCatalog(root, map[string]bool{}); err == nil {
 		t.Fatal("LoadSceneCatalog must still reject catalog keys not in the known preset set")
+	}
+}
+
+func TestLoadSceneCatalogForSurfaceRejectsCatalogSlugMissingOnDisk(t *testing.T) {
+	root := t.TempDir()
+	writeCatalog(t, root, `{"version":1,"scenes":{"ghost-blueprint":{"surface":"blueprint"}}}`)
+
+	if _, err := LoadSceneCatalogForSurface(root); err == nil {
+		t.Fatal("expected runtime catalog loader to reject a slug with no scene manifest on disk")
 	}
 }
 
@@ -265,4 +308,24 @@ func TestLoadSceneCatalogForSurfaceStructuralFailClosed(t *testing.T) {
 			t.Fatal("expected error for duplicate application order")
 		}
 	})
+}
+
+// TestCarrierAirWingIsBlueprintNotApplication pins the new scene's surface: it
+// is a catalog blueprint (a generation seed), never an app-list entry.
+func TestCarrierAirWingIsBlueprintNotApplication(t *testing.T) {
+	root := t.TempDir()
+	writeCatalog(t, root, canonicalCatalog)
+
+	cat, err := LoadSceneCatalog(root, canonicalKnownSlugs())
+	if err != nil {
+		t.Fatalf("LoadSceneCatalog: %v", err)
+	}
+	if !cat.IsBlueprint("carrier-air-wing-affiliation-inference") {
+		t.Fatalf("IsBlueprint(carrier-air-wing-affiliation-inference) = false, want true")
+	}
+	for _, app := range cat.VisibleApplications() {
+		if app.Slug == "carrier-air-wing-affiliation-inference" {
+			t.Fatalf("carrier-air-wing-affiliation-inference must not appear in VisibleApplications, got %+v", app)
+		}
+	}
 }

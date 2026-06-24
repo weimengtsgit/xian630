@@ -543,6 +543,40 @@ func TestRouteSelectBusinessAgentFallsBackToApplicationGeneration(t *testing.T) 
 	}
 }
 
+func TestRouteSelectEmptyExistingApplicationFallsBackToGeneration(t *testing.T) {
+	const emptyExistingApplication = `{
+  "intent": "existing_application",
+  "confidence": "high",
+  "existingApplicationSlugs": [],
+  "internalBlueprintSlug": "",
+  "userFacingReason": "已有应用可复用。",
+  "needsRouteConfirmation": false
+}`
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: emptyExistingApplication})
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "创建一个新的排班应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{
+		"intent": "existing_application",
+	})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var view dialogueView
+	json.NewDecoder(routeRec.Body).Decode(&view)
+	if view.Session.Intent != model.DialogueIntentApplicationGeneration {
+		t.Fatalf("intent = %q, want application_generation", view.Session.Intent)
+	}
+	if view.Session.Status != model.DialogueStatusDraftingApplication {
+		t.Fatalf("status = %q, want drafting_application", view.Session.Status)
+	}
+	if view.Child == nil || view.Session.ClarificationSessionID == "" {
+		t.Fatalf("empty existing-app selection must create a clarification child, got %#v", view)
+	}
+}
+
 // TestApplicationGenerationWithoutBlueprintStillCreatesClarification verifies
 // that application generation works with NO blueprint: the child clarification
 // is still created.

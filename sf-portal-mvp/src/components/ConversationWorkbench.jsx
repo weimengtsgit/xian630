@@ -187,7 +187,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     )
   }
   if (item.type === 'route_recommendation') {
-    return <RouteChoiceCard reason={item.reason} onSelectRoute={onSelectRoute} submitting={submitting} />
+    return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
   }
   if (item.type === 'app_recommendation') {
     return <AppRecommendationList cards={item.cards} onOpenApp={onOpenApp} submitting={submitting} />
@@ -222,15 +222,17 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   return null
 }
 
-function RouteChoiceCard({ reason, onSelectRoute, submitting }) {
+function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, submitting }) {
   return (
     <div className="cw-route-choice">
       {reason ? <p className="cw-route-reason">{reason}</p> : null}
       <div className="cw-route-options">
-        <button type="button" disabled={submitting} onClick={() => onSelectRoute('existing_application')}>
-          <b>复用已有应用</b>
-          <small>打开匹配的现有应用</small>
-        </button>
+        {canReuseExistingApplication ? (
+          <button type="button" disabled={submitting} onClick={() => onSelectRoute('existing_application')}>
+            <b>复用已有应用</b>
+            <small>打开匹配的现有应用</small>
+          </button>
+        ) : null}
         <button type="button" disabled={submitting} onClick={() => onSelectRoute('application_generation')}>
           <b>生成新应用</b>
           <small>通过需求澄清生成助手应用或业务应用</small>

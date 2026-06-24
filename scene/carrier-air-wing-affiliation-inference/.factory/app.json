@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "slug": "carrier-air-wing-affiliation-inference",
+  "name": "航母舰载机归属推断工具",
+  "type": "command-dashboard",
+  "source": "preset",
+  "description": "基于 ADS-B 海上起降与航母位置的舰载机归属研判蓝本",
+  "entry": "static-vite",
+  "path": "scene/carrier-air-wing-affiliation-inference",
+  "tags": ["carrier", "aircraft", "ads-b", "affiliation", "inference", "heatmap"],
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "runtime": {
+    "devCommand": "npm run dev",
+    "defaultPort": 5173
+  },
+  "docker": {
+    "enabled": true,
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "runtimePort": 80
+  }
+}

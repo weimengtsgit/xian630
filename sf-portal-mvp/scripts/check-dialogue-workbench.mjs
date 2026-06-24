@@ -110,6 +110,20 @@ const ambiguousView = {
 // When route confirmation is needed, route cards render; composer is NOT free-text editable.
 assert.equal(lockedFromView(ambiguousView), true, 'route-needs-confirmation view must lock free-text composer')
 
+// An application-generation route with no recommended existing application must
+// still expose a way to continue, without rendering an unusable reuse action.
+const generationChoiceView = {
+  session: { id: 'dlg_generation_choice', status: 'routing', intent: 'routing', route_locked: false, initial_prompt: '创建一个新的排班应用' },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '创建一个新的排班应用' }],
+  route: {
+    intent: 'application_generation', confidence: 'high', needsRouteConfirmation: true,
+    userFacingReason: '我会澄清需求并生成一个可运行的新应用。', existingApplicationSlugs: [],
+  },
+}
+const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')
+assert.ok(generationChoice, 'application generation must render a route-selection action')
+assert.equal(generationChoice.canReuseExistingApplication, false, 'an empty existing-app match must not render a reuse action')
+
 // resolved/abandoned/failed => terminal => composer locked
 for (const status of ['resolved', 'abandoned', 'failed']) {
   const termView = {
@@ -312,6 +326,7 @@ const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const apiClientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const eventsJs = readFileSync(new URL('../src/api/events.js', import.meta.url), 'utf8')
 const dialogueHookJs = readFileSync(new URL('../src/hooks/useDialogueSessions.js', import.meta.url), 'utf8')
+const routingSkill = readFileSync(new URL('../../.claude/skills/dialogue-intent-routing/SKILL.md', import.meta.url), 'utf8')
 
 // The hook MUST derive the answer-bar questions from the open child questions
 // (regression for review P0 #2): without it the submit control never renders.
@@ -380,6 +395,12 @@ assert.doesNotMatch(workbenchJsx, /配置业务 Agent/, 'route choices must not 
 assert.doesNotMatch(workbenchJsx, /创建一个业务处理 Agent/, 'route choices must not show 创建一个业务处理 Agent')
 assert.match(workbenchJsx, /复用已有应用/, 'route choices must still offer existing-app reuse')
 assert.match(workbenchJsx, /生成新应用/, 'route choices must still offer app generation')
+assert.match(workbenchJsx, /canReuseExistingApplication/, 'route choices must hide reuse when no application is recommended')
+
+const genericReasonRule = routingSkill.match(/- `userFacingReason`[\s\S]*?- `needsRouteConfirmation`/)
+assert.ok(genericReasonRule, 'routing skill must define the user-facing reason rule')
+assert.match(genericReasonRule[0], /runnable application/, 'generic application generation must describe a runnable application')
+assert.doesNotMatch(genericReasonRule[0], /assistant application/, 'only agent or assistant requests may be framed as assistant applications')
 // TimelineItem MUST receive onSend (regression for review P1 #5): the business
 // recommendation branch references onRedescribe={onSend}, so an unthreaded onSend
 // threw a ReferenceError and crashed the whole workbench render.

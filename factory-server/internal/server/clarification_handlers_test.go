@@ -913,6 +913,19 @@ func TestApplyAnswerToRequirementMapsRequiredListFields(t *testing.T) {
 	}
 }
 
+func TestApplyAnswerToRequirementAddsBlueprintSpecificGenerationSkills(t *testing.T) {
+	req := clarification.Requirement{
+		BlueprintRefs: []string{"carrier-air-wing-affiliation-inference"},
+	}
+
+	applyAnswerToRequirement(&req, "appType", "command_dashboard")
+
+	patterns := strings.Join(req.GenerationProfile["pattern"], ",")
+	if !strings.Contains(patterns, "maritime-alert-dashboard") || !strings.Contains(patterns, "affiliation-inference-dashboard") {
+		t.Fatalf("generationProfile.pattern = %q, want carrier-air-wing skills", patterns)
+	}
+}
+
 func TestAnswerClarificationPreservesMappedRequirementWhenNextRoundOmitsField(t *testing.T) {
 	const omittedTargetUsersOutput = `{
   "status": "waiting_user",

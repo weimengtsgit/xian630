@@ -73,20 +73,18 @@ func LoadSceneCatalog(root string, knownPresetSlugs map[string]bool) (SceneCatal
 	return cat, nil
 }
 
-// LoadSceneCatalogForSurface reads + structurally validates
-// .factory/scene-catalog.json WITHOUT requiring every catalog key to be a
-// discovered preset slug. It is the RUNTIME loader for GET /api/apps filtering
-// and dialogue candidate building, where the catalog has already been
-// disk-validated at scan time and the application store does NOT carry the
-// blueprint-surface presets (the scanner drops them). Requiring the full preset
-// set there would 500 every fresh-database GET /api/apps and starve dialogue
-// routing of blueprint candidates.
-//
-// Fail-closed is preserved for the structural invariants only: a missing file,
-// malformed JSON, an unsupported version, an invalid surface, and a missing or
-// duplicate application order still error.
+// LoadSceneCatalogForSurface reads + validates the scene catalog at runtime
+// without consulting the application store. It discovers preset scene slugs from
+// scene/*/.factory/app.json on disk, then applies the same unknown-slug
+// fail-closed validation as the scanner. This keeps fresh databases working
+// (blueprint-surface presets are not stored as applications) without letting a
+// typo or nonexistent catalog slug enter app filtering or intent routing.
 func LoadSceneCatalogForSurface(root string) (SceneCatalog, error) {
-	return loadSceneCatalogFile(root)
+	knownPresetSlugs, err := discoverPresetSceneSlugs(root)
+	if err != nil {
+		return SceneCatalog{}, err
+	}
+	return LoadSceneCatalog(root, knownPresetSlugs)
 }
 
 // loadSceneCatalogFile reads + structurally validates the catalog file. It does
@@ -134,6 +132,40 @@ func loadSceneCatalogFile(root string) (SceneCatalog, error) {
 	}
 
 	return cat, nil
+}
+
+func discoverPresetSceneSlugs(root string) (map[string]bool, error) {
+	matches, err := filepath.Glob(filepath.Join(root, "scene", "*", ".factory", "app.json"))
+	if err != nil {
+		return nil, fmt.Errorf("discover preset scene slugs: %w", err)
+	}
+	out := make(map[string]bool, len(matches))
+	for _, abs := range matches {
+		rel, err := filepath.Rel(root, abs)
+		if err != nil {
+			return nil, fmt.Errorf("discover preset scene slugs: rel %s: %w", abs, err)
+		}
+		relPath := filepath.ToSlash(rel)
+		raw, err := os.ReadFile(abs)
+		if err != nil {
+			return nil, fmt.Errorf("discover preset scene slugs: read %s: %w", relPath, err)
+		}
+		m, err := ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("discover preset scene slugs: %s: %w", relPath, err)
+		}
+		if err := ValidateManifest(relPath, m); err != nil {
+			return nil, fmt.Errorf("discover preset scene slugs: %w", err)
+		}
+		if m.Source != "preset" {
+			continue
+		}
+		if out[m.Slug] {
+			return nil, fmt.Errorf("discover preset scene slugs: duplicate slug %q", m.Slug)
+		}
+		out[m.Slug] = true
+	}
+	return out, nil
 }
 
 // VisibleApplications returns the application-surface presets, ordered by their
