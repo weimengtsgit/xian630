@@ -211,6 +211,26 @@ const bizOpenQs = openQuestionsForView(businessQuestionView)
 assert.equal(bizOpenQs.length, 1, 'openQuestionsForView must surface the business question for the answer bar')
 assert.equal(bizOpenQs[0].id, 'scope', 'business open question id must be scope')
 
+// Business-agent round-5 consolidation must use the same recommendation table
+// surface as application clarification, but it lives on the parent dialogue
+// messages rather than on a child clarification view.
+const businessConsolidationView = {
+  session: { id: 'dlg_bc', status: 'drafting_business_agent', intent: 'business_processing_agent', route_locked: true, initial_prompt: '做一个告警分诊助手' },
+  messages: [
+    { id: 'u1', role: 'user', kind: 'prompt', content: '做一个告警分诊助手' },
+    { id: 'c1', role: 'agent', kind: 'recommendation_consolidation', metadata_json: JSON.stringify([
+      { field: 'agentDraft.name', recommendedValue: '告警分诊助手', reason: '匹配业务目标', alternatives: ['告警处置助手'] },
+      { field: 'agentDraft.prompt', recommendedValue: '你是告警分诊助手。', reason: '可保存为业务 Agent 指令' },
+    ]) },
+  ],
+  route: { intent: 'business_processing_agent', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  agentDraftStatus: 'waiting_user',
+  agentDraft: { name: '告警分诊助手', description: '', prompt: '' },
+}
+const bizConsolidationTimeline = buildDialogueTimeline(businessConsolidationView)
+assert.equal(bizConsolidationTimeline.some(item => item.type === 'consolidation_table'), true, 'business round-5 consolidation must render a consolidation table')
+assert.equal(openQuestionsForView(businessConsolidationView).length, 0, 'business consolidation view must not fabricate open questions')
+
 // ---- resolved application/agent history records -----------------------------
 
 // Resolved existing-application dialogue => resolved outcome item naming the app.
@@ -313,9 +333,14 @@ assert.match(apiClientJs, /confirmDialogueBusinessAgent/, 'API client must expos
 assert.match(eventsJs, /dialogue\.intent\.updated/, 'SSE registry must include dialogue.intent.updated')
 assert.match(eventsJs, /dialogue\.application\.recommended/, 'SSE registry must include dialogue.application.recommended')
 assert.match(eventsJs, /dialogue\.route\.confirmed/, 'SSE registry must include dialogue.route.confirmed')
+assert.match(eventsJs, /dialogue\.route\.delta/, 'SSE registry must include dialogue.route.delta for live routing output')
+assert.match(eventsJs, /dialogue\.draft\.delta/, 'SSE registry must include dialogue.draft.delta for live business drafting output')
+assert.match(eventsJs, /dialogue\.draft\.consolidation\.updated/, 'SSE registry must include business draft consolidation updates')
 assert.match(eventsJs, /dialogue\.agent_draft\.updated/, 'SSE registry must include dialogue.agent_draft.updated')
 assert.match(eventsJs, /dialogue\.agent\.created/, 'SSE registry must include dialogue.agent.created')
 assert.match(eventsJs, /dialogue\.resolved/, 'SSE registry must include dialogue.resolved')
+assert.match(dialogueHookJs, /dialogue\.draft\.delta/, 'useDialogueSessions must route dialogue.draft.delta events into targeted refresh handling')
+assert.match(workbenchJsx, /agentDraftStatus/, 'business confirm button must be gated by agentDraftStatus')
 
 // No blueprint / template / hidden-id strings in the workbench source.
 assert.doesNotMatch(workbenchJsx, /蓝本/, 'workbench must not surface the word 蓝本')
@@ -347,6 +372,14 @@ assert.match(workbenchJsx, /consolidation_table|consolidation/, 'round-5 table m
 // Business recommendation with explicit confirm + re-describe.
 assert.match(workbenchJsx, /确认创建|确认配置/, 'business recommendation must offer an explicit confirm/create action')
 assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation must offer a re-describe action')
+
+// Route choices must NOT expose the business_processing_agent option, but must
+// still offer existing-app reuse and app generation.
+assert.doesNotMatch(workbenchJsx, /onSelectRoute\('business_processing_agent'\)/, 'route choices must not expose business_processing_agent')
+assert.doesNotMatch(workbenchJsx, /配置业务 Agent/, 'route choices must not show 配置业务 Agent')
+assert.doesNotMatch(workbenchJsx, /创建一个业务处理 Agent/, 'route choices must not show 创建一个业务处理 Agent')
+assert.match(workbenchJsx, /复用已有应用/, 'route choices must still offer existing-app reuse')
+assert.match(workbenchJsx, /生成新应用/, 'route choices must still offer app generation')
 // TimelineItem MUST receive onSend (regression for review P1 #5): the business
 // recommendation branch references onRedescribe={onSend}, so an unthreaded onSend
 // threw a ReferenceError and crashed the whole workbench render.

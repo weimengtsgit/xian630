@@ -51,7 +51,13 @@ export function ConversationWorkbench({
   const isClarification = intent === 'application_generation' && view && view.child
   const childStatus = isClarification ? view.child.status : null
   const canConfirmClarification = childStatus === 'ready_to_confirm'
-  const canConfirmBusiness = isBusiness && view && view.agentDraft && (view.agentDraft.name || view.agentDraft.prompt)
+  const canConfirmBusiness = isBusiness &&
+    view &&
+    view.agentDraftStatus === 'ready_to_confirm' &&
+    view.agentDraft &&
+    view.agentDraft.name &&
+    view.agentDraft.description &&
+    view.agentDraft.prompt
   const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
@@ -94,7 +100,7 @@ export function ConversationWorkbench({
 
       <div className="cw-body">
         {timeline.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有应用、生成新应用，还是配置业务 Agent。</div>
+          <div className="cw-empty">输入需求后，将自动识别是复用已有应用，还是生成新应用。</div>
         ) : (
           timeline.map(item => (
             <TimelineItem
@@ -227,11 +233,7 @@ function RouteChoiceCard({ reason, onSelectRoute, submitting }) {
         </button>
         <button type="button" disabled={submitting} onClick={() => onSelectRoute('application_generation')}>
           <b>生成新应用</b>
-          <small>通过需求澄清生成</small>
-        </button>
-        <button type="button" disabled={submitting} onClick={() => onSelectRoute('business_processing_agent')}>
-          <b>配置业务 Agent</b>
-          <small>创建一个业务处理 Agent</small>
+          <small>通过需求澄清生成助手应用或业务应用</small>
         </button>
       </div>
     </div>
