@@ -201,3 +201,8 @@
 .cw-spin { animation: cw-spin 0.9s linear infinite; display: inline-flex; vertical-align: -2px; margin-right: 4px; }
 @keyframes cw-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @keyframes cw-spin { to { transform: rotate(360deg); } }
+
+/* 思考过程: the model's raw reasoning streamed live (muted, distinct from 分析过程). */
+.cw-live-thinking { opacity: 0.92; }
+.cw-live-thinking .cw-item-label { color: rgba(180, 200, 214, 0.78); }
+.cw-live-thinking .cw-live-text { color: rgba(170, 196, 214, 0.7); font-style: italic; }

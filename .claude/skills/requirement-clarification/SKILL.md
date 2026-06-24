@@ -159,10 +159,11 @@ Output ONLY this JSON object (no prose, no ```json fences):
   item. Never emit internal blueprint/catalog slugs in `openHighImpact`
   ids/labels.
 - Do not create a generation job. Do not generate code.
-- Never expose hidden chain-of-thought or thinking. The `workLog` is the only
-  user-facing analysis surface — it explains what you identified, why you
-  recommend an option, and what remains unconfirmed. Never relay hidden
-  reasoning.
+- The `workLog` is the user-facing analysis surface (分析过程) — it explains what
+  you identified, why you recommend an option, and what remains unconfirmed.
+  Your raw thinking is ALSO surfaced live on the conversation surface (思考过程),
+  streamed token-by-token — think naturally; do not put secrets, credentials, or
+  internal blueprint/catalog slugs in it.
 - Never describe a blueprint as a template, sample, or copy source. Blueprints
   are an internal Factory reference only and must not appear in user-facing
   output.

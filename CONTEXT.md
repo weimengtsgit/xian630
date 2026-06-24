@@ -105,8 +105,8 @@ A user-facing record of an agent's recognized user goal, identified facts, propo
 _Avoid_: 原始思考过程, 思维链, 系统状态日志
 
 **模型分析过程**:
-The analysis portion of the visible work trace shown inside a clarification conversation, composed from structured analysis work logs and model output summaries rather than hidden chain-of-thought.
-_Avoid_: 原始思考过程, 隐藏推理, 思维链
+The analysis portion of the visible work trace shown inside a clarification conversation, composed from structured analysis work logs and model output summaries.
+**模型思考过程 (思考过程)**: The model's raw reasoning (`thinking_delta`), streamed live on the conversation surface as a 思考过程 block (distinct from 分析过程). Shown to the user token-by-token; the conversation flow surfaces it (the executor/trace pipeline is a separate surface).
 
 **可见工作轨迹**:
 An ordered, persistent, user-facing record of analysis, tool activity, data-source decisions, validation, output, and state changes for a dialogue or generation task. It is pushed in real time and can be replayed after a reconnect; every event is attributed to its dialogue and, where applicable, its task; hidden model reasoning is excluded.

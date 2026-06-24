@@ -880,13 +880,16 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 // D2 (clarification delta reachability): when dialogueID is non-empty the round
 // is being run for the application-generation DIALOGUE flow (a child
 // clarification session linked to a parent dialogue). In that case each child
-// clarification.message.delta — which carries ONLY the safe work-log text the
-// runner derives from text_delta (never thinking_delta) — is ALSO republished
-// as a dialogue.clarification.delta carrying the parent dialogue_id so the
-// portal dispatcher folds it into the conversation timeline live (mirroring
-// dialogue.draft.delta). When dialogueID is empty this is the legacy standalone
-// clarification flow, whose own surface consumes the bare
-// clarification.message.delta; that path is unaffected.
+// clarification.message.delta (the safe work-log text the runner derives from
+// text_delta) is ALSO republished as a dialogue.clarification.delta, and each
+// clarification.message.thinking (the model's raw reasoning, from
+// thinking_delta) is republished as a dialogue.clarification.thinking — both
+// carrying the parent dialogue_id so the portal dispatcher folds them into the
+// conversation timeline live (analysis → 分析过程, thinking → 思考过程). The
+// conversation surface streams the model's thinking; #9 applies to the
+// executor/trace pipeline, not here. When dialogueID is empty this is the
+// legacy standalone clarification flow, whose own surface consumes the bare
+// clarification.message.* events; that path is unaffected.
 func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round int) (*model.ClarificationSession, int, bool) {
 	return s.runRoundAndPersistForDialogue(ctx, sessID, round, "")
 }
@@ -894,8 +897,9 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 // runRoundAndPersistForDialogue is the dialogue-aware variant. It behaves
 // identically to runRoundAndPersist, except that when dialogueID != "" each
 // child clarification.message.delta is additionally republished as a
-// dialogue.clarification.delta (set-not-append, full-so-far delta) carrying the
-// parent dialogue_id. The legacy bare clarification.message.delta is still
+// dialogue.clarification.delta and each clarification.message.thinking as a
+// dialogue.clarification.thinking (set-not-append, full-so-far) carrying the
+// parent dialogue_id. The legacy bare clarification.message.* events are still
 // emitted unchanged so the standalone clarification surface keeps working.
 func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID string, round int, dialogueID string) (*model.ClarificationSession, int, bool) {
 	sess, err := s.store.GetClarificationSession(ctx, sessID)
@@ -923,11 +927,11 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
 		filtered := s.filterClarificationEvent(cfg, ev)
 		s.publishClarificationEvent(filtered)
-		// D2: in the dialogue flow, mirror the safe work-log delta as a
-		// dialogue-attributed event so the portal folds it live. Only the
-		// work-log delta (text_delta-derived Content) is forwarded — the
-		// runner never emits thinking_delta as a clarification.message.delta,
-		// so raw reasoning never rides along (security #9).
+		// D2: in the dialogue flow, mirror the live analysis delta AND the raw
+		// thinking stream as dialogue-attributed events so the portal folds them
+		// live (analysis → 分析过程, thinking → 思考过程). Policy: the conversation
+		// surface now streams the model's thinking; #9 applies to the executor/
+		// trace pipeline, NOT this conversation surface.
 		if dialogueID != "" && filtered.Type == "clarification.message.delta" {
 			// Mirror dialogue.draft.delta's wire shape exactly (top-level
 			// dialogue_id/message_id/delta) so applyLiveAnalysisEvent — which
@@ -936,6 +940,14 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			// json tag) rather than the clarification one (session_id).
 			s.publishDialogueEvent(dialogue.StreamEvent{
 				Type:       "dialogue.clarification.delta",
+				DialogueID: dialogueID,
+				MessageID:  filtered.MessageID,
+				Delta:      filtered.Delta,
+			})
+		}
+		if dialogueID != "" && filtered.Type == "clarification.message.thinking" {
+			s.publishDialogueEvent(dialogue.StreamEvent{
+				Type:       "dialogue.clarification.thinking",
 				DialogueID: dialogueID,
 				MessageID:  filtered.MessageID,
 				Delta:      filtered.Delta,

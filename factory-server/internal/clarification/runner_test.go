@@ -371,6 +371,17 @@ func TestRunnerUsesClaudeStreamJSONAndEmitsLiveOutputDeltas(t *testing.T) {
 	if !sawStarted || !sawPartialText || !sawCompleted {
 		t.Fatalf("live stream events missing started=%v partialText=%v completed=%v; got %v", sawStarted, sawPartialText, sawCompleted, eventTypes(events))
 	}
+	// The model's raw reasoning streams on a dedicated .thinking channel (the
+	// 思考过程 block) — separate from the safe .delta work-log above.
+	var sawThinking bool
+	for _, ev := range events {
+		if ev.Type == "clarification.message.thinking" && strings.Contains(ev.Delta, "hidden reasoning") {
+			sawThinking = true
+		}
+	}
+	if !sawThinking {
+		t.Fatalf("clarification.message.thinking must surface the model's reasoning (conversation streams thinking); events=%v", eventTypes(events))
+	}
 }
 
 // TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice proves that when the Claude

@@ -116,9 +116,11 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 		Data:      WorkLog{Type: "analysis_work_log", Content: "需求分析 agent 已连接 Claude Code 流式输出。"},
 	})
 	var assistantText strings.Builder
+	var assistantThinking strings.Builder
 	var resultText string
 	var resultIsError bool
 	var lastVisible string
+	var lastVisibleThinking string
 	args := append([]string{
 		"--print", prompt,
 		"--output-format", "stream-json",
@@ -131,26 +133,40 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
 		runner.LLMConsoleStreamLine(line)
-		delta, result, isErr := parseClaudeStreamLine(line)
+		delta, thinking, result, isErr := parseClaudeStreamLine(line)
 		if result != "" {
 			resultText = result
 			resultIsError = isErr
 		}
-		if delta == "" {
-			return
+		if delta != "" {
+			assistantText.WriteString(delta)
+			visible := extractWorkLogStreamText(assistantText.String())
+			if visible != "" && visible != lastVisible {
+				lastVisible = visible
+				emit(StreamEvent{
+					Type:      "clarification.message.delta",
+					SessionID: input.SessionID,
+					MessageID: messageID,
+					Delta:     visible,
+				})
+			}
 		}
-		assistantText.WriteString(delta)
-		visible := extractWorkLogStreamText(assistantText.String())
-		if visible == "" || visible == lastVisible {
-			return
+		// Surface the model's raw reasoning (thinking_delta) as a parallel
+		// clarification.message.thinking stream so the workbench renders a live
+		// 思考过程 block. Set, not append (full-so-far), mirroring the .delta emit.
+		if thinking != "" {
+			assistantThinking.WriteString(thinking)
+			visibleThinking := assistantThinking.String()
+			if visibleThinking != "" && visibleThinking != lastVisibleThinking {
+				lastVisibleThinking = visibleThinking
+				emit(StreamEvent{
+					Type:      "clarification.message.thinking",
+					SessionID: input.SessionID,
+					MessageID: messageID,
+					Delta:     visibleThinking,
+				})
+			}
 		}
-		lastVisible = visible
-		emit(StreamEvent{
-			Type:      "clarification.message.delta",
-			SessionID: input.SessionID,
-			MessageID: messageID,
-			Delta:     visible,
-		})
 	}, args...)
 	finalText := assistantText.String()
 	if strings.TrimSpace(finalText) == "" {
@@ -178,7 +194,7 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	return res, finalText, true, err
 }
 
-func parseClaudeStreamLine(line string) (textDelta, result string, resultIsError bool) {
+func parseClaudeStreamLine(line string) (textDelta, thinkingDelta, result string, resultIsError bool) {
 	var top struct {
 		Type    string          `json:"type"`
 		Event   json.RawMessage `json:"event"`
@@ -186,28 +202,35 @@ func parseClaudeStreamLine(line string) (textDelta, result string, resultIsError
 		IsError bool            `json:"is_error"`
 	}
 	if err := json.Unmarshal([]byte(line), &top); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	if top.Type == "result" {
-		return "", top.Result, top.IsError
+		return "", "", top.Result, top.IsError
 	}
 	if top.Type != "stream_event" || len(top.Event) == 0 {
-		return "", "", false
+		return "", "", "", false
 	}
 	var ev struct {
 		Type  string `json:"type"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(top.Event, &ev); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	if ev.Type != "content_block_delta" || ev.Delta.Type != "text_delta" {
-		return "", "", false
+	if ev.Type != "content_block_delta" {
+		return "", "", "", false
 	}
-	return ev.Delta.Text, "", false
+	if ev.Delta.Type == "thinking_delta" {
+		return "", ev.Delta.Thinking, "", false
+	}
+	if ev.Delta.Type == "text_delta" {
+		return ev.Delta.Text, "", "", false
+	}
+	return "", "", "", false
 }
 
 func extractWorkLogStreamText(s string) string {
@@ -658,7 +681,7 @@ func clarificationJSONCandidates(rawCandidates ...string) []string {
 			if line == "" {
 				continue
 			}
-			if _, result, _ := parseClaudeStreamLine(line); result != "" {
+			if _, _, result, _ := parseClaudeStreamLine(line); result != "" {
 				add(result)
 				for _, obj := range extractJSONObjects(result) {
 					add(obj)

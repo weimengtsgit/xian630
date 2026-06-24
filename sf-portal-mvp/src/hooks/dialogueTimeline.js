@@ -37,6 +37,13 @@ export const initialDialogueState = () => ({
   //   kind  — 'round' | 'step'
   //   content — the FULL-so-far safe text (set-not-append, never raw reasoning)
   liveAnalysis: null,
+  // liveThinking: a SINGLE transient item holding the model's raw reasoning
+  // (thinking_delta) as it streams token-by-token — the live "思考过程" block,
+  // parallel to liveAnalysis. Policy: the conversation surface streams the
+  // model's thinking (#9 applies to the executor/trace pipeline, not here).
+  // Folded from *.thinking (route / draft / clarification). Same shape as
+  // liveAnalysis: { key, content, kind } | null.
+  liveThinking: null,
 })
 
 // statusText maps a dialogue status to user-facing Chinese. It is the ONLY place
@@ -101,7 +108,7 @@ export function lockedFromView(view) {
 // the optimistic/persisted user message. It is SUPPRESSED when the persisted view
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
-export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null) {
+export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
 
@@ -147,6 +154,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       kind: la.kind === 'step' ? 'step' : 'round',
       pending: !(liveAnalysis && liveAnalysis.content),
     })
+    if (liveThinking && liveThinking.content) {
+      items.push({
+        id: `livethink_${safeString(liveThinking.key)}`,
+        type: 'live_thinking',
+        content: safeString(liveThinking.content),
+        kind: liveThinking.kind === 'step' ? 'step' : 'round',
+      })
+    }
     return items
   }
 
@@ -184,6 +199,18 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       })
     }
     // Other parent agent kinds (business_draft handled below) are dropped here.
+  }
+
+  // Transient live thinking (the model's raw reasoning, thinking_delta) —
+  // shown as a 思考过程 block ABOVE the analysis while the round streams.
+  // Cleared on view load, so it naturally disappears once the round completes.
+  if (liveThinking && liveThinking.content) {
+    items.push({
+      id: `livethink_${safeString(liveThinking.key)}`,
+      type: 'live_thinking',
+      content: safeString(liveThinking.content),
+      kind: liveThinking.kind === 'step' ? 'step' : 'round',
+    })
   }
 
   // Transient live analysis (Task 3, D1/D2): the streaming safe work log shown
@@ -596,6 +623,11 @@ export function applyDialogueEvent(state, type, ev) {
     if (LIVE_DELTA_EVENTS.has(type)) {
       return applyLiveAnalysisEvent(state, type, ev)
     }
+    // A *.thinking event carries the model's raw reasoning (FULL-so-far) and
+    // folds into the parallel liveThinking "思考过程" item. Also does not reload.
+    if (LIVE_THINKING_EVENTS.has(type)) {
+      return applyLiveThinkingEvent(state, type, ev)
+    }
     // All other events (lifecycle, completion, route confirmation, ready_to_confirm,
     // clarification.updated — anything that changes PERSISTED structure) flag a
     // targeted refresh so the authoritative persisted view reconciles and REPLACES
@@ -625,8 +657,7 @@ export function applyDialogueEvent(state, type, ev) {
 
 // LIVE_DELTA_EVENTS are the dialogue.* event types whose payload is the streaming
 // safe analysis work log (the FULL-so-far text). They fold incrementally into
-// liveAnalysis instead of triggering a per-token full view reload. The raw
-// reasoning (thinking_delta) is NEVER part of these — security constraint #9.
+// liveAnalysis instead of triggering a per-token full view reload.
 const LIVE_DELTA_EVENTS = new Set([
   'dialogue.route.delta',
   'dialogue.draft.delta',
@@ -639,11 +670,21 @@ const LIVE_DELTA_EVENTS = new Set([
   'dialogue.clarification.delta',
 ])
 
+// LIVE_THINKING_EVENTS are the parallel raw-reasoning stream (the model's
+// thinking_delta, FULL-so-far). They fold into liveThinking — the live
+// "思考过程" block — instead of liveAnalysis. Policy: the conversation surface
+// streams the model's thinking; #9 still applies to the executor/trace pipeline
+// (a different surface), not to this conversation timeline.
+const LIVE_THINKING_EVENTS = new Set([
+  'dialogue.route.thinking',
+  'dialogue.draft.thinking',
+  'dialogue.clarification.thinking',
+])
+
 // applyLiveAnalysisEvent folds ONE *.delta event into state.liveAnalysis. The
 // delta payload carries the FULL current text (set-not-append, mirroring
 // clarificationLogic.js). It is keyed by the running turn so a new turn replaces
-// the prior live block. ONLY the safe `delta` text is read — thinking_delta /
-// thinking / any raw-reasoning field is deliberately ignored (security #9).
+// the prior live block.
 export function applyLiveAnalysisEvent(state, type, ev) {
   if (!ev) return state
   const turnId = ev.turn_id || ev.turnId || ev.message_id || ev.messageId || 'turn'
@@ -653,6 +694,21 @@ export function applyLiveAnalysisEvent(state, type, ev) {
   return {
     ...state,
     liveAnalysis: { key, content, kind: 'round' },
+  }
+}
+
+// applyLiveThinkingEvent folds ONE *.thinking event into state.liveThinking —
+// the live "思考过程" block, parallel to applyLiveAnalysisEvent. Same set-not-
+// append, turn-keyed shape.
+export function applyLiveThinkingEvent(state, type, ev) {
+  if (!ev) return state
+  const turnId = ev.turn_id || ev.turnId || ev.message_id || ev.messageId || 'turn'
+  const key = `thinking:${turnId}`
+  const content = ev.delta != null ? String(ev.delta) : ''
+  if (!content) return state
+  return {
+    ...state,
+    liveThinking: { key, content, kind: 'round' },
   }
 }
 

@@ -41,6 +41,9 @@ const DIALOGUE_TYPES = new Set([
   'dialogue.agent.created',
   'dialogue.clarification.updated',
   'dialogue.clarification.delta',
+  'dialogue.clarification.thinking',
+  'dialogue.route.thinking',
+  'dialogue.draft.thinking',
   'dialogue.resolved',
   'dialogue.abandoned',
   'dialogue.deleted',
@@ -92,7 +95,18 @@ export function useDialogueSessions() {
   const selectedDialogueIdRef = useRef(null)
   useEffect(() => {
     selectedDialogueIdRef.current = state.selectedDialogueId
+    // A dialogue is now selected (via dialogue.created or loadView) — disarm the
+    // pending-new-dialogue flag so a later unrelated dialogue.created cannot
+    // hijack selection.
+    if (state.selectedDialogueId) pendingNewDialogueRef.current = false
   }, [state.selectedDialogueId])
+  // pendingNewDialogueRef is set true the instant send dispatches createDialogue
+  // for a brand-new dialogue, and consumed when the dialogue.created event
+  // arrives (which is published BEFORE routing streams). It lets the SSE
+  // callback select the new dialogue in time for its routing/clarification
+  // streaming (analysis + thinking) to fold live — otherwise selectedDialogueId
+  // is only set after createDialogue returns and the routing stream is dropped.
+  const pendingNewDialogueRef = useRef(false)
 
   // Rebuild the timeline whenever the persisted view OR the optimistic user
   // message changes (D5). The builder prepends the optimistic message (with a
@@ -107,9 +121,9 @@ export function useDialogueSessions() {
     // dialogue. buildDialogueTimeline(null, ...) surfaces just those transients.
     if (!state.view && !optimisticUserMessage) return
     setState(prev => (prev.view === state.view
-      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis) }
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking) }
       : prev))
-  }, [state.view, optimisticUserMessage, state.liveAnalysis]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -156,8 +170,9 @@ export function useDialogueSessions() {
         needsRefresh: null,
         // D6 fold-on-completion: a successful view load reconciles the persisted
         // analysis (rendered FOLDED) as authoritative, so clear the transient
-        // streaming live item. It re-folds from the next delta/trace.
+        // streaming live items. They re-fold from the next delta/trace.
         liveAnalysis: null,
+        liveThinking: null,
       }))
       // Switching the selected dialogue resets the trace stream (Constraint #10):
       // the per-dialogue SSE effect re-subscribes and re-hydrates from scratch.
@@ -229,6 +244,12 @@ export function useDialogueSessions() {
       if (sess && sess.route_locked && sess.intent === 'business_processing_agent' && sess.status === 'drafting_business_agent') {
         view = await factoryApi.continueDialogueBusiness(sess.id, prompt)
       } else if (!state.view || terminal(state.view.session.status)) {
+        // Brand-new dialogue: routing streams server-side during this await
+        // (dialogue.created is published before the route deltas). Arm the flag
+        // so the SSE callback selects the new dialogue the moment dialogue.created
+        // arrives, letting the routing analysis + thinking fold live. The flag is
+        // cleared when selectedDialogueId becomes set (effect below) or on error.
+        pendingNewDialogueRef.current = true
         view = await factoryApi.createDialogue({ initialPrompt: prompt })
       } else {
         const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
@@ -262,6 +283,7 @@ export function useDialogueSessions() {
         setOptimisticUserMessage(null)
         setError(err.message || String(err))
       }
+      pendingNewDialogueRef.current = false
       throw err
     } finally {
       if (mountedRef.current) setSubmitting(false)
@@ -622,8 +644,20 @@ export function useDialogueSessions() {
       if (!isDialogue && type !== 'clarification.summary.updated') return
       const ev = raw && typeof raw === 'object' && 'seq' in raw ? raw.data : raw
       if (!ev) return
+      // A brand-new dialogue's createDialogue publishes dialogue.created BEFORE
+      // its routing/clarification stream. If a send is pending, select it now so
+      // the streaming analysis + thinking fold live beneath the user's input
+      // (otherwise selectedDialogueId is only set after createDialogue returns
+      // and the routing stream is dropped).
+      const pendingNewId = type === 'dialogue.created' && pendingNewDialogueRef.current
+        ? (ev.dialogue_id || (ev.data && ev.data.dialogue_id))
+        : null
       setState(prev => {
-        const next = applyDialogueEvent(prev, type, ev)
+        let next = prev
+        if (pendingNewId && next.selectedDialogueId !== pendingNewId) {
+          next = { ...next, selectedDialogueId: pendingNewId }
+        }
+        next = applyDialogueEvent(next, type, ev)
         // If the event flagged a targeted refresh for the selected dialogue,
         // schedule a coalesced drain (rAF) instead of refetching per delta.
         if (next.needsRefresh && next.needsRefresh === next.selectedDialogueId && rafId == null) {

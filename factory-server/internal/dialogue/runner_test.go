@@ -367,9 +367,13 @@ func TestRouteIntentRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
-// --- intent routing: thinking_delta filtered from streamed events ---
+// --- intent routing: thinking_delta streams on a dedicated .thinking channel ---
 
-func TestRouteIntentFiltersThinkingDeltaFromStream(t *testing.T) {
+// The conversation surface streams the model's thinking. thinking_delta is
+// surfaced as a separate dialogue.route.thinking event (the 思考过程 block),
+// while the safe output (text_delta) reconstructs on the .delta channel — the
+// two never cross-contaminate. (#9 still applies to the executor/trace pipeline.)
+func TestRouteIntentSurfacesThinkingOnThinkingChannel(t *testing.T) {
 	root := t.TempDir()
 	out := RouteOutput{
 		Intent: IntentExistingApplication, Confidence: ConfidenceHigh,
@@ -396,14 +400,26 @@ func TestRouteIntentFiltersThinkingDeltaFromStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RouteIntent stream: %v", err)
 	}
+	var sawDelta, sawThinking bool
 	for _, ev := range events {
-		if strings.Contains(ev.Delta, "hidden internal reasoning") {
-			t.Fatalf("thinking_delta leaked into event delta: %q", ev.Delta)
+		if ev.Type == "dialogue.route.delta" {
+			sawDelta = true
+			if strings.Contains(ev.Delta, "hidden internal reasoning") {
+				t.Fatalf("thinking leaked into the .delta (analysis) channel: %q", ev.Delta)
+			}
 		}
-		b, _ := json.Marshal(ev)
-		if strings.Contains(string(b), "hidden internal reasoning") {
-			t.Fatalf("thinking_delta leaked into event data: %s", string(b))
+		if ev.Type == "dialogue.route.thinking" {
+			sawThinking = true
+			if !strings.Contains(ev.Delta, "hidden internal reasoning") {
+				t.Fatalf(".thinking channel must carry the raw reasoning, got %q", ev.Delta)
+			}
 		}
+	}
+	if !sawDelta {
+		t.Fatalf("no dialogue.route.delta emitted for the safe output")
+	}
+	if !sawThinking {
+		t.Fatalf("no dialogue.route.thinking emitted for thinking_delta (conversation surface streams thinking)")
 	}
 }
 

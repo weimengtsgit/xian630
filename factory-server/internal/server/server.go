@@ -317,6 +317,13 @@ func (s *Server) appLock(appID string) *sync.Mutex {
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	// The conversation surface streams the model's raw thinking (思考过程).
+	// Ensure spawned `claude` CLI subprocesses run with extended thinking enabled
+	// so thinking_delta arrives — inherited via the process env by the runner.
+	// Honor an explicit override; only default when unset.
+	if os.Getenv("MAX_THINKING_TOKENS") == "" {
+		os.Setenv("MAX_THINKING_TOKENS", "16000")
+	}
 	// Startup scan: best-effort. A scan failure (e.g. a misconfigured workspace
 	// root) must NOT prevent the server from listening — log and continue.
 	apps, err := s.scanner.Scan(ctx)
@@ -403,6 +410,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/agents/create", s.createAgent)
 	r.Handle("PATCH", "/api/agents/:id", s.updateAgent)
 	r.Handle("GET", "/api/agents/:id/runs", s.agentRuns)
+	r.Handle("DELETE", "/api/agents/:id", s.deleteAgent)
 
 	r.Handle("POST", "/api/jobs", s.createJob)
 	r.Handle("GET", "/api/jobs", s.listJobs)

@@ -17,6 +17,7 @@ import {
   applyDialogueEvent,
   initialDialogueState,
   applyLiveAnalysisEvent,
+  applyLiveThinkingEvent,
   foldTraceIntoLiveAnalysis,
 } from '../src/hooks/dialogueTimeline.js'
 import { liveStepFromTrace } from '../src/hooks/workTraceState.js'
@@ -314,12 +315,13 @@ assert.deepEqual(
   'folded analysis is replayed identically from persisted state after reload',
 )
 
-// ---- 3e. No thinking_delta / raw-reasoning field is ever read into the timeline
+// ---- 3e. Safe analysis (.delta) vs raw reasoning (.thinking) are separate channels
 //
-// Security constraint #9: raw hidden reasoning never reaches the frontend. The
-// reducer must ignore any thinking_delta field even if a (malicious/buggy)
-// payload carries one. We feed a delta whose `delta` is the safe text but which
-// also carries thinking_delta — only the safe text survives.
+// Policy: the conversation surface streams the model's thinking (思考过程) via a
+// DEDICATED *.thinking event into a parallel liveThinking item. #9 still applies
+// to the executor/trace pipeline (a different surface). The *.delta path still
+// folds ONLY the safe analysis: a (malicious/buggy) .delta payload carrying
+// stray thinking_delta/thinking FIELDS must not leak them into the analysis item.
 const guardedSt = applyLiveAnalysisEvent(baseState, 'dialogue.route.delta', {
   dialogue_id: 'dlg_live', turn_id: 't1', delta: '安全分析文本',
   thinking_delta: 'RAW HIDDEN REASONING',
@@ -328,17 +330,27 @@ const guardedSt = applyLiveAnalysisEvent(baseState, 'dialogue.route.delta', {
 assert.ok(guardedSt.liveAnalysis, 'liveAnalysis folded from a safe delta')
 assert.equal(
   guardedSt.liveAnalysis.content.includes('RAW'), false,
-  'no thinking_delta / thinking field content may reach the live analysis item',
+  'no stray thinking_delta/thinking field content may reach the analysis item',
 )
-assert.equal(guardedSt.liveAnalysis.content, '安全分析文本', 'only the safe delta text is folded')
+assert.equal(guardedSt.liveAnalysis.content, '安全分析文本', 'only the safe delta text is folded into liveAnalysis')
 
-// Static guard: the mapper source must never reference thinking fields.
-const mapperSrc = readFileSync(new URL('../src/hooks/dialogueTimeline.js', import.meta.url), 'utf8')
-assert.equal(
-  /thinking_delta|thinking\b/i.test(mapperSrc.replace(/\/\/[^\n]*/g, '')),
-  false,
-  'dialogueTimeline source must never read thinking_delta/thinking fields (security #9)',
-)
+// The model's raw reasoning streams via a dedicated *.thinking event into a
+// parallel liveThinking item (rendered as a 思考过程 block). The two channels
+// never cross-populate.
+const thinkSt = applyLiveThinkingEvent(baseState, 'dialogue.route.thinking', {
+  dialogue_id: 'dlg_live', turn_id: 't1', delta: '模型正在思考需求…',
+})
+assert.ok(thinkSt.liveThinking, 'a *.thinking event folds into liveThinking')
+assert.equal(thinkSt.liveThinking.content, '模型正在思考需求…', 'thinking text is folded (full-so-far)')
+assert.equal(thinkSt.liveAnalysis, null, 'a .thinking event must NOT populate liveAnalysis')
+assert.equal(guardedSt.liveThinking, null, 'a .delta event must NOT populate liveThinking')
+
+// buildDialogueTimeline renders a live_thinking 思考过程 block when liveThinking
+// is present (above the analysis), parallel to the live_analysis block.
+const liveThinkTimeline = buildDialogueTimeline(null, { id: 'opt_t', content: 'hi' }, null, { key: 'thinking:t1', content: '思考中…', kind: 'round' })
+const liveThinkItem = liveThinkTimeline.find(it => it.type === 'live_thinking')
+assert.ok(liveThinkItem, 'liveThinking renders a live_thinking item')
+assert.equal(liveThinkItem.content, '思考中…', 'live_thinking content preserved')
 
 // Static guard: the live item is rendered as plaintext, never dangerouslySetInnerHTML.
 // Strip comments so a doc comment mentioning the forbidden API does not trip it.

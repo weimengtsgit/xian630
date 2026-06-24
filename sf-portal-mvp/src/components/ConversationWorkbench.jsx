@@ -28,6 +28,10 @@ import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/di
 import { STAGE_LABELS } from './StepCard'
 import './ConversationWorkbench.css'
 
+// Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
+// its business-facing content is being reworked. Flip to true to bring it back.
+const SHOW_WORK_TRACE = false
+
 export function ConversationWorkbench({
   session,
   view,
@@ -183,7 +187,7 @@ export function ConversationWorkbench({
         {/* Continuous-workbench trace surface (Task 7): the dialogue-scoped,
             sequence-replayable visible work-trace. Rendered as a compact
             activity list appended after the composed timeline items. */}
-        {traceItems.length > 0 ? <WorkTraceList items={traceItems} steps={traceSteps} /> : null}
+        {SHOW_WORK_TRACE && traceItems.length > 0 ? <WorkTraceList items={traceItems} steps={traceSteps} /> : null}
 
         {/* After a version deploys, surface the "已生效，可继续描述修改需求"
             hint and keep the composer active (continuous loop). */}
@@ -319,6 +323,18 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
           {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
           {item.kind === 'step' ? '生成过程' : '分析过程'}
         </span>
+        <pre className="cw-live-text">{item.content}</pre>
+      </div>
+    )
+  }
+  if (item.type === 'live_thinking') {
+    // The model's raw reasoning (thinking_delta), streamed live as a "思考过程"
+    // block above the analysis. Plaintext `<pre>`, never dangerouslySetInnerHTML.
+    // Policy: the conversation surface streams the model's thinking (#9 applies
+    // to the executor/trace pipeline, not here).
+    return (
+      <div className="cw-item cw-agent cw-live-thinking">
+        <span className="cw-item-label"><Loader2 size={12} className="cw-spin" />思考过程</span>
         <pre className="cw-live-text">{item.content}</pre>
       </div>
     )
@@ -626,7 +642,6 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
   const requestDelete = entry => {
     const sess = entry && entry.session
     if (!sess) return
-    if (sess.status === 'routing' || sess.status === 'drafting_application' || sess.status === 'drafting_business_agent') return
     setPendingDelete(entry)
   }
 
@@ -652,7 +667,6 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
         {list.map(entry => {
           const sess = entry && entry.session
           if (!sess) return null
-          const deletable = sess.status !== 'routing' && sess.status !== 'drafting_application' && sess.status !== 'drafting_business_agent'
           return (
             <div key={sess.id} className={`cw-history-row${sess.id === selectedId ? ' active' : ''}`}>
               <button type="button" className="cw-history-item" onClick={() => onSelect(sess.id)}>
@@ -667,9 +681,9 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
               <button
                 type="button"
                 className="cw-history-delete"
-                disabled={!deletable || deletingDialogueId === sess.id}
+                disabled={deletingDialogueId === sess.id}
                 onClick={() => requestDelete(entry)}
-                title={deletable ? '删除历史会话' : '进行中的会话不可删除'}
+                title="删除历史会话"
                 aria-label="删除历史会话"
               >
                 {deletingDialogueId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
