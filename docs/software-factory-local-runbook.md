@@ -119,9 +119,10 @@ deployment succeeds.
 
 The portal no longer creates a generation job from the first chat message. The
 first message creates a **dialogue session** that classifies the user's intent
-into one of three routes: **existing-application reuse**, **application
-generation** (a child clarification session), or **business-processing agent
-drafting**. Selecting a route locks it; a new request needs a new dialogue.
+into one of two active routes: **existing-application reuse** or **application
+generation** (a child clarification session). Business-processing agent
+drafting is a dormant future route that is not exposed in this phase. Selecting
+a route locks it; a new request needs a new dialogue.
 
 ### Start order
 
@@ -175,20 +176,23 @@ drafting**. Selecting a route locks it; a new request needs a new dialogue.
    produces a normalized scenario name and Factory appends a 4-char Base36
    serial (e.g. `航母编队航迹复盘-K7M2`). No `demoN` names.
 
-### Manual flow 3 — business-processing agent definition
+### Assistant application request
 
-1. In the portal chat input, enter a business-handling request, e.g.:
+Use a prompt such as:
 
-   ```
-   帮我定义一个值班告警分诊智能体
-   ```
+```text
+帮我创建一个告警分诊助手，能够收集告警、判断优先级并给出处置建议。
+```
 
-2. The model infers the `business_processing_agent` intent and drafts an agent
-   definition (name, description, prompt) via `dialogue.agent_draft.updated`.
-3. Confirm the draft. Factory registers it as a business-processing agent
-   (`dialogue.agent.created`, `category=business_processing`). The dialogue
-   resolves. In this phase business-processing agents are **cataloged and
-   displayed only — they are not executed**.
+Expected:
+
+1. The dialogue does not show a "配置业务 Agent" route.
+2. If no existing application is a strong fit, the route enters
+   `application_generation`.
+3. The workbench starts requirement clarification for a runnable assistant
+   application.
+4. The final generated app appears in the application list as an application,
+   not as a business-processing Agent entry.
 
 ### Scene catalog and hidden blueprints
 
