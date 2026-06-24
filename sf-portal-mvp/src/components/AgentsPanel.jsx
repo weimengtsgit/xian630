@@ -416,7 +416,7 @@ export function AgentsPanel({
                   <textarea
                     value={editForm.prompt}
                     onChange={event => updateEditForm('prompt', event.target.value)}
-                    rows={7}
+                    rows={10}
                     disabled={editSaving}
                   />
                 </label>

@@ -85,7 +85,7 @@ export function AgentAuthoringDialog({ open, messages, draft, sending, saving, e
               onKeyDown={handleKeyDown}
               placeholder="描述业务场景、规则或补充说明..."
               disabled={sending || saving}
-              rows={1}
+              rows={10}
             />
             <button
               type="button"
