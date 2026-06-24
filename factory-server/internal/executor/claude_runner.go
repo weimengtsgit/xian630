@@ -483,6 +483,7 @@ func skillsPromptBlock(skillPaths, blueprintPaths []string, dataPolicy string) s
 			b.WriteString(" ")
 		}
 		b.WriteString("**严禁**：用 synthetic/mock/fake/demo 数据替代真实请求；用 Math.random、确定性公式或 Math.sin/Math.cos 曲线合成潮汐/风/密度/航迹等核心序列；取数失败后 fallback 到 mock；为「保证构建成功」而硬编码看似真实的数据。")
+		b.WriteString("**文件命名同样受诚实数据审计约束**：src/ 下严禁出现名为 mock / mocks / mockData / mock-data / mock_data / fake / dummy / placeholder 的源文件——审计按文件名判定，即使该文件只放常量/阈值/标签/格式化函数也会被判定生成失败。常量、阈值、标签、格式化等辅助内容请命名为 constants / thresholds / labels / format / ui 等，绝不使用 mock 系文件名。")
 		b.WriteString("真实取数失败时（源不可达、覆盖范围不支持、鉴权缺失），应用必须显示明确的错误或空状态，并把失败原因记入 output.json 的 warnings——交付假数据等同于本次生成失败。")
 		b.WriteString("仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据（且 UI 须明确标注 mock/演示）。")
 		b.WriteString("注意：mock_then_api 表示「真实优先、失败诚实报错」，**不是**失败后回退 mock。")

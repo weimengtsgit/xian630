@@ -11,6 +11,22 @@ description: Fetch and normalize real tide forecast data for named ports or port
 - Skip this skill only when the user explicitly asks for `mock`, `demo data`, or `sample data`.
 - Return failure when every real source fails. Do not fabricate tide series.
 
+## Fallback tiers — 公网兜底（主源取不到时按序降级，绝不编造）
+
+Fetch in this order; descend only when the higher tier fails (network error, CORS
+block, non-2xx, or empty). Tag every value with the source that produced it.
+1. **Primary**: NOAA CO-OPS `api.tidesandcurrents.noaa.gov` (no key, CORS `*`).
+2. **Alternate public sources**: the port's own hydrographic-office CORS endpoint
+   if available; JCG `www1.kaiho.mlit.go.jp` for Yokosuka (server-side / build-time —
+   no browser CORS, so route via a proxy when the app is static).
+3. **Public-web last resort**: a CORS-enabled open endpoint that exposes the value
+   or a usable summary — Wikipedia REST (`/w/api.php?...&origin=*`), DuckDuckGo
+   Instant Answer (`https://api.duckduckgo.com/?q=...&format=json`). "百度/Bing 公网
+   搜索" is the documented intent, but a browser cannot directly fetch baidu.com etc.
+   (CORS-blocked) — use only CORS-enabled endpoints here.
+4. **All public sources failed**: render `SOURCE_ALL_FAILED` listing the sources
+   tried — never substitute a synthetic tide curve.
+
 ## Real Data Is MANDATORY in the generated app
 
 When `dataPolicy` is `live_api` or `mock_then_api`, the generated application MUST
@@ -20,6 +36,12 @@ that case is a **generation failure**, not a safe default — even if it "makes 
 build pass". If a real fetch fails at runtime, show an explicit error/empty state
 and log it in `output.json` warnings; never silently substitute fake heights.
 Mock data is permitted ONLY when `dataPolicy=mock_data` or `useMock=true`.
+
+**诚实数据审计约束**：`src/data/`（及 `src/providers/` `src/services/` `src/api/` `src/store/`
+等数据层目录，或文件名以 data/provider/service/store 结尾）下的文件**禁止出现
+`Math.sin`/`Math.cos`/`Math.random`** —— 诚实数据审计会据此判定为"合成数据序列"并判
+生成失败。需要三角/几何/随机（基准转换、窗口判定、网格、距离、投影）时，把运算放进
+`src/utils/` 或 `src/lib/`（非数据层），数据层文件只做取数与归一化。
 
 ## Fetch Adapter — NOAA CO-OPS (public, no key, CORS `*`, browser-fetchable)
 
