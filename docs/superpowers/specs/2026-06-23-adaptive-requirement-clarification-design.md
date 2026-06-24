@@ -198,11 +198,17 @@ generation capability profile.
 The skill applies adaptive brainstorming behavior:
 
 1. Restate user intent in product terms and identify the single highest-value
-   missing decision.
+   missing decision, and separately identify every open **高影响确认事项** — any
+   unresolved decision that can change business meaning, data source, external
+   interface, permission, deployment, or user-visible behavior.
 2. In rounds 1 through 4, return either a complete requirement or exactly one
    blocking question with two or three recommended options.
-3. Do not ask a question merely to fill a quota. A sufficiently detailed first
-   prompt can immediately enter `ready_to_confirm`.
+3. High-impact confirmation items are never skipped. `ready_to_confirm` may be
+   reached without a question only when no high-impact item remains open; a
+   detailed first message does not by itself license skipping them. Do not ask
+   a question merely to fill a quota — non-high-impact details may still be
+   assumed adaptively. A requirement field filled from a blueprint assumption is
+   not a confirmed high-impact decision (see ADR 0006).
 4. If the requirement is incomplete after round 4, round 5 emits a structured
    recommendation-consolidation response listing every remaining field,
    recommended typed value, reason, and alternatives. The user can accept all
@@ -291,6 +297,16 @@ Application-generation child sessions retain their `clarification.*` events.
 The workbench maps both event families to user-facing timeline items. It does
 not render internal blueprint names or identifiers.
 
+The conversation workbench is the primary live surface for the whole agent
+experience. It streams the 分析工作日志 token-by-token as each intent-routing
+round, clarification round, and pipeline step runs — the user's own message
+appears optimistically on send, the analysis work log grows beneath it, and the
+round's conclusion (route card, question, requirement summary, or step result)
+follows; the streamed analysis then folds above the conclusion and remains
+replayable from persisted events. The step matrix and execution drawer stay as
+secondary detail/overview. Only the safe analysis work log is streamed; hidden
+chain-of-thought and `thinking_delta` are never forwarded.
+
 ## Validation and Failure Behavior
 
 - Scene catalog validation is fail-closed; unlisted or invalid scenes cannot
@@ -300,6 +316,9 @@ not render internal blueprint names or identifiers.
   resource links. The browser does not submit trusted values for them.
 - Ordinary application and business-draft rounds allow at most one question.
   Round-5 consolidation and round-6 adjustment invariants are server-enforced.
+- A requirement cannot enter `ready_to_confirm` (and the 确认并生成 action cannot
+  appear) while any 高影响确认事项 remains open, regardless of how detailed the
+  user's message is. This is server-enforced (see ADR 0006).
 - Invalid model output records a failure with audit data and creates no job or
   business-processing agent.
 - All model analysis shown to users is structured, user-facing explanation;

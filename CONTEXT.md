@@ -85,7 +85,7 @@ A user-requested change to an application already linked to the dialogue session
 _Avoid_: 新建重复应用, 覆盖历史版本, 独立会话
 
 **应用**:
-A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task.
+A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. The pipeline agents (软件开发智能体) appear only on non-workbench surfaces such as the 软件开发 tab, so they do not collide with the user-facing 智能体 label.
 _Avoid_: 任务, 会话, 模板
 
 **应用删除**:
