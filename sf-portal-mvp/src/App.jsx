@@ -131,6 +131,8 @@ function App() {
             loading={agents.loading}
             error={agents.error}
             onCreateAgent={agents.createAgent}
+            onDeleteAgent={agents.deleteAgent}
+            deletingAgentId={agents.deletingAgentId}
           />
         </div>
       </div>

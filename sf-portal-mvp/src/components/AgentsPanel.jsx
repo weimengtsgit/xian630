@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bot, Plus, X } from 'lucide-react'
+import { AlertTriangle, Bot, Loader2, Plus, Trash2, X } from 'lucide-react'
 import './AgentsPanel.css'
 
 const emptyForm = {
@@ -12,7 +12,17 @@ const emptyForm = {
   enabled: true,
 }
 
-export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
+// formatAgentTime renders an agent's created_at as MM-dd HH:mm, or '' when it
+// is absent / the 0 backfill (rows that predate the column) / unparseable.
+function formatAgentTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  const ms = date.getTime()
+  if (!Number.isFinite(ms) || ms < 946684800000) return ''
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+export function AgentsPanel({ agents, loading, error, onCreateAgent, onDeleteAgent, deletingAgentId }) {
   const list = Array.isArray(agents) ? agents : []
   const [selectedId, setSelectedId] = useState('')
   const [detailOpen, setDetailOpen] = useState(false)
@@ -25,6 +35,30 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
     () => list.find(agent => (agent.id || agent.key || agent.agent_key) === selectedId),
     [list, selectedId]
   )
+
+  // Two-step delete (mirrors DialogueHistoryDrawer): click the per-card trash
+  // button → pendingDelete → confirm card. Only business_processing agents are
+  // deletable; the built-in pipeline agents render no delete button.
+  const [pendingDelete, setPendingDelete] = useState(null)
+  const confirmingDelete = !!(
+    pendingDelete &&
+    deletingAgentId === (pendingDelete.id || pendingDelete.key || pendingDelete.agent_key)
+  )
+  const canDelete = agent => !!(onDeleteAgent && agent && agent.category === 'business_processing')
+  const requestDelete = agent => {
+    if (!canDelete(agent) || deletingAgentId) return
+    setPendingDelete(agent)
+  }
+  const confirmDelete = async () => {
+    if (!pendingDelete || confirmingDelete) return
+    const id = pendingDelete.id || pendingDelete.key || pendingDelete.agent_key
+    try {
+      await onDeleteAgent(id)
+      setPendingDelete(null)
+    } catch (_) {
+      // surfaced via the hook's error state
+    }
+  }
 
   const updateForm = (field, value) => {
     setForm(current => ({ ...current, [field]: value }))
@@ -125,38 +159,71 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
               const key = agent.key || agent.agent_key || agent.id
               const enabled =
                 agent.enabled === undefined ? true : Boolean(agent.enabled)
+              const generatedAt = formatAgentTime(agent.created_at)
               return (
-                <button
-                  key={agent.id || key}
-                  type="button"
-                  className={`agent-card ${enabled ? 'is-enabled' : 'is-disabled'} ${
-                    selectedAgent === agent ? 'is-selected' : ''
-                  }`}
-                  onClick={() => openAgentDetail(agent)}
-                >
-                  <div className="agent-avatar">
-                    <Bot size={20} />
-                  </div>
-                  <div className="agent-info">
-                    <div className="agent-name-row">
-                      <h3 className="agent-name">{agent.name || key}</h3>
-                      <span className={`agent-enabled-badge ${enabled ? 'on' : 'off'}`}>
-                        {enabled ? '启用' : '停用'}
-                      </span>
+                <div key={agent.id || key} className="agent-card-row">
+                  <button
+                    type="button"
+                    className={`agent-card ${enabled ? 'is-enabled' : 'is-disabled'} ${
+                      selectedAgent === agent ? 'is-selected' : ''
+                    }`}
+                    onClick={() => openAgentDetail(agent)}
+                  >
+                    <div className="agent-avatar">
+                      <Bot size={20} />
                     </div>
-                    <div className="agent-meta">
-                      <span className="agent-key">{key}</span>
-                      {agent.role && <span className="agent-role">{agent.role}</span>}
+                    <div className="agent-info">
+                      <div className="agent-name-row">
+                        <h3 className="agent-name">{agent.name || key}</h3>
+                        <span className={`agent-enabled-badge ${enabled ? 'on' : 'off'}`}>
+                          {enabled ? '启用' : '停用'}
+                        </span>
+                      </div>
+                      <div className="agent-meta">
+                        <span className="agent-key">{key}</span>
+                        {agent.role && <span className="agent-role">{agent.role}</span>}
+                        {generatedAt ? <span className="agent-time">生成于 {generatedAt}</span> : null}
+                      </div>
+                      {agent.description && (
+                        <p className="agent-desc">{agent.description}</p>
+                      )}
                     </div>
-                    {agent.description && (
-                      <p className="agent-desc">{agent.description}</p>
-                    )}
-                  </div>
-                </button>
+                  </button>
+                  {canDelete(agent) ? (
+                    <button
+                      type="button"
+                      className="agent-card-delete"
+                      disabled={deletingAgentId === (agent.id || key)}
+                      onClick={() => requestDelete(agent)}
+                      title="删除智能体"
+                      aria-label="删除智能体"
+                    >
+                      {deletingAgentId === (agent.id || key) ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                    </button>
+                  ) : null}
+                </div>
               )
             })}
           </div>
         )}
+        {pendingDelete ? (
+          <div className="cw-delete-confirm" role="dialog" aria-labelledby="agent-delete-confirm-title">
+            <div className="cw-delete-confirm-card">
+              <span className="cw-delete-confirm-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
+              <div className="cw-delete-confirm-copy">
+                <strong id="agent-delete-confirm-title">删除智能体</strong>
+                <p>将删除智能体「{pendingDelete.name || (pendingDelete.key || pendingDelete.agent_key || '')}」，此操作不可撤销。</p>
+              </div>
+              <div className="cw-delete-confirm-actions">
+                <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>取消</button>
+                <button type="button" className="cw-delete-confirm-danger" onClick={confirmDelete} disabled={confirmingDelete}>
+                  {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {detailOpen && selectedAgent && (

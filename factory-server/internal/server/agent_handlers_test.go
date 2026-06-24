@@ -279,6 +279,85 @@ func TestUpdateAgentBadBody(t *testing.T) {
 	}
 }
 
+// TestDeleteAgentBusiness deletes a user-created business agent, asserts 200,
+// and confirms the list drops back to the six seeded pipeline agents.
+func TestDeleteAgentBusiness(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	body := bytes.NewBufferString(`{"key":"review-agent","name":"评审智能体","role":"reviewer","category":"business_processing","prompt":"你是评审助手"}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	r.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (body=%s)", createRec.Code, createRec.Body.String())
+	}
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/agents/agent_review_agent", nil)
+	delRec := httptest.NewRecorder()
+	r.ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 (body=%s)", delRec.Code, delRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	listRec := httptest.NewRecorder()
+	r.ServeHTTP(listRec, listReq)
+	var all []model.Agent
+	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(all) != 6 {
+		t.Fatalf("len = %d, want 6 after delete", len(all))
+	}
+	for _, a := range all {
+		if a.ID == "agent_review_agent" {
+			t.Fatalf("deleted agent still present in list")
+		}
+	}
+}
+
+func TestDeleteAgentNotFound(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/agents/nope", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// TestDeleteAgentRejectsSoftwareDevelopment asserts the registry-seeded
+// pipeline agents are protected from deletion (409) and remain present.
+func TestDeleteAgentRejectsSoftwareDevelopment(t *testing.T) {
+	_, r := newAgentTestServer(t)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/agents/agent_code_generator", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	listRec := httptest.NewRecorder()
+	r.ServeHTTP(listRec, listReq)
+	var all []model.Agent
+	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	found := false
+	for _, a := range all {
+		if a.ID == "agent_code_generator" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("agent_code_generator missing after rejected delete")
+	}
+}
+
 // ccAgentRunsResponse is the response shape of GET /api/agents/:id/runs.
 type ccAgentRunsResponse struct {
 	Available bool   `json:"available"`

@@ -222,6 +222,10 @@ type Agent struct {
 	Prompt    string `json:"prompt"`
 	Enabled   bool   `json:"enabled"`
 	SortOrder int    `json:"sort_order"`
+	// CreatedAt is when the agent was generated (registry-seeded or created
+	// from a dialogue). INTEGER unix ms at the store boundary; 0 for rows that
+	// predate the column (the UI renders those as no time).
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Job struct {
