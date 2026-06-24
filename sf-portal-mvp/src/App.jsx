@@ -83,6 +83,7 @@ function App() {
             workTrace={dialogue.workTrace}
             pendingTurn={dialogue.pendingTurn}
             focusTask={dialogue.focusTask}
+            traceSteps={jobs.steps}
             taskPanel={
               <JobCenter
                 activeJob={dialogue.focusTask || null}

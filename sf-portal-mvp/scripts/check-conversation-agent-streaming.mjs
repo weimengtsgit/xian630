@@ -21,6 +21,29 @@ import {
 } from '../src/hooks/dialogueTimeline.js'
 import { liveStepFromTrace } from '../src/hooks/workTraceState.js'
 
+// ---- 0. D5: optimistic user message renders before the first view lands -----
+//
+// On the first message of a brand-new dialogue there is no persisted view yet
+// (createDialogue is still in flight). buildDialogueTimeline must still surface
+// the optimistic user message — and any streaming live analysis beneath it — so
+// the composer is not visually stuck. The prior `if (!view) return []` dropped
+// the optimistic entry entirely, which is why the first input appeared late.
+{
+  const optimisticTimeline = buildDialogueTimeline(null, { id: 'opt_1', content: '做一个图书馆借阅管理系统' }, null)
+  const opt = optimisticTimeline.find(it => it.type === 'user_message')
+  assert.ok(opt, 'optimistic user message must render even before the first persisted view lands (D5)')
+  assert.equal(opt.optimistic, true, 'the pre-view user message is the optimistic transient')
+  assert.equal(opt.content, '做一个图书馆借阅管理系统', 'optimistic content is preserved verbatim')
+
+  // A null view with no optimistic message stays empty (no spurious items).
+  assert.deepEqual(buildDialogueTimeline(null, null, null), [], 'null view with no optimistic message yields an empty timeline')
+
+  // A streaming live analysis also surfaces beneath the optimistic message pre-view.
+  const withLive = buildDialogueTimeline(null, { id: 'opt_2', content: 'hi' }, { key: 't1', content: '识别需求', kind: 'round' })
+  assert.ok(withLive.some(it => it.type === 'user_message'), 'optimistic message still leads when a live analysis streams pre-view')
+  assert.ok(withLive.some(it => it.type === 'live_analysis'), 'streaming live analysis renders beneath the optimistic message before the view lands')
+}
+
 // ---- 1. Static check: ConversationWorkbench keeps the confirm action gated --
 //
 // D3/ADR 0006: the 确认并生成 button may only appear when the child clarification
@@ -80,6 +103,65 @@ const rendered = qGroup.questions[0]
 assert.equal(rendered.id, 'data_policy', 'question id must be preserved')
 assert.equal(rendered.options.length, 2, 'options must be preserved for the user to pick')
 assert.equal(rendered.options[0].recommended, true, 'recommendation badge must mark the recommended option')
+
+// ---- 2b. The child's persisted analysis (thinking process) is retained -------
+//
+// The application-generation flow persists its analysis_work_log in the CHILD
+// clarification thread (not the parent). Without surfacing it, the streaming
+// live block is cleared on every reload and the thinking process vanishes. The
+// child analysis_work_log must render as a FOLDED analysis_stream item above the
+// question/conclusion (D6 retention), one collapsed block per entry.
+const retainedChildAnalysis = openTimeline.find(
+  it => it.type === 'analysis_stream' && it.content === '需求已收敛，但仍有高影响确认项',
+)
+assert.ok(retainedChildAnalysis, 'child analysis_work_log must render as an analysis_stream item (thinking process retained)')
+assert.equal(retainedChildAnalysis.folded, true, 'retained child analysis renders FOLDED (collapsed) above the conclusion (D6)')
+assert.equal(retainedChildAnalysis.expanded, true, 'analysis defaults to EXPANDED so the reasoning is visible without an extra click')
+
+// ---- 2c. Child analysis groups into ONE folded block per round --------------
+//
+// A multi-round dialogue emits several analysis_work_log entries per round
+// (one per clarifier observation). Rendering one block per entry was too noisy
+// (~10 blocks). Entries now fold by round — a user answer (not the initial
+// prompt) starts a new round — into a single 分析过程 · 第N轮 block whose content
+// is the round's entries joined by a blank line. The thread is walked
+// chronologically, so each round's analysis block sits above the user's reply.
+// The user's clarification answer renders the SELECTED OPTION LABEL (mapped from
+// the preceding question's options), not the raw value slug.
+const childMultiRound = {
+  id: 'clar_mr', status: 'ready_to_confirm', round: 3, max_rounds: 6,
+  requirement: { appType: 'operations_management', appName: '图书借阅', coreScenario: '借还' },
+  messages: [
+    { id: 'mr_a1', role: 'agent', kind: 'analysis_work_log', content: 'R1第一句' },
+    { id: 'mr_a2', role: 'agent', kind: 'analysis_work_log', content: 'R1第二句' },
+    { id: 'mr_q1', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
+      id: 'mr_q1', label: 'Q1',
+      options: [{ value: 'v1', label: '选项甲' }, { value: 'v2', label: '选项乙' }],
+    }) },
+    { id: 'mr_u1', role: 'user', kind: 'answer', content: 'v2' },
+    { id: 'mr_a3', role: 'agent', kind: 'analysis_work_log', content: 'R2第一句' },
+    { id: 'mr_a4', role: 'agent', kind: 'analysis_work_log', content: 'R2第二句' },
+  ],
+}
+const mrTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_mr', status: 'drafting_application', intent: 'application_generation', route_locked: true },
+  messages: [], route: {}, child: childMultiRound,
+})
+const mrAnalysis = mrTimeline.filter(it => it.type === 'analysis_stream')
+assert.equal(mrAnalysis.length, 2, 'child analysis groups into one block per round (2 rounds → 2 blocks, not one per entry)')
+assert.equal(mrAnalysis[0].label, '分析过程 · 第1轮', 'first round block labeled 第1轮')
+assert.equal(mrAnalysis[0].content, 'R1第一句\n\nR1第二句', 'round-1 entries concatenate with a blank line')
+assert.equal(mrAnalysis[1].label, '分析过程 · 第2轮', 'a user answer starts round 2')
+assert.equal(mrAnalysis[1].content, 'R2第一句\n\nR2第二句', 'round-2 entries concatenate')
+// The user's clarification answer renders as a user_message carrying the SELECTED
+// OPTION LABEL (Q1 + 选项乙 from value v2), placed chronologically between the
+// two analysis blocks.
+const mrAnswer = mrTimeline.find(it => it.type === 'user_message' && it.content.includes('选项乙'))
+assert.ok(mrAnswer, 'clarification answer must render the selected option label (Q1：选项乙), not the raw value v2')
+assert.equal(mrAnswer.content, 'Q1：选项乙', 'answer maps value v2 → option label 选项乙, prefixed with the question label')
+assert.ok(mrTimeline.indexOf(mrAnalysis[0]) < mrTimeline.indexOf(mrAnswer), 'round-1 analysis appears above the user answer')
+assert.ok(mrTimeline.indexOf(mrAnswer) < mrTimeline.indexOf(mrAnalysis[1]), 'round-2 analysis appears below the user answer')
+
 
 // ---- 3. No confirm button leaks while high-impact items are open -------------
 //
@@ -172,8 +254,8 @@ const completedView = {
 const completedTimeline = buildDialogueTimeline(completedView, null, null)
 const persistedAnalysis = completedTimeline.find(it => it.type === 'analysis_stream')
 assert.ok(persistedAnalysis, 'the persisted analysis_work_log maps to an analysis_stream item')
-assert.equal(persistedAnalysis.folded, true, 'persisted analysis_stream must render FOLDED (collapsed) above the conclusion (D6)')
-assert.equal(persistedAnalysis.expanded, false, 'folded item defaults to collapsed (expanded false)')
+assert.equal(persistedAnalysis.folded, true, 'persisted analysis_stream must render FOLDED (collapsible) above the conclusion (D6)')
+assert.equal(persistedAnalysis.expanded, true, 'analysis defaults to EXPANDED (visible without an extra click)')
 
 // The live item must NOT appear when a persisted analysis for the turn exists.
 const liveAfterPersist = buildDialogueTimeline(completedView, null, {

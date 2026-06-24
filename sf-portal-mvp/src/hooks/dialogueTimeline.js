@@ -102,9 +102,8 @@ export function lockedFromView(view) {
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
 export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null) {
-  if (!view) return []
   const items = []
-  const parentMessages = Array.isArray(view.messages) ? view.messages : []
+  const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
 
   // Determine whether the persisted view already carries a user message with the
   // SAME content as the optimistic one for this turn. If so the optimistic entry
@@ -125,6 +124,22 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         optimistic: true,
       })
     }
+  }
+
+  // D5: before the first persisted view lands (first message of a brand-new
+  // dialogue, while createDialogue is in flight) still surface the optimistic
+  // user message — and any streaming live analysis beneath it — so the composer
+  // is not visually stuck. Once the view loads, the full thread renders below.
+  if (!view) {
+    if (liveAnalysis && liveAnalysis.content) {
+      items.push({
+        id: `live_${safeString(liveAnalysis.key)}`,
+        type: 'live_analysis',
+        content: safeString(liveAnalysis.content),
+        kind: liveAnalysis.kind === 'step' ? 'step' : 'round',
+      })
+    }
+    return items
   }
 
   // Whether the persisted view already carries an analysis work log for this
@@ -149,15 +164,15 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     }
     if (msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
       // D6: the persisted analysis lands ONLY after the round completes. It
-      // renders FOLDED (collapsed) above the conclusion, with an expand toggle.
-      // `folded` marks the item as a collapsible block; `expanded` defaults to
-      // false so the summary is tucked away and the user expands to read it.
+      // renders as a collapsible block above the conclusion (`folded`), default
+      // EXPANDED so the reasoning is visible without an extra click; the user
+      // can collapse it via the toggle.
       items.push({
         id: msg.id,
         type: 'analysis_stream',
         content: safeString(msg.content),
         folded: true,
-        expanded: false,
+        expanded: true,
       })
     }
     // Other parent agent kinds (business_draft handled below) are dropped here.
@@ -318,6 +333,61 @@ function latestBusinessConsolidation(view) {
 // reads child.messages (the persisted child thread) and child.requirement.
 function appendChildItems(items, child, parentSession) {
   const childMessages = Array.isArray(child.messages) ? child.messages : []
+  // Walk the child clarification thread CHRONOLOGICALLY and emit, in order:
+  //   - each round's analysis_work_log entries as ONE folded 分析过程 · 第N轮
+  //     block, flushed when a question or a user answer arrives so the thinking
+  //     sits above the question / the user's reply. The application-generation
+  //     flow persists its analysis here (not in the parent); one block per entry
+  //     was too noisy (~10 for a 3-round dialogue), so each round folds together.
+  //     Default EXPANDED so the reasoning is visible without an extra click.
+  //   - the user's clarification answer as a user_message, rendered with the
+  //     SELECTED OPTION LABEL (looked up from the preceding question) instead of
+  //     the raw value slug — so the reply reads e.g. "主要使用角色：图书工作人员".
+  // Only the safe analysis_work_log / model_output kinds are emitted — never raw
+  // reasoning (security #9). A user answer (not the initial prompt) starts a new
+  // round.
+  let round = 1
+  let bucket = null // { round, entries: [] }
+  let lastQuestion = null // parsed metadata of the most recent question
+  const flushAnalysis = () => {
+    if (bucket && bucket.entries.length > 0) {
+      items.push({
+        id: `${parentSession.id || 'dlg'}_analysis_round_${bucket.round}`,
+        type: 'analysis_stream',
+        content: bucket.entries.join('\n\n'),
+        folded: true,
+        expanded: true,
+        label: `分析过程 · 第${bucket.round}轮`,
+      })
+    }
+    bucket = null
+  }
+  for (const msg of childMessages) {
+    if (msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
+      if (msg.content) {
+        if (!bucket) bucket = { round, entries: [] }
+        bucket.entries.push(safeString(msg.content))
+      }
+      continue
+    }
+    if (msg && msg.role === 'agent' && msg.kind === 'question') {
+      flushAnalysis()
+      lastQuestion = parseJSON(msg.metadata_json)
+      continue
+    }
+    if (msg && msg.role === 'user' && msg.kind !== 'prompt') {
+      flushAnalysis()
+      round += 1
+      items.push({
+        id: msg.id || `${parentSession.id || 'dlg'}_answer_${round}`,
+        type: 'user_message',
+        content: clarifyAnswerLabel(msg, lastQuestion),
+      })
+      lastQuestion = null
+      continue
+    }
+  }
+  flushAnalysis()
   // Question groups: the latest unanswered question set after the last user
   // answer. One group with all open questions.
   const openQuestions = openChildQuestions(child, childMessages)
@@ -346,6 +416,20 @@ function appendChildItems(items, child, parentSession) {
       requirement: safeRequirement(req),
     })
   }
+}
+
+// clarifyAnswerLabel renders a clarification answer as the user's reply, mapping
+// the persisted option VALUE to its human label via the preceding question's
+// options. Reads e.g. value "librarian_manage" → "主要使用角色：图书工作人员（管理端）".
+// Falls back to the raw value when no question/options match.
+function clarifyAnswerLabel(msg, lastQuestion) {
+  const raw = safeString(msg && msg.content)
+  if (!lastQuestion) return raw
+  const qLabel = safeString(lastQuestion.label || lastQuestion.question)
+  const opts = Array.isArray(lastQuestion.options) ? lastQuestion.options : []
+  const opt = opts.find(o => o && safeString(o.value) === raw)
+  const optLabel = opt ? safeString(opt.label || opt.value) : raw
+  return qLabel ? `${qLabel}：${optLabel}` : optLabel
 }
 
 // openChildQuestions returns the questions currently awaiting an answer, mirroring

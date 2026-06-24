@@ -223,16 +223,16 @@ export function JobCenter({
           {/* started_at (actual exec start) vs created_at (queue time) — Constraint #10.
               Show both, distinctly, when present. */}
           <div className="jc-time-block">
-            {activeJob.created_at ? (
-              <span className="jc-time jc-time-queued" title="排队时间">
-                <small>排队</small>
-                <time dateTime={activeJob.created_at}>{formatJobTime(activeJob.created_at)}</time>
-              </span>
-            ) : null}
             {activeJob.started_at ? (
               <span className="jc-time jc-time-started" title="开始执行">
                 <small>开始执行</small>
                 <time dateTime={activeJob.started_at}>{formatJobTime(activeJob.started_at)}</time>
+              </span>
+            ) : null}
+            {activeJob.ended_at ? (
+              <span className="jc-time jc-time-ended" title="结束执行">
+                <small>结束执行</small>
+                <time dateTime={activeJob.ended_at}>{formatJobTime(activeJob.ended_at)}</time>
               </span>
             ) : null}
           </div>

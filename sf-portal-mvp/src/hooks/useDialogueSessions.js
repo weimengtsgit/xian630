@@ -102,7 +102,10 @@ export function useDialogueSessions() {
   // safe work log renders beneath the user message and is suppressed once the
   // persisted analysis lands.
   useEffect(() => {
-    if (!state.view) return
+    // D5: rebuild even before the first persisted view lands so the optimistic
+    // user message (and streaming analysis) renders immediately on a brand-new
+    // dialogue. buildDialogueTimeline(null, ...) surfaces just those transients.
+    if (!state.view && !optimisticUserMessage) return
     setState(prev => (prev.view === state.view
       ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis) }
       : prev))
