@@ -102,5 +102,8 @@ assert.match(jobCenterJsx, /created_at|排队时间|创建时间/, 'JobCenter mu
 // The focus-task selector exists and prefers active jobs, else newest terminal.
 const focusTaskJs = readFileSync(new URL('../src/hooks/focusTask.js', import.meta.url), 'utf8')
 assert.match(focusTaskJs, /selectFocusTask/, 'a focus-task selector (selectFocusTask) must exist')
+const jobSelectionJs = readFileSync(new URL('../src/hooks/jobSelection.js', import.meta.url), 'utf8')
+assert.match(workbenchJsx, /resolvedApplication.*name|applicationHeaderTitle/, 'workbench header must prefer the resolved application name')
+assert.doesNotMatch(jobSelectionJs, /job\.app_name\s*\|\|/, 'task title must not fall back to job.app_name')
 
 console.log('check-visible-work-trace: OK')

@@ -76,6 +76,10 @@ export function ConversationWorkbench({
   // ---- continuous-workbench derived state (Task 7) ------------------------
   const traceItems = Array.isArray(workTrace) ? workTrace : []
   const hasPendingTurn = !!(pendingTurn && pendingTurn.turnId)
+  const resolvedApplication = view && view.resolvedApplication
+  const applicationHeaderTitle = resolvedApplication &&
+    (resolvedApplication.name || resolvedApplication.slug)
+  const workbenchTitle = applicationHeaderTitle || (session ? titleForDialogue(session) : '新会话')
   // A version has deployed when the view carries a resolved application with a
   // runtime url, OR the trace shows a deployment/version event. We render the
   // "vN 已生效，可继续描述修改需求" hint then, and keep the composer active.
@@ -115,7 +119,7 @@ export function ConversationWorkbench({
       <header className="cw-header">
         <div className="cw-title">
           <span className="cw-kicker">会话工作台</span>
-          <strong>{session ? titleForDialogue(session) : '新会话'}</strong>
+          <strong>{workbenchTitle}</strong>
         </div>
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
