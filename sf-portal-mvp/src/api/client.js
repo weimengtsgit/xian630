@@ -1,10 +1,41 @@
 const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'
+const DEFAULT_TIMEOUT_MS = 15000
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  })
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal, ...fetchOptions } = options
+  const controller = new AbortController()
+  let timedOut = false
+  let timeoutId = null
+  const abortFromCaller = () => controller.abort(signal.reason)
+  if (signal) {
+    if (signal.aborted) abortFromCaller()
+    else signal.addEventListener('abort', abortFromCaller, { once: true })
+  }
+  if (timeoutMs > 0) {
+    timeoutId = globalThis.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeoutMs)
+  }
+
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
+      ...fetchOptions,
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if (err.name === 'AbortError' && timedOut) {
+      const timeoutErr = new Error('请求超时，请稍后重试')
+      timeoutErr.name = 'TimeoutError'
+      throw timeoutErr
+    }
+    throw err
+  } finally {
+    if (timeoutId) globalThis.clearTimeout(timeoutId)
+    if (signal) signal.removeEventListener('abort', abortFromCaller)
+  }
   if (!response.ok) {
     const body = await response.text()
     const err = new Error(`${response.status} ${body}`)
@@ -54,8 +85,8 @@ export const factoryApi = {
   listSoftwareAgents: () => request('/api/agents?category=software'),
   listBusinessAgents: () => request('/api/agents?category=business'),
   createBusinessAgent: agent => request('/api/business-agents', { method: 'POST', body: JSON.stringify(agent) }),
-  updateBusinessAgent: (id, agent) => request(`/api/business-agents/${id}`, { method: 'PATCH', body: JSON.stringify(agent) }),
-  setBusinessAgentEnabled: (id, enabled) => request(`/api/business-agents/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+  updateBusinessAgent: (id, agent, options = {}) => request(`/api/business-agents/${id}/update`, { method: 'POST', body: JSON.stringify(agent), ...options }),
+  setBusinessAgentEnabled: (id, enabled) => request(`/api/business-agents/${id}/enabled`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   createBusinessAgentAuthoring: body => request('/api/business-agent-authoring', { method: 'POST', body: JSON.stringify(body || { mode: 'create' }) }),
   sendBusinessAgentAuthoringMessage: (id, content) => request(`/api/business-agent-authoring/${id}/messages`, { method: 'POST', body: JSON.stringify({ content }) }),
   finalizeBusinessAgentAuthoring: id => request(`/api/business-agent-authoring/${id}/finalize`, { method: 'POST' }),

@@ -327,8 +327,8 @@ func (s *Server) routes() *Router {
 	// agents scoped to category=business; the software registry above is
 	// read-only via these endpoints (403).
 	r.Handle("POST", "/api/business-agents", s.createBusinessAgent)
-	r.Handle("PATCH", "/api/business-agents/:id", s.updateBusinessAgent)
-	r.Handle("PATCH", "/api/business-agents/:id/enabled", s.setBusinessAgentEnabled)
+	r.Handle("POST", "/api/business-agents/:id/update", s.updateBusinessAgent)
+	r.Handle("POST", "/api/business-agents/:id/enabled", s.setBusinessAgentEnabled)
 	r.Handle("POST", "/api/business-agent-authoring", s.createBusinessAgentAuthoring)
 	r.Handle("GET", "/api/business-agent-authoring/:id", s.getBusinessAgentAuthoring)
 	r.Handle("POST", "/api/business-agent-authoring/:id/messages", s.addBusinessAgentAuthoringMessage)
@@ -391,7 +391,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
-		h.Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+		h.Set("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS")
 		h.Set("Access-Control-Allow-Headers", "Content-Type")
 		h.Set("Access-Control-Max-Age", "86400")
 		if r.Method == http.MethodOptions {

@@ -25,4 +25,14 @@ assert.match(source, /openAuthoringDialog/, 'must call openAuthoringDialog on cr
 assert.match(source, /onCreateBusinessAgent/, 'onCreateBusinessAgent prop must still exist')
 assert.match(source, /onUpdateBusinessAgent/, 'onUpdateBusinessAgent prop must still exist')
 
+// Regression: editing a business agent must not trap the user in 保存中.
+// The save request is abortable, and the cancel button remains available.
+assert.match(source, /useRef/, 'edit save flow must keep an abort controller ref')
+assert.match(source, /new AbortController\(\)/, 'edit save request must be abortable')
+assert.match(source, /onClick=\{cancelEdit\}/, 'edit cancel button must abort and leave editing')
+assert.doesNotMatch(source, /onClick=\{cancelEdit\}\s+disabled=\{editSaving\}/, 'edit cancel must remain clickable while saving')
+
+const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
+assert.match(clientSource, /DEFAULT_TIMEOUT_MS/, 'API requests must have a default timeout')
+assert.match(clientSource, /请求超时，请稍后重试/, 'timed-out API requests must surface a user-readable error')
 console.log('check-agent-authoring-dialog: OK')

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Bot, Pencil, Plus, Power, Save, X } from 'lucide-react'
 import { applySelectedBusinessAgents, splitAgentsByCategory } from '../hooks/agentList'
 import { useAgentAuthoringDialog } from '../hooks/useAgentAuthoringDialog'
@@ -54,6 +54,8 @@ export function AgentsPanel({
   const [editError, setEditError] = useState('')
   const [editSaving, setEditSaving] = useState(false)
   const [panelError, setPanelError] = useState('')
+  const editAbortControllerRef = useRef(null)
+  const ignoreSaveAbortRef = useRef(false)
 
   const authoring = useAgentAuthoringDialog(onRefreshAgents)
 
@@ -87,11 +89,20 @@ export function AgentsPanel({
     setDetailOpen(true)
   }
 
-  const closeAgentDetail = () => {
-    if (editSaving) return
-    setDetailOpen(false)
+  const cancelEdit = () => {
+    if (editAbortControllerRef.current) {
+      ignoreSaveAbortRef.current = true
+      editAbortControllerRef.current.abort()
+      editAbortControllerRef.current = null
+    }
+    setEditSaving(false)
     setEditing(false)
     setEditError('')
+  }
+
+  const closeAgentDetail = () => {
+    cancelEdit()
+    setDetailOpen(false)
   }
 
   const startEditing = () => {
@@ -119,6 +130,9 @@ export function AgentsPanel({
       setEditError('请填写名称和最终提示词')
       return
     }
+    const controller = new AbortController()
+    editAbortControllerRef.current = controller
+    ignoreSaveAbortRef.current = false
     setEditSaving(true)
     setEditError('')
     try {
@@ -127,12 +141,17 @@ export function AgentsPanel({
         description: editForm.description.trim(),
         prompt,
         enabled: editForm.enabled,
-      })
+      }, { signal: controller.signal })
       setSelectedId(updated.id || selectedAgent.id)
       setEditing(false)
     } catch (err) {
-      setEditError(err.message || String(err))
+      if (!ignoreSaveAbortRef.current) {
+        setEditError(err.message || String(err))
+      }
     } finally {
+      if (editAbortControllerRef.current === controller) {
+        editAbortControllerRef.current = null
+      }
       setEditSaving(false)
     }
   }
@@ -415,8 +434,7 @@ export function AgentsPanel({
                   <button
                     type="button"
                     className="agent-secondary-button"
-                    onClick={() => setEditing(false)}
-                    disabled={editSaving}
+                    onClick={cancelEdit}
                   >
                     取消
                   </button>

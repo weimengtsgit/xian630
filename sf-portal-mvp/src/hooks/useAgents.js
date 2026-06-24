@@ -38,9 +38,9 @@ export function useAgents() {
     return created
   }, [])
 
-  const updateBusinessAgent = useCallback(async (id, agent) => {
+  const updateBusinessAgent = useCallback(async (id, agent, options = {}) => {
     setError(null)
-    const updated = await factoryApi.updateBusinessAgent(id, agent)
+    const updated = await factoryApi.updateBusinessAgent(id, agent, options)
     setAgents(current => current.map(item => item.id === updated.id ? updated : item))
     return updated
   }, [])
