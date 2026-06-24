@@ -758,3 +758,131 @@ func TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput(t *testing.T
 		t.Errorf("clarification payload missing the question: %#v", trace.events)
 	}
 }
+
+// TestClaudeStepRunnerEmitsWorkLogAsDialogueTrace (Task 4) asserts that the
+// structured workLog summary entries decoded from output.json are surfaced as
+// dialogue-attributed traces (so they reach the conversation workbench), NOT only
+// as job-scoped step_execution_records rows. Each workLog entry's public content
+// must become an assistant_output trace via the SAME trace seam/redaction/cap the
+// assistant-text path uses. The test also asserts the HARD SECURITY invariant:
+// a thinking_delta trace is NEVER emitted (workLog has none, but the contract
+// must hold). The emitter is a captureTraceEmitter, which implements BOTH
+// StepRecordEmitter and TraceEmitter — exactly the seam the production stepEmitter
+// exposes — so this proves the trace reaches the dialogue (the stepEmitter stamps
+// DialogueID and drops traces for legacy jobs with an empty dialogue id).
+func TestClaudeStepRunnerEmitsWorkLogAsDialogueTrace(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeStreamCodegenCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"projectDir":     "generated-apps/demo",
+			"createdFiles":   []string{"generated-apps/demo/.factory/app.json"},
+			"needsUserInput": false,
+			"questions":      []any{},
+			"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+			"warnings":       []string{},
+			// workLog: the ONLY agent-authored field that becomes summary records AND
+			// (Task 4) dialogue traces. Content is user-facing analysis prose by design.
+			"workLog": []map[string]string{
+				{"content": "已分析需求，确定核心场景为东海航母编队近一个月航行轨迹复盘"},
+				{"content": "已设计地图时间轴交互方案，支持按日期回放编队位置与事件"},
+			},
+		},
+		stdout: `{"type":"result","subtype":"success","is_error":false,"result":"{}"}`,
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepCodeGeneration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	trace := &captureTraceEmitter{}
+
+	res, err := r.Run(context.Background(), job, step, trace)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
+	}
+
+	// Each workLog entry content must reach the conversation as an assistant_output
+	// trace (the same trace type the assistant-text stream path uses).
+	if !trace.payloadContaining("已分析需求，确定核心场景为东海航母编队近一个月航行轨迹复盘") {
+		t.Errorf("first workLog entry not emitted as a trace; events=%#v", trace.events)
+	}
+	if !trace.payloadContaining("已设计地图时间轴交互方案，支持按日期回放编队位置与事件") {
+		t.Errorf("second workLog entry not emitted as a trace; events=%#v", trace.events)
+	}
+
+	// The workLog trace must use the assistant_output trace type (the safe,
+	// allowlisted category the assistant-text path uses), so the gate accepts it.
+	assistantCount := 0
+	for _, e := range trace.events {
+		if e.traceType == string(model.WorkTraceAssistant) {
+			assistantCount++
+		}
+	}
+	if assistantCount < 2 {
+		t.Errorf("expected >=2 assistant_output traces (one per workLog entry), got %d; events=%#v", assistantCount, trace.events)
+	}
+
+	// HARD SECURITY (Constraint #9): a thinking_delta trace is NEVER emitted.
+	// workLog has no thinking, but the contract must hold — assert it.
+	for _, e := range trace.events {
+		if e.traceType == "thinking" || e.traceType == "thinking_delta" {
+			t.Errorf("hidden reasoning trace type %q emitted: %#v", e.traceType, e)
+		}
+	}
+}
+
+// TestEmitWorkLogTracesEachEntry is a focused unit test on the workLog→trace
+// emission, independent of the full Run pipeline. It drives emitWorkLog directly
+// via a captureTraceEmitter and asserts EVERY non-empty workLog entry becomes an
+// assistant_output trace, empty entries are skipped, and thinking never appears.
+// It uses a real output.json written by runner.DecodeWorkLog's own parser.
+func TestEmitWorkLogTracesEachEntry(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "output.json")
+	raw := `{"workLog":[{"content":"第一步：读取输入"},{"content":"  "},{"content":"第二步：生成组件"}]}`
+	if err := os.WriteFile(out, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output.json: %v", err)
+	}
+
+	// A captureTraceEmitter is the seam; emitWorkLog must discover its Trace
+	// capability via TraceEmitterFrom.
+	var r ClaudeStepRunner
+	trace := &captureTraceEmitter{}
+	r.emitWorkLog(context.Background(), trace, out)
+
+	if !trace.payloadContaining("第一步：读取输入") {
+		t.Errorf("first workLog entry not traced; events=%#v", trace.events)
+	}
+	if !trace.payloadContaining("第二步：生成组件") {
+		t.Errorf("third workLog entry not traced; events=%#v", trace.events)
+	}
+	if trace.payloadContaining("  ") && len(trace.events) == 0 {
+		t.Errorf("empty/whitespace entry should not produce a trace; events=%#v", trace.events)
+	}
+
+	// Exactly the two non-empty entries become assistant_output traces.
+	count := 0
+	for _, e := range trace.events {
+		if e.traceType == string(model.WorkTraceAssistant) {
+			count++
+		}
+		if e.traceType == "thinking" || e.traceType == "thinking_delta" {
+			t.Errorf("hidden reasoning trace emitted: %#v", e)
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected 2 assistant_output traces, got %d; events=%#v", count, trace.events)
+	}
+}
