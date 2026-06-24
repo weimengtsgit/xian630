@@ -1,0 +1,42 @@
+# Build-context exclusions for the deploy Dockerfiles (context = repo root).
+# Keep: sf-portal-mvp/, factory-server/, .claude/skills/, scene/, deploy/nginx/.
+
+.git
+.gitignore
+.DS_Store
+
+# Node
+**/node_modules
+**/dist
+**/.vite
+**/coverage
+**/.cache
+**/*.log
+
+# Go / runtime artifacts
+**/*.db
+**/*.db-*
+factory-server/generated-apps
+factory-server/.factory-runs
+factory-server/bin
+cc-status/bin
+cc-status/.factory-runs
+
+# Secrets
+deploy/.env
+
+# Unrelated top-level dirs
+docs
+software-factory-course
+sf-portal
+cc-status
+
+# Editor / misc
+.vscode
+.idea
+**/*.swp
+.superpowers
+
+# Docs not needed in images
+*.md
+CONTEXT.md

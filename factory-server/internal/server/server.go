@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runlog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
@@ -33,6 +35,7 @@ type Server struct {
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
 	runner      deploy.CommandRunner                                               // default: &deploy.OSRunner{}
+	runtime     deploy.ContainerRuntime                                             // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
 	execBusy    *atomic.Bool                                                       // global executor lock (Task 10 holds it during jobs)
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
@@ -53,7 +56,11 @@ type Server struct {
 	// pipeline's ClaudeStepRunner). Tests override this field with a fake
 	// runner.CommandRunner to avoid invoking claude.
 	clarifier clarification.Runner
-	runLog    *runlog.Logger
+	// dialogueRouter runs the two model-driven dialogue contracts (intent routing
+	// + business-agent drafting) via the real Claude Code CLI. Mirrors clarifier:
+	// product path is ALWAYS the real CLI; tests override this field with a fake.
+	dialogueRouter dialogue.Runner
+	runLog         *runlog.Logger
 }
 
 type claudeCommandAdapter struct {
@@ -169,12 +176,33 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	execBusy := new(atomic.Bool)
 	runLogger := runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups)
 	osRunner := &deploy.OSRunner{}
+
+	// Select container runtime based on configuration
+	var runtime deploy.ContainerRuntime
+	switch cfg.ContainerRuntime {
+	case "docker":
+		runtime = deploy.NewDocker(osRunner)
+		log.Printf("Container runtime: docker")
+	default: // "podman" or any invalid value (fallback to podman)
+		runtime = deploy.NewPodman(osRunner)
+		log.Printf("Container runtime: podman")
+	}
+	// Fail-fast visibility: if the selected runtime's binary is not on PATH,
+	// every image_build / container run will fail after a long generation run.
+	// Surface this at startup (not 12 minutes later at image_build) with the
+	// one-line fix. Does not block startup — the operator may install the
+	// binary before triggering a build.
+	if _, err := exec.LookPath(runtime.Name()); err != nil {
+		log.Printf("WARNING: container runtime %q not found on PATH (FACTORY_CONTAINER_RUNTIME=%s); image_build will fail until it is installed or you switch runtimes", runtime.Name(), cfg.ContainerRuntime)
+	}
+
 	s := &Server{
 		cfg:         cfg,
 		store:       st,
 		scanner:     sc,
 		hub:         NewHub(),
 		runner:      osRunner,
+		runtime:     runtime,
 		healthCheck: deploy.CheckHTTP,
 		execBusy:    execBusy,
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers
@@ -187,7 +215,8 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	factory := &executor.FactoryRunner{
 		Store:        st,
 		Cmds:         osRunner,
-		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/podman emit live command_stdout/command_stderr records
+		Runtime:      runtime, // docker or podman, per FACTORY_CONTAINER_RUNTIME (defaults podman)
+		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/container emit live command_stdout/command_stderr records
 		Alloc:        deploy.DefaultAllocator(),
 		Health:       deploy.CheckHTTP,
 		Workspace:    cfg.WorkspaceRoot,
@@ -198,6 +227,14 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// intentionally NOT gated on FACTORY_FAKE_CLAUDE — only the step-pipeline
 	// ClaudeStepRunner slot is. Tests override s.clarifier directly.
 	s.clarifier = clarification.Runner{
+		Cmd:           claudeCmd,
+		WorkspaceRoot: cfg.WorkspaceRoot,
+		ArtifactRoot:  cfg.ArtifactRoot,
+	}
+	// Dialogue routing + business-agent drafting run against the REAL Claude
+	// Code CLI in production, mirroring clarifier. Tests override
+	// s.dialogueRouter directly.
+	s.dialogueRouter = dialogue.Runner{
 		Cmd:           claudeCmd,
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		ArtifactRoot:  cfg.ArtifactRoot,
@@ -216,6 +253,9 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 			ArtifactRoot: cfg.ArtifactRoot,
 		}
 		log.Printf("FACTORY_FAKE_CLAUDE=1: claude steps use the deterministic FakeClaudeRunner")
+	}
+	if runner.LLMConsoleEnabled() {
+		log.Printf("FACTORY_LLM_CONSOLE=1: claude request/response traces stream to stderr")
 	}
 	dispatch := executor.NewDispatcher(factory, claude)
 	s.exec = executor.NewExecutor(st, dispatch, execBusy)
@@ -274,6 +314,15 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
+	// Idempotently backfill legacy clarification sessions into the new dialogue
+	// parent resource: one application_generation dialogue per legacy session,
+	// linked via clarification_session_id. Best-effort — a backfill failure
+	// must not prevent the server from listening (re-running startup retries
+	// any unbackfilled rows; FindDialogueByClarificationID prevents dups).
+	if err := s.store.BackfillClarificationDialogues(ctx); err != nil {
+		log.Printf("backfill clarification dialogues: %v", err)
+	}
+
 	s.srv = &http.Server{Addr: s.cfg.Addr, Handler: corsMiddleware(s.routes())}
 	go func() {
 		<-ctx.Done()
@@ -291,6 +340,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"artifact_root":      s.cfg.ArtifactRoot,
 		"workspace_root":     s.cfg.WorkspaceRoot,
 		"cc_status_base_url": s.cfg.CCStatusBaseURL,
+		"container_runtime":  s.cfg.ContainerRuntime,
 	})
 	log.Printf("factory-server listening on http://%s", s.cfg.Addr)
 	err = s.srv.ListenAndServe()
@@ -315,6 +365,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)
 	r.Handle("POST", "/api/apps/:id/rebuild", s.rebuildApp)
+	r.Handle("DELETE", "/api/apps/:id", s.deleteApp)
 
 	r.Handle("GET", "/api/agents", s.listAgents)
 	r.Handle("POST", "/api/agents", s.createAgent)
@@ -336,8 +387,10 @@ func (s *Server) routes() *Router {
 	// Clarification session lifecycle (Task 4). A portal chat message creates a
 	// clarification session (NOT a job) until the user confirms.
 	r.Handle("POST", "/api/clarifications", s.createClarification)
+	r.Handle("GET", "/api/clarifications", s.listClarifications)
 	r.Handle("GET", "/api/clarifications/active", s.getActiveClarification)
 	r.Handle("GET", "/api/clarifications/:id", s.getClarification)
+	r.Handle("DELETE", "/api/clarifications/:id", s.deleteClarification)
 	r.Handle("GET", "/api/clarifications/:id/messages", s.listClarificationMessages)
 	r.Handle("POST", "/api/clarifications/:id/messages", s.addClarificationMessage)
 	r.Handle("POST", "/api/clarifications/:id/answers", s.answerClarification)
@@ -346,6 +399,26 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/clarifications/:id/retry-current-round", s.retryClarificationRound)
 	r.Handle("POST", "/api/clarifications/:id/confirm", s.confirmClarification)
 	r.Handle("POST", "/api/clarifications/:id/abandon", s.abandonClarification)
+
+	// Dialogue API (Task 4). A facade over intent routing, child clarification,
+	// and business-agent drafting. The legacy /api/clarifications endpoints stay
+	// readable for backfilled history; new chat goes through /api/dialogues.
+	r.Handle("POST", "/api/dialogues", s.createDialogue)
+	r.Handle("GET", "/api/dialogues", s.listDialogues)
+	r.Handle("GET", "/api/dialogues/:id", s.getDialogue)
+	r.Handle("DELETE", "/api/dialogues/:id", s.deleteDialogue)
+	r.Handle("POST", "/api/dialogues/:id/messages", s.addDialogueMessage)
+	r.Handle("POST", "/api/dialogues/:id/route", s.selectDialogueRoute)
+	r.Handle("POST", "/api/dialogues/:id/applications/:applicationID/open", s.openDialogueApp)
+	r.Handle("POST", "/api/dialogues/:id/clarification/answers", s.answerDialogueClarification)
+	r.Handle("POST", "/api/dialogues/:id/clarification/answers/batch", s.answerDialogueClarificationBatch)
+	r.Handle("PATCH", "/api/dialogues/:id/clarification/requirement", s.patchDialogueRequirement)
+	r.Handle("POST", "/api/dialogues/:id/clarification/retry-current-round", s.retryDialogueClarificationRound)
+	r.Handle("POST", "/api/dialogues/:id/clarification/confirm", s.confirmDialogueClarification)
+	r.Handle("POST", "/api/dialogues/:id/clarification/abandon", s.abandonDialogue)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/confirm", s.confirmDialogueBusinessAgent)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/continue", s.continueDialogueBusinessAgent)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/consolidation", s.applyDialogueBusinessConsolidation)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

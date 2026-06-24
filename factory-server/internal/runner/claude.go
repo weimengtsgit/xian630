@@ -67,25 +67,39 @@ func (r *ClaudeRunner) binary() string {
 // other hidden provider field — only tool_use + the public workLog in the final
 // result become records.
 func claudeArgv(codegen bool) []string {
+	modelArgs := claudeModelArgs()
 	stream := []string{
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
 	}
 	if codegen {
-		return append([]string{
+		return append(append([]string{
 			"--print",
 			"--permission-mode", "acceptEdits",
 			"--allowedTools", "Read,Grep,Glob,Edit,Write",
 			"--disallowedTools", "Bash",
-		}, stream...)
+		}, modelArgs...), stream...)
 	}
-	return append([]string{
+	// Read-only stages intentionally avoid plan mode. DeepSeek-on-Claude-compatible
+	// endpoints can turn plan mode into an approval loop and emit prose instead of
+	// the required JSON contract. acceptEdits here does not grant write ability
+	// because Edit/Write remain disallowed.
+	return append(append([]string{
 		"--print",
-		"--permission-mode", "plan",
+		"--permission-mode", "acceptEdits",
 		"--allowedTools", "Read,Grep,Glob",
 		"--disallowedTools", "Bash,Edit,Write",
-	}, stream...)
+	}, modelArgs...), stream...)
+}
+
+func claudeModelArgs() []string {
+	for _, key := range []string{"CLAUDE_CODE_MODEL", "ANTHROPIC_MODEL"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return []string{"--model", value}
+		}
+	}
+	return nil
 }
 
 // Run writes the attempt input.json and prompt.md, then invokes the claude
@@ -128,10 +142,22 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 	if codegen && r.WorkDir != "" {
 		runDir = r.WorkDir
 	}
-	res, err := inputRunner.RunWithInput(ctx, runDir, prompt, r.binary(), claudeArgv(codegen)...)
+	stage := "analysis_step"
+	if codegen {
+		stage = "code_generation"
+	}
+	args := claudeArgv(codegen)
+	LLMConsoleRequest(stage, r.binary(), args, prompt)
+	res, err := inputRunner.RunWithInput(ctx, runDir, prompt, r.binary(), args...)
 	// Capture whatever we got, even on failure, for audit/debugging.
 	_ = os.WriteFile(ws.StdoutPath(), []byte(res.Stdout), 0o644)
 	_ = os.WriteFile(ws.StderrPath(), []byte(res.Stderr), 0o644)
+	for _, line := range strings.Split(res.Stderr, "\n") {
+		LLMConsoleStderr(line)
+	}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		LLMConsoleStreamLine(line)
+	}
 	// Even on the non-streaming path, parse the captured stdout for tool-use
 	// events so records are still emitted (the stream flags are in argv, so the
 	// stdout IS stream-json). This keeps the streaming-contract test honest when
@@ -141,7 +167,17 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 		return fmt.Errorf("claude run: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("claude exit %d: %w", res.ExitCode, ErrRunnerExitNonzero)
+		if !streamHasSuccessResult(res.Stdout) {
+			return fmt.Errorf("claude exit %d: %w", res.ExitCode, ErrRunnerExitNonzero)
+		}
+		// Tolerated non-zero exit: the Claude Code CLI sometimes appends a
+		// spurious trailing result error (e.g. "only prompt commands are
+		// supported in streaming mode", seen with stdin-piped prompts under
+		// stream-json during acceptEdits code generation) AFTER the genuine
+		// success result, then exits non-zero. The streamed success result
+		// proves the agent finished its work, so proceed rather than discard
+		// completed output (output.json + generated files).
+		LLMConsoleStderr(fmt.Sprintf("claude exited %d but a success result was streamed; tolerating spurious trailing CLI error", res.ExitCode))
 	}
 	if strings.TrimSpace(res.Stdout) != "" {
 		if _, statErr := os.Stat(ws.OutputPath()); errors.Is(statErr, os.ErrNotExist) {
@@ -177,18 +213,26 @@ func (r *ClaudeRunner) runStream(ctx context.Context, ws AttemptWorkspace, promp
 	if codegen && r.WorkDir != "" {
 		runDir = r.WorkDir
 	}
+	stage := "analysis_step"
+	if codegen {
+		stage = "code_generation"
+	}
+	args := claudeArgv(codegen)
+	LLMConsoleRequest(stage, r.binary(), args, prompt)
 	var stdoutBuf, stderrBuf strings.Builder
 	onStdout := func(line string) {
+		LLMConsoleStreamLine(line)
 		stdoutBuf.WriteString(line)
 		stdoutBuf.WriteByte('\n')
 		streamClaudeEvents(ctx, emit, line)
 	}
 	onStderr := func(line string) {
+		LLMConsoleStderr(line)
 		stderrBuf.WriteString(line)
 		stderrBuf.WriteByte('\n')
 		_ = emit.Emit(ctx, model.ExecutionRecordCommandStderr, line)
 	}
-	res, err := sr.RunStreamWithInput(ctx, runDir, prompt, onStdout, onStderr, r.binary(), claudeArgv(codegen)...)
+	res, err := sr.RunStreamWithInput(ctx, runDir, prompt, onStdout, onStderr, r.binary(), args...)
 	if stdoutBuf.Len() > 0 && res.Stdout == "" {
 		res.Stdout = stdoutBuf.String()
 	}
@@ -201,7 +245,17 @@ func (r *ClaudeRunner) runStream(ctx context.Context, ws AttemptWorkspace, promp
 		return fmt.Errorf("claude run: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("claude exit %d: %w", res.ExitCode, ErrRunnerExitNonzero)
+		if !streamHasSuccessResult(res.Stdout) {
+			return fmt.Errorf("claude exit %d: %w", res.ExitCode, ErrRunnerExitNonzero)
+		}
+		// Tolerated non-zero exit: the Claude Code CLI sometimes appends a
+		// spurious trailing result error (e.g. "only prompt commands are
+		// supported in streaming mode", seen with stdin-piped prompts under
+		// stream-json during acceptEdits code generation) AFTER the genuine
+		// success result, then exits non-zero. The streamed success result
+		// proves the agent finished its work, so proceed rather than discard
+		// completed output (output.json + generated files).
+		LLMConsoleStderr(fmt.Sprintf("claude exited %d but a success result was streamed; tolerating spurious trailing CLI error", res.ExitCode))
 	}
 	if strings.TrimSpace(res.Stdout) != "" {
 		if _, statErr := os.Stat(ws.OutputPath()); errors.Is(statErr, os.ErrNotExist) {

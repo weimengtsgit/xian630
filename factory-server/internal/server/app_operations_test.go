@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,6 +79,7 @@ func newOpsServer(t *testing.T, fr *srvRunner) (*Server, *Router) {
 
 	srv := New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
 	srv.runner = fr
+	srv.runtime = deploy.NewPodman(fr)
 	srv.healthCheck = func(context.Context, string, time.Duration) error { return nil }
 	return srv, srv.routes()
 }
@@ -145,7 +147,7 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	if dep.HostPort < 18000 || dep.HostPort > 18999 {
 		t.Errorf("host_port = %d, want in [18000,18999]", dep.HostPort)
 	}
-	wantURL := "http://127.0.0.1:" + itoaStr(dep.HostPort)
+	wantURL := containerHealthURL(dep.HostPort)
 	if dep.URL != wantURL {
 		t.Errorf("url = %q, want %q", dep.URL, wantURL)
 	}
@@ -163,6 +165,29 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	}
 	if app.RuntimeURL != wantURL {
 		t.Errorf("app runtime_url = %q, want %q", app.RuntimeURL, wantURL)
+	}
+}
+
+func TestStartUsesConfiguredContainerRuntime(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	srv.runtime = deploy.NewDocker(fr)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/start", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if hasCall(fr.calls, "podman", "build") || hasCall(fr.calls, "podman", "run") {
+		t.Fatalf("start app hardcoded podman despite configured docker runtime: calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "docker", "build", "-t", "localhost/software-factory/east-sea-situation:preset", ".") {
+		t.Fatalf("missing docker build call; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "docker", "run", "-d", "--name sf-east-sea-situation-", "-p ", ":80") {
+		t.Fatalf("missing docker run call; calls=%v", fr.calls)
 	}
 }
 
@@ -463,6 +488,95 @@ func TestStartReturns404ForMissingApp(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	appDir := filepath.Join(root, "generated-apps", "demo-delete")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-delete", Slug: "demo-delete", Name: "Demo Delete", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-delete",
+		ManifestPath: "generated-apps/demo-delete/.factory/app.json", Status: model.AppStatusRunning,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	dep := model.Deployment{ID: "dep_delete", AppID: app.ID, ContainerName: "sf-demo-delete", Status: "running", CreatedAt: now}
+	if err := srv.store.CreateDeployment(context.Background(), dep); err != nil {
+		t.Fatalf("seed dep: %v", err)
+	}
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-delete", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+		t.Fatalf("app dir still exists or stat failed differently: %v", err)
+	}
+	got, err := srv.store.GetApplication(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("app row still exists: %#v", got)
+	}
+	deps, err := srv.store.ListDeploymentsByApp(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("list deps: %v", err)
+	}
+	if len(deps) != 0 {
+		t.Fatalf("deployments still exist: %#v", deps)
+	}
+	if !hasCall(fr.calls, "podman", "rm", "sf-demo-delete") {
+		t.Fatalf("expected podman rm for running container; calls=%v", fr.calls)
+	}
+	expectEvent(t, ch, "app.deleted")
+}
+
+func TestDeleteRejectsPresetApp(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	_, r := newOpsServer(t, fr)
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-east-sea-situation", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteRejectsGeneratedAppOutsideGeneratedRoot(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	now := time.Now()
+	app := model.Application{
+		ID: "app-bad", Slug: "bad", Name: "Bad", Source: model.AppSourceGenerated,
+		Type: "command_dashboard", Path: "../outside", ManifestPath: "generated-apps/bad/.factory/app.json",
+		Status: model.AppStatusStopped, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-bad", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s, want 403", rec.Code, rec.Body.String())
+	}
+	got, _ := srv.store.GetApplication(context.Background(), app.ID)
+	if got == nil {
+		t.Fatalf("unsafe app row was deleted")
 	}
 }
 

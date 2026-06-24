@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +23,33 @@ import (
 // Claude-mode steps are NOT handled here — the dispatcher routes those to the
 // claude runner (Task 16); if a claude step reaches this runner it fails fast
 // with ErrorUnknown rather than attempting npm/podman work.
+// runtime returns the configured container backend (docker or podman). Production
+// always sets FactoryRunner.Runtime from FACTORY_CONTAINER_RUNTIME (server.go);
+// when nil it defaults to podman so legacy tests that omit it keep working.
+// Callers MUST use this instead of deploy.NewPodman directly, otherwise the
+// image_build/deploy steps ignore FACTORY_CONTAINER_RUNTIME and always use podman.
+func (f *FactoryRunner) runtime() deploy.ContainerRuntime {
+	if f.Runtime != nil {
+		return f.Runtime
+	}
+	return deploy.NewPodman(f.Cmds)
+}
+
+// appURLHost returns the host used in the user-facing deployment URL for a
+// generated app. Override with FACTORY_APP_URL_HOST (e.g. the site's public or
+// internal IP) when factory runs in a container; otherwise fall back to the
+// health-probe host so local/WSL dev keeps working.
+func appURLHost() string {
+	if v := os.Getenv("FACTORY_APP_URL_HOST"); v != "" {
+		return v
+	}
+	return wslVMHealthIP()
+}
+
 type FactoryRunner struct {
-	Store *store.Store
-	Cmds  deploy.CommandRunner // used for both npm and podman (via deploy.NewPodman)
+	Store   *store.Store
+	Cmds    deploy.CommandRunner // used for npm and all container-runtime shell-outs
+	Runtime deploy.ContainerRuntime
 	// StreamCmds is the OPTIONAL streaming capability. When non-nil, runCmd and
 	// the podman paths route each command through RunStreamWithInput and feed the
 	// per-line callbacks into a commandStreamBatcher that emits live
@@ -212,9 +236,9 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 		return fail, nil
 	}
 	tag := "job-" + job.ID
-	podman := deploy.NewPodman(f.Cmds)
-	// BuildImage runs `podman build .` with dir = app.Path. app.Path is a
-	// relative path against the workspace root (e.g. "generated-apps/demo"),
+	rt := f.runtime()
+	// BuildImage runs `<docker|podman> build .` with dir = app.Path. app.Path
+	// is a relative path against the workspace root (e.g. "generated-apps/demo"),
 	// so resolve it to a workspace-rooted dir — mirroring what the npm steps
 	// do — before handing it to BuildImage. In production the server's cwd is
 	// factory-server/, not the workspace root, so a bare relative Path would
@@ -226,14 +250,14 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	if f.StreamCmds != nil {
 		b := newCommandStreamBatcher(ctx, emit)
 		b.start()
-		_, res, err = podman.BuildImageWithCallbacks(ctx, buildApp, tag, b.addStdout, b.addStderr)
+		_, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, tag, b.addStdout, b.addStderr)
 		b.close()
 	} else {
-		_, res, err = podman.BuildImage(ctx, buildApp, tag)
+		_, res, err = rt.BuildImage(ctx, buildApp, tag)
 	}
 	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorImageBuildFailed, ErrorMessage: fmt.Sprintf("podman build failed: %v", err)}, nil
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorImageBuildFailed, ErrorMessage: fmt.Sprintf("%s build failed: %v", rt.Name(), err)}, nil
 	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
@@ -267,35 +291,36 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("allocate port: %v", err)}, nil
 	}
 
-	podman := deploy.NewPodman(f.Cmds)
+	rt := f.runtime()
 	var container deploy.ContainerRef
 	var res deploy.CommandResult
 	if f.StreamCmds != nil {
 		b := newCommandStreamBatcher(ctx, emit)
 		b.start()
-		container, res, err = podman.RunContainerWithCallbacks(ctx, image, app.Slug, host, containerPort, b.addStdout, b.addStderr)
+		container, res, err = rt.RunContainerWithCallbacks(ctx, image, app.Slug, host, containerPort, b.addStdout, b.addStderr)
 		b.close()
 	} else {
-		container, res, err = podman.RunContainer(ctx, image, app.Slug, host, containerPort)
+		container, res, err = rt.RunContainer(ctx, image, app.Slug, host, containerPort)
 	}
 	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
 		if container.Name != "" {
-			_, _ = podman.RemoveContainer(ctx, container.Name)
+			_, _ = rt.RemoveContainer(ctx, container.Name)
 		}
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPodmanRunFailed, ErrorMessage: fmt.Sprintf("podman run failed: %v", err)}, nil
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPodmanRunFailed, ErrorMessage: fmt.Sprintf("%s run failed: %v", rt.Name(), err)}, nil
 	}
 
 	// Health check; on failure stop+remove (best-effort), mark deployment failed,
 	// mark app error.
-	url := "http://127.0.0.1:" + strconv.Itoa(host)
+	healthURL := fmt.Sprintf("http://%s:%d", wslVMHealthIP(), host)
+	url := fmt.Sprintf("http://%s:%d", appURLHost(), host)
 	health := f.Health
 	if health == nil {
 		health = deploy.CheckHTTP
 	}
-	if herr := health(ctx, url, 10*time.Second); herr != nil {
-		_, _ = podman.StopContainer(ctx, container.Name)
-		_, _ = podman.RemoveContainer(ctx, container.Name)
+	if herr := health(ctx, healthURL, 10*time.Second); herr != nil {
+		_, _ = rt.StopContainer(ctx, container.Name)
+		_, _ = rt.RemoveContainer(ctx, container.Name)
 		_ = f.Store.CreateDeployment(ctx, model.Deployment{
 			ID:            "dep_" + id.New(),
 			AppID:         app.ID,
@@ -331,7 +356,7 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	}
 	_ = f.Store.CreateDeployment(ctx, dep)
 	_ = f.Store.SetAppRuntime(ctx, app.ID, string(model.AppStatusRunning), url)
-	f.stopPreviousDeployments(ctx, podman, app.ID, dep.ID)
+	f.stopPreviousDeployments(ctx, rt, app.ID, dep.ID)
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
@@ -356,7 +381,7 @@ func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
 	}
 }
 
-func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, podman *deploy.Podman, appID, keepID string) {
+func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, rt deploy.ContainerRuntime, appID, keepID string) {
 	deps, err := f.Store.ListDeploymentsByApp(ctx, appID)
 	if err != nil {
 		return
@@ -365,8 +390,26 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, podman *dep
 		if dep.ID == keepID || dep.Status != "running" {
 			continue
 		}
-		_, _ = podman.StopContainer(ctx, dep.ContainerName)
-		_, _ = podman.RemoveContainer(ctx, dep.ContainerName)
+		_, _ = rt.StopContainer(ctx, dep.ContainerName)
+		_, _ = rt.RemoveContainer(ctx, dep.ContainerName)
 		_ = f.Store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
 	}
+}
+
+// wslVMHealthIP returns the host a container health probe should target. On
+// Windows+WSL2 it is the WSL VM IP (wslrelay forwarding is unreliable); in a
+// containerized deploy set FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
+func wslVMHealthIP() string {
+	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
+		return v
+	}
+	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
+		`ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+'`).Output()
+	if err == nil {
+		ip := strings.TrimSpace(string(out))
+		if ip != "" {
+			return ip
+		}
+	}
+	return "127.0.0.1"
 }

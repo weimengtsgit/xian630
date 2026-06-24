@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	// Pure-Go SQLite driver — keeps the factory server a single static binary
 	// with no C toolchain dependency.
 	_ "modernc.org/sqlite"
@@ -26,6 +27,11 @@ var schemaSQL string
 // Store wraps a SQLite connection pool.
 type Store struct {
 	db *sql.DB
+	// jobOnCreateStepHook, when non-nil, is invoked once per job-step insert
+	// inside SeedClarificationJob. It is a test seam to inject a mid-seed failure
+	// so the atomic rollback contract can be verified; it is always nil in
+	// production.
+	jobOnCreateStepHook func(model.JobStep) error
 }
 
 // Open opens (and migrates) the database at path. For an in-memory database
@@ -63,6 +69,23 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE jobs ADD COLUMN confirmed_requirement_json TEXT NOT NULL DEFAULT ''`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.confirmed_requirement_json: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "applications", "display_order",
+		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate applications.display_order: %w", err)
+	}
+	// agents.category: software_development by default so existing rows backfill
+	// to the pipeline category automatically.
+	if err := s.ensureColumn(ctx, "agents", "category",
+		`ALTER TABLE agents ADD COLUMN category TEXT NOT NULL DEFAULT 'software_development'`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agents.category: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "agents", "prompt",
+		`ALTER TABLE agents ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agents.prompt: %w", err)
 	}
 	return s, nil
 }

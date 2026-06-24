@@ -61,6 +61,83 @@ ORDER BY updated_at DESC LIMIT 1`,
 	return cs, nil
 }
 
+// ListClarificationSessions returns clarification sessions newest-first.
+// limit <= 0 defaults to 50; limit > 200 is capped to 200.
+func (s *Store) ListClarificationSessions(ctx context.Context, limit int) ([]model.ClarificationSession, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+clarificationSessionCols+`
+FROM clarification_sessions
+ORDER BY updated_at DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []model.ClarificationSession{}
+	for rows.Next() {
+		cs, err := scanClarificationSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		if cs != nil {
+			out = append(out, *cs)
+		}
+	}
+	return out, rows.Err()
+}
+
+// ListAllClarificationSessions returns EVERY clarification session without the
+// shared list cap, ordered deterministically oldest-first (created_at ASC then
+// id ASC). It is intended for one-shot startup migrations (e.g. the legacy
+// dialogue backfill) that must visit every row, not for the paginated API
+// history — that still goes through ListClarificationSessions with its cap.
+func (s *Store) ListAllClarificationSessions(ctx context.Context) ([]model.ClarificationSession, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+clarificationSessionCols+`
+FROM clarification_sessions
+ORDER BY created_at ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.ClarificationSession{}
+	for rows.Next() {
+		cs, err := scanClarificationSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		if cs != nil {
+			out = append(out, *cs)
+		}
+	}
+	return out, rows.Err()
+}
+
+// DeleteClarificationSession removes one clarification session and its transcript
+// messages in a transaction. Linked jobs, apps, artifacts, and execution records
+// are intentionally left untouched.
+func (s *Store) DeleteClarificationSession(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM clarification_messages WHERE session_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM clarification_sessions WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // UpdateClarificationRound advances the persisted `round` column to the round
 // that actually ran and bumps updated_at. Without this the persisted round
 // stays at its creation value (0), so GET /api/clarifications/:id would

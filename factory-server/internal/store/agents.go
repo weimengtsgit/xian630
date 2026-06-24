@@ -9,14 +9,14 @@ import (
 
 // UpsertAgent inserts an agent, or on id conflict refreshes its immutable and
 // descriptive fields (key, name, role, description, claude_agent_name,
-// skills_json, sort_order) from the supplied value. The enabled flag is
-// write-on-insert only: on conflict the existing DB value is preserved so that
-// a runtime enable/disable via SetAgentEnabled survives the next startup upsert
-// of the default registry (see design §7.2).
+// skills_json, category, prompt, sort_order) from the supplied value. The
+// enabled flag is write-on-insert only: on conflict the existing DB value is
+// preserved so that a runtime enable/disable via SetAgentEnabled survives the
+// next startup upsert of the default registry (see design §7.2).
 func (s *Store) UpsertAgent(ctx context.Context, a model.Agent) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO agents(id, key, name, role, description, claude_agent_name, skills_json, enabled, sort_order)
-VALUES(?,?,?,?,?,?,?,?,?)
+INSERT INTO agents(id, key, name, role, description, claude_agent_name, skills_json, category, prompt, enabled, sort_order)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   key               = excluded.key,
   name              = excluded.name,
@@ -24,9 +24,12 @@ ON CONFLICT(id) DO UPDATE SET
   description       = excluded.description,
   claude_agent_name = excluded.claude_agent_name,
   skills_json       = excluded.skills_json,
+  category          = excluded.category,
+  prompt            = excluded.prompt,
   sort_order        = excluded.sort_order`,
 		a.ID, a.Key, a.Name, a.Role, a.Description,
-		a.ClaudeAgentName, a.SkillsJSON, boolToInt(a.Enabled), a.SortOrder)
+		a.ClaudeAgentName, a.SkillsJSON, string(a.Category), a.Prompt,
+		boolToInt(a.Enabled), a.SortOrder)
 	return err
 }
 
@@ -34,17 +37,18 @@ ON CONFLICT(id) DO UPDATE SET
 // upsert: duplicate ids or keys should surface to the caller.
 func (s *Store) CreateAgent(ctx context.Context, a model.Agent) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO agents(id, key, name, role, description, claude_agent_name, skills_json, enabled, sort_order)
-VALUES(?,?,?,?,?,?,?,?,?)`,
+INSERT INTO agents(id, key, name, role, description, claude_agent_name, skills_json, category, prompt, enabled, sort_order)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.Key, a.Name, a.Role, a.Description,
-		a.ClaudeAgentName, a.SkillsJSON, boolToInt(a.Enabled), a.SortOrder)
+		a.ClaudeAgentName, a.SkillsJSON, string(a.Category), a.Prompt,
+		boolToInt(a.Enabled), a.SortOrder)
 	return err
 }
 
 // ListAgents returns every known agent ordered by sort_order ascending.
 func (s *Store) ListAgents(ctx context.Context) ([]model.Agent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, key, name, role, description, claude_agent_name, skills_json, enabled, sort_order
+SELECT id, key, name, role, description, claude_agent_name, skills_json, category, prompt, enabled, sort_order
 FROM agents
 ORDER BY sort_order ASC`)
 	if err != nil {
@@ -67,7 +71,7 @@ ORDER BY sort_order ASC`)
 // such agent exists — a miss is not an error — mirroring GetApplication.
 func (s *Store) GetAgent(ctx context.Context, id string) (*model.Agent, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, key, name, role, description, claude_agent_name, skills_json, enabled, sort_order
+SELECT id, key, name, role, description, claude_agent_name, skills_json, category, prompt, enabled, sort_order
 FROM agents
 WHERE id = ?`, id)
 	a, err := scanAgent(row)
@@ -95,10 +99,12 @@ func (s *Store) SetAgentEnabled(ctx context.Context, id string, enabled bool) er
 func scanAgent(sc scanner) (*model.Agent, error) {
 	var a model.Agent
 	var enabled int
+	var category string
 	if err := sc.Scan(&a.ID, &a.Key, &a.Name, &a.Role, &a.Description,
-		&a.ClaudeAgentName, &a.SkillsJSON, &enabled, &a.SortOrder); err != nil {
+		&a.ClaudeAgentName, &a.SkillsJSON, &category, &a.Prompt, &enabled, &a.SortOrder); err != nil {
 		return nil, err
 	}
 	a.Enabled = enabled != 0
+	a.Category = model.AgentCategory(category)
 	return &a, nil
 }

@@ -14,8 +14,8 @@ import (
 // mutable fields from the supplied value.
 func (s *Store) UpsertApplication(ctx context.Context, app model.Application) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO applications(id, slug, name, type, source, description, path, manifest_path, status, runtime_url, created_at, updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO applications(id, slug, name, type, source, description, path, manifest_path, status, runtime_url, display_order, created_at, updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   slug         = excluded.slug,
   name         = excluded.name,
@@ -32,17 +32,41 @@ ON CONFLICT(id) DO UPDATE SET
                    WHEN applications.status = 'running' THEN applications.runtime_url
                    ELSE excluded.runtime_url
                  END,
+  display_order = excluded.display_order,
   updated_at   = excluded.updated_at`,
 		app.ID, app.Slug, app.Name, app.Type, string(app.Source),
 		app.Description, app.Path, app.ManifestPath, string(app.Status),
-		app.RuntimeURL, ms(app.CreatedAt), ms(app.UpdatedAt))
+		app.RuntimeURL, app.DisplayOrder, ms(app.CreatedAt), ms(app.UpdatedAt))
 	return err
+}
+
+// DeleteApplication deletes an application row by id.
+func (s *Store) DeleteApplication(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM applications WHERE id = ?`, id)
+	return err
+}
+
+// DeleteApplicationWithDeployments deletes an application and its deployment rows
+// in one transaction so a failure in either delete leaves both tables unchanged.
+func (s *Store) DeleteApplicationWithDeployments(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM deployments WHERE app_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM applications WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListApplications returns every known application ordered by slug.
 func (s *Store) ListApplications(ctx context.Context) ([]model.Application, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, slug, name, type, source, description, path, manifest_path, status, runtime_url, created_at, updated_at
+SELECT id, slug, name, type, source, description, path, manifest_path, status, runtime_url, display_order, created_at, updated_at
 FROM applications
 ORDER BY slug`)
 	if err != nil {
@@ -57,7 +81,7 @@ ORDER BY slug`)
 		var created, updated int64
 		if err := rows.Scan(&a.ID, &a.Slug, &a.Name, &a.Type, &source,
 			&a.Description, &a.Path, &a.ManifestPath, &status, &a.RuntimeURL,
-			&created, &updated); err != nil {
+			&a.DisplayOrder, &created, &updated); err != nil {
 			return nil, err
 		}
 		a.Source = model.AppSource(source)
@@ -74,7 +98,7 @@ ORDER BY slug`)
 // the cc-status GetSession convention (sql.ErrNoRows is mapped to nil, nil).
 func (s *Store) GetApplication(ctx context.Context, id string) (*model.Application, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, slug, name, type, source, description, path, manifest_path, status, runtime_url, created_at, updated_at
+SELECT id, slug, name, type, source, description, path, manifest_path, status, runtime_url, display_order, created_at, updated_at
 FROM applications
 WHERE id = ?`, id)
 
@@ -83,7 +107,7 @@ WHERE id = ?`, id)
 	var created, updated int64
 	if err := row.Scan(&a.ID, &a.Slug, &a.Name, &a.Type, &source,
 		&a.Description, &a.Path, &a.ManifestPath, &status, &a.RuntimeURL,
-		&created, &updated); err != nil {
+		&a.DisplayOrder, &created, &updated); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -100,7 +124,7 @@ WHERE id = ?`, id)
 // if duplicated), or (nil, nil) when no such application exists.
 func (s *Store) GetApplicationBySlug(ctx context.Context, slug string) (*model.Application, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, slug, name, type, source, description, path, manifest_path, status, runtime_url, created_at, updated_at
+SELECT id, slug, name, type, source, description, path, manifest_path, status, runtime_url, display_order, created_at, updated_at
 FROM applications
 WHERE slug = ?
 ORDER BY updated_at DESC
@@ -111,7 +135,7 @@ LIMIT 1`, slug)
 	var created, updated int64
 	if err := row.Scan(&a.ID, &a.Slug, &a.Name, &a.Type, &source,
 		&a.Description, &a.Path, &a.ManifestPath, &status, &a.RuntimeURL,
-		&created, &updated); err != nil {
+		&a.DisplayOrder, &created, &updated); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}

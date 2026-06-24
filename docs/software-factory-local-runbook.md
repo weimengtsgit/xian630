@@ -115,56 +115,102 @@ Expected: the job walks all six steps to `completed`; the generated app card
 appears in the portal with `source=generated` and a deployment URL once
 deployment succeeds.
 
-## Requirement Clarification Flow
+## Dialogue Session Flow
 
 The portal no longer creates a generation job from the first chat message. The
-first message creates a **clarification session** instead; a generation job is
-only created after the user confirms the recommended requirement.
+first message creates a **dialogue session** that classifies the user's intent
+into one of two active routes: **existing-application reuse** or **application
+generation** (a child clarification session). Business-processing agent
+drafting is a dormant future route that is not exposed in this phase. Selecting
+a route locks it; a new request needs a new dialogue.
 
 ### Start order
 
 1. Start **cc-status** (section 1).
 2. Start **factory-server** with `FACTORY_FAKE_CLAUDE` **unset** — the real
-   clarification runner uses the local Claude Code CLI. `FACTORY_FAKE_CLAUDE=1`
-   is NOT used for clarification; see
-   [factory-server/README.md](../factory-server/README.md) for the boundary.
+   dialogue/clarification runner uses the local Claude Code CLI.
+   `FACTORY_FAKE_CLAUDE=1` is NOT used for dialogue routing or clarification;
+   see [factory-server/README.md](../factory-server/README.md) for the boundary.
 3. Start **sf-portal-mvp** (section 3).
 
-### Manual acceptance scenario
+### Manual flow 1 — existing-application reuse
 
-1. In the portal chat input, enter exactly:
+1. In the portal chat input, enter a request that matches an existing preset
+   application, e.g.:
+
+   ```
+   打开东海态势应用
+   ```
+
+2. The model infers the `existing_application_reuse` intent and emits a
+   structured recommendation (`dialogue.application.recommended`) pointing at a
+   configured preset application.
+3. Confirm the route. The dialogue resolves and the recommended application can
+   be opened or started directly — no generation job is created.
+
+### Manual flow 2 — application generation (6-round adaptive clarification)
+
+1. In the portal chat input, enter a new application request:
 
    ```
    生成一个航母编队近一个月航行轨迹和事件的东海地图复盘应用
    ```
 
-2. The center clarification panel **streams analysis work-logs and structured
-   option cards** — this is *not* an immediate job. The first message created a
-   clarification session, not a generation pipeline.
-3. Select or confirm the recommended options (the round-1 runner proposes a
-   recommended option per question and may recommend a similar preset
-   blueprint).
+2. The model infers the `application_generation` intent. Confirm the route; a
+   child **clarification session** is created. The center panel **streams
+   analysis work-logs and structured option cards** — this is *not* an
+   immediate job.
+3. The clarification is **adaptive and limited to 6 rounds**:
+   - Rounds 1–4: at most **one** question per round, each with 2–3 options.
+   - Round 5: **recommendation consolidation** — remaining decisions are listed
+     with their recommended values for one-shot accept or targeted adjustment.
+   - Round 6: a single-field adjustment, then the session reaches
+     `ready_to_confirm`. There is **no seventh round**.
 4. Click `确认并生成`.
 5. A **Job appears only after confirmation**. It runs the fixed six-step
    pipeline:
    `requirement_analysis` → `solution_design` → `code_generation` →
    `test_verification` → `image_build` → `deployment`.
 6. On success the generated app appears in the application list with
-   `source=generated` and a deployment URL.
+   `source=generated` and a deployment URL. Its name is Factory-owned: the model
+   produces a normalized scenario name and Factory appends a 4-char Base36
+   serial (e.g. `航母编队航迹复盘-K7M2`). No `demoN` names.
 
-### 场景蓝本 catalog
+### Assistant application request
 
-During clarification the runner may recommend a similar preset **场景蓝本**
-(scene blueprint) as a style/structure/interaction/data-model reference. The
-catalog lives at
-[`.claude/skills/requirement-clarification/blueprints.json`](../.claude/skills/requirement-clarification/blueprints.json)
-and is derived from the `scene/<slug>/` directories (e.g.
-`carrier-formation-replay`, `aircraft-carrier-track`, `east-sea-situation`,
-`carrier-homeport-tide-window`, `carrier-deck-wind-calculator`,
-`merchant-density-grid-alert`, `social-sighting-cluster-alert`).
+Use a prompt such as:
 
-Blueprints are **references only** — they are never copied. Generated apps are
-original code written under `generated-apps/<slug>/`.
+```text
+帮我创建一个告警分诊助手，能够收集告警、判断优先级并给出处置建议。
+```
+
+Expected:
+
+1. The dialogue does not show a "配置业务 Agent" route.
+2. If no existing application is a strong fit, the route enters
+   `application_generation`.
+3. The workbench starts requirement clarification for a runnable assistant
+   application.
+4. The final generated app appears in the application list as an application,
+   not as a business-processing Agent entry.
+
+### Scene catalog and hidden blueprints
+
+Preset scene surfaces are governed by the single scene catalog at
+[`.factory/scene-catalog.json`](../.factory/scene-catalog.json). Each scene is
+assigned to exactly one surface:
+
+- `application` (listed preset apps): `carrier-formation-replay`,
+  `aircraft-carrier-track`, `east-sea-situation`.
+- `blueprint` (hidden internal references): `carrier-homeport-tide-window`,
+  `carrier-deck-wind-calculator`, `merchant-density-grid-alert`,
+  `social-sighting-cluster-alert` (display name 开源社区异常监测).
+
+`preset-apps.json` no longer drives runtime display or routing. **Blueprints are
+internal and hidden** — they are never presented to the user as a product
+constraint, an unavailable capability, or an existing application to open. They
+may guide generation internally as references only; generated apps are original
+code written under `generated-apps/<slug>/`, never copied.
 
 ### Audit file locations
 
@@ -188,11 +234,47 @@ the auditable analysis text as it grows. It never forwards raw chain-of-thought.
 
 ### Known MVP limitation (reload)
 
-Reloading the portal mid-clarification currently returns the center panel to
-**empty**. The clarification session itself **persists server-side** — resume
-by continuing the conversation (the next message or `/confirm` still works
-against the same session id). This is an honest MVP limitation of the portal's
-client-side session hydration, not a server-side data-loss bug.
+Reloading the portal mid-dialogue/mid-clarification currently returns the
+center panel to **empty**. The dialogue and clarification sessions themselves
+**persist server-side** — resume by continuing the conversation (the next
+message or `/confirm` still works against the same session id). This is an
+honest MVP limitation of the portal's client-side session hydration, not a
+server-side data-loss bug.
+
+### Migration smoke check (historical clarification sessions)
+
+When `factory-server` starts against a database created by an earlier (pre-
+dialogue) build, legacy clarification sessions are **backfilled** into
+`application_generation` dialogues on startup, and the run is **idempotent** —
+restarting the server does not duplicate or rewrite already-migrated rows.
+
+Verify after first startup:
+
+```bash
+curl http://127.0.0.1:8787/api/dialogues      # backfilled dialogues present
+# restart factory-server, then re-run the same call — row count and ids unchanged
+```
+
+A legacy clarification session that had already produced a job appears under its
+backfilled dialogue as a resolved `application_generation` route.
+
+### Safe SSE event families
+
+The portal subscribes to `/api/events` and consumes only these SSE event
+families:
+
+```text
+app.*          job.*          step.*         deployment.*
+dialogue.*     clarification.*
+```
+
+The `dialogue.*` family includes `dialogue.created`, `dialogue.intent.updated`,
+`dialogue.application.recommended`, `dialogue.route.confirmed`,
+`dialogue.agent_draft.updated`, `dialogue.agent.created`,
+`dialogue.clarification.updated`, `dialogue.resolved`, `dialogue.abandoned`,
+`dialogue.deleted`. `clarification.*` is retained as a legacy/backfill family.
+Internal blueprint slugs, raw Claude `stdout`/`stderr`, and `thinking_delta`
+content are **never** forwarded to the browser.
 
 ## Environment variables
 

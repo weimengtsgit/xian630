@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -41,7 +43,7 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if err := os.WriteFile(absInput, in, 0o644); err != nil {
 		return RoundOutput{}, err
 	}
-	prompt := r.prompt(absInput)
+	prompt := r.promptText(absInput)
 	if err := os.WriteFile(filepath.Join(dir, "prompt.md"), []byte(prompt), 0o644); err != nil {
 		return RoundOutput{}, err
 	}
@@ -60,18 +62,22 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if res.ExitCode != 0 {
 		return RoundOutput{}, fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
 	}
-	if strings.TrimSpace(assistantText) == "" {
-		assistantText = res.Stdout
-	}
-	extracted := extractJSONObject(assistantText)
-	var out RoundOutput
-	if err := json.Unmarshal([]byte(extracted), &out); err != nil {
-		return RoundOutput{}, fmt.Errorf("decode clarification output: %v: %w", err, runner.ErrOutputInvalidJSON)
+	out, err := decodeRoundOutput(assistantText, res.Stdout)
+	if err != nil {
+		return RoundOutput{}, err
 	}
 	out = normalizeRoundOutput(out)
 	outBytes, _ := json.MarshalIndent(out, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "output.json"), outBytes, 0o644); err != nil {
 		return RoundOutput{}, err
+	}
+	// Adaptive invariant: rounds 1–4 accept ZERO questions or EXACTLY ONE
+	// required question. A model round emitting more than one question is a
+	// contract violation — reject it rather than silently truncating. Round 5
+	// (consolidation) emits no questions by construction; this guard still
+	// holds it to the same discipline.
+	if !IsReadyToConfirmStatus(out.Status) && len(out.Questions) > 1 {
+		return RoundOutput{}, fmt.Errorf("clarification round %d emitted %d questions; adaptive contract allows at most one: %w", out.Round, len(out.Questions), ErrAdaptiveTooManyQuestions)
 	}
 	events := normalizeEvents(input.SessionID, out, normalizeOptions{SkipWorkLogs: streamed})
 	if err := writeStream(filepath.Join(dir, "stream.jsonl"), events); err != nil {
@@ -87,11 +93,19 @@ func (r Runner) runClaude(ctx context.Context, input RoundInput, prompt string, 
 	if sr, ok := r.Cmd.(streamCommandRunner); ok {
 		return r.runClaudeStream(ctx, sr, input, prompt, emit)
 	}
-	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(),
+	args := append([]string{
 		"--print", prompt,
 		"--permission-mode", "plan",
 		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write")
+		"--disallowedTools", "Bash,Edit,Write",
+	}, claudeModelArgs()...)
+	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
+	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(), args...)
+	// Non-streaming fallback: the captured stdout is still stream-json NDJSON,
+	// so trace each line for parity with the streaming path.
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		runner.LLMConsoleStreamLine(line)
+	}
 	return res, res.Stdout, false, err
 }
 
@@ -105,11 +119,24 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	})
 	var assistantText strings.Builder
 	var resultText string
+	var resultIsError bool
 	var lastVisible string
+	args := append([]string{
+		"--print", prompt,
+		"--output-format", "stream-json",
+		"--include-partial-messages",
+		"--verbose",
+		"--permission-mode", "plan",
+		"--allowedTools", "Read,Grep,Glob",
+		"--disallowedTools", "Bash,Edit,Write",
+	}, claudeModelArgs()...)
+	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
-		delta, result := parseClaudeStreamLine(line)
+		runner.LLMConsoleStreamLine(line)
+		delta, result, isErr := parseClaudeStreamLine(line)
 		if result != "" {
 			resultText = result
+			resultIsError = isErr
 		}
 		if delta == "" {
 			return
@@ -126,21 +153,23 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 			MessageID: messageID,
 			Delta:     visible,
 		})
-	},
-		"--print", prompt,
-		"--output-format", "stream-json",
-		"--include-partial-messages",
-		"--verbose",
-		"--permission-mode", "plan",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write")
+	}, args...)
 	finalText := assistantText.String()
 	if strings.TrimSpace(finalText) == "" {
 		finalText = resultText
 	}
 	finalVisible := extractWorkLogStreamText(finalText)
 	if finalVisible == "" {
-		finalVisible = "结构化澄清结果接收完成，正在解析。"
+		// When the CLI surfaced an error (e.g. an upstream API 529 overloaded)
+		// instead of a clarification document, show the real reason rather than
+		// the optimistic "parsing" string — otherwise the bubble reads "正在解析"
+		// right up until the session flips to "已失败", which looks like a parser
+		// crash instead of a model-side failure.
+		if notice := claudeErrorNotice(finalText, resultIsError); notice != "" {
+			finalVisible = notice
+		} else {
+			finalVisible = "结构化澄清结果接收完成，正在解析。"
+		}
 	}
 	emit(StreamEvent{
 		Type:      "clarification.message.completed",
@@ -151,20 +180,21 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 	return res, finalText, true, err
 }
 
-func parseClaudeStreamLine(line string) (textDelta string, result string) {
+func parseClaudeStreamLine(line string) (textDelta, result string, resultIsError bool) {
 	var top struct {
-		Type   string          `json:"type"`
-		Event  json.RawMessage `json:"event"`
-		Result string          `json:"result"`
+		Type    string          `json:"type"`
+		Event   json.RawMessage `json:"event"`
+		Result  string          `json:"result"`
+		IsError bool            `json:"is_error"`
 	}
 	if err := json.Unmarshal([]byte(line), &top); err != nil {
-		return "", ""
+		return "", "", false
 	}
 	if top.Type == "result" {
-		return "", top.Result
+		return "", top.Result, top.IsError
 	}
 	if top.Type != "stream_event" || len(top.Event) == 0 {
-		return "", ""
+		return "", "", false
 	}
 	var ev struct {
 		Type  string `json:"type"`
@@ -174,12 +204,12 @@ func parseClaudeStreamLine(line string) (textDelta string, result string) {
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(top.Event, &ev); err != nil {
-		return "", ""
+		return "", "", false
 	}
 	if ev.Type != "content_block_delta" || ev.Delta.Type != "text_delta" {
-		return "", ""
+		return "", "", false
 	}
-	return ev.Delta.Text, ""
+	return ev.Delta.Text, "", false
 }
 
 func extractWorkLogStreamText(s string) string {
@@ -282,15 +312,91 @@ func parsePartialJSONString(s string, quotePos int) (string, int) {
 	return b.String(), len(s)
 }
 
+// claudeErrorNotice returns a user-facing Chinese notice when the Claude Code
+// CLI returned an error (e.g. an upstream API 529 "overloaded") in lieu of a
+// clarification document, so the failure reason is visible in the work-log
+// bubble before the session transitions to "已失败". It keys off the result
+// envelope's is_error flag (authoritative) and the CLI's "API Error" marker as a
+// textual fallback. Returns "" for ordinary output — including a valid document
+// that simply omits workLog — so the caller keeps its optimistic "正在解析"
+// fallback in that case and does not misreport a successful round as failed.
+func claudeErrorNotice(finalText string, resultIsError bool) string {
+	t := strings.TrimSpace(finalText)
+	if t == "" {
+		return ""
+	}
+	if !resultIsError && !looksLikeClaudeError(t) {
+		return ""
+	}
+	return "需求澄清失败：" + truncateNotice(t)
+}
+
+// looksLikeClaudeError detects a Claude Code CLI error surfaced as the assistant
+// text/result, e.g. `API Error: 529 {"type":"error",...}`. The CLI prints
+// upstream API failures with the literal "API Error" prefix; "overloaded_error"
+// covers the Anthropic-style error type that some gateways pass through.
+func looksLikeClaudeError(s string) bool {
+	return strings.Contains(s, "API Error") ||
+		strings.Contains(s, "overloaded_error")
+}
+
+// truncateNotice caps an error notice so a pathological blob cannot flood the
+// work-log bubble; real CLI failures are short strings.
+func truncateNotice(s string) string {
+	const max = 500
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
 func (r Runner) prompt(inputPath string) string {
 	return "Use .claude/skills/requirement-clarification/SKILL.md. " +
 		fmt.Sprintf("The round input is at the absolute path %s — read it with the Read tool. ", inputPath) +
-		"Output ONLY valid JSON matching the requirement clarification contract." +
-		" Consult .claude/skills/requirement-clarification/blueprints.json for the 场景蓝本 catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s) and emit recommendedBlueprints cards. Blueprints are style/structure references only — never propose copying scene source."
+		"Output ONLY valid JSON matching the adaptive requirement clarification contract. " +
+		"Emit at most ONE required question per round (rounds 1–4), each with 2–3 options. " +
+		"At round 5 (only if still incomplete) emit a consolidation list recommending a value for every remaining field. " +
+		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs."
 }
+
+// ErrAdaptiveTooManyQuestions is returned when a clarification round emits more
+// than one question. The adaptive contract allows at most one required question
+// per round.
+var ErrAdaptiveTooManyQuestions = errors.New("adaptive contract allows at most one question per round")
 
 type normalizeOptions struct {
 	SkipWorkLogs bool
+}
+
+// PublicRequirement projects a Requirement into its user-facing form, stripping
+// the internal BlueprintRefs. It is the ONLY shape that may appear in a
+// user-facing SSE event; the raw Requirement (with blueprintRefs) is retained
+// on the persisted RoundOutput returned to the caller and written to
+// output.json. Handlers in other packages MUST route every clarification /
+// dialogue event payload through this helper rather than publishing the raw
+// Requirement, which carries internal Factory blueprint slugs.
+func PublicRequirement(r Requirement) requirementView {
+	return requirementWithoutBlueprintRefs(r)
+}
+
+// requirementWithoutBlueprintRefs projects a Requirement into its user-facing
+// form, stripping the internal BlueprintRefs. It is the ONLY shape that may
+// appear in a user-facing SSE event; the raw Requirement (with blueprintRefs)
+// is retained on the persisted RoundOutput returned to the caller and written
+// to output.json. PublicRequirement is the exported alias used by handlers.
+func requirementWithoutBlueprintRefs(r Requirement) requirementView {
+	return requirementView{
+		AppType:           r.AppType,
+		AppName:           r.AppName,
+		TargetUsers:       r.TargetUsers,
+		CoreScenario:      r.CoreScenario,
+		PrimaryView:       r.PrimaryView,
+		MainEntities:      r.MainEntities,
+		DataPolicy:        r.DataPolicy,
+		AcceptanceFocus:   r.AcceptanceFocus,
+		GenerationProfile: r.GenerationProfile,
+	}
 }
 
 func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions) []StreamEvent {
@@ -312,16 +418,25 @@ func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions
 	for _, q := range out.Questions {
 		events = append(events, StreamEvent{Type: "clarification.question.created", SessionID: sessionID, Data: q})
 	}
-	events = append(events, StreamEvent{Type: "clarification.summary.updated", SessionID: sessionID, Data: out.Requirement})
-	if len(out.RecommendedBlueprints) > 0 {
+	// Blueprints are internal server-side metadata (Requirement.BlueprintRefs).
+	// They MUST NOT appear in any user-facing SSE event. Emit a projection that
+	// omits the field entirely so it cannot leak by omission — the persisted
+	// RoundOutput.Requirement (returned to the caller and written to output.json)
+	// still carries blueprintRefs intact.
+	events = append(events, StreamEvent{Type: "clarification.summary.updated", SessionID: sessionID, Data: requirementWithoutBlueprintRefs(out.Requirement)})
+	// Adaptive: emit a consolidation event for the round-5 recommendation list.
+	// Blueprints are no longer surfaced in any user-facing event (the
+	// clarification.blueprint.recommended event has been removed); blueprints
+	// are an internal Factory reference persisted only in requirement metadata.
+	if len(out.Consolidation) > 0 {
 		events = append(events, StreamEvent{
-			Type:      "clarification.blueprint.recommended",
+			Type:      "clarification.consolidation.updated",
 			SessionID: sessionID,
-			Data:      out.RecommendedBlueprints,
+			Data:      out.Consolidation,
 		})
 	}
 	if IsReadyToConfirmStatus(out.Status) {
-		events = append(events, StreamEvent{Type: "clarification.ready_to_confirm", SessionID: sessionID, Data: out.Requirement})
+		events = append(events, StreamEvent{Type: "clarification.ready_to_confirm", SessionID: sessionID, Data: requirementWithoutBlueprintRefs(out.Requirement)})
 	}
 	return events
 }
@@ -361,11 +476,19 @@ func writeStream(path string, events []StreamEvent) error {
 }
 
 // extractJSONObject returns the substring of s spanning the outermost balanced {...}
-// object, tolerating markdown fences (```json … ```) and surrounding prose. If no
-// balanced object is found, it returns s unchanged so json.Unmarshal produces the
-// usual error.
+// object, tolerating markdown fences (```json … ```), surrounding prose, and
+// JSON strings (e.g., "{\"status\":...}"). If no balanced object is found, it
+// returns s unchanged so json.Unmarshal produces the usual error.
 func extractJSONObject(s string) string {
 	s = strings.TrimSpace(s)
+	// If the entire text is a JSON string (starts and ends with quotes), unquote it first.
+	// This handles the case where claude stream-json returns result as a quoted JSON string.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		unquoted, err := strconv.Unquote(s)
+		if err == nil && strings.HasPrefix(unquoted, "{") {
+			s = unquoted
+		}
+	}
 	// strip a leading ```lang fence and trailing ```
 	if strings.HasPrefix(s, "```") {
 		// drop the opening fence line
@@ -410,6 +533,274 @@ func extractJSONObject(s string) string {
 	return s[start:] // unbalanced; let json.Unmarshal report the error
 }
 
+func decodeRoundOutput(rawCandidates ...string) (RoundOutput, error) {
+	var lastErr error
+	for _, candidate := range clarificationJSONCandidates(rawCandidates...) {
+		var out RoundOutput
+		if err := json.Unmarshal([]byte(candidate), &out); err != nil {
+			repaired, repairErr := repairLooseJSONStringQuotes(candidate)
+			if repairErr != nil {
+				lastErr = err
+				continue
+			}
+			if err := json.Unmarshal([]byte(repaired), &out); err != nil {
+				lastErr = err
+				continue
+			}
+		}
+		if !looksLikeRoundOutput(out) {
+			lastErr = fmt.Errorf("decoded JSON does not match clarification contract")
+			continue
+		}
+		return out, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no clarification JSON found in Claude output")
+	}
+	return RoundOutput{}, fmt.Errorf("decode clarification output: %v: %w", lastErr, runner.ErrOutputInvalidJSON)
+}
+
+func clarificationJSONCandidates(rawCandidates ...string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	for _, raw := range rawCandidates {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		add(raw)
+		for _, obj := range extractJSONObjects(raw) {
+			add(obj)
+		}
+		scanner := bufio.NewScanner(strings.NewReader(raw))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			if _, result, _ := parseClaudeStreamLine(line); result != "" {
+				add(result)
+				for _, obj := range extractJSONObjects(result) {
+					add(obj)
+				}
+			}
+			if candidate := extractAssistantMessageText(line); candidate != "" {
+				add(candidate)
+				for _, obj := range extractJSONObjects(candidate) {
+					add(obj)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func extractAssistantMessageText(line string) string {
+	var top struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content []struct {
+				Type  string         `json:"type"`
+				Text  string         `json:"text"`
+				Input map[string]any `json:"input"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &top); err != nil {
+		return ""
+	}
+	if top.Type != "assistant" {
+		return ""
+	}
+	var parts []string
+	for _, block := range top.Message.Content {
+		switch block.Type {
+		case "text":
+			if text := strings.TrimSpace(block.Text); text != "" {
+				parts = append(parts, text)
+			}
+		case "tool_use":
+			if text := toolUseInputText(block.Input); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func toolUseInputText(input map[string]any) string {
+	for _, key := range []string{"content", "prompt", "question", "message", "text"} {
+		value, ok := input[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractJSONObjects(s string) []string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+			s = strings.TrimSpace(s[nl+1:])
+		}
+		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+		s = strings.TrimSpace(s)
+	}
+
+	var out []string
+	for start := 0; start < len(s); {
+		open := strings.IndexByte(s[start:], '{')
+		if open < 0 {
+			break
+		}
+		open += start
+		depth := 0
+		inStr := false
+		esc := false
+		for i := open; i < len(s); i++ {
+			c := s[i]
+			if inStr {
+				if esc {
+					esc = false
+				} else if c == '\\' {
+					esc = true
+				} else if c == '"' {
+					inStr = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inStr = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					out = append(out, s[open:i+1])
+					start = i + 1
+					goto nextObject
+				}
+			}
+		}
+		break
+	nextObject:
+	}
+	return out
+}
+
+// repairLooseJSONStringQuotes repairs a common non-JSON pattern from some
+// Anthropic-compatible providers: raw double quotes embedded inside a JSON
+// string value, e.g. `"content":"覆盖"全流程""`. The heuristic only escapes
+// quotes that appear while already inside a string and are clearly not acting
+// as the end delimiter because the next significant byte is not one of the
+// legal post-string tokens in JSON.
+func repairLooseJSONStringQuotes(s string) (string, error) {
+	var b strings.Builder
+	inString := false
+	escape := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !inString {
+			b.WriteByte(c)
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		if escape {
+			b.WriteByte(c)
+			escape = false
+			continue
+		}
+		switch c {
+		case '\\':
+			b.WriteByte(c)
+			escape = true
+		case '"':
+			if isLikelyStringTerminator(s, i+1) {
+				b.WriteByte(c)
+				inString = false
+			} else {
+				b.WriteString(`\"`)
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if inString || escape {
+		return "", fmt.Errorf("unterminated JSON string")
+	}
+	return b.String(), nil
+}
+
+func isLikelyStringTerminator(s string, next int) bool {
+	for ; next < len(s); next++ {
+		switch s[next] {
+		case ' ', '\n', '\r', '\t':
+			continue
+		case ',', '}', ']', ':':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeRoundOutput(out RoundOutput) bool {
+	if out.Round <= 0 {
+		return false
+	}
+	switch out.Status {
+	case "waiting_user", "ready_to_confirm", "confirmed", "active":
+	default:
+		return false
+	}
+	return len(out.WorkLog) > 0 ||
+		len(out.Questions) > 0 ||
+		!requirementIsZero(out.Requirement)
+}
+
+func requirementIsZero(req Requirement) bool {
+	return req.AppType == "" &&
+		req.AppName == "" &&
+		len(req.TargetUsers) == 0 &&
+		req.CoreScenario == "" &&
+		req.PrimaryView == "" &&
+		len(req.MainEntities) == 0 &&
+		len(req.BlueprintRefs) == 0 &&
+		req.DataPolicy == "" &&
+		len(req.AcceptanceFocus) == 0 &&
+		len(req.GenerationProfile) == 0
+}
+
+func (r Runner) promptText(inputPath string) string {
+	return "Use .claude/skills/requirement-clarification/SKILL.md as a reference for the clarification contract only. " +
+		fmt.Sprintf("The round input is at the absolute path %s and must be read with the Read tool. ", inputPath) +
+		"Do not call Write, Edit, Bash, or any file-modifying tool. Do not write output.json. Do not create a plan file. " +
+		"All human-readable output fields must use Simplified Chinese, including workLog content, question text, option labels, option descriptions, requirement summaries, and recommendation copy; only identifiers, slugs, file paths, enum keys, and code symbols may remain non-Chinese. " +
+		"Return the final clarification payload directly as raw JSON in the final assistant message only, with no markdown fences and no extra prose. " +
+		"Output ONLY valid JSON matching the requirement clarification contract. " +
+		"Consult .claude/skills/requirement-clarification/blueprints.json for the internal scene blueprint catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s). If no blueprint matches, use an empty blueprintRefs array. Blueprints are hidden style/structure references only: never emit user-facing blueprint recommendations, never call them templates, and never copy scene source."
+}
+
 func (r Runner) binary() string {
 	if r.Binary == "" {
 		return "claude"
@@ -429,4 +820,189 @@ func (r Runner) artifactRoot() string {
 		return ".factory-runs"
 	}
 	return r.ArtifactRoot
+}
+
+// ErrConsolidationFieldUnknown is returned by ApplyConsolidationAdjustment when
+// the user-selected field is not present in the consolidation list.
+var ErrConsolidationFieldUnknown = errors.New("selected field is not in the consolidation list")
+
+// ErrConsolidationValueInvalid is returned by ApplyConsolidationAdjustment when
+// a consolidation entry's recommendedValue is malformed JSON or the wrong type
+// for its field.
+var ErrConsolidationValueInvalid = errors.New("consolidation recommendedValue is invalid for its field")
+
+// ApplyConsolidationAdjustment implements the round-6 merge (no model turn).
+// It (a) permits only the one selectedField the user adjusted, applying
+// selectedValue to it; (b) merges the persisted recommended values for every
+// OTHER missing field in the consolidation list; (c) validates completeness of
+// the result; and (d) returns the requirement marked ready_to_confirm. It does
+// NOT invoke the model. The handler (Task 4) calls this directly.
+//
+// current is the requirement carried into round 6 (the confirmed-so-far
+// fields). consolidation is the round-5 recommendation list. selectedField is
+// the single field the user chose to override; selectedValue is their pick. If
+// selectedField is empty, every missing field takes its recommendation (a pure
+// accept-all).
+func ApplyConsolidationAdjustment(current Requirement, consolidation []ConsolidationEntry, selectedField string, selectedValue any) (Requirement, error) {
+	if selectedField != "" {
+		known := false
+		for _, e := range consolidation {
+			if e.Field == selectedField {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return Requirement{}, fmt.Errorf("field %q: %w", selectedField, ErrConsolidationFieldUnknown)
+		}
+	}
+	out := current
+	// Apply the persisted recommended value for every consolidation field EXCEPT
+	// the selected one (which the user overrides).
+	for _, e := range consolidation {
+		if e.Field == selectedField {
+			if err := setRequirementField(&out, e.Field, selectedValue); err != nil {
+				return Requirement{}, fmt.Errorf("field %q selected value: %w", e.Field, err)
+			}
+			continue
+		}
+		// Only fill in fields that are currently empty/missing — a previously
+		// confirmed value is preserved, not overwritten by the recommendation.
+		if !requirementFieldEmpty(out, e.Field) {
+			continue
+		}
+		var v any
+		if err := json.Unmarshal(e.RecommendedValue, &v); err != nil {
+			return Requirement{}, fmt.Errorf("field %q: %w", e.Field, ErrConsolidationValueInvalid)
+		}
+		if err := setRequirementField(&out, e.Field, v); err != nil {
+			return Requirement{}, fmt.Errorf("field %q: %w", e.Field, err)
+		}
+	}
+	if err := validateRequirementComplete(out); err != nil {
+		return Requirement{}, err
+	}
+	return out, nil
+}
+
+// setRequirementField assigns a typed value to a named Requirement field by
+// JSON tag. It accepts the value shapes a consolidation entry carries (string
+// for scalar fields, []any for slice fields).
+func setRequirementField(req *Requirement, field string, value any) error {
+	v := reflect.ValueOf(req).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag != field {
+			continue
+		}
+		fv := v.Field(i)
+		switch fv.Kind() {
+		case reflect.String:
+			s, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("expected string for %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			fv.SetString(s)
+		case reflect.Slice:
+			arr, ok := value.([]any)
+			if !ok {
+				return fmt.Errorf("expected array for %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			out := make([]string, 0, len(arr))
+			for _, a := range arr {
+				s, ok := a.(string)
+				if !ok {
+					return fmt.Errorf("expected string element for %s: %w", field, ErrConsolidationValueInvalid)
+				}
+				out = append(out, s)
+			}
+			fv.Set(reflect.ValueOf(out))
+		case reflect.Map:
+			// generationProfile: map[string][]string. Consolidation does not
+			// typically adjust this (it is set early), but handle defensively.
+			b, err := json.Marshal(value)
+			if err != nil {
+				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			var m map[string][]string
+			if err := json.Unmarshal(b, &m); err != nil {
+				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			fv.Set(reflect.ValueOf(m))
+		default:
+			return fmt.Errorf("field %s unsupported kind %s: %w", field, fv.Kind(), ErrConsolidationValueInvalid)
+		}
+		return nil
+	}
+	return fmt.Errorf("field %q: %w", field, ErrConsolidationFieldUnknown)
+}
+
+// requirementFieldEmpty reports whether a Requirement field (by JSON tag) is at
+// its zero value, so ApplyConsolidationAdjustment only fills missing fields.
+func requirementFieldEmpty(req Requirement, field string) bool {
+	v := reflect.ValueOf(&req).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag != field {
+			continue
+		}
+		fv := v.Field(i)
+		switch fv.Kind() {
+		case reflect.String:
+			return fv.String() == ""
+		case reflect.Slice, reflect.Map:
+			return fv.Len() == 0
+		}
+	}
+	return true
+}
+
+// validateRequirementComplete enforces the required confirmed-requirement
+// fields. It mirrors the SKILL.md "Required Confirmed Requirement Fields" list.
+func validateRequirementComplete(req Requirement) error {
+	missing := []string{}
+	if req.AppType == "" {
+		missing = append(missing, "appType")
+	}
+	if req.AppName == "" {
+		missing = append(missing, "appName")
+	}
+	if len(req.TargetUsers) == 0 {
+		missing = append(missing, "targetUsers")
+	}
+	if req.CoreScenario == "" {
+		missing = append(missing, "coreScenario")
+	}
+	if req.PrimaryView == "" {
+		missing = append(missing, "primaryView")
+	}
+	if len(req.MainEntities) == 0 {
+		missing = append(missing, "mainEntities")
+	}
+	if req.DataPolicy == "" {
+		missing = append(missing, "dataPolicy")
+	}
+	if len(req.AcceptanceFocus) == 0 {
+		missing = append(missing, "acceptanceFocus")
+	}
+	if len(req.GenerationProfile) == 0 {
+		missing = append(missing, "generationProfile")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("requirement incomplete, missing %s: %w", strings.Join(missing, ", "), ErrConsolidationValueInvalid)
+	}
+	return nil
+}
+
+func claudeModelArgs() []string {
+	for _, key := range []string{"CLAUDE_CODE_MODEL", "ANTHROPIC_MODEL"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return []string{"--model", value}
+		}
+	}
+	return nil
 }

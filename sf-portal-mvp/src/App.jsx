@@ -3,12 +3,11 @@ import { LeftToolbar } from './components/LeftToolbar'
 import { ApplicationsPanel } from './components/ApplicationsPanel'
 import { AgentsPanel } from './components/AgentsPanel'
 import { JobCenter } from './components/JobCenter'
-import { ClarificationPanel } from './components/ClarificationPanel'
-import { ChatDialog } from './components/ChatDialog'
+import { ConversationWorkbench } from './components/ConversationWorkbench'
 import { useApplications } from './hooks/useApplications'
 import { useAgents } from './hooks/useAgents'
 import { useJobs } from './hooks/useJobs'
-import { useClarification } from './hooks/useClarification'
+import { useDialogueSessions } from './hooks/useDialogueSessions'
 import { factoryApi } from './api/client'
 import './App.css'
 
@@ -20,7 +19,7 @@ function App() {
   const apps = useApplications()
   const agents = useAgents()
   const jobs = useJobs()
-  const clarification = useClarification()
+  const dialogue = useDialogueSessions()
 
   // Regeneration is another generate request. Task 5 gates bare POST /api/jobs
   // to require a confirmed requirement, so regeneration MUST flow through
@@ -28,20 +27,9 @@ function App() {
   // via job.created SSE to useJobs). Do NOT call jobs.createJob here.
   const regenerateApplication = app => {
     const name = app.name || app.slug || app.id
-    clarification
+    dialogue
       .send(`基于已有应用「${name}」重新生成一个更完整的版本，保留原有主题和运行形态，并改进页面效果与交互。`)
       .catch(() => {})
-  }
-
-  // Chat submit routing:
-  //  - if a running job is waiting for user input, answer THAT job;
-  //  - otherwise start / continue a clarification session (clarification ->
-  //    confirm is the only path that creates a Job now).
-  const submitChat = prompt => {
-    if (jobs.activeJob && jobs.activeJob.status === 'waiting_user') {
-      return jobs.answerJob(jobs.activeJob.id, prompt)
-    }
-    return clarification.send(prompt)
   }
 
   return (
@@ -59,6 +47,7 @@ function App() {
             onStop={apps.stopApplication}
             onRebuild={apps.restartApplication}
             onRegenerate={regenerateApplication}
+            onDelete={apps.deleteApplication}
             onRefresh={apps.refresh}
           />
         </div>
@@ -80,22 +69,34 @@ function App() {
             loadStepRecords={jobs.loadStepRecords}
             getArtifactContent={factoryApiGetArtifactContent}
           />
-          <ClarificationPanel
-            session={clarification.session}
-            messages={clarification.messages}
-            questions={clarification.questions}
-            requirement={clarification.requirement}
-            blueprints={clarification.blueprints}
-            error={clarification.error}
-            onAnswerBatch={answers => clarification.answerBatch(answers)}
-            onConfirm={clarification.confirm}
-            onRetry={clarification.retry}
-            onAbandon={clarification.abandon}
-          />
-          <ChatDialog
-            activeJob={jobs.activeJob}
-            jobError={jobs.error}
-            onSubmit={submitChat}
+          <ConversationWorkbench
+            session={dialogue.session}
+            view={dialogue.view}
+            sessions={dialogue.sessions}
+            timeline={dialogue.timeline}
+            questions={dialogue.questions}
+            locked={dialogue.locked}
+            error={dialogue.error || jobs.error}
+            submitting={dialogue.submitting}
+            deletingDialogueId={dialogue.deletingDialogueId}
+            historyOpen={dialogue.historyOpen}
+            setHistoryOpen={dialogue.setHistoryOpen}
+            onNewSession={dialogue.newDialogue}
+            onSelectSession={dialogue.selectDialogue}
+            onSend={prompt => {
+              if (jobs.activeJob && jobs.activeJob.status === 'waiting_user') {
+                return jobs.answerJob(jobs.activeJob.id, prompt)
+              }
+              return dialogue.send(prompt)
+            }}
+            onSelectRoute={dialogue.selectRoute}
+            onOpenApp={dialogue.openApp}
+            onAnswerBatch={dialogue.answerBatch}
+            onAcceptConsolidation={dialogue.acceptConsolidation}
+            onConfirm={dialogue.confirm}
+            onRetry={dialogue.retry}
+            onAbandon={dialogue.abandon}
+            onDeleteSession={dialogue.deleteDialogue}
           />
         </div>
 

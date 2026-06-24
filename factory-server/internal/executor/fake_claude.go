@@ -7,10 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -37,6 +37,11 @@ type fakeSceneTemplate struct {
 	Type         string
 	Description  string
 	Keywords     []string
+	// Profile is the optional README Generation Profile to report as "followed"
+	// when the confirmed requirement carries none. nil for all entries except
+	// scenes whose domain/pattern skills (e.g. affiliation-inference-dashboard)
+	// are not derivable from appType alone.
+	Profile map[string][]string
 }
 
 type fakeGenerationPlan struct {
@@ -72,7 +77,7 @@ var fakeSceneTemplates = []fakeSceneTemplate{
 	},
 	{
 		TemplateSlug: "social-sighting-cluster-alert",
-		Name:         "海域网格商船密度异常告警器",
+		Name:         "开源社区异常监测",
 		Type:         "command-dashboard",
 		Description:  "社媒海上目击聚合告警地图",
 		Keywords:     []string{"社交媒体", "推特", "Instagram", "公开搜索", "GPS", "EXIF", "散点图", "目击潮", "新帖子"},
@@ -90,6 +95,22 @@ var fakeSceneTemplates = []fakeSceneTemplate{
 		Type:         "map-dashboard",
 		Description:  "基于东海卫星地图展示目标列表、轨迹、警戒区、事件时间线和融合态势面板。",
 		Keywords:     []string{"东海目标态势演示", "东海方向", "目标列表", "目标轨迹", "警戒区", "融合态势", "目标态势"},
+	},
+	{
+		TemplateSlug: "carrier-air-wing-affiliation-inference",
+		Name:         "航母舰载机归属推断工具",
+		Type:         "command-dashboard",
+		Description:  "基于 ADS-B 海上起降事件和航母已知位置库推断舰载机归属、交叉部署和离舰告警。",
+		Keywords: []string{
+			"航母舰载机归属推断工具", "舰载机归属", "ADS-B", "ICAO", "海上起降",
+			"航母已知位置", "归属置信度", "交叉部署", "已离舰", "关系树", "起降热力地图",
+			"air wing", "affiliation", "adsb", "heatmap",
+		},
+		Profile: map[string][]string{
+			"base":    {"software-factory-app"},
+			"domain":  {"defense-operations-ui"},
+			"pattern": {"command-dashboard", "maritime-alert-dashboard", "affiliation-inference-dashboard"},
+		},
 	},
 }
 
@@ -130,20 +151,52 @@ func (f *FakeClaudeRunner) workspace() string {
 	return f.Workspace
 }
 
-// profileForJob derives the generationProfile the fake should report as having
-// "followed". It prefers the profile carried on the job's confirmed requirement
-// (same source the real runner parses via parseGenerationProfile); when absent
-// (legacy/direct-created jobs, or requirement_analysis which hasn't frozen yet)
-// it falls back to the app-type-derived profile so the fake end-to-end pipeline
-// still emits a non-empty usedSkills and passes the Task-6 validator.
-func profileForJob(job model.Job, appType string) map[string][]string {
-	if profile, _ := parseGenerationProfile(json.RawMessage(job.ConfirmedRequirementJSON)); len(profile) > 0 {
-		return profile
+// profileForJob starts with the confirmed Factory-derived profile, or an
+// app-type fallback for direct legacy jobs, then adds any scene-specific skills
+// required by the matched blueprint. This keeps fake output compatible with the
+// normal dialogue path while retaining a safe fallback for low-level tests.
+func profileForJob(job model.Job, scene fakeSceneTemplate) map[string][]string {
+	profile, _ := parseGenerationProfile(json.RawMessage(job.ConfirmedRequirementJSON))
+	if len(profile) == 0 {
+		profile = generationProfileForAppTypePublic(scene.Type)
 	}
-	return generationProfileForAppTypePublic(appType)
+	return mergeGenerationProfiles(profile, scene.Profile)
 }
 
-func (f *FakeClaudeRunner) plan(ctx context.Context, prompt string) fakeGenerationPlan {
+func mergeGenerationProfiles(base, additions map[string][]string) map[string][]string {
+	merged := make(map[string][]string, len(base)+len(additions))
+	for group, skills := range base {
+		merged[group] = append([]string(nil), skills...)
+	}
+	for group, skills := range additions {
+		for _, skill := range skills {
+			present := false
+			for _, existing := range merged[group] {
+				if existing == skill {
+					present = true
+					break
+				}
+			}
+			if !present {
+				merged[group] = append(merged[group], skill)
+			}
+		}
+	}
+	return merged
+}
+
+// plan derives the generation plan for a claude-mode step. Naming precedence
+// (mirrors the Factory rule so the fake and real runners agree):
+//  1. Explicit f.Slug escape hatch (lower-level tests): legacy minimal app,
+//     slug/name from the prompt, Legacy=true. Kept verbatim for compat.
+//  2. Pre-allocated name/slug on the job (the dialogue-confirm path, allocated
+//     by confirmDialogueClarification via idpkg.Base36Serial + factoryAppSlug):
+//     used VERBATIM, never re-serialised. Type/Description from the matched scene.
+//  3. Legacy / direct-created job: pick the scene via matchFakeSceneTemplate,
+//     then allocate a UPPERCASE Base36 serial that does not collide with any
+//     app slug already in the store or under generated-apps/.
+func (f *FakeClaudeRunner) plan(ctx context.Context, job model.Job) fakeGenerationPlan {
+	prompt := job.UserPrompt
 	if f.Slug != "" {
 		slug := f.slug()
 		return fakeGenerationPlan{
@@ -155,20 +208,100 @@ func (f *FakeClaudeRunner) plan(ctx context.Context, prompt string) fakeGenerati
 		}
 	}
 	scene := matchFakeSceneTemplate(prompt)
-	index := f.nextDemoIndex(ctx, scene.TemplateSlug)
-	suffix := fmt.Sprintf("demo%02d", index)
+	// Pre-allocated name/slug from a dialogue-confirm job win over re-serialising.
+	if name := strings.TrimSpace(job.AppName); name != "" {
+		if slug := strings.TrimSpace(job.AppSlug); slug != "" {
+			return fakeGenerationPlan{
+				Slug:         slug,
+				Name:         name,
+				Type:         scene.Type,
+				Description:  scene.Description,
+				TemplateSlug: scene.TemplateSlug,
+			}
+		}
+	}
+	// Legacy / direct-created job: Factory Base36 serial, never demoNN.
+	serial := idpkg.Base36Serial(func(cand string) bool {
+		return f.serialTaken(ctx, scene, cand)
+	})
 	return fakeGenerationPlan{
-		Slug:         scene.TemplateSlug + "-" + suffix,
-		Name:         scene.Name + suffix,
+		Slug:         fakeAppSlug(scene.Name, scene.TemplateSlug, serial),
+		Name:         scene.Name + "-" + serial,
 		Type:         scene.Type,
 		Description:  scene.Description,
 		TemplateSlug: scene.TemplateSlug,
 	}
 }
 
+// slugifyRawLocal mirrors server.slugifyRaw: lowercase, keep [a-z0-9], map
+// every other rune (including '-' and '_') to '-', then trim/collapse hyphens.
+// Re-implemented here because executor must not import the server package.
+func slugifyRawLocal(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	for strings.Contains(out, "--") {
+		out = strings.ReplaceAll(out, "--", "-")
+	}
+	return out
+}
+
+// fakeAppSlug mirrors server.factoryAppSlug's contract. serial is lowercased;
+// the slug anchors on the ASCII portion of name, falling back to anchor (the
+// scene's ASCII TemplateSlug) and finally "app". Deterministic in
+// (name, anchor, suffix) so the collision predicate can test the exact slug.
+func fakeAppSlug(name, anchor, suffix string) string {
+	serial := strings.ToLower(suffix)
+	if namePart := slugifyRawLocal(name); namePart != "" {
+		return namePart + "-" + serial
+	}
+	anchor2 := slugifyRawLocal(anchor)
+	if anchor2 == "" {
+		anchor2 = "app"
+	}
+	return anchor2 + "-" + serial
+}
+
+// serialTaken reports whether the slug derived from (scene.Name,
+// scene.TemplateSlug, candSerial) is already used by an app in the store OR
+// exists as a directory under generated-apps/. Reuses the read-dir +
+// store-list pattern of the former nextDemoIndex.
+func (f *FakeClaudeRunner) serialTaken(ctx context.Context, scene fakeSceneTemplate, candSerial string) bool {
+	candidate := fakeAppSlug(scene.Name, scene.TemplateSlug, candSerial)
+	if f.Store != nil {
+		if apps, err := f.Store.ListApplications(ctx); err == nil {
+			for _, app := range apps {
+				if app.Slug == candidate {
+					return true
+				}
+			}
+		}
+	}
+	generatedRoot := filepath.Join(f.Workspace, "generated-apps")
+	if entries, err := os.ReadDir(generatedRoot); err == nil {
+		for _, entry := range entries {
+			if entry.Name() == candidate {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchFakeSceneTemplate picks the scene whose keywords appear most often in
+// the prompt; ties resolve to the first match so the default (index 0) only
+// wins when no scene scores above zero.
 func matchFakeSceneTemplate(prompt string) fakeSceneTemplate {
 	best := fakeSceneTemplates[0]
-	bestScore := -1
+	bestScore := 0
 	for _, scene := range fakeSceneTemplates {
 		score := 0
 		for _, keyword := range scene.Keywords {
@@ -182,44 +315,6 @@ func matchFakeSceneTemplate(prompt string) fakeSceneTemplate {
 		}
 	}
 	return best
-}
-
-func (f *FakeClaudeRunner) nextDemoIndex(ctx context.Context, baseSlug string) int {
-	used := map[int]bool{}
-	if f.Store != nil {
-		if apps, err := f.Store.ListApplications(ctx); err == nil {
-			for _, app := range apps {
-				if index, ok := parseDemoIndex(baseSlug, app.Slug); ok {
-					used[index] = true
-				}
-			}
-		}
-	}
-	generatedRoot := filepath.Join(f.Workspace, "generated-apps")
-	if entries, err := os.ReadDir(generatedRoot); err == nil {
-		for _, entry := range entries {
-			if index, ok := parseDemoIndex(baseSlug, entry.Name()); ok {
-				used[index] = true
-			}
-		}
-	}
-	for i := 1; ; i++ {
-		if !used[i] {
-			return i
-		}
-	}
-}
-
-func parseDemoIndex(baseSlug string, slug string) (int, bool) {
-	prefix := baseSlug + "-demo"
-	if !strings.HasPrefix(slug, prefix) {
-		return 0, false
-	}
-	index, err := strconv.Atoi(slug[len(prefix):])
-	if err != nil || index <= 0 {
-		return 0, false
-	}
-	return index, true
 }
 
 // writeOutput serialises v to the step's attempt workspace output.json path.
@@ -239,7 +334,8 @@ func (f *FakeClaudeRunner) writeOutput(job model.Job, step model.JobStep, v any)
 }
 
 func (f *FakeClaudeRunner) runRequirementAnalysis(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
-	plan := f.plan(ctx, job.UserPrompt)
+	plan := f.plan(ctx, job)
+	profile := profileForJob(job, matchFakeSceneTemplate(job.UserPrompt))
 	// Task 5: requirement_analysis is now a FREEZE/AUDIT of the job's confirmed
 	// requirement, not a clarify step. Emit the frozen contract the real runner
 	// produces: the validated requirement plus a validation block that marks it
@@ -256,7 +352,7 @@ func (f *FakeClaudeRunner) runRequirementAnalysis(ctx context.Context, job model
 		"mainEntities":           []string{"formation", "event"},
 		"dataPolicy":             "mock_data",
 		"acceptanceFocus":        []string{"track replay"},
-		"generationProfile":      generationProfileForAppTypePublic(plan.Type),
+		"generationProfile":      profile,
 		"constraints":            []string{"React + Vite"},
 		"risks":                  []string{"no real data"},
 		"validation": map[string]any{
@@ -308,8 +404,8 @@ func generationProfileForAppTypePublic(appType string) map[string][]string {
 }
 
 func (f *FakeClaudeRunner) runSolutionDesign(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
-	plan := f.plan(ctx, job.UserPrompt)
-	profile := profileForJob(job, plan.Type)
+	plan := f.plan(ctx, job)
+	profile := profileForJob(job, matchFakeSceneTemplate(job.UserPrompt))
 	out := map[string]any{
 		"app": map[string]any{
 			"slug":   plan.Slug,
@@ -332,8 +428,8 @@ func (f *FakeClaudeRunner) runSolutionDesign(ctx context.Context, job model.Job,
 }
 
 func (f *FakeClaudeRunner) runCodeGeneration(ctx context.Context, job model.Job, step model.JobStep) (StepResult, error) {
-	plan := f.plan(ctx, job.UserPrompt)
-	profile := profileForJob(job, plan.Type)
+	plan := f.plan(ctx, job)
+	profile := profileForJob(job, matchFakeSceneTemplate(job.UserPrompt))
 	out := map[string]any{
 		"projectDir":     "generated-apps/" + plan.Slug,
 		"createdFiles":   []string{"package.json", "vite.config.js", "index.html", "src/main.jsx", "src/App.jsx", "src/style.css", ".factory/app.json", "Dockerfile", "nginx.conf"},

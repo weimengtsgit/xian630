@@ -1,4 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'
+// `??` (not `||`): in production the portal is built with
+// VITE_FACTORY_API_BASE_URL="" so calls go same-origin (/api) through the edge
+// reverse proxy; empty string is not nullish so it is kept. In `npm run dev` the
+// var is unset, so the local factory address is used as before.
+const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL ?? 'http://127.0.0.1:8787'
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -82,4 +86,62 @@ export const factoryApi = {
   retryClarificationRound: id => request(`/api/clarifications/${id}/retry-current-round`, { method: 'POST' }),
   confirmClarification: id => request(`/api/clarifications/${id}/confirm`, { method: 'POST' }),
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
+  listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
+  deleteClarification: id => request(`/api/clarifications/${id}`, { method: 'DELETE' }),
+  // ---- dialogue facade (Task 4 backend) -----------------------------------
+  // The /api/dialogues surface is the composed parent view over the three Factory
+  // outcomes: existing-app reuse, application generation (child clarification),
+  // and business-agent drafting. Every method returns a composed DialogueView
+  // (or a list of them). Path/methods mirror the backend routes exactly.
+  listDialogues: () => request('/api/dialogues'),
+  getDialogue: id => request(`/api/dialogues/${id}`),
+  createDialogue: ({ initialPrompt }) =>
+    request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
+  deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
+  sendDialogueMessage: (id, content) =>
+    request(`/api/dialogues/${id}/messages`, { method: 'POST', body: JSON.stringify({ content }) }),
+  selectDialogueRoute: (id, { intent, ...rest }) =>
+    request(`/api/dialogues/${id}/route`, { method: 'POST', body: JSON.stringify({ intent, ...rest }) }),
+  openDialogueApplication: (id, applicationID) =>
+    request(`/api/dialogues/${id}/applications/${applicationID}/open`, { method: 'POST' }),
+  answerDialogueClarification: (id, answers) =>
+    request(`/api/dialogues/${id}/clarification/answers`, { method: 'POST', body: JSON.stringify(answers) }),
+  answerDialogueClarificationBatch: (id, answers) =>
+    request(`/api/dialogues/${id}/clarification/answers/batch`, { method: 'POST', body: JSON.stringify({ answers }) }),
+  // applyDialogueConsolidation drives the round-5/6 consolidation actions over the
+  // SAME batch endpoint but with top-level consolidation fields (NOT wrapped in
+  // {answers}, which the backend decodes as the normal round-answer path). accept
+  // => accept-all recommendations (ready_to_confirm); field+value => one-field
+  // round-6 override.
+  applyDialogueConsolidation: (id, { accept = false, field = '', value = '' } = {}) =>
+    request(`/api/dialogues/${id}/clarification/answers/batch`, {
+      method: 'POST',
+      body: JSON.stringify(
+        accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
+      ),
+    }),
+  patchDialogueRequirement: (id, requirement) =>
+    request(`/api/dialogues/${id}/clarification/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
+  retryDialogueRound: id =>
+    request(`/api/dialogues/${id}/clarification/retry-current-round`, { method: 'POST' }),
+  confirmDialogueClarification: id =>
+    request(`/api/dialogues/${id}/clarification/confirm`, { method: 'POST' }),
+  abandonDialogueClarification: id =>
+    request(`/api/dialogues/${id}/clarification/abandon`, { method: 'POST' }),
+  confirmDialogueBusinessAgent: id =>
+    request(`/api/dialogues/${id}/business-agent/confirm`, { method: 'POST' }),
+  // continueDialogueBusinessAgent drives the multi-round business-agent drafting
+  // loop: append the user's refinement/answer and re-run the draft round. The
+  // business route is locked, so free-text /messages would 409 — this is the
+  // dedicated answer/refine path.
+  continueDialogueBusiness: (id, content) =>
+    request(`/api/dialogues/${id}/business-agent/continue`, { method: 'POST', body: JSON.stringify({ content }) }),
+  applyDialogueBusinessConsolidation: (id, { accept = false, field = '', value = '' } = {}) =>
+    request(`/api/dialogues/${id}/business-agent/consolidation`, {
+      method: 'POST',
+      body: JSON.stringify(
+        accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
+      ),
+    }),
+  deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

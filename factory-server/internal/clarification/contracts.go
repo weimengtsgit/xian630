@@ -64,16 +64,11 @@ type WorkLog struct {
 	Content string `json:"content"`
 }
 
-// BlueprintRef is a pointer into the 场景蓝本 catalog
-// (.claude/skills/requirement-clarification/blueprints.json). Blueprints are
-// style/structure references only — never proposals to copy scene source.
-type BlueprintRef struct {
-	Slug          string `json:"slug"`
-	Name          string `json:"name"`
-	AppType       string `json:"appType"`
-	Reason        string `json:"reason"`
-	ReferenceKind string `json:"referenceKind"`
-}
+// BlueprintRef was the user-visible blueprint recommendation card. It has been
+// REMOVED from the adaptive contract: blueprints are now an internal Factory
+// reference only, surfaced nowhere in user-facing events. Requirement.BlueprintRefs
+// is retained as server-side-only metadata. Do not reintroduce a user-visible
+// blueprint recommendation type.
 
 type Requirement struct {
 	AppType           string              `json:"appType"`
@@ -86,6 +81,23 @@ type Requirement struct {
 	AcceptanceFocus   []string            `json:"acceptanceFocus"`
 	GenerationProfile map[string][]string `json:"generationProfile"`
 	BlueprintRefs     []string            `json:"blueprintRefs"`
+}
+
+// requirementView is the user-facing projection of Requirement. It intentionally
+// OMITS BlueprintRefs: blueprint slugs are internal Factory metadata persisted
+// server-side only and must never travel in a user-facing SSE event. Use
+// requirementView (not Requirement itself) for any event payload. This struct
+// cannot leak the field by omission, unlike a string-scrub.
+type requirementView struct {
+	AppType           string              `json:"appType"`
+	AppName           string              `json:"appName"`
+	TargetUsers       []string            `json:"targetUsers"`
+	CoreScenario      string              `json:"coreScenario"`
+	PrimaryView       string              `json:"primaryView"`
+	MainEntities      []string            `json:"mainEntities"`
+	DataPolicy        string              `json:"dataPolicy"`
+	AcceptanceFocus   []string            `json:"acceptanceFocus"`
+	GenerationProfile map[string][]string `json:"generationProfile"`
 }
 
 type RoundInput struct {
@@ -103,13 +115,26 @@ type MessageView struct {
 	Content string `json:"content"`
 }
 
+// ConsolidationEntry is one field recommendation emitted at round 5 when the
+// requirement is still incomplete after the one-decision rounds 1–4. Factory
+// persists these as a recommendation_consolidation message and lets the user
+// adjust a single field at round 6 (see ApplyConsolidationAdjustment). The
+// RecommendedValue is a typed JSON value (string or array).
+type ConsolidationEntry struct {
+	Field            string          `json:"field"`
+	RecommendedValue json.RawMessage `json:"recommendedValue"`
+	Reason           string          `json:"reason"`
+	Alternatives     []string        `json:"alternatives"`
+}
+
 type RoundOutput struct {
-	Status                string         `json:"status"`
-	Round                 int            `json:"round"`
-	WorkLog               []WorkLog      `json:"workLog"`
-	Questions             []Question     `json:"questions"`
-	Requirement           Requirement    `json:"requirement"`
-	RecommendedBlueprints []BlueprintRef `json:"recommendedBlueprints"`
+	Status                 string               `json:"status"`
+	Round                  int                  `json:"round"`
+	WorkLog                []WorkLog            `json:"workLog"`
+	Questions              []Question           `json:"questions"`
+	Requirement            Requirement          `json:"requirement"`
+	NormalizedScenarioName string               `json:"normalizedScenarioName"`
+	Consolidation          []ConsolidationEntry `json:"consolidation,omitempty"`
 }
 
 type StreamEvent struct {

@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Sparkles,
   Loader2,
+  Trash2,
 } from 'lucide-react'
 import { orderApplicationsForDisplay } from '../hooks/applicationOrdering'
 import './ApplicationsPanel.css'
@@ -28,6 +29,7 @@ const ACTION_TEXT = {
   stop: '停止中',
   rebuild: '重建中',
   regenerate: '创建中',
+  delete: '删除中',
 }
 
 export function ApplicationsPanel({
@@ -39,6 +41,7 @@ export function ApplicationsPanel({
   onStop,
   onRebuild,
   onRegenerate,
+  onDelete,
   onRefresh,
 }) {
   const list = orderApplicationsForDisplay(apps)
@@ -161,6 +164,22 @@ export function ApplicationsPanel({
                       >
                         {action === 'regenerate' ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
                         {action === 'regenerate' ? ACTION_TEXT[action] : '重新生成'}
+                      </button>
+                    )}
+                    {isGenerated(app) && (
+                      <button
+                        type="button"
+                        className="card-btn danger-btn"
+                        onClick={() => {
+                          if (window.confirm(`确认删除生成应用「${app.name || app.slug}」？本地生成目录会被删除，生成审计记录会保留。`)) {
+                            onDelete && onDelete(app.id)
+                          }
+                        }}
+                        title="删除生成应用"
+                        disabled={busy}
+                      >
+                        {action === 'delete' ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                        {action === 'delete' ? ACTION_TEXT[action] : '删除'}
                       </button>
                     )}
                   </div>

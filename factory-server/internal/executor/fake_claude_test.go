@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -148,6 +150,47 @@ func TestFakeClaudeRequirementAnalysisWritesOutput(t *testing.T) {
 	}
 }
 
+func TestFakeClaudeCarrierAirWingRequirementAnalysisKeepsBlueprintProfile(t *testing.T) {
+	st := newFakeClaudeTestStore(t)
+	ws := t.TempDir()
+	art := filepath.Join(ws, ".factory-runs")
+	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: art}
+	job, step := fakeClaudeJobStepWithPrompt(
+		"job_carrier_profile",
+		model.StepRequirementAnalysis,
+		"航母舰载机归属推断工具 ADS-B ICAO 海上起降 交叉部署 已离舰 关系树 起降热力地图",
+	)
+	job.ConfirmedRequirementJSON = `{"generationProfile":{"base":["software-factory-app"],"domain":["defense-operations-ui"],"pattern":["command-dashboard"]}}`
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
+	}
+
+	var out map[string]any
+	readOutputJSON(t, art, job, step, &out)
+	profile, ok := out["generationProfile"].(map[string]any)
+	if !ok {
+		t.Fatalf("generationProfile = %#v, want object", out["generationProfile"])
+	}
+	patterns, _ := profile["pattern"].([]any)
+	if !containsAnyString(patterns, "maritime-alert-dashboard") || !containsAnyString(patterns, "affiliation-inference-dashboard") {
+		t.Fatalf("generationProfile.pattern = %#v, want maritime and affiliation skills", patterns)
+	}
+}
+
+func containsAnyString(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestFakeClaudeSolutionDesignWritesOutput: solution_design writes output.json
 // declaring the generated app slug/type/source and returns succeeded.
 func TestFakeClaudeSolutionDesignWritesOutput(t *testing.T) {
@@ -270,7 +313,12 @@ func TestFakeClaudeCodeGenerationWritesApp(t *testing.T) {
 	}
 }
 
-func TestFakeClaudeCodeGenerationMatchesSceneTemplateAndIncrementsDemoSuffix(t *testing.T) {
+// TestFakeClaudeLegacyJobUsesBase36SerialNotDemo: a job with no pre-allocated
+// AppName/AppSlug and no explicit f.Slug must use a UPPERCASE Base36 serial
+// (Factory naming rule: <scene.Name>-<UPPERCASE Base36>), never a demoNN
+// suffix. Two runs of the same scene-matching prompt produce DISTINCT slugs
+// because Base36Serial avoids the one already taken.
+func TestFakeClaudeLegacyJobUsesBase36SerialNotDemo(t *testing.T) {
 	st := newFakeClaudeTestStore(t)
 	ws := t.TempDir()
 	art := filepath.Join(ws, ".factory-runs")
@@ -278,7 +326,7 @@ func TestFakeClaudeCodeGenerationMatchesSceneTemplateAndIncrementsDemoSuffix(t *
 	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: art}
 	prompt := "请生成一个应用，名称为「航母母港潮汐窗口计算器」。应用需要接入公开的潮汐预测 API，抓取诺福克、圣迭戈、布雷默顿、横须贺四大航母母港未来 72 小时潮汐数据。"
 
-	job1, step1 := fakeClaudeJobStepWithPrompt("job_demo_1", model.StepCodeGeneration, prompt)
+	job1, step1 := fakeClaudeJobStepWithPrompt("job_base36_1", model.StepCodeGeneration, prompt)
 	if err := st.CreateJob(context.Background(), job1); err != nil {
 		t.Fatalf("create job1: %v", err)
 	}
@@ -290,7 +338,7 @@ func TestFakeClaudeCodeGenerationMatchesSceneTemplateAndIncrementsDemoSuffix(t *
 		t.Fatalf("job1 status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
 	}
 
-	job2, step2 := fakeClaudeJobStepWithPrompt("job_demo_2", model.StepCodeGeneration, prompt)
+	job2, step2 := fakeClaudeJobStepWithPrompt("job_base36_2", model.StepCodeGeneration, prompt)
 	if err := st.CreateJob(context.Background(), job2); err != nil {
 		t.Fatalf("create job2: %v", err)
 	}
@@ -302,50 +350,160 @@ func TestFakeClaudeCodeGenerationMatchesSceneTemplateAndIncrementsDemoSuffix(t *
 		t.Fatalf("job2 status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
 	}
 
-	for _, tc := range []struct {
-		slug string
-		name string
-	}{
-		{"carrier-homeport-tide-window-demo01", "航母母港潮汐窗口计算器demo01"},
-		{"carrier-homeport-tide-window-demo02", "航母母港潮汐窗口计算器demo02"},
-	} {
-		appDir := filepath.Join(ws, "generated-apps", tc.slug)
+	// The Chinese scene name contributes no ASCII, so the slug anchors on the
+	// (ASCII) TemplateSlug: <templateslug>-<lowercase base36>. The name keeps
+	// the UPPERCASE base36 serial appended to the scene name.
+	slugRe := regexp.MustCompile(`^carrier-homeport-tide-window-[0-9a-z]{4}$`)
+	nameRe := regexp.MustCompile(`^航母母港潮汐窗口计算器-[0-9A-Z]{4}$`)
+
+	entries, err := os.ReadDir(filepath.Join(ws, "generated-apps"))
+	if err != nil {
+		t.Fatalf("read generated-apps: %v", err)
+	}
+	type gen struct{ slug, name string }
+	var gens []gen
+	for _, e := range entries {
+		appDir := filepath.Join(ws, "generated-apps", e.Name())
 		if _, err := os.Stat(filepath.Join(appDir, "src", "main.jsx")); err != nil {
-			t.Fatalf("generated template copy missing src/main.jsx for %s: %v", tc.slug, err)
+			t.Fatalf("generated template copy missing src/main.jsx for %s: %v", e.Name(), err)
 		}
 		if _, err := os.Stat(filepath.Join(appDir, "node_modules", "skip.txt")); !os.IsNotExist(err) {
-			t.Fatalf("node_modules copied for %s; err=%v", tc.slug, err)
+			t.Fatalf("node_modules copied for %s; err=%v", e.Name(), err)
 		}
 		raw, err := os.ReadFile(filepath.Join(appDir, ".factory", "app.json"))
 		if err != nil {
-			t.Fatalf("read manifest for %s: %v", tc.slug, err)
+			t.Fatalf("read manifest for %s: %v", e.Name(), err)
 		}
 		var manifest map[string]any
 		if err := json.Unmarshal(raw, &manifest); err != nil {
-			t.Fatalf("manifest invalid json for %s: %v", tc.slug, err)
+			t.Fatalf("manifest invalid json for %s: %v", e.Name(), err)
 		}
-		if manifest["slug"] != tc.slug || manifest["name"] != tc.name || manifest["source"] != "generated" || manifest["path"] != "generated-apps/"+tc.slug {
-			t.Fatalf("manifest for %s = %+v", tc.slug, manifest)
+		slug, _ := manifest["slug"].(string)
+		name, _ := manifest["name"].(string)
+		if slug != e.Name() {
+			t.Fatalf("dir name %q != manifest slug %q", e.Name(), slug)
 		}
+		if !slugRe.MatchString(slug) {
+			t.Fatalf("slug %q does not match %v", slug, slugRe)
+		}
+		if !nameRe.MatchString(name) {
+			t.Fatalf("manifest name %q does not match %v", name, nameRe)
+		}
+		if manifest["source"] != "generated" {
+			t.Fatalf("manifest source for %s = %v, want generated", slug, manifest["source"])
+		}
+		if strings.Contains(slug, "demo") || strings.Contains(name, "demo") {
+			t.Fatalf("demoNN leak: slug=%q name=%q", slug, name)
+		}
+		gens = append(gens, gen{slug, name})
+	}
+	if len(gens) != 2 {
+		t.Fatalf("expected 2 generated apps, got %d: %+v", len(gens), gens)
+	}
+	if gens[0].slug == gens[1].slug {
+		t.Fatalf("two runs produced the SAME slug %q (Base36Serial must avoid the taken one)", gens[0].slug)
+	}
+	if gens[0].name == gens[1].name {
+		t.Fatalf("two runs produced the SAME name %q", gens[0].name)
 	}
 
+	// Each job's stored AppSlug/AppName must (a) match the Factory regex and
+	// (b) correspond to an actual generated dir — directory-listing order is not
+	// guaranteed, so match by value rather than by index.
 	got1, err := st.GetJob(context.Background(), job1.ID)
 	if err != nil || got1 == nil {
 		t.Fatalf("get job1: %v (%v)", err, got1)
-	}
-	if got1.AppSlug != "carrier-homeport-tide-window-demo01" || got1.AppName != "航母母港潮汐窗口计算器demo01" {
-		t.Fatalf("job1 app = %q/%q", got1.AppSlug, got1.AppName)
 	}
 	got2, err := st.GetJob(context.Background(), job2.ID)
 	if err != nil || got2 == nil {
 		t.Fatalf("get job2: %v (%v)", err, got2)
 	}
-	if got2.AppSlug != "carrier-homeport-tide-window-demo02" || got2.AppName != "航母母港潮汐窗口计算器demo02" {
-		t.Fatalf("job2 app = %q/%q", got2.AppSlug, got2.AppName)
+	for i, got := range []*model.Job{got1, got2} {
+		if !slugRe.MatchString(got.AppSlug) {
+			t.Fatalf("job%d AppSlug %q does not match %v", i+1, got.AppSlug, slugRe)
+		}
+		if !nameRe.MatchString(got.AppName) {
+			t.Fatalf("job%d AppName %q does not match %v", i+1, got.AppName, nameRe)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "generated-apps", got.AppSlug, "src", "main.jsx")); err != nil {
+			t.Fatalf("job%d AppSlug %q has no generated dir on disk: %v", i+1, got.AppSlug, err)
+		}
+	}
+	if got1.AppSlug == got2.AppSlug {
+		t.Fatalf("job1 and job2 share slug %q (Base36Serial must avoid the taken one)", got1.AppSlug)
 	}
 }
 
-func TestFakeClaudeMatchesAllDemoScenePrompts(t *testing.T) {
+// TestFakeClaudePrefersPreAllocatedAppNameAndSlug: when a dialogue-confirm job
+// already carries a Factory pre-allocated AppName/AppSlug (allocated by
+// confirmDialogueClarification via idpkg.Base36Serial + factoryAppSlug), the
+// fake must use them VERBATIM — not re-serialise, not re-suffix, not overwrite.
+func TestFakeClaudePrefersPreAllocatedAppNameAndSlug(t *testing.T) {
+	st := newFakeClaudeTestStore(t)
+	ws := t.TempDir()
+	art := filepath.Join(ws, ".factory-runs")
+	writeFakeSceneTemplate(t, ws, "carrier-air-wing-affiliation-inference", "航母舰载机归属推断工具", "command-dashboard", "基于 ADS-B 海上起降事件和航母已知位置库推断舰载机归属、交叉部署和离舰告警。")
+	r := &FakeClaudeRunner{Store: st, Workspace: ws, ArtifactRoot: art}
+
+	const (
+		preName = "航母舰载机归属推断工具-K7M2"
+		preSlug = "carrier-affiliation-k7m2"
+	)
+	job, step := fakeClaudeJobStepWithPrompt("job_preal", model.StepCodeGeneration, "航母舰载机归属推断工具 ADS-B ICAO 海上起降 交叉部署 已离舰 关系树 起降热力地图")
+	job.AppName = preName
+	job.AppSlug = preSlug
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
+	}
+
+	// The generated app dir is exactly the pre-allocated slug.
+	appDir := filepath.Join(ws, "generated-apps", preSlug)
+	if _, err := os.Stat(filepath.Join(appDir, "src", "main.jsx")); err != nil {
+		t.Fatalf("generated app missing src/main.jsx under %s: %v", preSlug, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(appDir, ".factory", "app.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("manifest invalid json: %v", err)
+	}
+	if manifest["slug"] != preSlug {
+		t.Fatalf("manifest slug = %v, want %q (verbatim, not re-serialised)", manifest["slug"], preSlug)
+	}
+	if manifest["name"] != preName {
+		t.Fatalf("manifest name = %v, want %q (verbatim, not re-serialised)", manifest["name"], preName)
+	}
+	if manifest["source"] != "generated" {
+		t.Fatalf("manifest source = %v, want generated", manifest["source"])
+	}
+	// No extra app dirs: the fake must not have ALSO emitted a serialised one.
+	entries, err := os.ReadDir(filepath.Join(ws, "generated-apps"))
+	if err != nil {
+		t.Fatalf("read generated-apps: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 generated app dir, got %d: %+v", len(entries), entries)
+	}
+	// The job's pre-allocated AppSlug/AppName are unchanged.
+	got, err := st.GetJob(context.Background(), job.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get job: %v (%v)", err, got)
+	}
+	if got.AppSlug != preSlug || got.AppName != preName {
+		t.Fatalf("job app = %q/%q, want unchanged %q/%q", got.AppSlug, got.AppName, preSlug, preName)
+	}
+}
+
+func TestFakeClaudeMatchesAllScenePrompts(t *testing.T) {
 	cases := []struct {
 		name string
 		text string
@@ -354,9 +512,10 @@ func TestFakeClaudeMatchesAllDemoScenePrompts(t *testing.T) {
 		{"tide", "航母母港潮汐窗口计算器 诺福克 圣迭戈 布雷默顿 横须贺 72 小时 12.8 可出港时间窗", "carrier-homeport-tide-window"},
 		{"deck wind", "甲板风实时计算器 公开格点风场 10 米高度风速 20 节 30 节 无弹射器辅助 安全着舰", "carrier-deck-wind-calculator"},
 		{"ais density", "海域网格商船密度异常告警器 AIS 船舶位置 50 海里 30 天滑动平均 商船数量 70% 50%", "merchant-density-grid-alert"},
-		{"social sighting", "海域网格商船密度异常告警器 社交媒体 推特 Instagram GPS EXIF 散点图 目击潮 新帖子", "social-sighting-cluster-alert"},
+		{"social sighting", "开源社区异常监测 社交媒体 推特 Instagram GPS EXIF 散点图 目击潮 新帖子", "social-sighting-cluster-alert"},
 		{"formation replay", "航母编队月度航迹复盘 近一个月 日级航迹 航行路线 伴随舰队形 关键事件点 时间轴", "carrier-formation-replay"},
 		{"east sea", "东海目标态势演示 东海方向 目标列表 目标轨迹 警戒区 融合态势 目标态势", "east-sea-situation"},
+		{"carrier air wing", "航母舰载机归属推断工具 ADS-B ICAO 海上起降 交叉部署 已离舰 关系树 起降热力地图", "carrier-air-wing-affiliation-inference"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

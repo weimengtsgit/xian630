@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
@@ -134,7 +135,29 @@ func newClarTestServer(t *testing.T, fake runner.CommandRunner) (*Server, *Route
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
+	workspaceRoot := t.TempDir()
+	writeServerCatalog(t, workspaceRoot, `{
+  "version": 1,
+  "scenes": {
+    "carrier-formation-replay": { "surface": "application", "order": 1 },
+    "carrier-homeport-tide-window": { "surface": "blueprint" },
+    "carrier-deck-wind-calculator": { "surface": "blueprint" },
+    "merchant-density-grid-alert": { "surface": "blueprint" },
+    "social-sighting-cluster-alert": { "surface": "blueprint" },
+    "carrier-air-wing-affiliation-inference": { "surface": "blueprint" }
+  }
+}`)
+	for _, slug := range []string{
+		"carrier-formation-replay",
+		"carrier-homeport-tide-window",
+		"carrier-deck-wind-calculator",
+		"merchant-density-grid-alert",
+		"social-sighting-cluster-alert",
+		"carrier-air-wing-affiliation-inference",
+	} {
+		writeServerSceneManifest(t, workspaceRoot, slug)
+	}
+	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: workspaceRoot}, st, scanner.Scanner{})
 	srv.clarifier = clarification.Runner{
 		Cmd:           fake,
 		WorkspaceRoot: t.TempDir(),
@@ -256,7 +279,7 @@ func TestGetActiveClarificationNormalizesLegacyCompleteWaitingSession(t *testing
 	}
 }
 
-func TestCreateClarificationConflictReportsNormalizedActiveStatus(t *testing.T) {
+func TestCreateClarificationAllowsMultipleActiveSessions(t *testing.T) {
 	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: waitingUserOutput})
 
 	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母母港潮汐窗口计算器"})
@@ -272,19 +295,24 @@ func TestCreateClarificationConflictReportsNormalizedActiveStatus(t *testing.T) 
 		t.Fatalf("seed requirement: %v", err)
 	}
 
-	conflict := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成另一个应用"})
-	if conflict.Code != http.StatusConflict {
-		t.Fatalf("conflict status = %d body=%s, want 409", conflict.Code, conflict.Body.String())
+	second := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成另一个应用"})
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second create status = %d body=%s, want 201", second.Code, second.Body.String())
 	}
-	var body map[string]any
-	if err := json.Unmarshal(conflict.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode conflict body: %v", err)
+	var secondSess model.ClarificationSession
+	if err := json.NewDecoder(second.Body).Decode(&secondSess); err != nil {
+		t.Fatalf("decode second session: %v", err)
 	}
-	if body["session_id"] != sess.ID {
-		t.Fatalf("session_id = %v, want %q", body["session_id"], sess.ID)
+	if secondSess.ID == sess.ID {
+		t.Fatalf("second session reused active session id %q", sess.ID)
 	}
-	if body["status"] != string(model.ClarificationStatusReadyToConfirm) {
-		t.Fatalf("status = %v, want %q", body["status"], model.ClarificationStatusReadyToConfirm)
+
+	sessions, err := st.ListClarificationSessions(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("ListClarificationSessions: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %#v, want 2", sessions)
 	}
 }
 
@@ -907,6 +935,19 @@ func TestApplyAnswerToRequirementMapsRequiredListFields(t *testing.T) {
 	}
 }
 
+func TestApplyAnswerToRequirementAddsBlueprintSpecificGenerationSkills(t *testing.T) {
+	req := clarification.Requirement{
+		BlueprintRefs: []string{"carrier-air-wing-affiliation-inference"},
+	}
+
+	applyAnswerToRequirement(&req, "appType", "command_dashboard")
+
+	patterns := strings.Join(req.GenerationProfile["pattern"], ",")
+	if !strings.Contains(patterns, "maritime-alert-dashboard") || !strings.Contains(patterns, "affiliation-inference-dashboard") {
+		t.Fatalf("generationProfile.pattern = %q, want carrier-air-wing skills", patterns)
+	}
+}
+
 func TestAnswerClarificationPreservesMappedRequirementWhenNextRoundOmitsField(t *testing.T) {
 	const omittedTargetUsersOutput = `{
   "status": "waiting_user",
@@ -1266,7 +1307,7 @@ func TestRunRoundSanitizesUnsafeBlueprintRefs(t *testing.T) {
     "mainEntities": ["编队","事件"],
     "dataPolicy": "mock_data",
     "acceptanceFocus": ["轨迹联动"],
-    "blueprintRefs": ["carrier-formation-replay", "../x"],
+    "blueprintRefs": ["carrier-homeport-tide-window", "../x"],
     "generationProfile": {"base":["software-factory-app"]}
   }
 }`
@@ -1295,7 +1336,391 @@ func TestRunRoundSanitizesUnsafeBlueprintRefs(t *testing.T) {
 	if len(persisted.BlueprintRefs) != 1 {
 		t.Fatalf("persisted blueprintRefs = %#v, want exactly 1 (safe slug only)", persisted.BlueprintRefs)
 	}
-	if persisted.BlueprintRefs[0] != "carrier-formation-replay" {
-		t.Fatalf("persisted blueprintRef[0] = %q, want 'carrier-formation-replay'", persisted.BlueprintRefs[0])
+	if persisted.BlueprintRefs[0] != "carrier-homeport-tide-window" {
+		t.Fatalf("persisted blueprintRef[0] = %q, want 'carrier-homeport-tide-window'", persisted.BlueprintRefs[0])
 	}
+}
+
+func TestRunRoundDropsNonBlueprintRefsFromSceneCatalog(t *testing.T) {
+	const disabledBlueprintOutput = `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"收敛"}],
+  "questions": [],
+  "requirement": {
+    "appType": "situation_replay",
+    "appName": "航母编队复盘应用",
+    "targetUsers": ["作战参谋"],
+    "coreScenario": "复盘近 1 个月航迹",
+    "primaryView": "地图 + 时间轴",
+    "mainEntities": ["编队","事件"],
+    "dataPolicy": "mock_data",
+    "acceptanceFocus": ["轨迹联动"],
+    "blueprintRefs": ["carrier-formation-replay"],
+    "generationProfile": {"base":["software-factory-app"]}
+  },
+  "recommendedBlueprints": [
+    {
+      "slug":"carrier-formation-replay",
+      "name":"航母编队月度航迹复盘",
+      "appType":"situation_replay",
+      "reason":"匹配",
+      "referenceKind":"reference"
+    }
+  ]
+}`
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: disabledBlueprintOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	var persisted struct {
+		BlueprintRefs []string `json:"blueprintRefs"`
+	}
+	if err := json.Unmarshal([]byte(got.RequirementJSON), &persisted); err != nil {
+		t.Fatalf("unmarshal persisted requirement: %v", err)
+	}
+	if len(persisted.BlueprintRefs) != 0 {
+		t.Fatalf("persisted blueprintRefs = %#v, want none for disabled blueprint", persisted.BlueprintRefs)
+	}
+}
+
+func TestListClarificationsReturnsParsedRequirement(t *testing.T) {
+	_, r, _ := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clarifications?limit=50", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var views []clarificationView
+	if err := json.NewDecoder(rec.Body).Decode(&views); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("len = %d, want 1", len(views))
+	}
+	if views[0].Requirement.AppName != "航母编队复盘应用" {
+		t.Fatalf("appName = %q", views[0].Requirement.AppName)
+	}
+}
+
+func TestListClarificationsIncludesLinkedJobAndDeletedApplicationState(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID:              "clar_linked",
+		Status:          model.ClarificationStatusConfirmed,
+		InitialPrompt:   "生成已删除应用",
+		Round:           2,
+		MaxRounds:       3,
+		RequirementJSON: `{"appType":"command_dashboard","appName":"已删除应用","coreScenario":"查看历史状态"}`,
+		CreatedJobID:    "job_linked",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ConfirmedAt:     &now,
+	}
+	if err := st.CreateClarificationSession(context.Background(), sess); err != nil {
+		t.Fatalf("seed clarification: %v", err)
+	}
+	job := model.Job{
+		ID:                     "job_linked",
+		UserPrompt:             "生成已删除应用",
+		AppSlug:                "deleted-app",
+		AppName:                "已删除应用",
+		Status:                 model.JobStatusCompleted,
+		CurrentStepKind:        model.StepDeployment,
+		CreatedAppID:           "app_deleted",
+		CreatedAt:              now,
+		UpdatedAt:              now,
+		ClarificationSessionID: sess.ID,
+	}
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clarifications?limit=50", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var views []clarificationView
+	if err := json.NewDecoder(rec.Body).Decode(&views); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var linked *clarificationView
+	for i := range views {
+		if views[i].ID == sess.ID {
+			linked = &views[i]
+		}
+	}
+	if linked == nil {
+		t.Fatalf("linked session missing from views: %#v", views)
+	}
+	if linked.CreatedJob == nil || linked.CreatedJob.ID != job.ID {
+		t.Fatalf("created job = %#v, want %s", linked.CreatedJob, job.ID)
+	}
+	if linked.ApplicationState != "deleted" {
+		t.Fatalf("application_state = %q, want deleted", linked.ApplicationState)
+	}
+}
+
+func TestDeleteClarificationDeletesSessionMessagesButKeepsJob(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	ctx := context.Background()
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID:              "clar_delete",
+		Status:          model.ClarificationStatusConfirmed,
+		InitialPrompt:   "生成历史会话",
+		Round:           2,
+		MaxRounds:       3,
+		RequirementJSON: `{}`,
+		CreatedJobID:    "job_delete_keep",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ConfirmedAt:     &now,
+	}
+	if err := st.CreateClarificationSession(ctx, sess); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if err := st.AddClarificationMessage(ctx, model.ClarificationMessage{
+		ID: "cmsg_delete", SessionID: sess.ID, Role: "agent", Kind: "analysis_work_log",
+		Content: "历史内容", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed message: %v", err)
+	}
+	job := model.Job{
+		ID: "job_delete_keep", UserPrompt: "生成历史会话", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAt: now, UpdatedAt: now,
+		ClarificationSessionID: sess.ID,
+	}
+	if err := st.CreateJob(ctx, job); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/clarifications/"+sess.ID, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetClarificationSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get deleted session: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("session still exists: %#v", got)
+	}
+	msgs, err := st.ListClarificationMessages(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %#v, want none", msgs)
+	}
+	gotJob, err := st.GetJob(ctx, job.ID)
+	if err != nil || gotJob == nil {
+		t.Fatalf("linked job was deleted: %#v err=%v", gotJob, err)
+	}
+}
+
+func TestDeleteClarificationRejectsActiveSession(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmOutput})
+	now := time.Now()
+	sess := model.ClarificationSession{
+		ID: "clar_active_delete", Status: model.ClarificationStatusActive, InitialPrompt: "分析中",
+		Round: 1, MaxRounds: 3, RequirementJSON: `{}`, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateClarificationSession(context.Background(), sess); err != nil {
+		t.Fatalf("seed active session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/clarifications/"+sess.ID, nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete active status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("active session should remain: %#v err=%v", got, err)
+	}
+}
+
+// blueprintRefsRequirementJSON is a complete requirement that ALSO carries an
+// internal blueprint slug. Handlers re-publish the requirement over SSE on
+// answer / batch-answer / patch; those events must NOT carry blueprintRefs.
+const blueprintRefsRequirementJSON = `{"appType":"command_dashboard","appName":"航母母港潮汐窗口计算器","targetUsers":["作战指挥人员"],"coreScenario":"四大母港潮汐窗口监控","primaryView":"2×2 港口卡片矩阵","mainEntities":["港口","潮汐"],"dataPolicy":"mock_then_api","acceptanceFocus":["窗口计算"],"generationProfile":{"base":["software-factory-app"]},"blueprintRefs":["carrier-homeport-tide-window"]}`
+
+const leakSlug = "carrier-homeport-tide-window"
+
+// assertNoBlueprintLeak fails the test if body contains the blueprintRefs JSON
+// key or the internal slug string. Mirrors the marshal-and-assert style of
+// clarification.TestRunnerRedactsBlueprintRefsFromUserFacingEvents.
+func assertNoBlueprintLeak(t *testing.T, label, body string) {
+	t.Helper()
+	if strings.Contains(body, "blueprintRefs") {
+		t.Fatalf("%s leaks blueprintRefs key: %s", label, body)
+	}
+	if strings.Contains(body, leakSlug) {
+		t.Fatalf("%s leaks blueprint slug: %s", label, body)
+	}
+}
+
+// summaryUpdatedPayloads extracts the marshaled JSON payload strings of every
+// clarification.summary.updated event captured off the hub. The hub wraps each
+// clarification.StreamEvent inside Event.Data, so we peel two layers.
+func summaryUpdatedPayloads(t *testing.T, events []Event) []string {
+	t.Helper()
+	var out []string
+	for _, ev := range events {
+		if ev.Type != "clarification.summary.updated" {
+			continue
+		}
+		raw, err := json.Marshal(ev.Data)
+		if err != nil {
+			t.Fatalf("marshal event data: %v", err)
+		}
+		var stream clarification.StreamEvent
+		if err := json.Unmarshal(raw, &stream); err != nil {
+			t.Fatalf("unmarshal StreamEvent: %v", err)
+		}
+		payload, err := json.Marshal(stream.Data)
+		if err != nil {
+			t.Fatalf("marshal stream payload: %v", err)
+		}
+		out = append(out, string(payload))
+	}
+	return out
+}
+
+// TestHandlerRedactsBlueprintRefsFromSSEEvents is the handler/SSE-layer guard
+// the per-task reviews missed: after (a) a single answer, (b) a batch answer,
+// and (c) a requirement patch, the clarification.summary.updated event MUST
+// contain neither the blueprintRefs key nor the internal slug, while the
+// persisted server-side requirement still carries BlueprintRefs intact.
+func TestHandlerRedactsBlueprintRefsFromSSEEvents(t *testing.T) {
+	cases := []struct {
+		name   string
+		action func(t *testing.T, srv *Server, r *Router, sessID string)
+	}{
+		{
+			name: "single answer",
+			action: func(t *testing.T, srv *Server, r *Router, sessID string) {
+				// Keep the session waiting_user so the answer advances without
+				// a model round overwriting the seeded requirement.
+				srv.clarifier = clarification.Runner{
+					Cmd:           fakeClarRunner{stdout: waitingUserOutput},
+					WorkspaceRoot: srv.clarifier.WorkspaceRoot,
+					ArtifactRoot:  srv.clarifier.ArtifactRoot,
+				}
+				rec := doPost(t, r, http.MethodPost, "/api/clarifications/"+sessID+"/answers", map[string]string{"questionId": "q1", "value": "ops"})
+				if rec.Code != http.StatusOK {
+					t.Fatalf("answer status = %d body=%s", rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			name: "batch answer",
+			action: func(t *testing.T, srv *Server, r *Router, sessID string) {
+				srv.clarifier = clarification.Runner{
+					Cmd:           fakeClarRunner{stdout: waitingUserOutput},
+					WorkspaceRoot: srv.clarifier.WorkspaceRoot,
+					ArtifactRoot:  srv.clarifier.ArtifactRoot,
+				}
+				rec := doPost(t, r, http.MethodPost, "/api/clarifications/"+sessID+"/answers/batch", map[string]any{
+					"answers": []map[string]string{{"questionId": "q1", "value": "ops"}},
+				})
+				if rec.Code != http.StatusOK {
+					t.Fatalf("batch answer status = %d body=%s", rec.Code, rec.Body.String())
+				}
+			},
+		},
+		{
+			name: "requirement patch",
+			action: func(t *testing.T, srv *Server, r *Router, sessID string) {
+				// generationProfile is server-derived and rejected by the patch
+				// endpoint, so send every editable field plus the blueprint slug.
+				patchReq := `{"appType":"command_dashboard","appName":"航母母港潮汐窗口计算器","targetUsers":["作战指挥人员"],"coreScenario":"四大母港潮汐窗口监控","primaryView":"2×2 港口卡片矩阵","mainEntities":["港口","潮汐"],"dataPolicy":"mock_then_api","acceptanceFocus":["窗口计算"],"blueprintRefs":["carrier-homeport-tide-window"]}`
+				patchBody := map[string]any{"requirement": json.RawMessage(patchReq)}
+				rec := doPost(t, r, http.MethodPatch, "/api/clarifications/"+sessID+"/requirement", patchBody)
+				if rec.Code != http.StatusOK {
+					t.Fatalf("patch status = %d body=%s", rec.Code, rec.Body.String())
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, r, st := newClarTestServer(t, fakeClarRunner{stdout: waitingUserOutput})
+
+			create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母母港潮汐窗口计算器"})
+			if create.Code != http.StatusCreated {
+				t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+			}
+			var sess model.ClarificationSession
+			if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+				t.Fatalf("decode session: %v", err)
+			}
+			// Seed a requirement that carries the internal blueprint slug; the
+			// re-publish on the handler path must strip it.
+			if err := st.UpdateClarificationRequirement(context.Background(), sess.ID, blueprintRefsRequirementJSON); err != nil {
+				t.Fatalf("seed requirement: %v", err)
+			}
+
+			ch := srv.hub.Subscribe()
+			defer srv.hub.Unsubscribe(ch)
+			_ = drainClarificationHub(ch) // flush round-1 events
+
+			tc.action(t, srv, r, sess.ID)
+
+			payloads := summaryUpdatedPayloads(t, drainClarificationHub(ch))
+			if len(payloads) == 0 {
+				t.Fatalf("no clarification.summary.updated event observed for %s", tc.name)
+			}
+			for i, body := range payloads {
+				assertNoBlueprintLeak(t, tc.name+" clarification.summary.updated["+itoa(i)+"]", body)
+			}
+
+			// Server-side retention: the persisted requirement STILL carries the
+			// internal slug (redaction is user-facing-only).
+			got, err := st.GetClarificationSession(context.Background(), sess.ID)
+			if err != nil || got == nil {
+				t.Fatalf("re-get session: %#v %v", got, err)
+			}
+			if !strings.Contains(got.RequirementJSON, leakSlug) {
+				t.Fatalf("server-side requirement lost blueprint slug; redaction must be user-facing only: %s", got.RequirementJSON)
+			}
+		})
+	}
+}
+
+// itoa avoids importing strconv solely for an index label.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
 }

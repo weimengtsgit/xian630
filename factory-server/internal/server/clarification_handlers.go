@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
+	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 )
 
 // publishClarificationEvent forwards a normalized clarification.StreamEvent onto
@@ -62,7 +64,10 @@ type confirmClarificationBody struct {
 // round that actually ran. No response-side round override is needed.
 type clarificationView struct {
 	model.ClarificationSession
-	Requirement clarification.Requirement `json:"requirement"`
+	Requirement      clarification.Requirement `json:"requirement"`
+	CreatedJob       *model.Job                `json:"created_job,omitempty"`
+	Application      *model.Application        `json:"application,omitempty"`
+	ApplicationState string                    `json:"application_state,omitempty"`
 }
 
 func (s *Server) viewFromSession(sess *model.ClarificationSession) clarificationView {
@@ -76,6 +81,34 @@ func (s *Server) viewFromSession(sess *model.ClarificationSession) clarification
 		v.Requirement.GenerationProfile = nil
 	}
 	return v
+}
+
+func (s *Server) enrichClarificationHistoryView(ctx context.Context, v clarificationView) (clarificationView, error) {
+	if v.CreatedJobID == "" {
+		return v, nil
+	}
+	job, err := s.store.GetJob(ctx, v.CreatedJobID)
+	if err != nil {
+		return v, err
+	}
+	if job == nil {
+		return v, nil
+	}
+	v.CreatedJob = job
+	if job.CreatedAppID == "" {
+		return v, nil
+	}
+	app, err := s.store.GetApplication(ctx, job.CreatedAppID)
+	if err != nil {
+		return v, err
+	}
+	if app == nil {
+		v.ApplicationState = "deleted"
+		return v, nil
+	}
+	v.Application = app
+	v.ApplicationState = string(app.Status)
+	return v, nil
 }
 
 // ---- handlers ---------------------------------------------------------------
@@ -98,32 +131,21 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if active, err := s.store.GetActiveClarificationSession(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "get active session")
-		return
-	} else if active != nil {
-		active, err = s.normalizeClarificationReadiness(ctx, active)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "normalize active session")
+	if body.AbandonActive {
+		if active, err := s.store.GetActiveClarificationSession(ctx); err != nil {
+			writeError(w, http.StatusInternalServerError, "get active session")
 			return
-		}
-		if !body.AbandonActive {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":      "active session exists",
-				"session_id": active.ID,
-				"status":     active.Status,
+		} else if active != nil {
+			if err := s.store.SetClarificationStatus(ctx, active.ID, model.ClarificationStatusAbandoned, "", ""); err != nil {
+				writeError(w, http.StatusInternalServerError, "abandon active session")
+				return
+			}
+			s.publishClarificationEvent(clarification.StreamEvent{
+				Type:      "clarification.abandoned",
+				SessionID: active.ID,
+				Data:      active,
 			})
-			return
 		}
-		if err := s.store.SetClarificationStatus(ctx, active.ID, model.ClarificationStatusAbandoned, "", ""); err != nil {
-			writeError(w, http.StatusInternalServerError, "abandon active session")
-			return
-		}
-		s.publishClarificationEvent(clarification.StreamEvent{
-			Type:      "clarification.abandoned",
-			SessionID: active.ID,
-			Data:      active,
-		})
 	}
 
 	now := time.Now()
@@ -172,6 +194,32 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.viewFromSession(updated))
 }
 
+// listClarifications handles GET /api/clarifications.
+func (s *Server) listClarifications(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	sessions, err := s.store.ListClarificationSessions(r.Context(), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list sessions")
+		return
+	}
+	out := make([]clarificationView, 0, len(sessions))
+	for i := range sessions {
+		sess := sessions[i]
+		view, err := s.enrichClarificationHistoryView(r.Context(), s.viewFromSession(&sess))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "enrich sessions")
+			return
+		}
+		out = append(out, view)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // getActiveClarification handles GET /api/clarifications/active. It lets the
 // portal rehydrate an in-flight clarification after a browser reload, avoiding
 // a confusing POST /api/clarifications 409 when the server still has an active
@@ -207,6 +255,37 @@ func (s *Server) getClarification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.viewFromSession(sess))
+}
+
+// deleteClarification handles DELETE /api/clarifications/:id. It removes only
+// the clarification history row and transcript messages; generated jobs/apps and
+// execution artifacts remain intact. A currently-active analysis round is not
+// deletable because the runner may still be appending messages.
+func (s *Server) deleteClarification(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	sess, err := s.store.GetClarificationSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get session")
+		return
+	}
+	if sess == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if sess.Status == model.ClarificationStatusActive {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "active session cannot be deleted", "status": sess.Status})
+		return
+	}
+	if err := s.store.DeleteClarificationSession(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete session")
+		return
+	}
+	s.publishClarificationEvent(clarification.StreamEvent{
+		Type:      "clarification.deleted",
+		SessionID: id,
+		Data:      map[string]string{"id": id},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
 // listClarificationMessages handles GET /api/clarifications/:id/messages.
@@ -305,6 +384,8 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add answer message")
 		return
 	}
+	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -319,7 +400,7 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      req,
+		Data:      clarification.PublicRequirement(req),
 	})
 	// Advance the round exactly like the free-text path (P2#2): the structured
 	// answer + merged requirement must be visible to the next clarifier round,
@@ -377,6 +458,8 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -391,7 +474,7 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      req,
+		Data:      clarification.PublicRequirement(req),
 	})
 
 	advanced, ok := s.advanceAfterUserTurn(r.Context(), id, updated)
@@ -463,9 +546,11 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
-	current.BlueprintRefs = incoming.BlueprintRefs
-	// Always (re)compute the profile from appType — never trust the client.
-	current.GenerationProfile = generationProfileForAppType(current.AppType)
+	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
+	// Always (re)compute the profile from the application type and internal
+	// blueprint refs — never trust the client-supplied skill list — while
+	// preserving the server-derived `data` group selected during clarification.
+	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs, current.GenerationProfile)
 
 	reqBytes, _ := json.Marshal(current)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
@@ -480,7 +565,7 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      current,
+		Data:      clarification.PublicRequirement(current),
 	})
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 }
@@ -613,21 +698,27 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid requirement json")
 			return
 		}
+		if !blueprintRefsAllSafe(incoming.BlueprintRefs) {
+			writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
+			return
+		}
 		// The confirmed requirement may carry business fields; recompute the
-		// profile from appType so a client can never inject one at confirm time.
-		incoming.GenerationProfile = generationProfileForAppType(incoming.AppType)
+		// profile from appType so a client can never inject one at confirm time,
+		// plus internal blueprint refs, while preserving the persisted `data`
+		// skill group across the recompute.
+		incoming.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
+		incoming.GenerationProfile = generationProfileForRequirement(incoming.AppType, incoming.BlueprintRefs, req.GenerationProfile)
 		req = incoming
 	} else {
-		// Recompute the profile defensively even on the persisted requirement.
-		req.GenerationProfile = generationProfileForAppType(req.AppType)
-	}
-
-	// Fail closed on unsafe blueprintRef slugs (P2#1): unified check covers BOTH
-	// the client-supplied requirement (body.Requirement branch above) AND the
-	// empty-body path that confirms the persisted requirement as-is.
-	if !blueprintRefsAllSafe(req.BlueprintRefs) {
-		writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
-		return
+		if !blueprintRefsAllSafe(req.BlueprintRefs) {
+			writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
+			return
+		}
+		// Recompute the profile defensively even on the persisted requirement,
+		// preserving the server-derived `data` skill group and blueprint-derived
+		// pattern skills.
+		req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	}
 
 	if missing := missingRequiredFields(req); len(missing) > 0 {
@@ -665,12 +756,9 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	if err := s.store.CreateJob(r.Context(), job); err != nil {
-		writeError(w, http.StatusInternalServerError, "create job")
-		return
-	}
+	steps := make([]model.JobStep, 0, len(stepPlan))
 	for i, sp := range stepPlan {
-		step := model.JobStep{
+		steps = append(steps, model.JobStep{
 			ID:       "step_" + idpkg.New(),
 			JobID:    jobID,
 			Kind:     sp.kind,
@@ -678,15 +766,14 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			AgentKey: sp.agentKey,
 			Status:   model.StepStatusPending,
 			Attempt:  0,
-		}
-		if err := s.store.CreateJobStep(r.Context(), step); err != nil {
-			writeError(w, http.StatusInternalServerError, "create step")
-			return
-		}
+		})
 	}
-
-	if err := s.store.LinkClarificationJob(r.Context(), id, jobID); err != nil {
-		writeError(w, http.StatusInternalServerError, "link job")
+	// Seed the job + steps + clarification link in ONE transaction: on failure
+	// there is NO orphaned job and the session is moved to a diagnosable failed
+	// state (never left ready_to_confirm with no linked job).
+	if err := s.store.SeedClarificationJob(r.Context(), job, steps, id); err != nil {
+		_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return
 	}
 	if err := s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusConfirmed, "", ""); err != nil {
@@ -768,7 +855,10 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 		CurrentRequirement: s.parseRequirement(sess.RequirementJSON),
 	}
 
-	out, err := s.clarifier.RunRound(ctx, input, s.publishClarificationEvent)
+	cfg := s.loadSceneCatalog(ctx)
+	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
+		s.publishClarificationEvent(s.filterClarificationEvent(cfg, ev))
+	})
 	if err != nil {
 		// Round failed: advance the persisted round to the round we attempted so
 		// retry-current-round re-runs the right round, mark the session failed,
@@ -804,7 +894,11 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// not fail: a single bad slug should not abort the round; the executor drops
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
-	out.Requirement.BlueprintRefs = sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
+	out.Requirement.BlueprintRefs = s.sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
+	// The LLM may suggest business fields and safe blueprint refs, but the skill
+	// profile is always Factory-derived from those refs, while preserving the
+	// LLM-selected `data` group.
+	out.Requirement.GenerationProfile = generationProfileForRequirement(out.Requirement.AppType, out.Requirement.BlueprintRefs, out.Requirement.GenerationProfile)
 	now := time.Now()
 	reqBytes, _ := json.Marshal(out.Requirement)
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
@@ -830,6 +924,22 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 			Role:         "agent",
 			Kind:         "question",
 			MetadataJSON: string(qBytes),
+			CreatedAt:    now,
+		}); err != nil {
+			return sess, roundN, false
+		}
+	}
+	// Persist the round-5 consolidation list as a recommendation_consolidation
+	// message so the round-6 adjust handler (Task 4 dialogue facade) can load it
+	// via ApplyConsolidationAdjustment without a model turn.
+	if len(out.Consolidation) > 0 {
+		consBytes, _ := json.Marshal(out.Consolidation)
+		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
+			ID:           "cmsg_" + idpkg.New(),
+			SessionID:    sessID,
+			Role:         "agent",
+			Kind:         "recommendation_consolidation",
+			MetadataJSON: string(consBytes),
 			CreatedAt:    now,
 		}); err != nil {
 			return sess, roundN, false
@@ -983,11 +1093,38 @@ func blueprintRefsAllSafe(refs []string) bool {
 // sanitizeBlueprintRefs drops any unsafe blueprintRef slug, keeping only safe
 // ones. Used on LLM-produced refs (semi-trusted): a single bad slug should not
 // abort the whole round; the executor drops unsafe refs for Reads regardless.
-func sanitizeBlueprintRefs(refs []string) []string {
+func (s *Server) sanitizeBlueprintRefs(refs []string) []string {
 	out := refs[:0:0]
+	catalog, err := scanner.LoadSceneCatalogForSurface(s.cfg.WorkspaceRoot)
+	if err != nil {
+		return out
+	}
 	for _, slug := range refs {
-		if executor.SafeName(slug) {
+		if executor.SafeName(slug) && catalog.IsBlueprint(slug) {
 			out = append(out, slug)
+		}
+	}
+	return out
+}
+
+func (s *Server) filterClarificationEvent(cfg scanner.SceneCatalog, ev clarification.StreamEvent) clarification.StreamEvent {
+	switch ev.Type {
+	case "clarification.summary.updated", "clarification.ready_to_confirm":
+		req, ok := ev.Data.(clarification.Requirement)
+		if !ok {
+			return ev
+		}
+		req.BlueprintRefs = filterBlueprintRefs(cfg, req.BlueprintRefs)
+		ev.Data = req
+	}
+	return ev
+}
+
+func filterBlueprintRefs(cfg scanner.SceneCatalog, refs []string) []string {
+	out := refs[:0:0]
+	for _, ref := range refs {
+		if cfg.IsBlueprint(ref) {
+			out = append(out, ref)
 		}
 	}
 	return out
@@ -1057,7 +1194,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "appType", "app_type":
 		if value != "" {
 			req.AppType = value
-			req.GenerationProfile = generationProfileForAppType(value)
+			req.GenerationProfile = generationProfileForRequirement(value, req.BlueprintRefs, req.GenerationProfile)
 		}
 	case "appName", "app_name":
 		if value != "" {
@@ -1082,7 +1219,8 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "acceptanceFocus", "acceptance_focus":
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
 	case "blueprintRefs", "blueprint_refs":
-		req.BlueprintRefs = sanitizeBlueprintRefs(mergeAnswerList(req.BlueprintRefs, value))
+		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
+		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
@@ -1211,4 +1349,52 @@ func generationProfileForAppType(appType string) map[string][]string {
 	default:
 		return nil
 	}
+}
+
+// generationProfileForRequirement derives the Factory-owned profile from the
+// supported application type, then augments it with capabilities required by
+// internal scene blueprints. It also preserves the server/model-derived `data`
+// skill group that was selected during clarification; client-supplied skill
+// lists are still rejected before this helper is called.
+func generationProfileForRequirement(appType string, blueprintRefs []string, existingProfiles ...map[string][]string) map[string][]string {
+	profile := generationProfileForAppType(appType)
+	for _, slug := range blueprintRefs {
+		for group, additions := range blueprintProfileAdditions[slug] {
+			if profile == nil {
+				profile = map[string][]string{}
+			}
+			profile[group] = appendUniqueSkills(profile[group], additions)
+		}
+	}
+	if len(existingProfiles) > 0 {
+		if dataGroup := existingProfiles[0]["data"]; len(dataGroup) > 0 {
+			if profile == nil {
+				profile = map[string][]string{}
+			}
+			profile["data"] = append([]string(nil), dataGroup...)
+		}
+	}
+	return profile
+}
+
+var blueprintProfileAdditions = map[string]map[string][]string{
+	"carrier-air-wing-affiliation-inference": {
+		"pattern": {"maritime-alert-dashboard", "affiliation-inference-dashboard"},
+	},
+}
+
+func appendUniqueSkills(current, additions []string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, existing := range current {
+			if existing == addition {
+				found = true
+				break
+			}
+		}
+		if !found {
+			current = append(current, addition)
+		}
+	}
+	return current
 }

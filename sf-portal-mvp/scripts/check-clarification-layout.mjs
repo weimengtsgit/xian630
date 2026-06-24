@@ -9,8 +9,8 @@ const clarJsx = readFileSync(new URL('../src/components/ClarificationPanel.jsx',
 
 assert.match(
   appCss,
-  /\.wb-center\s*>\s*\.clar-panel\s*\{[^}]*flex:\s*1\.5\s+1\s+0[^}]*min-height:\s*260px/s,
-  'center column must allocate a larger flexible row to the clarification panel',
+  /\.wb-center\s*>\s*\.conversation-workbench\s*\{[^}]*flex:\s*1\s+1\s+0[^}]*min-height:\s*360px/s,
+  'center column must allocate a larger flexible row to the conversation workbench',
 )
 
 assert.doesNotMatch(
@@ -29,18 +29,6 @@ assert.match(
   chatCss,
   /\.chat-dock\s*\{[^}]*min-height:\s*0/s,
   'chat dock base height must shrink to content so the empty state has no blank area below the input',
-)
-
-assert.match(
-  appCss,
-  /\.wb-center\s*>\s*\.chat-dock\s*\{[^}]*flex:\s*0\s+0\s+auto[^}]*min-height:\s*0/s,
-  'empty chat dock must use content height instead of reserving a fixed row',
-)
-
-assert.match(
-  appCss,
-  /\.wb-center\s*>\s*\.chat-dock\.chat-dock-has-history\s*\{[^}]*flex:\s*0\.8\s+1\s+220px[^}]*min-height:\s*220px/s,
-  'chat dock should reserve scrollable history space only after messages exist',
 )
 
 assert.match(

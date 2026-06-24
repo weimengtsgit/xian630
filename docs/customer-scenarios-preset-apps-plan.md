@@ -1,26 +1,31 @@
-# 客户四场景预置应用方案
+# 客户场景预置应用与场景蓝本方案
 
 ## 目标
 
-将客户提供的 4 个场景沉淀为 4 套独立的 `scene/` 预置应用，并作为后续需求澄清和生成能力画像选择的场景蓝本。第一版采用演示数据契约：应用以 mock provider 提供可替换的数据结构，保持静态 Vite 应用可构建、可部署、可演示，不直接接入真实潮汐、气象、AIS、Twitter 或 Instagram 服务。
+将客户提供的场景沉淀为可复用的 `scene/` 资源，并作为后续需求澄清和生成能力画像选择的场景蓝本。第一版采用演示数据契约：应用或蓝本以 mock provider 提供可替换的数据结构，保持本地演示可运行或可生成，不直接接入真实潮汐、气象、AIS、社媒、ADS-B 或航母位置服务。
 
 ## 已确认边界
 
-- 每个场景对应一个独立 `scene/<slug>/` 项目，包含 `.factory/app.json`、README、Dockerfile、nginx 和自包含前端代码。
+- 客户前四个场景已有独立 `scene/<slug>/` 项目，可作为生成参考和演示应用源。
+- 客户第五个场景先作为隐藏场景蓝本落地，后续如果需要本地 fake demo 一键生成，再补完整可运行 scene app。
 - 应用显示名保留客户场景名称；内部 slug、描述和场景蓝本名可用于区分同名场景。
 - 应用内容保留客户判断口径，包括阈值、状态标签、场景解释和刷新频率。
+- 研判参数（例如 200 海里、60%、30 天、近地高度阈值、最小样本数）使用客户默认值，但后续可由用户交互或接口返回覆盖。
+- 真实 ADS-B 历史数据库和美航母位置库接入由后续数据接入能力包定义，不在当前场景蓝本中实现采集服务。
 - 门户应用卡片应显示一行副信息，优先取 manifest `description` 或 `slug`，用于区分两个同名客户场景。
 - 应用界面显示客户原始刷新频率；本地演示可以使用较短 tick 推进“最近刷新时间”、倒计时或曲线变化。
-- 4 个场景均归为 `指挥看板类应用`，生成能力画像使用 `software-factory-app`、`defense-operations-ui`、`command-dashboard`、`maritime-alert-dashboard`。
+- 客户前四个场景均归为 `指挥看板类应用`，生成能力画像使用 `software-factory-app`、`defense-operations-ui`、`command-dashboard`、`maritime-alert-dashboard`。
+- 客户第五个场景归为 `指挥看板类应用` 的 `归属研判类应用` 子型，生成能力画像增加 `affiliation-inference-dashboard`。
 
 ## 预置应用清单
 
-| 场景 | 应用显示名 | 建议 slug | 内部区分描述 | 应用类型 |
-|---|---|---|---|---|
-| 场景一 | 航母母港潮汐窗口计算器 | `carrier-homeport-tide-window` | 四大航母母港潮汐窗口状态看板 | `command-dashboard` |
-| 场景二 | 甲板风实时计算器 | `carrier-deck-wind-calculator` | 航母活动区域甲板风条件评估看板 | `command-dashboard` |
-| 场景三 | 海域网格商船密度异常告警器 | `merchant-density-grid-alert` | AIS 商船密度网格异常告警 | `command-dashboard` |
-| 场景四 | 海域网格商船密度异常告警器 | `social-sighting-cluster-alert` | 社媒海上目击聚合告警地图 | `command-dashboard` |
+| 场景 | 显示名 | 建议 slug | 内部区分描述 | 表面 | 应用类型 |
+|---|---|---|---|---|---|
+| 客户场景一 | 航母母港潮汐窗口计算器 | `carrier-homeport-tide-window` | 四大航母母港潮汐窗口状态看板 | 隐藏场景蓝本 | `command-dashboard` |
+| 客户场景二 | 甲板风实时计算器 | `carrier-deck-wind-calculator` | 航母活动区域甲板风条件评估看板 | 隐藏场景蓝本 | `command-dashboard` |
+| 客户场景三 | 海域网格商船密度异常告警器 | `merchant-density-grid-alert` | AIS 商船密度网格异常告警 | 隐藏场景蓝本 | `command-dashboard` |
+| 客户场景四 | 开源社区异常监测 | `social-sighting-cluster-alert` | 社媒海上目击聚合告警地图 | 隐藏场景蓝本 | `command-dashboard` |
+| 客户场景五 | 航母舰载机归属推断工具 | `carrier-air-wing-affiliation-inference` | ADS-B 海上起降与航母位置的舰载机归属研判 | 隐藏场景蓝本 | `command-dashboard` / `归属研判类应用` |
 
 ## 场景一：航母母港潮汐窗口计算器
 
@@ -101,7 +106,7 @@
 - 每个网格内必须有数量曲线。
 - 顶部显示“每 3 分钟刷新一次”和最近刷新时间。
 
-## 场景四：海域网格商船密度异常告警器
+## 场景四：开源社区异常监测
 
 ### 客户口径
 
@@ -117,7 +122,7 @@
 
 ### 第一版应用形态
 
-- 应用显示名仍使用客户原始名称。
+- 应用显示名使用「开源社区异常监测」（客户原始场景名为「海域网格商船密度异常告警器」，按社媒目击聚合场景重命名以与场景三区分）。
 - 主视图为全球海域散点地图 + 聚合高亮区域 + 新帖流。
 - 每条帖子展示平台、账号、语言、关键词命中、坐标来源、时间和相似内容摘要。
 - 聚合区域展示账号数、时间窗口、相似关键词、疑似目击潮提示。
@@ -132,7 +137,7 @@
 
 ## 生成能力画像
 
-4 个场景统一采用：
+客户前四个海事告警场景统一采用：
 
 ```json
 {
@@ -144,10 +149,80 @@
 
 `maritime-alert-dashboard` 负责沉淀海域/港口/网格/坐标对象、外部数据演示契约、阈值告警、刷新节奏、倒计时窗口、地图网格、散点聚合等共性规则。
 
+## 客户场景五：航母舰载机归属推断工具
+
+### 客户口径
+
+- 接入 ADS-B 历史数据库，加载过去三年全球航班轨迹，字段包含 ICAO 码、时间、经纬度、高度、速度。
+- 接入美航母已知位置库。
+- 第一步，识别海上起降：从 ADS-B 轨迹中提取所有高度从零到正值的起飞事件和从正值归零的着陆事件，提取起降点坐标；凡是起降点位于海面的，标记为“疑似舰载机起降”。
+- 第二步，时空关联绑定：将每个疑似起降点与时间最接近的航母已知位置对比，距离小于 200 海里的判定为从该航母起降；统计每架飞机与各航母的关联次数。
+- 第三步，归属判定：一架飞机若与某航母关联次数占比超过 60%，判为该航母高置信度属舰飞机；若多艘关联但均未超过 60%，列为疑似交叉部署飞机，标注各航母关联概率。
+- 连续 30 天未从属舰航母附近起降的，自动标记“已离舰”并告警。
+- 界面三块：左侧疑似舰载机列表，右侧上航母归属关系树，右侧下起降热力地图。
+
+### 已确认边界
+
+- 该场景是客户提供的第五个场景；“航母编队月度航迹复盘”和“东海目标态势演示”是内部演示场景，不占客户场景序号。
+- 第一版采用演示数据契约。真实 ADS-B 和航母位置接入由后续数据接入能力包定义。
+- 归属置信度分母为该飞机所有已绑定航母关联次数；未绑定疑似起降事件单独展示，不稀释分母。
+- “已离舰”只对高置信度属舰飞机触发，不应用于疑似交叉部署飞机或数据不足飞机。
+- 海上起降事件可使用近地去噪阈值，默认近地高度 `<= 100 ft`，但 UI 仍保留客户“高度从零到正值 / 正值归零”的判断口径。
+- 海面判断通过海陆掩膜判断表达；mock 数据携带 `surfaceType` 和 `surfaceConfidence`。
+- 200 海里、60%、30 天、近地阈值、最小绑定样本数均为研判参数，客户值是默认值，后续可由用户交互或接口覆盖。
+- 疑似交叉部署与数据不足区分：默认少于 3 次已绑定关联为“数据不足”；关联 2 艘及以上航母且无单一航母超过 60% 为“疑似交叉部署”。
+- 时空关联采用“时间最接近的航母已知位置”，第一版不做航母轨迹插值，但展示航母位置时间差。
+- 生成应用命名遵循当前 Factory 规则：LLM 返回规范化场景名称，Factory 追加 4 位 Base36 随机序列，例如 `航母舰载机归属推断工具-K7M2`，不再使用 `demo01/demo02`。
+
+### 第一版蓝本形态
+
+- 左侧表格显示 ICAO 码、机型、首次发现日、最近活动日、总起降次数、当前推定航母、归属置信度、状态标签。
+- 左侧支持按航母筛选，按已离舰/高置信度/疑似交叉部署/数据不足和最近活动时间排序。
+- 每行可展开查看起降时间线、关联航母变化图、未绑定事件和数据质量说明。
+- 右上关系树展示航母及其下属飞机，显示置信度、最近起降时间和状态徽标。
+- 右下热力地图标红海上起降点，叠加航母已知轨迹蓝线，支持时间轴回放和悬停详情。
+- 三块联动：选飞机高亮树节点和地图点；选航母筛选左表并高亮航母轨迹；选地图事件展开对应飞机详情。
+
+### mock payload 关键字段
+
+```js
+{
+  sourceState: { adsbSource, carrierPositionSource, landSeaMaskSource, dataWindowYears, lastLoadedAt },
+  judgementParameters: {
+    associationDistanceNm: 200,
+    highConfidenceThreshold: 0.6,
+    departedDays: 30,
+    nearGroundAltitudeFt: 100,
+    minimumBoundAssociations: 3
+  },
+  aircraft: [{ icao, aircraftType, firstSeenDate, latestActivityDate, totalTakeoffLandingCount, inferredCarrierId, confidence, status, carrierProbabilities }],
+  carriers: [{ id, name, track: [{ time, lat, lon }] }],
+  events: [{ id, icao, eventType, time, lat, lon, altitudeTransition, speedKt, surfaceType, boundCarrierId, distanceNm, carrierPositionTimeDeltaMinutes, bindingStatus }]
+}
+```
+
+### 生成能力画像
+
+```json
+{
+  "base": ["software-factory-app"],
+  "domain": ["defense-operations-ui"],
+  "pattern": ["command-dashboard", "maritime-alert-dashboard", "affiliation-inference-dashboard"],
+  "blueprintRefs": ["carrier-air-wing-affiliation-inference"]
+}
+```
+
+### 后续实施
+
+1. 将 `carrier-air-wing-affiliation-inference` 保持为 `.factory/scene-catalog.json` 的 `blueprint` 表面。
+2. 在 `.claude/skills/requirement-clarification/blueprints.json` 中登记该蓝本，用于需求澄清和蓝本匹配。
+3. 补充完整可运行 scene app 后，再把 `factory-server/internal/executor/fake_claude.go` 的 fake 场景匹配扩展到该蓝本。
+4. fake demo 命名同步改为当前规则：`<normalizedScenarioName>-<Base36>`，不再生成 `demo01/demo02`。
+
 ## 后续实施顺序
 
-1. 补充 `maritime-alert-dashboard` 项目级生成能力包。
-2. 更新门户应用卡片，显示 description 或 slug 作为副信息。
-3. 逐个创建 4 个 `scene/` 预置应用，并生成 manifest。
-4. 每个应用运行 `npm install`、`npm run build`。
-5. 用 Factory 启动扫描确认 4 个新预置应用进入应用列表。
+1. 保持客户前四个场景的现有 scene 项目和蓝本登记。
+2. 保持客户第五个场景为隐藏 `blueprint` 表面，不进入应用列表。
+3. 后续补完整可运行的 `carrier-air-wing-affiliation-inference` scene app。
+4. 补 ADS-B、航母位置和海陆掩膜的数据接入能力包。
+5. 将 fake demo 场景复制路径改为 `<normalizedScenarioName>-<Base36>` 命名，并加入客户第五场景匹配。

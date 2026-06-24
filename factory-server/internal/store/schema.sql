@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS applications (
     manifest_path TEXT    NOT NULL DEFAULT '',
     status        TEXT    NOT NULL,            -- stopped|running|error|building|missing
     runtime_url   TEXT    NOT NULL DEFAULT '',
+    display_order INTEGER NOT NULL DEFAULT 0,   -- catalog order for application-surface presets; 0 otherwise
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );
@@ -26,6 +27,8 @@ CREATE TABLE IF NOT EXISTS agents (
     description       TEXT    NOT NULL DEFAULT '',
     claude_agent_name TEXT    NOT NULL DEFAULT '',
     skills_json       TEXT    NOT NULL DEFAULT '',
+    category          TEXT    NOT NULL DEFAULT 'software_development', -- software_development | business_processing
+    prompt            TEXT    NOT NULL DEFAULT '',                     -- system prompt for business_processing agents
     enabled           INTEGER NOT NULL DEFAULT 1,
     sort_order        INTEGER NOT NULL DEFAULT 0
 );
@@ -154,3 +157,44 @@ CREATE TABLE IF NOT EXISTS step_execution_records (
 );
 CREATE INDEX IF NOT EXISTS idx_step_execution_records_job
 ON step_execution_records(job_id, step_id, attempt, sequence);
+
+-- Dialogue sessions: the durable parent of a multi-turn dialogue that routes a
+-- user request to one of three outcomes (existing app, generated app,
+-- business-processing agent). See model.DialogueSession. clar_id links the
+-- legacy clarification session that seeded the row (backfill); it is empty for
+-- dialogues created by the new routes.
+CREATE TABLE IF NOT EXISTS dialogue_sessions (
+    id                     TEXT    PRIMARY KEY,
+    initial_prompt         TEXT    NOT NULL DEFAULT '',
+    draft_json             TEXT    NOT NULL DEFAULT '',
+    error_code             TEXT    NOT NULL DEFAULT '',
+    error_message          TEXT    NOT NULL DEFAULT '',
+    status                 TEXT    NOT NULL,            -- routing|recommending|drafting_application|drafting_business_agent|resolved|failed|abandoned
+    intent                 TEXT    NOT NULL DEFAULT 'routing', -- routing|existing_application|application_generation|business_processing_agent
+    route_locked           INTEGER NOT NULL DEFAULT 0,
+    clarification_session_id TEXT  NOT NULL DEFAULT '',
+    resolved_application_id TEXT   NOT NULL DEFAULT '',
+    created_agent_id       TEXT    NOT NULL DEFAULT '',
+    created_at             INTEGER NOT NULL,
+    updated_at             INTEGER NOT NULL,
+    resolved_at            INTEGER,
+    abandoned_at           INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_sessions_updated
+ON dialogue_sessions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dialogue_sessions_clarification
+ON dialogue_sessions(clarification_session_id);
+
+-- Dialogue messages: the message thread of a dialogue session. See
+-- model.DialogueMessage.
+CREATE TABLE IF NOT EXISTS dialogue_messages (
+    id            TEXT    PRIMARY KEY,
+    dialogue_id   TEXT    NOT NULL,
+    role          TEXT    NOT NULL,
+    kind          TEXT    NOT NULL,
+    content       TEXT    NOT NULL DEFAULT '',
+    metadata_json TEXT    NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_messages_created
+ON dialogue_messages(dialogue_id, created_at);

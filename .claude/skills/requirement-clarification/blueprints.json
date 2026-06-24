@@ -94,8 +94,8 @@
     },
     {
       "slug": "social-sighting-cluster-alert",
-      "displayName": "海域网格商船密度异常告警器",
-      "description": "社媒海上目击聚合告警地图（与 merchant-density-grid-alert 同名，按 slug+description 区分）。",
+      "displayName": "开源社区异常监测",
+      "description": "社媒海上目击聚合告警地图。",
       "appType": "command_dashboard",
       "type": "command-dashboard",
       "tags": ["maritime", "dashboard", "social", "sighting", "cluster", "osint"],
@@ -106,6 +106,50 @@
       "keyFeatures": ["平台=色+形，坐标源=填充（GPS 实心 / EXIF 空心环）", "聚类脉动高亮，疑似目击潮红色", "图层开关 + 聚类详情栏 + 新帖流"],
       "matchKeywords": ["社媒", "目击", "聚类", "开源情报", "OSINT", "推特", "Instagram", "航母", "军舰", "散点", "聚合", "目击潮", "social", "sighting", "cluster", "osint", "geotag"],
       "referenceDoc": "scene/social-sighting-cluster-alert/README.md"
+    },
+    {
+      "slug": "carrier-air-wing-affiliation-inference",
+      "displayName": "航母舰载机归属推断工具",
+      "description": "基于 ADS-B 海上起降事件和航母已知位置库推断舰载机归属、交叉部署和离舰告警。",
+      "appType": "command_dashboard",
+      "type": "command-dashboard",
+      "tags": ["carrier", "aircraft", "ads-b", "affiliation", "inference", "heatmap"],
+      "primaryView": "疑似舰载机列表 + 航母归属关系树 + 起降热力地图",
+      "mainEntities": ["ADS-B 航迹", "海上起降事件", "航母已知位置", "飞机-航母关联", "归属置信度", "已离舰告警"],
+      "dataModelStyle": "ADS-B tracks + carrier positions + sea takeoff/landing events + bound associations + inferred affiliation results",
+      "cadence": "历史三年数据加载 + 时间轴回放",
+      "keyFeatures": [
+        "识别海上起降：高度从零到正值 / 正值归零，海陆掩膜筛选海上点",
+        "时空关联绑定：最近时间航母位置 + 默认 200 海里阈值，展示距离和时间差",
+        "归属判定：>60% 高置信度属舰；多航母未超过阈值为疑似交叉部署；30 天未靠近属舰航母为已离舰",
+        "左侧飞机表格、右上航母关系树、右下起降热力地图三块联动"
+      ],
+      "matchKeywords": [
+        "航母舰载机归属推断工具",
+        "舰载机归属",
+        "ADS-B",
+        "ADS B",
+        "ICAO",
+        "海上起降",
+        "航母已知位置",
+        "归属置信度",
+        "交叉部署",
+        "已离舰",
+        "200海里",
+        "200 海里",
+        "60%",
+        "30天",
+        "30 天",
+        "关系树",
+        "起降热力地图",
+        "air wing",
+        "affiliation",
+        "carrier aircraft",
+        "adsb",
+        "takeoff landing",
+        "heatmap"
+      ],
+      "referenceDoc": "scene/carrier-air-wing-affiliation-inference/README.md"
     }
   ]
 }
