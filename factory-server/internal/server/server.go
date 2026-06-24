@@ -320,7 +320,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// The conversation surface streams the model's raw thinking (思考过程).
 	// Ensure spawned `claude` CLI subprocesses run with extended thinking enabled
 	// so thinking_delta arrives — inherited via the process env by the runner.
-	// Honor an explicit override; only default when unset.
+	// Honor an explicit override; only default when unset. The executor/trace
+	// pipeline's #9 boundary is the source-level drop in internal/runner and
+	// internal/executor, not the absence of thinking data in the process env.
 	if os.Getenv("MAX_THINKING_TOKENS") == "" {
 		os.Setenv("MAX_THINKING_TOKENS", "16000")
 	}
