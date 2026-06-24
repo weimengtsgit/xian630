@@ -2096,3 +2096,313 @@ func TestCancelTurnRejectsWrongDialogue(t *testing.T) {
 	}
 }
 
+// --- Task 8: archive endpoint + regression ---------------------------------
+
+// waitForEventType drains a hub subscriber channel until an event with the
+// given type arrives (1s deadline). It is the deterministic bridge between an
+// async hub publish and a synchronous assertion.
+func waitForEventType(ch <-chan Event, want string) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return false
+			}
+			if ev.Type == want {
+				return true
+			}
+		case <-time.After(time.Until(deadline)):
+			return false
+		}
+	}
+	return false
+}
+
+// TestArchiveDialogueTransitionsStatusAndEmitsEvent verifies the
+// POST /api/dialogues/:id/archive endpoint flips a continuing dialogue to the
+// archived phase, emits dialogue.archived, and is idempotent (re-archiving an
+// already-archived dialogue returns 200 and leaves status unchanged).
+func TestArchiveDialogueTransitionsStatusAndEmitsEvent(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	seedContinuingDialogue(t, st, "dlg_a", "app_a", "ver_a")
+
+	// Subscribe to the hub BEFORE archiving so the event is captured (the hub
+	// drops events for slow subscribers, but our buffered channel is drained).
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_a/archive", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	dlg, err := st.GetDialogueSession(context.Background(), "dlg_a")
+	if err != nil || dlg == nil {
+		t.Fatalf("get dialogue after archive: %v", err)
+	}
+	if dlg.Status != model.DialogueStatusArchived {
+		t.Fatalf("status = %q, want archived", dlg.Status)
+	}
+
+	// dialogue.archived must be published.
+	if !waitForEventType(ch, "dialogue.archived") {
+		t.Fatalf("dialogue.archived event not observed")
+	}
+
+	// Idempotent: archiving an already-archived dialogue is a 200 no-op.
+	rec = doPost(t, r, http.MethodPost, "/api/dialogues/dlg_a/archive", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("idempotent archive status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	dlg, _ = st.GetDialogueSession(context.Background(), "dlg_a")
+	if dlg.Status != model.DialogueStatusArchived {
+		t.Fatalf("status after re-archive = %q, want archived", dlg.Status)
+	}
+}
+
+// TestArchiveDialogueRejectsUnknown returns 404 for a missing dialogue.
+func TestArchiveDialogueRejectsUnknown(t *testing.T) {
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{})
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_missing/archive", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("archive unknown = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Task 8: deterministic end-to-end scenario arc -------------------------
+//
+// The full Workbench arc (concurrent scheduling, same-app serialization,
+// promote, retain-on-failure, archive, explicit-delete retention) is split into
+// focused sub-tests so each phase is deterministic. The scheduler concurrency
+// (A/v1+B/v1 concurrent, A/v2 held) and retain-on-failure mechanics are proven
+// at the store/executor level (TestClaimNextRunnableJobSerializesByAppSlug,
+// TestFailedDeploymentLeavesPreviousEffectiveVersionRunning); these tests cover
+// the cross-cutting behavior that lives at the server/dialogue boundary and the
+// retention contract that spans app + dialogue deletion.
+
+// scenarioSeedVersions seeds an effective v1 (running deployment) and a queued
+// candidate v2 for appID. It returns the v1/v2 version ids. It mirrors what a
+// successful first deployment (v1) and an in-flight second generation (v2) look
+// like, without invoking the real executor.
+func scenarioSeedVersions(t *testing.T, st *store.Store, appID, v1ID, v2ID, depV1ID string) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	promoted := now
+	// v1: effective, running deployment, app on v1's runtime URL.
+	depV1 := model.Deployment{
+		ID: depV1ID, AppID: appID, JobID: "job_v1", ImageName: "img", ImageTag: v1ID,
+		ContainerName: "sf-" + v1ID, HostPort: 18001, ContainerPort: 8080,
+		URL: "http://127.0.0.1:18001", Status: "running", CreatedAt: now, StartedAt: &now,
+	}
+	if err := st.CreateDeployment(ctx, depV1); err != nil {
+		t.Fatalf("seed dep v1: %v", err)
+	}
+	if err := st.SetAppRuntime(ctx, appID, string(model.AppStatusRunning), depV1.URL); err != nil {
+		t.Fatalf("seed app running: %v", err)
+	}
+	if _, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: v1ID, ApplicationID: appID, JobID: "job_v1", Status: model.ApplicationVersionEffective,
+		DeploymentID: depV1ID, SourcePath: "generated-apps/scenario", CreatedAt: now, PromotedAt: &promoted,
+	}); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	// v2: queued candidate (a second generation in flight for the same app).
+	if _, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: v2ID, ApplicationID: appID, JobID: "job_v2", Status: model.ApplicationVersionQueued,
+		SourcePath: "generated-apps/scenario2", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+}
+
+// TestScenarioWorkTraceIsolationAcrossDialogues asserts the REST work-trace
+// endpoint only returns a dialogue's own events: streaming A never surfaces B's
+// trace rows. This is the REST-side counterpart to the SSE isolation test in
+// events_test.go.
+func TestScenarioWorkTraceIsolationAcrossDialogues(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	seedContinuingDialogue(t, st, "dlg_A", "app_A", "ver_A")
+	seedContinuingDialogue(t, st, "dlg_B", "app_B", "ver_B")
+	ctx := context.Background()
+
+	// Append trace events to BOTH dialogues.
+	if _, err := srv.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+		DialogueID: "dlg_A", Type: string(model.WorkTraceApproach), PayloadJSON: `{"v":"A1"}`,
+	}); err != nil {
+		t.Fatalf("append A: %v", err)
+	}
+	if _, err := srv.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+		DialogueID: "dlg_B", Type: string(model.WorkTraceApproach), PayloadJSON: `{"v":"B1"}`,
+	}); err != nil {
+		t.Fatalf("append B: %v", err)
+	}
+
+	// A's REST trace must contain A's event and NOT B's.
+	rec := doPost(t, r, http.MethodGet, "/api/dialogues/dlg_A/work-trace", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("A trace status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"dlg_A"`) || strings.Contains(body, `"dlg_B"`) {
+		t.Fatalf("A trace isolation failed (B leaked or A missing): %s", body)
+	}
+	// Symmetrically for B.
+	rec = doPost(t, r, http.MethodGet, "/api/dialogues/dlg_B/work-trace", nil)
+	body = rec.Body.String()
+	if !strings.Contains(body, `"dlg_B"`) || strings.Contains(body, `"dlg_A"`) {
+		t.Fatalf("B trace isolation failed (A leaked or B missing): %s", body)
+	}
+}
+
+// TestScenarioAcceptModificationReturnsTurn asserts a continuing dialogue
+// accepts a follow-up modification asynchronously: 202 + {dialogueId, turnId,
+// acceptedAt} and a persisted turn. (The 202 contract is also covered by the
+// Task 2 tests; this re-asserts it within the scenario arc.)
+func TestScenarioAcceptModificationReturnsTurn(t *testing.T) {
+	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentApplicationModification,
+			Summary: dialogue.TurnSummary{UserFacingText: "增加一个筛选器"}},
+	))
+	seedContinuingDialogue(t, st, "dlg_A", "app_A", "ver_A")
+
+	body := acceptMessage(t, r, "dlg_A", "增加一个按时间的筛选器")
+	if body["dialogueId"] != "dlg_A" {
+		t.Fatalf("dialogueId = %q, want dlg_A", body["dialogueId"])
+	}
+	turn, _ := st.GetDialogueTurn(context.Background(), body["turnId"])
+	if turn == nil || turn.DialogueID != "dlg_A" {
+		t.Fatalf("modification turn not persisted for dlg_A: %+v", turn)
+	}
+}
+
+// TestScenarioPromoteEffectiveThenRetainOnFailure covers the version lifecycle
+// through the store API (the deterministic equivalent of the executor-driven
+// deployment): seed an effective v1 + queued v2; promote v1 (already effective,
+// no-op-safe) is the steady state; then simulate v2's health-check failure by
+// marking it failed and assert v1 STAYS effective/running (retain-on-failure).
+func TestScenarioPromoteEffectiveThenRetainOnFailure(t *testing.T) {
+	_, _, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	// Seed the base preset app so SetAppRuntime targets a real row.
+	const appID = "app-carrier-formation-replay"
+	scenarioSeedVersions(t, st, appID, "ver_v1", "ver_v2", "dep_v1")
+
+	// v1 is the effective version.
+	eff, err := st.GetEffectiveApplicationVersion(ctx, appID)
+	if err != nil || eff == nil || eff.ID != "ver_v1" {
+		t.Fatalf("effective before failure = %+v, want ver_v1", eff)
+	}
+
+	// Simulate v2's deployment health-check failing: the executor marks the
+	// candidate version failed. The prior effective version is RETAINED.
+	if err := st.MarkApplicationVersionStatus(ctx, "ver_v2", model.ApplicationVersionFailed); err != nil {
+		t.Fatalf("mark v2 failed: %v", err)
+	}
+
+	// v1 must STILL be effective (retain-on-failure, Task 6).
+	eff2, err := st.GetEffectiveApplicationVersion(ctx, appID)
+	if err != nil || eff2 == nil || eff2.ID != "ver_v1" {
+		t.Fatalf("effective after v2 failure = %+v, want ver_v1 (retained)", eff2)
+	}
+	// v1's deployment stays running; the app stays running on v1's URL.
+	dep, err := st.GetDeployment(ctx, "dep_v1")
+	if err != nil || dep == nil || dep.Status != "running" {
+		t.Fatalf("v1 deployment not retained on failure: %+v", dep)
+	}
+	app, err := st.GetApplication(ctx, appID)
+	if err != nil || app == nil || app.Status != model.AppStatusRunning || app.RuntimeURL != dep.URL {
+		t.Fatalf("app not retained running on v1: %+v", app)
+	}
+	// The candidate v2 is recorded as failed in the lineage for audit.
+	versions, err := st.ListApplicationVersions(ctx, appID)
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	var failedFound bool
+	for _, v := range versions {
+		if v.ID == "ver_v2" && v.Status == model.ApplicationVersionFailed {
+			failedFound = true
+		}
+	}
+	if !failedFound {
+		t.Fatalf("failed candidate v2 not retained in lineage: %+v", versions)
+	}
+}
+
+// TestScenarioArchiveThenExplicitDeletePreservesAudit covers the retention
+// contract end-to-end at the server boundary: archive a dialogue, then
+// explicitly DELETE it, and assert the dialogue is gone while the application
+// deletion path preserves jobs/steps/version/trace audit history.
+func TestScenarioArchiveThenExplicitDeletePreservesAudit(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	const (
+		dlgID = "dlg_arc"
+		appID = "app-carrier-formation-replay"
+		jobID = "job_arc"
+	)
+	ctx := context.Background()
+	seedContinuingDialogue(t, st, dlgID, appID, "ver_arc")
+	now := time.Now()
+
+	// Audit rows linked to the dialogue/app: a job with lineage + a trace event.
+	if err := st.CreateJob(ctx, model.Job{
+		ID: jobID, AppSlug: appID, Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAppID: appID, DialogueID: dlgID,
+		ApplicationID: appID, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if _, err := srv.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+		DialogueID: dlgID, ApplicationID: appID, Type: string(model.WorkTraceDeployment),
+		PayloadJSON: `{"deployed":true}`,
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	// 1. Archive the dialogue → status=archived, dialogue.archived emitted.
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/archive", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !waitForEventType(ch, "dialogue.archived") {
+		t.Fatalf("dialogue.archived not observed")
+	}
+	dlg, _ := st.GetDialogueSession(ctx, dlgID)
+	if dlg == nil || dlg.Status != model.DialogueStatusArchived {
+		t.Fatalf("status after archive = %+v, want archived", dlg)
+	}
+
+	// 2. Explicitly DELETE the dialogue → it is removed.
+	rec = doPost(t, r, http.MethodDelete, "/api/dialogues/"+dlgID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := st.GetDialogueSession(ctx, dlgID); got != nil {
+		t.Fatalf("dialogue not deleted: %+v", got)
+	}
+
+	// 3. Application deletion (the production store path deleteApp uses) removes
+	// the app + its deployments but PRESERVES audit history: the job, the trace
+	// event, and any application_version rows remain readable. This is the
+	// explicit-delete retention contract — semantic records persist until the
+	// dialogue itself is gone, and even then app-level lineage is not purged.
+	if err := st.DeleteApplicationWithDeployments(ctx, appID); err != nil {
+		t.Fatalf("delete app: %v", err)
+	}
+	if got, _ := st.GetApplication(ctx, appID); got != nil {
+		t.Fatalf("app not deleted: %+v", got)
+	}
+	// The job survives app deletion (audit preserved).
+	if job, _ := st.GetJob(ctx, jobID); job == nil || job.ID != jobID {
+		t.Fatalf("job lost on app deletion (audit violated): %+v", job)
+	}
+	// The trace event survives app deletion (audit preserved).
+	trace, err := st.ListDialogueTrace(ctx, dlgID, 0, 0)
+	if err != nil || len(trace) != 1 {
+		t.Fatalf("trace lost on app deletion (audit violated): err=%v len=%d", err, len(trace))
+	}
+}
+

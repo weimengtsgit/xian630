@@ -438,6 +438,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/dialogues", s.listDialogues)
 	r.Handle("GET", "/api/dialogues/:id", s.getDialogue)
 	r.Handle("DELETE", "/api/dialogues/:id", s.deleteDialogue)
+	r.Handle("POST", "/api/dialogues/:id/archive", s.archiveDialogue)
 	r.Handle("POST", "/api/dialogues/:id/messages", s.addDialogueMessage)
 	r.Handle("POST", "/api/dialogues/:id/turns/:turnId/cancel", s.cancelDialogueTurn)
 	r.Handle("POST", "/api/dialogues/:id/route", s.selectDialogueRoute)

@@ -369,3 +369,117 @@ func TestWorkTraceStreamLastEventIDHeaderWins(t *testing.T) {
 		t.Fatalf("Last-Event-ID precedence: first id = %q, want 3 (header=2 should win over query=4)", firstID)
 	}
 }
+
+// TestWorkTraceStoreGateRejectsDisallowedTypes is the direct security-gate test
+// for Constraint #9. The store is the single trust boundary: AppendDialogueTrace
+// must REJECT a trace event whose type is outside the allowlist (thinking /
+// thinking_delta / raw_request / raw_response / empty string / credential-ish
+// types) and persist NOTHING. The existing SSE tests prove isolation and
+// unpersisted-event dropping at the transport layer; this proves the producer
+// contract is enforced at the persistence boundary regardless of producer.
+func TestWorkTraceStoreGateRejectsDisallowedTypes(t *testing.T) {
+	srv := newTraceTestServer(t)
+	ctx := context.Background()
+
+	disallowed := []string{
+		"thinking",        // raw chain-of-thought — never persisted
+		"thinking_delta",  // streaming thinking prefix
+		"raw_request",     // raw upstream request body
+		"raw_response",    // raw upstream response body
+		"credentials",     // credential-ish type
+		"",                // empty type
+		"assistant_thinking",
+	}
+	for _, bad := range disallowed {
+		ev, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
+			DialogueID: "dlg_gate", Type: bad, PayloadJSON: `{"x":1}`,
+		})
+		if err == nil {
+			t.Fatalf("type %q: expected rejection error, got row %+v", bad, ev)
+		}
+	}
+
+	// Nothing was persisted: the dialogue's trace is empty.
+	got, err := srv.store.ListDialogueTrace(ctx, "dlg_gate", 0, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("disallowed types were persisted (security violation): %+v", got)
+	}
+
+	// A credential-bearing payload on an ALLOWED type is accepted but redacted
+	// (the gate zeros sensitive keys rather than rejecting the whole event). This
+	// is the defense-in-depth branch of Constraint #9.
+	redacted, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
+		DialogueID: "dlg_gate", Type: string(model.WorkTraceTool),
+		PayloadJSON: `{"tool":"Read","api_key":"sk-secret-12345","path":"a/b"}`,
+	})
+	if err != nil {
+		t.Fatalf("redact-then-accept: %v", err)
+	}
+	if strings.Contains(redacted.PayloadJSON, "sk-secret-12345") {
+		t.Fatalf("credential not redacted on allowed type: %s", redacted.PayloadJSON)
+	}
+	if !strings.Contains(redacted.PayloadJSON, "[redacted]") {
+		t.Fatalf("expected [redacted] marker, got %s", redacted.PayloadJSON)
+	}
+}
+
+// TestWorkTraceStreamNeverDeliversOtherDialogueOnReplay extends the live
+// isolation test (TestWorkTraceStreamFiltersByDialogue) to the REPLAY path: a
+// dialogue's persisted replay must not surface another dialogue's rows even when
+// both are persisted before the stream connects. This closes the gap where
+// isolation was only asserted against live hub events, not stored replay.
+func TestWorkTraceStreamNeverDeliversOtherDialogueOnReplay(t *testing.T) {
+	srv := newTraceTestServer(t)
+	ctx := context.Background()
+	// Persist rows for both dialogues BEFORE the stream connects.
+	for i := 0; i < 2; i++ {
+		if _, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
+			DialogueID: "dlg_A", Type: string(model.WorkTraceIntent), PayloadJSON: `{"a":true}`,
+		}); err != nil {
+			t.Fatalf("append A: %v", err)
+		}
+		if _, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
+			DialogueID: "dlg_B", Type: string(model.WorkTraceIntent), PayloadJSON: `{"b":true}`,
+		}); err != nil {
+			t.Fatalf("append B: %v", err)
+		}
+	}
+
+	ts := httptest.NewServer(srv.routes())
+	t.Cleanup(ts.Close)
+	br := openTraceStream(t, ts, "/api/dialogues/dlg_A/work-trace/stream", "")
+
+	// The two A replay rows must arrive; no B row must ever leak.
+	deadline := time.After(3 * time.Second)
+	got := 0
+	for got < 2 {
+		evCh := make(chan struct {
+			dataLine string
+			err      error
+		}, 1)
+		go func() {
+			_, _, dl, rerr := readSSEEvent(t, br)
+			evCh <- struct {
+				dataLine string
+				err      error
+			}{dl, rerr}
+		}()
+		select {
+		case ev := <-evCh:
+			if ev.err != nil {
+				t.Fatalf("read error: %v", ev.err)
+			}
+			if strings.Contains(ev.dataLine, `"dlg_B"`) || strings.Contains(ev.dataLine, `"b":true`) {
+				t.Fatalf("other dialogue leaked during replay: %s", ev.dataLine)
+			}
+			if strings.Contains(ev.dataLine, `"dlg_A"`) || strings.Contains(ev.dataLine, `"a":true`) {
+				got++
+			}
+		case <-deadline:
+			t.Fatalf("timeout: only %d/2 A replay rows arrived", got)
+		}
+	}
+}

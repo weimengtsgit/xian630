@@ -752,6 +752,34 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
+// archiveDialogue handles POST /api/dialogues/:id/archive. It transitions a
+// continuing dialogue into the archived phase so the workbench can shelve a
+// finished conversation without deleting its audit trail (trace events,
+// versions, deployments, and job records persist). It emits dialogue.archived.
+// The call is idempotent: archiving an already-archived dialogue is a 200 no-op.
+// Task 8 added the archived status in Task 2 but no route; this is that route.
+func (s *Server) archiveDialogue(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	dlg, err := s.store.GetDialogueSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get dialogue")
+		return
+	}
+	if dlg == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	// Idempotent: an already-archived dialogue stays archived and we still ack.
+	if dlg.Status != model.DialogueStatusArchived {
+		if err := s.store.UpdateDialogueStatus(r.Context(), id, model.DialogueStatusArchived, dlg.ErrorCode, dlg.ErrorMessage); err != nil {
+			writeError(w, http.StatusInternalServerError, "archive dialogue")
+			return
+		}
+		s.publishDialogueSimple("dialogue.archived", id, map[string]string{"id": id})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "archived", "id": id})
+}
+
 // addDialogueMessage handles POST /api/dialogues/:id/messages.
 //
 // Pre-route (status=routing, route not locked): the message is the user refining
