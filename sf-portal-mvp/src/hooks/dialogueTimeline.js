@@ -348,7 +348,13 @@ function appendChildItems(items, child, parentSession) {
   // round.
   let round = 1
   let bucket = null // { round, entries: [] }
-  let lastQuestion = null // parsed metadata of the most recent question
+  let prevWasUser = false // true while inside a batch of consecutive user answers
+  // questionsById accumulates EVERY question seen (id -> parsed metadata). A
+  // round can ask several high-impact questions at once, and the user answers
+  // them in one batch; each answer is resolved against the question its OWN
+  // metadata_json.questionId names — not a single "last question", which would
+  // mislabel every answer after the first in a batch.
+  const questionsById = {}
   const flushAnalysis = () => {
     if (bucket && bucket.entries.length > 0) {
       items.push({
@@ -368,22 +374,30 @@ function appendChildItems(items, child, parentSession) {
         if (!bucket) bucket = { round, entries: [] }
         bucket.entries.push(safeString(msg.content))
       }
+      prevWasUser = false
       continue
     }
     if (msg && msg.role === 'agent' && msg.kind === 'question') {
       flushAnalysis()
-      lastQuestion = parseJSON(msg.metadata_json)
+      const q = parseJSON(msg.metadata_json)
+      if (q && q.id) questionsById[q.id] = q
+      prevWasUser = false
       continue
     }
     if (msg && msg.role === 'user' && msg.kind !== 'prompt') {
-      flushAnalysis()
-      round += 1
+      // A user turn may carry MULTIPLE answers (one batched question group);
+      // only the FIRST answer of the batch flushes the round's analysis and
+      // advances the round counter, so N batched answers inflate it by 1, not N.
+      if (!prevWasUser) {
+        flushAnalysis()
+        round += 1
+      }
       items.push({
         id: msg.id || `${parentSession.id || 'dlg'}_answer_${round}`,
         type: 'user_message',
-        content: clarifyAnswerLabel(msg, lastQuestion),
+        content: clarifyAnswerLabel(msg, questionsById),
       })
-      lastQuestion = null
+      prevWasUser = true
       continue
     }
   }
@@ -419,14 +433,21 @@ function appendChildItems(items, child, parentSession) {
 }
 
 // clarifyAnswerLabel renders a clarification answer as the user's reply, mapping
-// the persisted option VALUE to its human label via the preceding question's
-// options. Reads e.g. value "librarian_manage" → "主要使用角色：图书工作人员（管理端）".
+// the persisted option VALUE to its human label via the question the answer
+// names. Each answer message carries metadata_json {questionId, value}; the
+// question is looked up in questionsById (accumulated from the thread) so a
+// BATCH of answers resolves each against its own question — not a single shared
+// one. Reads e.g. value "librarian_manage" → "主要使用角色：图书工作人员（管理端）".
 // Falls back to the raw value when no question/options match.
-function clarifyAnswerLabel(msg, lastQuestion) {
-  const raw = safeString(msg && msg.content)
-  if (!lastQuestion) return raw
-  const qLabel = safeString(lastQuestion.label || lastQuestion.question)
-  const opts = Array.isArray(lastQuestion.options) ? lastQuestion.options : []
+function clarifyAnswerLabel(msg, questionsById) {
+  const meta = parseJSON(msg && msg.metadata_json)
+  const qid = meta && meta.questionId
+  const value = meta && meta.value != null ? meta.value : safeString(msg && msg.content)
+  const raw = safeString(value)
+  const q = qid ? questionsById[qid] : null
+  if (!q) return raw
+  const qLabel = safeString(q.label || q.question)
+  const opts = Array.isArray(q.options) ? q.options : []
   const opt = opts.find(o => o && safeString(o.value) === raw)
   const optLabel = opt ? safeString(opt.label || opt.value) : raw
   return qLabel ? `${qLabel}：${optLabel}` : optLabel

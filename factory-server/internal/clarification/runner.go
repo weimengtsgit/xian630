@@ -353,7 +353,7 @@ func (r Runner) prompt(inputPath string) string {
 	return "Use .claude/skills/requirement-clarification/SKILL.md. " +
 		fmt.Sprintf("The round input is at the absolute path %s — read it with the Read tool. ", inputPath) +
 		"Output ONLY valid JSON matching the adaptive requirement clarification contract. " +
-		"Emit at most ONE required question per round (rounds 1–4), each with 2–3 options. " +
+		"Emit ALL open high-impact questions in one round (rounds 1–4), each with 2–3 options, so the user confirms them in a single batch. " +
 		"At round 5 (only if still incomplete) emit a consolidation list recommending a value for every remaining field. " +
 		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs."
 }

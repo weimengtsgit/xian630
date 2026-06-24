@@ -142,16 +142,25 @@ assert.equal(retainedChildAnalysis.expanded, true, 'analysis defaults to EXPANDE
 // The user's clarification answer renders the SELECTED OPTION LABEL (mapped from
 // the preceding question's options), not the raw value slug.
 const childMultiRound = {
-  id: 'clar_mr', status: 'ready_to_confirm', round: 3, max_rounds: 6,
+  id: 'clar_mr', status: 'ready_to_confirm', round: 2, max_rounds: 6,
   requirement: { appType: 'operations_management', appName: '图书借阅', coreScenario: '借还' },
   messages: [
+    // Round 1: analysis + TWO high-impact questions in ONE batch.
     { id: 'mr_a1', role: 'agent', kind: 'analysis_work_log', content: 'R1第一句' },
     { id: 'mr_a2', role: 'agent', kind: 'analysis_work_log', content: 'R1第二句' },
     { id: 'mr_q1', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
       id: 'mr_q1', label: 'Q1',
       options: [{ value: 'v1', label: '选项甲' }, { value: 'v2', label: '选项乙' }],
     }) },
-    { id: 'mr_u1', role: 'user', kind: 'answer', content: 'v2' },
+    { id: 'mr_q2', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
+      id: 'mr_q2', label: 'Q2',
+      options: [{ value: 'x', label: '选项丙' }, { value: 'y', label: '选项丁' }],
+    }) },
+    // User answers BOTH in one batch — two consecutive answer messages, each
+    // carrying metadata_json {questionId, value} (the real persisted shape).
+    { id: 'mr_u1', role: 'user', kind: 'answer', content: 'v2', metadata_json: JSON.stringify({ questionId: 'mr_q1', value: 'v2' }) },
+    { id: 'mr_u2', role: 'user', kind: 'answer', content: 'y', metadata_json: JSON.stringify({ questionId: 'mr_q2', value: 'y' }) },
+    // Round 2: analysis (no more questions → ready_to_confirm).
     { id: 'mr_a3', role: 'agent', kind: 'analysis_work_log', content: 'R2第一句' },
     { id: 'mr_a4', role: 'agent', kind: 'analysis_work_log', content: 'R2第二句' },
   ],
@@ -161,19 +170,20 @@ const mrTimeline = buildDialogueTimeline({
   messages: [], route: {}, child: childMultiRound,
 })
 const mrAnalysis = mrTimeline.filter(it => it.type === 'analysis_stream')
-assert.equal(mrAnalysis.length, 2, 'child analysis groups into one block per round (2 rounds → 2 blocks, not one per entry)')
-assert.equal(mrAnalysis[0].label, '分析过程 · 第1轮', 'first round block labeled 第1轮')
+// 2 batched answers must NOT inflate the round counter: still 2 rounds → 2 blocks.
+assert.equal(mrAnalysis.length, 2, '2 batched answers count as ONE user turn → 2 round blocks, not 4')
+assert.equal(mrAnalysis[0].label, '分析过程 · 第1轮', 'first round block labeled 第1轮 (batch answers do not inflate it)')
 assert.equal(mrAnalysis[0].content, 'R1第一句\n\nR1第二句', 'round-1 entries concatenate with a blank line')
-assert.equal(mrAnalysis[1].label, '分析过程 · 第2轮', 'a user answer starts round 2')
+assert.equal(mrAnalysis[1].label, '分析过程 · 第2轮', 'a user turn starts round 2')
 assert.equal(mrAnalysis[1].content, 'R2第一句\n\nR2第二句', 'round-2 entries concatenate')
-// The user's clarification answer renders as a user_message carrying the SELECTED
-// OPTION LABEL (Q1 + 选项乙 from value v2), placed chronologically between the
-// two analysis blocks.
-const mrAnswer = mrTimeline.find(it => it.type === 'user_message' && it.content.includes('选项乙'))
-assert.ok(mrAnswer, 'clarification answer must render the selected option label (Q1：选项乙), not the raw value v2')
-assert.equal(mrAnswer.content, 'Q1：选项乙', 'answer maps value v2 → option label 选项乙, prefixed with the question label')
-assert.ok(mrTimeline.indexOf(mrAnalysis[0]) < mrTimeline.indexOf(mrAnswer), 'round-1 analysis appears above the user answer')
-assert.ok(mrTimeline.indexOf(mrAnswer) < mrTimeline.indexOf(mrAnalysis[1]), 'round-2 analysis appears below the user answer')
+// Each answer resolves against its OWN question (via metadata.questionId), so a
+// batch labels every answer correctly — not all against the last question.
+const mrAnswers = mrTimeline.filter(it => it.type === 'user_message')
+assert.equal(mrAnswers.length, 2, 'both batched answers render as user replies')
+assert.equal(mrAnswers[0].content, 'Q1：选项乙', 'answer 1 resolves value v2 → 选项乙 via its own question mr_q1')
+assert.equal(mrAnswers[1].content, 'Q2：选项丁', 'answer 2 resolves value y → 选项丁 via its own question mr_q2 (not mr_q1)')
+assert.ok(mrTimeline.indexOf(mrAnalysis[0]) < mrTimeline.indexOf(mrAnswers[0]), 'round-1 analysis sits above the answers')
+assert.ok(mrTimeline.indexOf(mrAnswers[1]) < mrTimeline.indexOf(mrAnalysis[1]), 'round-2 analysis sits below the answers')
 
 
 // ---- 3. No confirm button leaks while high-impact items are open -------------
