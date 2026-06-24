@@ -445,6 +445,7 @@ func normalizeRoundOutput(out RoundOutput) RoundOutput {
 	if IsReadyToConfirmStatus(out.Status) {
 		out.Status = "ready_to_confirm"
 	}
+	out.OpenHighImpact = normalizeHighImpact(out.OpenHighImpact)
 	for i := range out.Questions {
 		q := &out.Questions[i]
 		if len(q.Recommendation) > 1 {
@@ -457,6 +458,80 @@ func normalizeRoundOutput(out RoundOutput) RoundOutput {
 		}
 	}
 	return out
+}
+
+// normalizeHighImpact validates and redacts the model's openHighImpact list,
+// enforcing the user-facing contract (D3). Each item must have a non-empty id
+// and label and at most 3 options, each option a non-empty value+label. Items
+// or options that fail structural validation are dropped rather than failing the
+// whole round (best-effort: a single malformed entry must not abort a usable
+// round). Known internal blueprint/catalog slug patterns are best-effort
+// excluded from id/label — the skill is instructed not to emit them, but the
+// structural gate is the required one. An empty/nil input returns nil so the
+// JSON field stays omitted.
+func normalizeHighImpact(items []HighImpactItem) []HighImpactItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]HighImpactItem, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, it := range items {
+		id := strings.TrimSpace(it.ID)
+		label := strings.TrimSpace(it.Label)
+		if id == "" || label == "" {
+			continue
+		}
+		if looksLikeInternalSlug(id) || looksLikeInternalSlug(label) {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		var opts []Option
+		for _, opt := range it.Options {
+			v := strings.TrimSpace(opt.Value)
+			l := strings.TrimSpace(opt.Label)
+			if v == "" || l == "" {
+				continue
+			}
+			if looksLikeInternalSlug(v) {
+				continue
+			}
+			opts = append(opts, Option{Value: v, Label: l, Reason: opt.Reason, Recommended: opt.Recommended})
+		}
+		if len(opts) > 3 {
+			opts = opts[:3]
+		}
+		seen[id] = struct{}{}
+		out = append(out, HighImpactItem{ID: id, Label: label, Recommendation: strings.TrimSpace(it.Recommendation), Options: opts})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// looksLikeInternalSlug is a best-effort guard that rejects values matching the
+// factory's internal slug conventions (snake_case catalog/blueprint names such
+// as software-factory-app or carrier-formation-replay). It is conservative: it
+// only flags strings that contain a hyphen AND look like a slug (lowercase +
+// hyphens/digits only, length >= 4) — plain user language like "数据策略" or
+// "Mock 数据优先" is never matched. The skill is instructed not to emit internal
+// names; this is a backstop, not the primary gate.
+func looksLikeInternalSlug(s string) bool {
+	if len(s) < 4 || !strings.ContainsRune(s, '-') {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func writeStream(path string, events []StreamEvent) error {

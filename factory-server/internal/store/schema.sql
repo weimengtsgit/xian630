@@ -118,17 +118,18 @@ CREATE TABLE IF NOT EXISTS conversations (
 -- Clarification sessions: a multi-round requirement-clarification exchange
 -- that runs before a Job is created. See model.ClarificationSession.
 CREATE TABLE IF NOT EXISTS clarification_sessions (
-    id               TEXT    PRIMARY KEY,
-    status           TEXT    NOT NULL,
-    initial_prompt   TEXT    NOT NULL DEFAULT '',
-    round            INTEGER NOT NULL DEFAULT 0,
-    max_rounds       INTEGER NOT NULL DEFAULT 3,
-    requirement_json TEXT    NOT NULL DEFAULT '{}',
-    created_job_id   TEXT    NOT NULL DEFAULT '',
-    error_code       TEXT    NOT NULL DEFAULT '',
-    error_message    TEXT    NOT NULL DEFAULT '',
-    created_at       INTEGER NOT NULL,
-    updated_at       INTEGER NOT NULL,
+    id                    TEXT    PRIMARY KEY,
+    status                TEXT    NOT NULL,
+    initial_prompt        TEXT    NOT NULL DEFAULT '',
+    round                 INTEGER NOT NULL DEFAULT 0,
+    max_rounds            INTEGER NOT NULL DEFAULT 3,
+    requirement_json      TEXT    NOT NULL DEFAULT '{}',
+    open_high_impact_json TEXT    NOT NULL DEFAULT '',
+    created_job_id        TEXT    NOT NULL DEFAULT '',
+    error_code            TEXT    NOT NULL DEFAULT '',
+    error_message         TEXT    NOT NULL DEFAULT '',
+    created_at            INTEGER NOT NULL,
+    updated_at            INTEGER NOT NULL,
     confirmed_at     INTEGER,
     abandoned_at     INTEGER
 );

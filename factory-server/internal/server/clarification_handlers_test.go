@@ -1771,3 +1771,158 @@ func itoa(i int) string {
 	}
 	return string(b)
 }
+
+// --- D3 high-impact confirmation gate (Task 2) -------------------------------
+
+// readyButHighImpactOpenOutput is a complete requirement the model marked
+// ready_to_confirm, BUT it carries a non-empty openHighImpact list. The D3 gate
+// must keep the session waiting_user even though the requirement is complete.
+const readyButHighImpactOpenOutput = `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "workLog": [{"type":"ready","content":"需求已收敛，但仍有高影响确认项"}],
+  "questions": [{"id":"data_policy","label":"数据来源策略","question":"数据从哪里来?","options":[{"value":"mock_data","label":"Mock 数据优先"},{"value":"api_first","label":"接口优先"}]}],
+  "requirement": {
+    "appType": "command_dashboard",
+    "appName": "航母母港潮汐窗口计算器",
+    "targetUsers": ["作战指挥人员"],
+    "coreScenario": "四大母港潮汐窗口监控",
+    "primaryView": "2×2 港口卡片矩阵",
+    "mainEntities": ["港口","潮汐"],
+    "dataPolicy": "mock_data",
+    "acceptanceFocus": ["窗口计算"],
+    "generationProfile": {"base":["software-factory-app"]}
+  },
+  "openHighImpact": [
+    {"id":"data_policy","label":"数据来源策略","recommendation":"mock_data","options":[{"value":"mock_data","label":"Mock 数据优先"},{"value":"api_first","label":"接口优先"}]},
+    {"id":"scope","label":"应用范围","options":[{"value":"all","label":"全部港口"},{"value":"part","label":"部分港口"}]}
+  ]
+}`
+
+// TestHighImpactGateKeepsWaitingUserWhenOpen drives a session whose round returns
+// ready_to_confirm + complete requirement + NON-EMPTY openHighImpact. The session
+// must stay waiting_user (NOT ready_to_confirm), the open list must be persisted,
+// and confirm must be rejected (409). Then a follow-up round that empties
+// openHighImpact must promote to ready_to_confirm.
+func TestHighImpactGateKeepsWaitingUserWhenOpen(t *testing.T) {
+	srv, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyButHighImpactOpenOutput})
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成潮汐窗口应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	// D3: complete requirement + non-empty openHighImpact => waiting_user, NOT ready.
+	if sess.Status != model.ClarificationStatusWaitingUser {
+		t.Fatalf("status = %q, want waiting_user (high-impact items open block ready_to_confirm)", sess.Status)
+	}
+	// The open list must be persisted on the session.
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	if strings.TrimSpace(got.OpenHighImpactJSON) == "" {
+		t.Fatal("open_high_impact_json not persisted; must carry the open list")
+	}
+
+	// Confirm gate must reject (409) while openHighImpact is non-empty.
+	confirm := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/confirm", nil)
+	if confirm.Code != http.StatusConflict {
+		t.Fatalf("confirm status = %d, want 409 (high-impact items open): %s", confirm.Code, confirm.Body.String())
+	}
+
+	// Swap the fake so the next round empties openHighImpact and promotes.
+	srv.clarifier = clarification.Runner{
+		Cmd:           fakeClarRunner{stdout: readyToConfirmOutput},
+		WorkspaceRoot: srv.clarifier.WorkspaceRoot,
+		ArtifactRoot:  srv.clarifier.ArtifactRoot,
+	}
+	add := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/messages", map[string]string{"content": "mock 数据优先，覆盖全部港口"})
+	if add.Code != http.StatusOK {
+		t.Fatalf("add message status = %d body=%s", add.Code, add.Body.String())
+	}
+	if err := json.NewDecoder(add.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode updated session: %v", err)
+	}
+	// Now openHighImpact is empty => promote to ready_to_confirm.
+	if sess.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("status = %q, want ready_to_confirm (high-impact items cleared)", sess.Status)
+	}
+	got2, _ := st.GetClarificationSession(context.Background(), sess.ID)
+	if got2 == nil || strings.TrimSpace(got2.OpenHighImpactJSON) != "" {
+		t.Fatalf("open_high_impact_json must be cleared on promotion: %q", got2.OpenHighImpactJSON)
+	}
+}
+
+// TestHighImpactGateSurvivesMaxRoundsCap proves advanceAfterUserTurn does NOT
+// auto-promote a session to ready_to_confirm at the MaxRounds cap while
+// openHighImpact is still open — it stays waiting_user so the user can answer.
+func TestHighImpactGateSurvivesMaxRoundsCap(t *testing.T) {
+	// Round 1: ready + complete req + open high-impact => waiting_user.
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyButHighImpactOpenOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成潮汐窗口应用"})
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	// Push the persisted round to the cap so the NEXT user turn hits
+	// advanceAfterUserTurn's max-rounds branch, simulating the cap with the
+	// persisted open-high-impact list still present.
+	if err := st.UpdateClarificationRound(context.Background(), sess.ID, sess.MaxRounds); err != nil {
+		t.Fatalf("set round to cap: %v", err)
+	}
+
+	// A user message triggers advanceAfterUserTurn; nextRound > MaxRounds. With
+	// openHighImpact still open it must stay waiting_user, not ready_to_confirm.
+	add := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/messages", map[string]string{"content": "再补充一点"})
+	if add.Code != http.StatusOK {
+		t.Fatalf("add message status = %d body=%s", add.Code, add.Body.String())
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	if got.Status != model.ClarificationStatusWaitingUser {
+		t.Fatalf("status = %q, want waiting_user (max-rounds cap must not promote while high-impact open)", got.Status)
+	}
+}
+
+// TestHighImpactGateSurvivesIdleNormalize proves normalizeClarificationReadiness
+// (the read-time promotion of a waiting_user session whose required fields are
+// filled) does NOT promote while openHighImpact is open, even though every
+// required field is present. A field filled from a blueprint assumption is NOT
+// a confirmed high-impact decision.
+func TestHighImpactGateSurvivesIdleNormalize(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyButHighImpactOpenOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成潮汐窗口应用"})
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	// Force the session back to waiting_user so the GET read-path runs the
+	// normalize check; the required fields are already complete from the round
+	// output but openHighImpact is non-empty.
+	if err := st.SetClarificationStatus(context.Background(), sess.ID, model.ClarificationStatusWaitingUser, "", ""); err != nil {
+		t.Fatalf("reset waiting_user: %v", err)
+	}
+
+	// GET runs normalizeClarificationReadiness. With openHighImpact open it must
+	// NOT promote.
+	getReq := httptest.NewRequest(http.MethodGet, "/api/clarifications/"+sess.ID, nil)
+	getRec := httptest.NewRecorder()
+	r.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var view model.ClarificationSession
+	if err := json.NewDecoder(getRec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Status != model.ClarificationStatusWaitingUser {
+		t.Fatalf("status = %q, want waiting_user (idle normalize must not promote while high-impact open)", view.Status)
+	}
+}

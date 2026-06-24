@@ -109,6 +109,17 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agents.prompt: %w", err)
 	}
+	// clarification_sessions.open_high_impact_json: persisted snapshot of the
+	// currently-open high-impact confirmation items (D3 / ADR 0006). The
+	// non-model readiness sites (advanceAfterUserTurn round-cap promotion and
+	// normalizeClarificationReadiness on read) re-check this WITHOUT a model
+	// turn so a session with open high-impact items stays question/active even
+	// at the MaxRounds cap, and is never auto-promoted to ready_to_confirm.
+	if err := s.ensureColumn(ctx, "clarification_sessions", "open_high_impact_json",
+		`ALTER TABLE clarification_sessions ADD COLUMN open_high_impact_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate clarification_sessions.open_high_impact_json: %w", err)
+	}
 	return s, nil
 }
 

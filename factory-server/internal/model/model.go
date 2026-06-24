@@ -346,19 +346,20 @@ const (
 // that runs before a Job is created. RequirementJSON holds the evolving
 // structured requirement; CreatedJobID is set once the session produces a Job.
 type ClarificationSession struct {
-	ID              string              `json:"id"`
-	Status          ClarificationStatus `json:"status"`
-	InitialPrompt   string              `json:"initial_prompt"`
-	Round           int                 `json:"round"`
-	MaxRounds       int                 `json:"max_rounds"`
-	RequirementJSON string              `json:"requirement_json"`
-	CreatedJobID    string              `json:"created_job_id,omitempty"`
-	ErrorCode       string              `json:"error_code,omitempty"`
-	ErrorMessage    string              `json:"error_message,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	ConfirmedAt     *time.Time          `json:"confirmed_at,omitempty"`
-	AbandonedAt     *time.Time          `json:"abandoned_at,omitempty"`
+	ID                 string              `json:"id"`
+	Status             ClarificationStatus `json:"status"`
+	InitialPrompt      string              `json:"initial_prompt"`
+	Round              int                 `json:"round"`
+	MaxRounds          int                 `json:"max_rounds"`
+	RequirementJSON    string              `json:"requirement_json"`
+	OpenHighImpactJSON string              `json:"open_high_impact_json,omitempty"`
+	CreatedJobID       string              `json:"created_job_id,omitempty"`
+	ErrorCode          string              `json:"error_code,omitempty"`
+	ErrorMessage       string              `json:"error_message,omitempty"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+	ConfirmedAt        *time.Time          `json:"confirmed_at,omitempty"`
+	AbandonedAt        *time.Time          `json:"abandoned_at,omitempty"`
 }
 
 // ClarificationMessage is one entry in a clarification session's message

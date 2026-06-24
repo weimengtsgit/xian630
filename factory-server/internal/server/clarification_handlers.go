@@ -946,10 +946,29 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 		}
 	}
 
+	// Persist the round's open-high-impact list so the non-model readiness
+	// sites (advanceAfterUserTurn at the round cap, normalizeClarificationReadiness
+	// on read) can re-apply the D3 gate without a fresh model turn. Persist BEFORE
+	// computing status so the gate decision and the persisted snapshot are
+	// consistent even if the status write below succeeds.
+	hiJSON := ""
+	if len(out.OpenHighImpact) > 0 {
+		b, _ := json.Marshal(out.OpenHighImpact)
+		hiJSON = string(b)
+	}
+	if err := s.store.UpdateClarificationOpenHighImpact(ctx, sessID, hiJSON); err != nil {
+		return sess, roundN, false
+	}
+
 	// Map the runner's reported status onto the session status, defaulting to
-	// waiting_user when the runner did not declare readiness.
+	// waiting_user when the runner did not declare readiness. D3 / ADR 0006:
+	// ready_to_confirm requires openHighImpact to be EMPTY in addition to the
+	// model declaring readiness (or a no-question complete requirement). A
+	// blueprint-assumed field is NOT a confirmed high-impact decision, so a
+	// detailed first message does NOT bypass this gate.
 	status := model.ClarificationStatusWaitingUser
-	if clarification.IsReadyToConfirmStatus(out.Status) || (len(out.Questions) == 0 && len(missingRequiredFields(out.Requirement)) == 0) {
+	ready := (clarification.IsReadyToConfirmStatus(out.Status) || (len(out.Questions) == 0 && len(missingRequiredFields(out.Requirement)) == 0)) && len(out.OpenHighImpact) == 0
+	if ready {
 		status = model.ClarificationStatusReadyToConfirm
 	} else if out.Status == string(model.ClarificationStatusActive) {
 		status = model.ClarificationStatusActive
@@ -998,9 +1017,16 @@ func clarificationFailureCode(err error) model.ErrorCode {
 func (s *Server) advanceAfterUserTurn(ctx context.Context, sessID string, sess *model.ClarificationSession) (*model.ClarificationSession, bool) {
 	nextRound := sess.Round + 1
 	if nextRound > sess.MaxRounds {
-		// Reached the round cap without the clarifier declaring readiness —
-		// transition to ready_to_confirm so the user can confirm.
-		if err := s.store.SetClarificationStatus(ctx, sessID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
+		// Reached the round cap without the clarifier declaring readiness.
+		// D3 / ADR 0006: a session that still has open high-impact confirmation
+		// items must NOT be auto-promoted to ready_to_confirm at the cap — it
+		// stays waiting_user so the user can still answer the blocking question.
+		// Only when openHighImpact is empty do we promote so the user can confirm.
+		status := model.ClarificationStatusReadyToConfirm
+		if len(s.parseOpenHighImpact(sess.OpenHighImpactJSON)) > 0 {
+			status = model.ClarificationStatusWaitingUser
+		}
+		if err := s.store.SetClarificationStatus(ctx, sessID, status, "", ""); err != nil {
 			return sess, false
 		}
 		updated, err := s.store.GetClarificationSession(ctx, sessID)
@@ -1034,6 +1060,14 @@ func (s *Server) normalizeClarificationReadiness(ctx context.Context, sess *mode
 	}
 	req := s.parseRequirement(sess.RequirementJSON)
 	if len(missingRequiredFields(req)) > 0 {
+		return sess, nil
+	}
+	// D3 / ADR 0006: even when all required fields are filled, a session with
+	// open high-impact confirmation items must NOT be promoted to
+	// ready_to_confirm. Required fields may have been filled from blueprint
+	// assumptions; a confirmed high-impact decision requires an explicit user
+	// answer, so stay waiting_user while openHighImpact is non-empty.
+	if len(s.parseOpenHighImpact(sess.OpenHighImpactJSON)) > 0 {
 		return sess, nil
 	}
 	if err := s.store.SetClarificationStatus(ctx, sess.ID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
@@ -1184,6 +1218,23 @@ func (s *Server) parseRequirement(raw string) clarification.Requirement {
 	}
 	_ = json.Unmarshal([]byte(raw), &req)
 	return req
+}
+
+// parseOpenHighImpact reads the persisted open-high-impact JSON snapshot back
+// into the validated shape. The non-model readiness sites
+// (advanceAfterUserTurn, normalizeClarificationReadiness) call this to re-apply
+// the D3 gate from the persisted state without a model turn. Re-validation is
+// defensive: the list was validated by the runner before persist, but a corrupt
+// row should fail-safe to "open" only when the JSON genuinely decodes to items.
+func (s *Server) parseOpenHighImpact(raw string) []clarification.HighImpactItem {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var items []clarification.HighImpactItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	return items
 }
 
 // applyAnswerToRequirement merges a structured answer into the requirement for a
