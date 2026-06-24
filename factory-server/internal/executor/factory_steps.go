@@ -300,6 +300,17 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	rt := f.runtime()
 	buildApp := app
 	buildApp.Path = candidateDir
+	// The container runtime on this host cannot reach image/npm registries: the
+	// podman machine proxies outbound through 127.0.0.1:7897 (a local SOCKS proxy
+	// that is currently off), so any in-container `npm ci`/`npm run build` hangs
+	// on "connection refused". For static-vite apps the host already built dist/
+	// during test_verification (inside this candidate dir), so serve that
+	// pre-built bundle with a dist-copy nginx image (nginx:alpine cached locally)
+	// instead of the generated multi-stage Dockerfile — keeping image_build
+	// fully offline.
+	if manifest.Entry == "static-vite" {
+		_ = writeStaticHostingDockerfile(buildApp.Path)
+	}
 	var res deploy.CommandResult
 	var err error
 	if f.StreamCmds != nil {
@@ -572,6 +583,37 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, rt deploy.C
 		_, _ = rt.RemoveContainer(ctx, dep.ContainerName)
 		_ = f.Store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
 	}
+}
+
+// writeStaticHostingDockerfile overwrites the app's Dockerfile with a dist-copy
+// nginx image when the host has already built dist/index.html (i.e. a static-vite
+// app whose test_verification step produced a bundle in the candidate dir). It
+// exists because the container runtime on this host cannot reach image/npm
+// registries (the podman machine proxies through a dead 127.0.0.1:7897), so the
+// generated multi-stage Dockerfile that runs `npm ci` + `npm run build`
+// in-container would hang. Serving the host-built dist/ from cached nginx:alpine
+// keeps image_build fully offline. It is a no-op when dist/index.html is absent,
+// so non-static apps are unaffected.
+func writeStaticHostingDockerfile(appDir string) error {
+	if _, err := os.Stat(filepath.Join(appDir, "dist", "index.html")); err != nil {
+		return nil // not a host-built static app; leave the generated Dockerfile
+	}
+	var b strings.Builder
+	b.WriteString("# Static-hosting image: dist/ was built on the host by test_verification.\n")
+	b.WriteString("# The container runtime cannot reach npm registries, so there is NO\n")
+	b.WriteString("# in-container node build — nginx serves the pre-built static assets.\n")
+	b.WriteString("FROM nginx:alpine\n")
+	b.WriteString("COPY dist/ /usr/share/nginx/html\n")
+	// Ensure an nginx server config exists; write a minimal SPA fallback if the
+	// generated app did not ship one.
+	nginxConf := filepath.Join(appDir, "nginx.conf")
+	if _, err := os.Stat(nginxConf); err != nil {
+		_ = os.WriteFile(nginxConf, []byte("server {\n  listen 80;\n  server_name localhost;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri /index.html; }\n}\n"), 0o644)
+	}
+	b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
+	b.WriteString("EXPOSE 80\n")
+	b.WriteString("CMD [\"nginx\", \"-g\", \"daemon off;\"]\n")
+	return os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644)
 }
 
 // wslVMHealthIP returns the host a container health probe should target. On
