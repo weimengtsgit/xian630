@@ -25,6 +25,18 @@ export const initialDialogueState = () => ({
   // doing an N+1 full-history refresh per streaming delta.
   needsRefresh: null,
   dialogueActivity: {},
+  // liveAnalysis (Task 3, D1/D2): a SINGLE transient item holding the safe
+  // analysis work log as it streams token-by-token. It is the live
+  // "分析过程" shown beneath the user message BEFORE the round's persisted
+  // analysis_work_log lands. Folded from *.delta (route / draft / clarification)
+  // and from the in-flight pipeline step (dialogue.work_trace). On the round /
+  // step completion the persisted view reconciles and the builder suppresses
+  // this transient item (rendering the persisted analysis FOLDED instead).
+  //   { key, content, kind } | null
+  //   key   — turn id for routing/clarification/draft rounds, 'step:<jobId>:<stepId>' for a pipeline step
+  //   kind  — 'round' | 'step'
+  //   content — the FULL-so-far safe text (set-not-append, never raw reasoning)
+  liveAnalysis: null,
 })
 
 // statusText maps a dialogue status to user-facing Chinese. It is the ONLY place
@@ -83,7 +95,13 @@ export function lockedFromView(view) {
 // user sees their own message immediately. It is prepended as a user_message item
 // UNLESS the reloaded persisted view already contains a user message with identical
 // content for this turn — then it is DEDUPED (the persisted message is authoritative).
-export function buildDialogueTimeline(view, optimisticUserMessage = null) {
+//
+// The optional `liveAnalysis` ({ key, content, kind }) is the Task 3 transient
+// streaming analysis item. It is inserted as a `live_analysis` item right after
+// the optimistic/persisted user message. It is SUPPRESSED when the persisted view
+// already carries an analysis_work_log for the round it represents — on completion
+// the persisted analysis (rendered FOLDED) is authoritative (D6).
+export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null) {
   if (!view) return []
   const items = []
   const parentMessages = Array.isArray(view.messages) ? view.messages : []
@@ -109,6 +127,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null) {
     }
   }
 
+  // Whether the persisted view already carries an analysis work log for this
+  // round. When it does, the transient live_analysis is SUPPRESSED (the persisted
+  // analysis, rendered FOLDED, is authoritative — D6) so the streaming block does
+  // not duplicate the just-landed folded summary.
+  const hasPersistedAnalysis = parentMessages.some(
+    msg => msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output'),
+  )
+
   // 1. Parent thread: user messages + analysis work logs, in persisted order.
   for (const msg of parentMessages) {
     if (!msg || msg.role === 'user') {
@@ -122,13 +148,32 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null) {
       continue
     }
     if (msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
+      // D6: the persisted analysis lands ONLY after the round completes. It
+      // renders FOLDED (collapsed) above the conclusion, with an expand toggle.
+      // `folded` marks the item as a collapsible block; `expanded` defaults to
+      // false so the summary is tucked away and the user expands to read it.
       items.push({
         id: msg.id,
         type: 'analysis_stream',
         content: safeString(msg.content),
+        folded: true,
+        expanded: false,
       })
     }
     // Other parent agent kinds (business_draft handled below) are dropped here.
+  }
+
+  // Transient live analysis (Task 3, D1/D2): the streaming safe work log shown
+  // BEFORE the persisted analysis lands. Inserted immediately after the user
+  // message (the optimistic or persisted one). Suppressed once the persisted
+  // analysis for the round exists (D6 fold-on-completion).
+  if (liveAnalysis && liveAnalysis.content && !hasPersistedAnalysis) {
+    items.push({
+      id: `live_${safeString(liveAnalysis.key)}`,
+      type: 'live_analysis',
+      content: safeString(liveAnalysis.content),
+      kind: liveAnalysis.kind === 'step' ? 'step' : 'round',
+    })
   }
 
   // 2. Route choice cards when the intent is ambiguous (needs confirmation).
@@ -420,19 +465,31 @@ function safeRequirement(req) {
 
 // applyDialogueEvent folds one dialogue.* (or wrapped clarification.*) SSE event
 // into state. It NEVER does an N+1 full-history refresh: for the selected
-// dialogue it sets needsRefresh=<id> so the hook refetches ONE view; for other
-// dialogues it records lightweight activity. Returns NEW state (immutable).
+// dialogue it either folds a LIVE delta incrementally into liveAnalysis (Task 3)
+// or sets needsRefresh=<id> for completion/lifecycle events so the hook refetches
+// ONE view; for other dialogues it records lightweight activity. Returns NEW
+// state (immutable).
 export function applyDialogueEvent(state, type, ev) {
   const dialogueId = ev && (ev.dialogue_id || (ev.data && ev.data.dialogue_id))
   if (!dialogueId) return state
   if (type === 'dialogue.deleted') {
     return applyDeletedEvent(state, dialogueId)
   }
-  const isActivityOnly = ACTIVITY_ONLY_EVENTS.has(type)
+  // The selected dialogue gets special handling.
   if (state.selectedDialogueId && dialogueId === state.selectedDialogueId) {
-    // Targeted refresh: the hook refetches this single composed view.
+    // Task 3 (D1/D2): a *.delta event carries the FULL-so-far safe analysis text
+    // and folds incrementally into the single transient liveAnalysis item. It
+    // does NOT set needsRefresh — that was the old per-token full-reload path.
+    if (LIVE_DELTA_EVENTS.has(type)) {
+      return applyLiveAnalysisEvent(state, type, ev)
+    }
+    // All other events (lifecycle, completion, route confirmation, ready_to_confirm,
+    // clarification.updated — anything that changes PERSISTED structure) flag a
+    // targeted refresh so the authoritative persisted view reconciles and REPLACES
+    // the live item (D6 fold-on-completion).
     return { ...state, needsRefresh: dialogueId }
   }
+  const isActivityOnly = ACTIVITY_ONLY_EVENTS.has(type)
   if (isActivityOnly) {
     return {
       ...state,
@@ -450,6 +507,49 @@ export function applyDialogueEvent(state, type, ev) {
       ...state.dialogueActivity,
       [dialogueId]: { status: 'updated', lastType: type },
     },
+  }
+}
+
+// LIVE_DELTA_EVENTS are the dialogue.* event types whose payload is the streaming
+// safe analysis work log (the FULL-so-far text). They fold incrementally into
+// liveAnalysis instead of triggering a per-token full view reload. The raw
+// reasoning (thinking_delta) is NEVER part of these — security constraint #9.
+const LIVE_DELTA_EVENTS = new Set([
+  'dialogue.route.delta',
+  'dialogue.draft.delta',
+  'clarification.message.delta',
+])
+
+// applyLiveAnalysisEvent folds ONE *.delta event into state.liveAnalysis. The
+// delta payload carries the FULL current text (set-not-append, mirroring
+// clarificationLogic.js). It is keyed by the running turn so a new turn replaces
+// the prior live block. ONLY the safe `delta` text is read — thinking_delta /
+// thinking / any raw-reasoning field is deliberately ignored (security #9).
+export function applyLiveAnalysisEvent(state, type, ev) {
+  if (!ev) return state
+  const turnId = ev.turn_id || ev.turnId || ev.message_id || ev.messageId || 'turn'
+  const key = `turn:${turnId}`
+  const content = ev.delta != null ? String(ev.delta) : ''
+  if (!content) return state
+  return {
+    ...state,
+    liveAnalysis: { key, content, kind: 'round' },
+  }
+}
+
+// foldTraceIntoLiveAnalysis merges a step-derived live item (produced by
+// workTraceState.liveStepFromTrace) into state.liveAnalysis. A new step key
+// replaces the prior block; the same step key updates content in place. Used by
+// the hook to surface the in-flight pipeline step's safe text in the same live
+// surface (D2 — pipeline steps stream through this path too).
+export function foldTraceIntoLiveAnalysis(state, stepLive) {
+  if (!stepLive || !stepLive.content) return state
+  const existing = state.liveAnalysis
+  // A round delta always wins over a step (a round is the broader context).
+  if (existing && existing.kind === 'round') return state
+  return {
+    ...state,
+    liveAnalysis: { key: stepLive.key, content: stepLive.content, kind: 'step' },
   }
 }
 

@@ -281,10 +281,19 @@ export function ConversationWorkbench({
 function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
   if (item.type === 'analysis_stream') {
+    // D6: the persisted analysis lands after the round completes and renders
+    // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
+    // the full text. Rendered as plaintext only (never dangerouslySetInnerHTML).
+    return <FoldedAnalysis content={item.content} />
+  }
+  if (item.type === 'live_analysis') {
+    // D1/D2: the transient streaming safe analysis work log. Monospace,
+    // plaintext `<pre>`-safe, NEVER dangerouslySetInnerHTML. Rendered as a
+    // distinct "分析过程" block while the round/step is in flight.
     return (
-      <div className="cw-item cw-agent">
-        <span className="cw-item-label">分析过程</span>
-        {item.content}
+      <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}`}>
+        <span className="cw-item-label">{item.kind === 'step' ? '生成过程' : '分析过程'}</span>
+        <pre className="cw-live-text">{item.content}</pre>
       </div>
     )
   }
@@ -322,6 +331,29 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     return <div className="cw-system">{statusText(item.status)}</div>
   }
   return null
+}
+
+// FoldedAnalysis (D6) renders the persisted analysis work log as a COLLAPSED
+// block with an expand/collapse toggle. The round's streamed analysis folds above
+// its conclusion once the persisted analysis lands; the user expands to read it.
+// Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
+function FoldedAnalysis({ content }) {
+  const [expanded, setExpanded] = useState(false)
+  const text = String(content || '')
+  return (
+    <div className="cw-item cw-agent cw-folded-analysis">
+      <button
+        type="button"
+        className="cw-fold-toggle"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-item-label">分析过程</span>
+        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+    </div>
+  )
 }
 
 function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, submitting }) {

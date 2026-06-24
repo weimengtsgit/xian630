@@ -4,6 +4,7 @@ import { subscribeFactoryEvents, subscribeDialogueTrace } from '../api/events'
 import {
   applyDialogueEvent,
   buildDialogueTimeline,
+  foldTraceIntoLiveAnalysis,
   initialDialogueState,
   lockedFromView,
   openQuestionsForView,
@@ -12,6 +13,7 @@ import {
   applyTraceEvent,
   applyTraceEvents,
   initialWorkTraceState,
+  liveStepFromTrace,
   resetWorkTraceState,
 } from './workTraceState'
 import { selectFocusTask } from './focusTask'
@@ -95,12 +97,15 @@ export function useDialogueSessions() {
   // message changes (D5). The builder prepends the optimistic message (with a
   // dedupe against an identical persisted user message) so the user sees their
   // own message immediately, and drops it once the reload brings the real one.
+  // It ALSO threads the transient liveAnalysis (Task 3, D1/D2) so the streaming
+  // safe work log renders beneath the user message and is suppressed once the
+  // persisted analysis lands.
   useEffect(() => {
     if (!state.view) return
     setState(prev => (prev.view === state.view
-      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage) }
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis) }
       : prev))
-  }, [state.view, optimisticUserMessage]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.view, optimisticUserMessage, state.liveAnalysis]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -145,6 +150,10 @@ export function useDialogueSessions() {
         questions: openQuestionsForView(view),
         requirement: view.child ? (view.child.requirement || null) : null,
         needsRefresh: null,
+        // D6 fold-on-completion: a successful view load reconciles the persisted
+        // analysis (rendered FOLDED) as authoritative, so clear the transient
+        // streaming live item. It re-folds from the next delta/trace.
+        liveAnalysis: null,
       }))
       // Switching the selected dialogue resets the trace stream (Constraint #10):
       // the per-dialogue SSE effect re-subscribes and re-hydrates from scratch.
@@ -565,6 +574,19 @@ export function useDialogueSessions() {
     // pendingTurn is read inside onEvent for the terminal-clear side effect, but
     // must NOT re-subscribe the stream on every turn change; read it via ref.
   }, [state.selectedDialogueId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Bridge the in-flight pipeline step into the conversation's live analysis
+  // (Task 3, D2 — Step 5). The work-trace stream already surfaces the build
+  // phase token-by-token; when a step row carries renderable assistant text we
+  // fold it into the SAME liveAnalysis surface as the round deltas, keyed by
+  // step. A round delta always wins over a step (the round is the broader
+  // context); once a round delta has landed the step fold is a no-op.
+  useEffect(() => {
+    if (!state.selectedDialogueId) return
+    const stepLive = liveStepFromTrace(workTrace.items)
+    if (!stepLive) return
+    setState(prev => foldTraceIntoLiveAnalysis(prev, stepLive))
+  }, [workTrace, state.selectedDialogueId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mount: hydrate the list and auto-select the most recent dialogue. Subscribe to
   // dialogue.* events. Targeted refresh: a content event for the selected dialogue

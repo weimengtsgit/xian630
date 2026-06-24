@@ -43,6 +43,18 @@
 .cw-user { align-self: flex-end; background: rgba(104, 221, 255, 0.18); color: #edfaff; }
 .cw-agent { align-self: flex-start; background: rgba(3, 17, 29, 0.74); border: 1px solid rgba(111, 218, 255, 0.16); color: #d7eef8; }
 .cw-item-label { display: block; color: #68ddff; font-size: 11px; margin-bottom: 4px; }
+
+/* Task 3 (D1/D2/D6): live streaming analysis + folded persisted analysis */
+/* The transient streaming block (分析过程 / 生成过程). Monospace plaintext, no HTML. */
+.cw-live-analysis { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.cw-live-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 12px; line-height: 1.5; color: #d7eef8; }
+.cw-live-step .cw-live-text { color: rgba(215, 238, 248, 0.82); }
+/* The persisted analysis folded (collapsed) above the conclusion. Expand toggle reveals it. */
+.cw-folded-analysis { padding: 0; }
+.cw-fold-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; background: transparent; border: none; cursor: pointer; color: inherit; font: inherit; text-align: left; }
+.cw-fold-toggle .cw-item-label { margin-bottom: 0; }
+.cw-fold-hint { color: rgba(104, 221, 255, 0.7); font-size: 11px; }
+.cw-folded-text { margin: 0 10px 10px; padding-top: 6px; border-top: 1px solid rgba(111, 218, 255, 0.14); white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; color: rgba(215, 238, 248, 0.78); }
 .cw-system { align-self: center; color: rgba(215, 238, 248, 0.55); font-size: 11px; }
 .cw-question-group, .cw-summary, .cw-apps, .cw-business, .cw-consolidation, .cw-route-choice { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; padding: 10px; background: rgba(11, 29, 44, 0.55); }
 .cw-question { display: flex; flex-direction: column; gap: 8px; }
