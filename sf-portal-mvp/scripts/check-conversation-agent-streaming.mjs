@@ -69,9 +69,10 @@ assert.ok(
 const childOpenHighImpact = {
   id: 'clar_hi', status: 'waiting_user', round: 1, max_rounds: 6,
   requirement: { appType: 'command_dashboard', appName: '潮汐窗口', coreScenario: '监控' },
-  // The blocking high-impact item is delivered as a normal question message in
-  // the child thread (one per round). openHighImpact itself is backend-only
-  // gating metadata; it does not need a new UI element.
+  // High-impact items are delivered as normal question messages in the child
+  // thread, ALL AT ONCE in a single round (not one per round) so the user
+  // confirms them in one batch. openHighImpact itself is backend-only gating
+  // metadata; it does not need a new UI element.
   messages: [
     { id: 'u1', role: 'user', kind: 'prompt', content: '生成潮汐窗口应用' },
     { id: 'a1', role: 'agent', kind: 'analysis_work_log', content: '需求已收敛，但仍有高影响确认项' },
@@ -87,6 +88,18 @@ const childOpenHighImpact = {
         ],
       }),
     },
+    {
+      id: 'a3', role: 'agent', kind: 'question',
+      metadata_json: JSON.stringify({
+        id: 'primary_user_role', label: '主要使用角色',
+        question: '主要给谁用?',
+        recommendation: ['operator'],
+        options: [
+          { value: 'operator', label: '操作员', recommended: true },
+          { value: 'viewer', label: '只读查看' },
+        ],
+      }),
+    },
   ],
 }
 const openView = {
@@ -98,11 +111,11 @@ const openView = {
 const openTimeline = buildDialogueTimeline(openView)
 const qGroup = openTimeline.find(it => it.type === 'question_group')
 assert.ok(qGroup, 'blocking high-impact item must surface as a question_group while child status is waiting_user')
-assert.equal(qGroup.questions.length, 1, 'exactly one blocking question per round (adaptive invariant)')
-const rendered = qGroup.questions[0]
-assert.equal(rendered.id, 'data_policy', 'question id must be preserved')
-assert.equal(rendered.options.length, 2, 'options must be preserved for the user to pick')
-assert.equal(rendered.options[0].recommended, true, 'recommendation badge must mark the recommended option')
+assert.equal(qGroup.questions.length, 2, 'ALL open high-impact questions surface in one round (batch, not one per round)')
+const byId = Object.fromEntries(qGroup.questions.map(q => [q.id, q]))
+assert.ok(byId.data_policy && byId.primary_user_role, 'both high-impact questions are present in the single group')
+assert.equal(byId.data_policy.options.length, 2, 'options must be preserved for the user to pick')
+assert.equal(byId.data_policy.options[0].recommended, true, 'recommendation badge must mark the recommended option')
 
 // ---- 2b. The child's persisted analysis (thinking process) is retained -------
 //

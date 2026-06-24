@@ -518,9 +518,10 @@ func contains(xs []string, want string) bool {
 
 // --- adaptive 6-round contract (Step 4) ---
 
-// TestRunnerRejectsMoreThanOneQuestion proves the runner rejects a model round
-// that emits more than one question rather than silently truncating.
-func TestRunnerRejectsMoreThanOneQuestion(t *testing.T) {
+// TestRunnerAcceptsAllQuestionsInOneRound proves the runner accepts a model
+// round that emits ALL open high-impact questions at once (batch clarification)
+// and passes every question through — the user confirms them in a single group.
+func TestRunnerAcceptsAllQuestionsInOneRound(t *testing.T) {
 	root := t.TempDir()
 	fr := &fakeCommandRunner{rawStdout: `{
   "status": "waiting_user",
@@ -534,17 +535,24 @@ func TestRunnerRejectsMoreThanOneQuestion(t *testing.T) {
 }`}
 	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
 	var events []StreamEvent
-	_, err := r.RunRound(context.Background(), RoundInput{
+	out, err := r.RunRound(context.Background(), RoundInput{
 		SessionID: "clar_multi_q", Round: 1, MaxRounds: 6, InitialPrompt: "x",
 	}, func(ev StreamEvent) { events = append(events, ev) })
-	if err == nil {
-		t.Fatalf("expected error for >1 question")
+	if err != nil {
+		t.Fatalf("runner must accept multiple questions in one round (batch clarification): %v", err)
 	}
-	// No question.created events should leak for a rejected round.
+	if len(out.Questions) != 2 {
+		t.Fatalf("both questions must pass through, got %d", len(out.Questions))
+	}
+	// Both questions emit a created event so the portal renders them in one group.
+	var created int
 	for _, ev := range events {
 		if ev.Type == "clarification.question.created" {
-			t.Fatalf("rejected round must not emit question events: %#v", ev)
+			created++
 		}
+	}
+	if created != 2 {
+		t.Fatalf("expected 2 question.created events (one per batched question), got %d", created)
 	}
 }
 

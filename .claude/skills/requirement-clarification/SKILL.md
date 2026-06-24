@@ -35,14 +35,14 @@ decision — the user must actually answer.
 Each round, identify the open 高影响确认事项 (e.g. data source/policy, scope of
 coverage, primary user role). While ANY remain open:
 
-1. **Surface exactly ONE** of them as the round's blocking `questions[0]`
-   (with 2–3 options and a recommendation) — it flows through the normal
-   one-question-per-round path.
-2. **List the full remaining set** in `openHighImpact` (including the one you
-   surfaced as `questions[0]`, plus all others still open).
-3. When the user answers the round's question, the NEXT round DROPS that item
-   from `openHighImpact` (re-evaluate), surfaces the next open one as
-   `questions[0]`, or — when none remain — returns `ready_to_confirm`.
+1. **Surface ALL of them at once** as the round's `questions[]` (each with 2–3
+   options and a recommendation) so the user can confirm every high-impact item
+   in a single batch — do NOT dribble them out one per round.
+2. **List the full set** in `openHighImpact` (the same items you surfaced as
+   `questions[]`).
+3. When the user answers, the NEXT round re-evaluates: DROP every resolved item
+   from `openHighImpact`, surface any STILL-open ones again as `questions[]`,
+   or — when none remain — return `ready_to_confirm`.
 
 `ready_to_confirm` requires `openHighImpact` to be EMPTY, **regardless of how
 detailed the first message is or how complete the requirement looks**. A
@@ -129,16 +129,17 @@ Output ONLY this JSON object (no prose, no ```json fences):
 - `normalizedScenarioName` — a concise scenario name the model supplies. Factory
   appends a trusted Base36 serial in a later step; do NOT include any serial or
   numeric suffix here.
-- `questions` — at most ONE question per round (rounds 1–4); each with 2–3
-  options. More than one question is a contract violation.
+- `questions` — ALL open high-impact questions in one round (each with 2–3
+  options), so the user answers them in a single batch. Zero questions only when
+  returning `ready_to_confirm`.
 - `consolidation` — emitted at round 5 only. One entry per remaining missing
   field. `recommendedValue` is a typed JSON value (string for scalars, array for
   list fields like `targetUsers`, `mainEntities`, `acceptanceFocus`).
 - `openHighImpact` — the currently-open 高影响确认事项 (see the High-Impact
   Confirmation Gate section). While non-empty, `status` must be `waiting_user`
-  and exactly one of these items is surfaced as `questions[0]`. Only when this
-  list is empty may you return `ready_to_confirm`. User-facing only: no internal
-  slugs.
+  and EVERY item in this list is also surfaced as a `questions[]` entry. Only
+  when this list is empty may you return `ready_to_confirm`. User-facing only:
+  no internal slugs.
 - `requirement.blueprintRefs` — server-side-only metadata. Blueprints are an
   internal Factory reference; populate `blueprintRefs` when the intent matches;
   otherwise use an empty array. NEVER surface blueprints in any user-facing
@@ -148,13 +149,15 @@ Output ONLY this JSON object (no prose, no ```json fences):
 
 - Never output `confirmed`; Factory reserves that status for after the user
   clicks the final confirm action and a generation job is created.
-- Ask at most ONE question per round (rounds 1–4). Each question has 2–3
-  options and a recommendation. Do NOT exceed 6 rounds.
+- Surface ALL open high-impact questions in one round (each with 2–3 options
+  and a recommendation) so the user confirms them in a single batch. Do NOT
+  exceed 6 rounds.
 - **High-impact items are non-skippable (D3).** While `openHighImpact` is
-  non-empty you MUST return `waiting_user` and surface one of them as
-  `questions[0]`. A complete requirement filled from blueprint assumptions does
-  NOT clear the gate — the user must explicitly confirm each high-impact item.
-  Never emit internal blueprint/catalog slugs in `openHighImpact` ids/labels.
+  non-empty you MUST return `waiting_user` and surface EVERY one of them as a
+  `questions[]` entry. A complete requirement filled from blueprint assumptions
+  does NOT clear the gate — the user must explicitly confirm each high-impact
+  item. Never emit internal blueprint/catalog slugs in `openHighImpact`
+  ids/labels.
 - Do not create a generation job. Do not generate code.
 - Never expose hidden chain-of-thought or thinking. The `workLog` is the only
   user-facing analysis surface — it explains what you identified, why you

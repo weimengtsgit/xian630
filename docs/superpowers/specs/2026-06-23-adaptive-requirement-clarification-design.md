@@ -201,8 +201,10 @@ The skill applies adaptive brainstorming behavior:
    missing decision, and separately identify every open **高影响确认事项** — any
    unresolved decision that can change business meaning, data source, external
    interface, permission, deployment, or user-visible behavior.
-2. In rounds 1 through 4, return either a complete requirement or exactly one
-   blocking question with two or three recommended options.
+2. In rounds 1 through 4, return either a complete requirement or **ALL** open
+   high-impact questions at once — each a blocking question with two or three
+   recommended options — so the user confirms them in a single batch rather than
+   one per round.
 3. High-impact confirmation items are never skipped. `ready_to_confirm` may be
    reached without a question only when no high-impact item remains open; a
    detailed first message does not by itself license skipping them. Do not ask
@@ -314,8 +316,10 @@ chain-of-thought and `thinking_delta` are never forwarded.
 - Factory validates routing output against the precise candidates it supplied.
 - Factory owns application serials, agent keys, recommendation defaults, and
   resource links. The browser does not submit trusted values for them.
-- Ordinary application and business-draft rounds allow at most one question.
-  Round-5 consolidation and round-6 adjustment invariants are server-enforced.
+- Clarification (application-generation) rounds return ALL open high-impact
+  questions in one round (batch); business-draft rounds still allow at most one
+  question. Round-5 consolidation and round-6 adjustment invariants are
+  server-enforced.
 - A requirement cannot enter `ready_to_confirm` (and the 确认并生成 action cannot
   appear) while any 高影响确认事项 remains open, regardless of how detailed the
   user's message is. This is server-enforced (see ADR 0006).

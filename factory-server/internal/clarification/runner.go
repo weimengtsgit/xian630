@@ -71,14 +71,12 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if err := os.WriteFile(filepath.Join(dir, "output.json"), outBytes, 0o644); err != nil {
 		return RoundOutput{}, err
 	}
-	// Adaptive invariant: rounds 1–4 accept ZERO questions or EXACTLY ONE
-	// required question. A model round emitting more than one question is a
-	// contract violation — reject it rather than silently truncating. Round 5
-	// (consolidation) emits no questions by construction; this guard still
-	// holds it to the same discipline.
-	if !IsReadyToConfirmStatus(out.Status) && len(out.Questions) > 1 {
-		return RoundOutput{}, fmt.Errorf("clarification round %d emitted %d questions; adaptive contract allows at most one: %w", out.Round, len(out.Questions), ErrAdaptiveTooManyQuestions)
-	}
+	// A clarification round may return ZERO questions (ready) OR ALL open
+	// high-impact questions at once so the user can answer them in a single
+	// batch (the portal renders them as one question_group and the batch-answer
+	// handler persists them together, then advances once). The D3 gate — not
+	// this count — keeps ready_to_confirm withheld while openHighImpact is
+	// non-empty, so batching does not let a high-impact item slip through.
 	events := normalizeEvents(input.SessionID, out, normalizeOptions{SkipWorkLogs: streamed})
 	if err := writeStream(filepath.Join(dir, "stream.jsonl"), events); err != nil {
 		return RoundOutput{}, err
@@ -359,11 +357,6 @@ func (r Runner) prompt(inputPath string) string {
 		"At round 5 (only if still incomplete) emit a consolidation list recommending a value for every remaining field. " +
 		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs."
 }
-
-// ErrAdaptiveTooManyQuestions is returned when a clarification round emits more
-// than one question. The adaptive contract allows at most one required question
-// per round.
-var ErrAdaptiveTooManyQuestions = errors.New("adaptive contract allows at most one question per round")
 
 type normalizeOptions struct {
 	SkipWorkLogs bool
