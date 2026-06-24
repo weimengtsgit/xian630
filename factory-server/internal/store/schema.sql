@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS dialogue_sessions (
     draft_json             TEXT    NOT NULL DEFAULT '',
     error_code             TEXT    NOT NULL DEFAULT '',
     error_message          TEXT    NOT NULL DEFAULT '',
-    status                 TEXT    NOT NULL,            -- routing|recommending|drafting_application|drafting_business_agent|resolved|failed|abandoned
+    status                 TEXT    NOT NULL,            -- routing|recommending|drafting_application|drafting_business_agent|resolved|failed|abandoned|active|analyzing|waiting_user|change_confirmation|task_running|archived
     intent                 TEXT    NOT NULL DEFAULT 'routing', -- routing|existing_application|application_generation|business_processing_agent
     route_locked           INTEGER NOT NULL DEFAULT 0,
     clarification_session_id TEXT  NOT NULL DEFAULT '',
@@ -205,6 +205,27 @@ CREATE TABLE IF NOT EXISTS dialogue_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_dialogue_messages_created
 ON dialogue_messages(dialogue_id, created_at);
+
+-- Dialogue turns: one per-message analysis round within a CONTINUING dialogue
+-- session. Each user message on an active session creates a pending turn; the
+-- turn worker claims the oldest pending turn per dialogue, runs the turn-intent
+-- round, and marks it terminal before the next turn begins. See
+-- model.DialogueTurn / TurnIntent / TurnStatus.
+CREATE TABLE IF NOT EXISTS dialogue_turns (
+    id           TEXT    PRIMARY KEY,
+    dialogue_id  TEXT    NOT NULL,
+    message_id   TEXT    NOT NULL DEFAULT '',
+    intent       TEXT    NOT NULL DEFAULT '', -- application_modification|new_application|application_inquiry|task_control|general_dialogue
+    status       TEXT    NOT NULL DEFAULT 'pending', -- pending|running|completed|canceled|failed
+    summary_json TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    started_at   INTEGER,
+    ended_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_turns_dialogue
+ON dialogue_turns(dialogue_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dialogue_turns_status
+ON dialogue_turns(status, created_at);
 
 -- Application versions: the immutable, ordered lineage of an application. One
 -- application has many versions ordered by created_at; each version records

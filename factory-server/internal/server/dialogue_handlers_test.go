@@ -215,6 +215,11 @@ func newDialogueTestServer(t *testing.T, dlgRunner runner.CommandRunner) (*Serve
 		WorkspaceRoot: root,
 		ArtifactRoot:  t.TempDir(),
 	}
+	// The turn worker defaults to the production CLI classifier. Tests that drive
+	// the async turn contract override srv.turnClassifier (and rebuild the
+	// worker) — see newDialogueTurnTestServer below.
+	srv.turnClassifier = srv.dialogueRouter
+	srv.turnWorker = NewTurnWorker(srv, st, srv.turnClassifier)
 	return srv, srv.routes(), st
 }
 
@@ -1644,3 +1649,450 @@ func TestBusinessAgentContinueEnforcesSixRoundCap(t *testing.T) {
 		t.Fatalf("draftCalls = %d, want 6 (no 7th round must run)", seq.draftCalls)
 	}
 }
+
+// --- Task 2: continuing dialogues + ordered turns ---------------------------
+
+// controllableTurnClassifier is a fake dialogue.TurnClassifier whose ClassifyTurn
+// blocks on a release channel until the test releases it. This makes the
+// background turn worker DETERMINISTIC: a test can hold turn 1 in-flight, assert
+// message 2's turn is pending, then release to assert drain/complete behavior.
+// It returns a configured canned TurnOutput per release.
+type controllableTurnClassifier struct {
+	// outputs is a queue of canned TurnOutputs, one per ClassifyTurn call.
+	outputs []dialogue.TurnOutput
+	// release is closed (or sent on) to unblock one waiting ClassifyTurn.
+	release chan struct{}
+	// calls counts ClassifyTurn invocations (after release).
+	calls int
+}
+
+func newControllableTurnClassifier(outputs ...dialogue.TurnOutput) *controllableTurnClassifier {
+	return &controllableTurnClassifier{
+		outputs: outputs,
+		release: make(chan struct{}, 1),
+	}
+}
+
+func (c *controllableTurnClassifier) ClassifyTurn(ctx context.Context, input dialogue.TurnInput, emit func(dialogue.StreamEvent)) (dialogue.TurnOutput, error) {
+	// Block until the test releases this turn.
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return dialogue.TurnOutput{}, ctx.Err()
+	}
+	idx := c.calls
+	c.calls++
+	out := dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue}
+	if idx < len(c.outputs) {
+		out = c.outputs[idx]
+	}
+	if emit != nil {
+		emit(dialogue.StreamEvent{Type: "dialogue.turn.delta", DialogueID: input.DialogueID})
+	}
+	return out, nil
+}
+
+// releaseOne unblocks exactly one waiting ClassifyTurn.
+func (c *controllableTurnClassifier) releaseOne() {
+	c.release <- struct{}{}
+}
+
+// newDialogueTurnTestServer builds a test server whose turn classifier is the
+// controllable fake, and starts the turn worker's drain loop on a cancellable
+// context. It returns the server, router, store, the classifier, and a cancel
+// func to stop the worker at the end of the test (registered via t.Cleanup).
+func newDialogueTurnTestServer(t *testing.T, classifier *controllableTurnClassifier) (*Server, *Router, *store.Store, *controllableTurnClassifier) {
+	t.Helper()
+	root := t.TempDir()
+	mustWriteCatalog(t, root)
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	now := time.Now()
+	for _, app := range []model.Application{
+		{ID: "app-carrier-formation-replay", Slug: "carrier-formation-replay", Name: "航母编队月度航迹复盘", Type: "situation_replay", Source: model.AppSourcePreset, Status: model.AppStatusRunning, Path: "scene/carrier-formation-replay", DisplayOrder: 1, CreatedAt: now, UpdatedAt: now, RuntimeURL: "http://localhost:5173"},
+		{ID: "app-carrier-homeport-tide-window", Slug: "carrier-homeport-tide-window", Name: "航母母港潮汐窗口计算器", Type: "command_dashboard", Source: model.AppSourcePreset, Status: model.AppStatusStopped, Path: "scene/carrier-homeport-tide-window", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := st.SyncApplications(context.Background(), []model.Application{app}); err != nil {
+			t.Fatalf("seed app %s: %v", app.Slug, err)
+		}
+	}
+	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: root}, st, scanner.Scanner{})
+	srv.clarifier = clarification.Runner{Cmd: &fakeDialogueRunner{}, WorkspaceRoot: root, ArtifactRoot: t.TempDir()}
+	srv.dialogueRouter = dialogue.Runner{Cmd: &fakeDialogueRunner{}, WorkspaceRoot: root, ArtifactRoot: t.TempDir()}
+	srv.turnClassifier = classifier
+	srv.turnWorker = NewTurnWorker(srv, st, classifier)
+	// Start the worker drain loop on a cancellable context.
+	wctx, cancel := context.WithCancel(context.Background())
+	srv.turnWorker.Start(wctx)
+	t.Cleanup(cancel)
+	return srv, srv.routes(), st, classifier
+}
+
+// seedContinuingDialogue creates a dialogue session in the continuing ACTIVE
+// phase with a linked (resolved) application, simulating a dialogue whose first
+// application has already been deployed. It is the precondition for the async
+// turn contract tests. The seeded app/agent ids let modification/inquiry turns
+// target a known application.
+func seedContinuingDialogue(t *testing.T, st *store.Store, dlgID, appID, versionID string) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	dlg := model.DialogueSession{
+		ID:                    dlgID,
+		InitialPrompt:         "做一个航母编队航迹复盘应用",
+		Status:                model.DialogueStatusActive,
+		Intent:                model.DialogueIntentApplicationGeneration,
+		RouteLocked:           true,
+		ResolvedApplicationID: appID,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("seed continuing dialogue: %v", err)
+	}
+	// Seed the linked application row so composeDialogueView / fork can resolve it.
+	apps, _ := st.ListApplications(ctx)
+	found := false
+	for _, a := range apps {
+		if a.ID == appID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		app := model.Application{
+			ID: appID, Slug: appID, Name: "已部署的复盘应用", Type: "situation_replay",
+			Source: model.AppSourceGenerated, Status: model.AppStatusRunning,
+			Path: "scene/" + appID, CreatedAt: now, UpdatedAt: now, RuntimeURL: "http://localhost:5173",
+		}
+		if err := st.SyncApplications(ctx, []model.Application{app}); err != nil {
+			t.Fatalf("seed linked app: %v", err)
+		}
+	}
+}
+
+// acceptMessage posts a message on a continuing dialogue and asserts the 202
+// async contract, returning the parsed {dialogueId, turnId, acceptedAt} body.
+func acceptMessage(t *testing.T, r *Router, dlgID, content string) map[string]string {
+	t.Helper()
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/messages", map[string]string{"content": content})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	if body["turnId"] == "" {
+		t.Fatalf("202 body missing turnId: %#v", body)
+	}
+	return body
+}
+
+// waitForTurnStatus polls the store until the turn with the given id reaches the
+// wanted status, or fails the test after a timeout. It is the deterministic
+// bridge between the async worker and synchronous assertions: a test releases a
+// turn then waits for the completed/canceled transition.
+func waitForTurnStatus(t *testing.T, st *store.Store, turnID string, want model.TurnStatus) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		turn, err := st.GetDialogueTurn(ctx, turnID)
+		if err != nil {
+			t.Fatalf("get turn %s: %v", turnID, err)
+		}
+		if turn != nil && turn.Status == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	turn, _ := st.GetDialogueTurn(ctx, turnID)
+	got := model.TurnStatus("")
+	if turn != nil {
+		got = turn.Status
+	}
+	t.Fatalf("turn %s status = %q, want %q (timed out)", turnID, got, want)
+}
+
+// TestDialogueAcceptsModificationAfterDeployment verifies a continuing (active)
+// dialogue accepts a follow-up modification message asynchronously: it returns
+// 202 with {dialogueId, turnId, acceptedAt} and persists a pending turn.
+func TestDialogueAcceptsModificationAfterDeployment(t *testing.T) {
+	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent: model.TurnIntentApplicationModification,
+		Summary: dialogue.TurnSummary{
+			UserFacingText:      "将告警阈值修改为 150 海里",
+			ChangeDescription:   "将告警阈值从默认值修改为 150 海里",
+		},
+	}))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	body := acceptMessage(t, r, "dlg_1", "把告警阈值改成 150 海里")
+
+	if body["dialogueId"] != "dlg_1" {
+		t.Fatalf("dialogueId = %q, want dlg_1", body["dialogueId"])
+	}
+	if body["acceptedAt"] == "" {
+		t.Fatalf("202 body missing acceptedAt: %#v", body)
+	}
+	// A turn row was persisted and is still in-flight (the worker may already have
+	// claimed it to running, but it must NOT be terminal — the round is async).
+	// The pending-vs-running distinction is asserted deterministically by the
+	// queueing test below using the controllable classifier.
+	ctx := context.Background()
+	turn, err := st.GetDialogueTurn(ctx, body["turnId"])
+	if err != nil || turn == nil {
+		t.Fatalf("in-flight turn not persisted: %v", err)
+	}
+	switch turn.Status {
+	case model.TurnStatusPending, model.TurnStatusRunning:
+		// ok: accepted and being processed asynchronously
+	default:
+		t.Fatalf("turn status = %q, want pending or running (must not be terminal right after accept)", turn.Status)
+	}
+}
+
+// TestDialogueQueuesSecondAnalysisTurn verifies at-most-one-analysis-turn-per-
+// session ordering: while turn 1 is in-flight, a second message persists a turn
+// that stays pending; only after turn 1 completes does turn 2 begin.
+func TestDialogueQueuesSecondAnalysisTurn(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "ok1"}},
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "ok2"}},
+	))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	// Turn 1: the worker claims it and blocks inside the classifier (waiting on
+	// release). Signal the worker to start draining.
+	first := acceptMessage(t, r, "dlg_1", "first message")
+	// Give the worker a moment to claim turn 1 (it blocks on release). Poll until
+	// turn 1 is running.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+		if t1 != nil && t1.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// While turn 1 is in-flight (claimed + blocked on release), submit message 2.
+	// Its turn must stay pending — at most one analysis turn runs per session.
+	second := acceptMessage(t, r, "dlg_1", "second message")
+	t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+	if t1 == nil || t1.Status != model.TurnStatusRunning {
+		t.Fatalf("turn 1 status = %v, want running (must be in-flight before asserting turn 2 queues)", t1)
+	}
+	t2, _ := st.GetDialogueTurn(context.Background(), second["turnId"])
+	if t2 == nil {
+		t.Fatalf("second turn not persisted")
+	}
+	if t2.Status != model.TurnStatusPending {
+		t.Fatalf("second turn status = %q, want pending while turn 1 is in-flight", t2.Status)
+	}
+	if clf.calls != 0 {
+		t.Fatalf("classifier calls = %d, want 0 (turn 2 must not be analyzed until turn 1 ends)", clf.calls)
+	}
+
+	// Release turn 1: it completes, then the worker drains turn 2 (which blocks
+	// on release again).
+	clf.releaseOne()
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCompleted)
+
+	// Turn 2 now starts (running, blocked on release).
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t2b, _ := st.GetDialogueTurn(context.Background(), second["turnId"])
+		if t2b != nil && t2b.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// Release turn 2 and confirm it completes.
+	clf.releaseOne()
+	waitForTurnStatus(t, st, second["turnId"], model.TurnStatusCompleted)
+}
+
+// TestNewApplicationTurnForksDialogue verifies a new_application turn forks the
+// dialogue: it creates a new dialogue draft (in routing) and emits
+// dialogue.forked carrying the source + new dialogue ids.
+func TestNewApplicationTurnForksDialogue(t *testing.T) {
+	srv, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent: model.TurnIntentNewApplication,
+		Summary: dialogue.TurnSummary{
+			ForkTargetInitialPrompt: "做一个排班管理应用",
+		},
+	}))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	first := acceptMessage(t, r, "dlg_1", "我想做一个排班应用")
+	// Release the turn so it completes and performs the fork side effect.
+	if clf, ok := srv.turnClassifier.(*controllableTurnClassifier); ok {
+		clf.releaseOne()
+	}
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCompleted)
+
+	// A new dialogue draft was created in routing.
+	sessions, err := st.ListDialogueSessions(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var forkID string
+	for _, s := range sessions {
+		if s.ID != "dlg_1" && s.Status == model.DialogueStatusRouting {
+			forkID = s.ID
+			break
+		}
+	}
+	if forkID == "" {
+		t.Fatalf("expected a forked dialogue in routing; got %#v", sessions)
+	}
+
+	// dialogue.forked was emitted with the source + new dialogue ids.
+	events := drainClarificationHub(ch)
+	sawForked := false
+	for _, ev := range events {
+		if ev.Type == "dialogue.forked" {
+			sawForked = true
+			data, _ := json.Marshal(ev.Data)
+			if !strings.Contains(string(data), "\"source_dialogue_id\":\"dlg_1\"") {
+				t.Fatalf("forked event missing source_dialogue_id=dlg_1: %s", data)
+			}
+			if !strings.Contains(string(data), "\"new_dialogue_id\":\""+forkID+"\"") {
+				t.Fatalf("forked event missing new_dialogue_id=%s: %s", forkID, data)
+			}
+		}
+	}
+	if !sawForked {
+		t.Fatalf("did not see dialogue.forked; got %#v", eventTypes(events))
+	}
+}
+
+// TestInquiryDoesNotCreateJob verifies an inquiry turn (and by the same code
+// path, task_control / general_dialogue) produces NO job: it completes the turn
+// without seeding a generation job. An application_modification turn that has not
+// been confirmed also produces no job, but the cleanest assertion is the inquiry
+// intent.
+func TestInquiryDoesNotCreateJob(t *testing.T) {
+	srv, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent:  model.TurnIntentApplicationInquiry,
+		Summary: dialogue.TurnSummary{Reply: "这个应用支持 200 海里阈值。"},
+	}))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	jobsBefore, _ := st.ListJobs(context.Background(), "")
+
+	first := acceptMessage(t, r, "dlg_1", "这个应用支持多大阈值？")
+	if clf, ok := srv.turnClassifier.(*controllableTurnClassifier); ok {
+		clf.releaseOne()
+	}
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCompleted)
+
+	jobsAfter, _ := st.ListJobs(context.Background(), "")
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Fatalf("inquiry turn created a job: before=%d after=%d", len(jobsBefore), len(jobsAfter))
+	}
+	// The turn completed and carries the inquiry intent.
+	turn, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+	if turn == nil {
+		t.Fatalf("turn not found")
+	}
+	if turn.Intent != model.TurnIntentApplicationInquiry {
+		t.Fatalf("turn intent = %q, want application_inquiry", turn.Intent)
+	}
+}
+
+// TestCancelRunningTurnEndToEnd verifies the end-to-end cancel contract (review
+// Fix 1): while turn 1 is in-flight (blocked in the classifier), POST cancel
+// flips it to canceled, the in-flight model round actually aborts (the
+// classifier's ctx is cancelled), and a later queued turn then proceeds. This is
+// deterministic — no arbitrary sleeps: the controllable classifier holds turn 1
+// in-flight on a release channel, the cancel POST cancels the round's ctx, and
+// waitForTurnStatus bridges the async worker.
+func TestCancelRunningTurnEndToEnd(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "canceled-should-not-return"}},
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "second-ok"}},
+	))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	// Turn 1: the worker claims it and blocks inside the classifier (on release).
+	first := acceptMessage(t, r, "dlg_1", "first message")
+	// Poll until turn 1 is running (claimed + blocked on release) — deterministic.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+		if t1 != nil && t1.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+	if t1 == nil || t1.Status != model.TurnStatusRunning {
+		t.Fatalf("turn 1 status = %v, want running before cancel", t1)
+	}
+
+	// While turn 1 is in-flight, submit message 2 -> a pending turn queued behind it.
+	second := acceptMessage(t, r, "dlg_1", "second message")
+
+	// POST cancel on turn 1. This flips the row to canceled AND cancels the
+	// in-flight round's ctx (so the classifier returns ctx.Err() rather than
+	// blocking forever on release).
+	cancelRec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_1/turns/"+first["turnId"]+"/cancel", nil)
+	if cancelRec.Code != http.StatusAccepted {
+		t.Fatalf("cancel status = %d, want 202; body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+
+	// Turn 1 must reach the terminal canceled state (the worker aborts the round
+	// and finalizes as canceled). The classifier must NOT have returned turn 1's
+	// output (calls stays 0 — the release was never sent).
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCanceled)
+	if clf.calls != 0 {
+		t.Fatalf("classifier calls = %d, want 0 (turn 1 round was cancelled before the model returned)", clf.calls)
+	}
+
+	// A later queued turn then proceeds: turn 2 is now claimable, the worker
+	// drains it (blocks on release again). Release it so it completes.
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t2, _ := st.GetDialogueTurn(context.Background(), second["turnId"])
+		if t2 != nil && t2.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	clf.releaseOne()
+	waitForTurnStatus(t, st, second["turnId"], model.TurnStatusCompleted)
+}
+
+// TestCancelTurnRejectsWrongDialogue verifies the cancel handler 404s when the
+// turn id exists but does not belong to the path dialogue (defensive boundary).
+func TestCancelTurnRejectsWrongDialogue(t *testing.T) {
+	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue},
+	))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+	seedContinuingDialogue(t, st, "dlg_2", "app_1", "ver_1")
+
+	// Create a turn on dlg_1, then try to cancel it via dlg_2's path.
+	now := time.Now()
+	err := st.CreateDialogueTurn(context.Background(), model.DialogueTurn{
+		ID: "dturn_x", DialogueID: "dlg_1", MessageID: "dmsg_1",
+		Status: model.TurnStatusRunning, CreatedAt: now, StartedAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_2/turns/dturn_x/cancel", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cancel turn via wrong dialogue = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+

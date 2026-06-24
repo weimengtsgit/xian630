@@ -60,7 +60,14 @@ type Server struct {
 	// + business-agent drafting) via the real Claude Code CLI. Mirrors clarifier:
 	// product path is ALWAYS the real CLI; tests override this field with a fake.
 	dialogueRouter dialogue.Runner
-	runLog         *runlog.Logger
+	// turnClassifier classifies one follow-up message on a CONTINUING dialogue
+	// session into one of the five turn intents. Product path is the real CLI
+	// (Runner.ClassifyTurn); tests override this field with a fake.
+	turnClassifier dialogue.TurnClassifier
+	// turnWorker drains pending dialogue turns (Task 2). It is started from
+	// Start and is also startable from tests so they can drive it.
+	turnWorker *TurnWorker
+	runLog     *runlog.Logger
 }
 
 type claudeCommandAdapter struct {
@@ -239,6 +246,11 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		ArtifactRoot:  cfg.ArtifactRoot,
 	}
+	// Turn classifier runs against the REAL Claude Code CLI in production (the
+	// same dialogue.Runner implements TurnClassifier via ClassifyTurn). Tests
+	// override s.turnClassifier directly with a fake.
+	s.turnClassifier = s.dialogueRouter
+	s.turnWorker = NewTurnWorker(s, st, s.turnClassifier)
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
 		Store:        st,
 		Workspace:    cfg.WorkspaceRoot,
@@ -322,6 +334,13 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.store.BackfillClarificationDialogues(ctx); err != nil {
 		log.Printf("backfill clarification dialogues: %v", err)
 	}
+	// Idempotently transition legacy resolved dialogues into continuing active
+	// sessions so a dialogue whose first application is deployed stays open for
+	// follow-up modification/inquiry turns (Task 2). Best-effort, like the
+	// clarification backfill above.
+	if err := s.store.BackfillResolvedDialoguesToActive(ctx); err != nil {
+		log.Printf("backfill resolved dialogues to active: %v", err)
+	}
 
 	s.srv = &http.Server{Addr: s.cfg.Addr, Handler: corsMiddleware(s.routes())}
 	go func() {
@@ -333,6 +352,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// Start the pipeline executor's drain loop; it exits when ctx is cancelled
 	// (server shutdown).
 	s.exec.Start(ctx)
+	// Start the dialogue turn worker's drain loop; it exits when ctx is
+	// cancelled (server shutdown).
+	s.turnWorker.Start(ctx)
 	s.logEvent("server_started", map[string]any{
 		"pid":                os.Getpid(),
 		"addr":               s.cfg.Addr,
@@ -408,6 +430,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/dialogues/:id", s.getDialogue)
 	r.Handle("DELETE", "/api/dialogues/:id", s.deleteDialogue)
 	r.Handle("POST", "/api/dialogues/:id/messages", s.addDialogueMessage)
+	r.Handle("POST", "/api/dialogues/:id/turns/:turnId/cancel", s.cancelDialogueTurn)
 	r.Handle("POST", "/api/dialogues/:id/route", s.selectDialogueRoute)
 	r.Handle("POST", "/api/dialogues/:id/applications/:applicationID/open", s.openDialogueApp)
 	r.Handle("POST", "/api/dialogues/:id/clarification/answers", s.answerDialogueClarification)

@@ -752,9 +752,20 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
-// addDialogueMessage handles POST /api/dialogues/:id/messages. While unlocked,
-// it appends the user message and repeats the routing procedure. Once the route
-// is locked it rejects further routing with 409.
+// addDialogueMessage handles POST /api/dialogues/:id/messages.
+//
+// Pre-route (status=routing, route not locked): the message is the user refining
+// their initial request before choosing a route, so the handler appends the
+// message and re-runs the (synchronous) intent-routing procedure, returning the
+// composed view — the legacy 200 contract preserved for the routing phase.
+//
+// Continuing session (status is one of the active/analyzing/... phases, i.e. the
+// session route is already established and the dialogue stays open): the handler
+// persists the user message + a pending dialogue_turn, signals the per-dialogue
+// turn worker, and returns 202 Accepted {dialogueId, turnId, acceptedAt}. No
+// model content travels in the response body — it flows via dialogue.* events.
+// At most one turn runs per session; a later message while a turn is in-flight
+// stays pending and is processed in order once the current turn ends.
 func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	dlg, err := s.store.GetDialogueSession(r.Context(), id)
@@ -766,8 +777,13 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if dlg.RouteLocked {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "route is locked; create a new dialogue for a new request"})
+	// A locked route that is still in a route/clarification/drafting phase (not
+	// yet a continuing session) is mid-resolution and does not accept free
+	// messages: the user must complete that flow (clarification answer /
+	// business-agent continue) instead. This preserves the legacy 409 the 27
+	// existing tests rely on for a locked-but-unresolved route.
+	if dlg.RouteLocked && !model.IsContinuingDialogueStatus(dlg.Status) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "route is locked; complete the active flow or create a new dialogue"})
 		return
 	}
 	var body addDialogueMessageBody
@@ -789,7 +805,35 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add message")
 		return
 	}
-	// Re-run routing with the full history.
+
+	// Continuing session: async turn contract (202). Route is already
+	// established, so this message is a follow-up turn, not a re-route.
+	if model.IsContinuingDialogueStatus(dlg.Status) {
+		turnID := "dturn_" + idpkg.New()
+		turn := model.DialogueTurn{
+			ID: turnID, DialogueID: id, MessageID: msg.ID,
+			Intent: "", Status: model.TurnStatusPending, CreatedAt: now,
+		}
+		if err := s.store.CreateDialogueTurn(ctx, turn); err != nil {
+			writeError(w, http.StatusInternalServerError, "create turn")
+			return
+		}
+		s.publishDialogueSimple("dialogue.message.accepted", id, map[string]any{
+			"turn_id":   turnID,
+			"message_id": msg.ID,
+		})
+		if s.turnWorker != nil {
+			s.turnWorker.Signal()
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"dialogueId":  id,
+			"turnId":      turnID,
+			"acceptedAt":  now.UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Pre-route phase: synchronous re-routing (legacy 200 contract).
 	allMsgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
 	route, _, rerr := s.runRouting(ctx, dlg, body.Content, allMsgs)
 	if rerr != nil {
@@ -806,6 +850,80 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// cancelDialogueTurn handles POST /api/dialogues/:id/turns/:turnId/cancel. It
+// verifies the turn belongs to the dialogue and is currently running, flips it
+// to canceled via the store, emits dialogue.turn.canceled, and — critically —
+// invokes the in-flight round's cancel func (via the turn worker) so the
+// running model round actually aborts. This is the end-to-end cancel: the turn
+// becomes terminal before the next pending turn begins, rather than relying on
+// the row-flip alone. Returns 202 Accepted (the cancel is accepted; the worker
+// finalizes the terminal transition asynchronously). Mirrors the executor's
+// cancelJob handler style.
+func (s *Server) cancelDialogueTurn(w http.ResponseWriter, r *http.Request) {
+	dialogueID := Param(r, "id")
+	turnID := Param(r, "turnId")
+	ctx := r.Context()
+	turn, err := s.store.GetDialogueTurn(ctx, turnID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get turn")
+		return
+	}
+	if turn == nil || turn.DialogueID != dialogueID {
+		writeError(w, http.StatusNotFound, "turn not found")
+		return
+	}
+	if turn.Status != model.TurnStatusRunning {
+		// Already terminal (or still pending): nothing to cancel. Idempotent
+		// re-cancel of a terminal turn is a no-op success so a client retry does
+		// not get a spurious error.
+		writeJSON(w, http.StatusOK, map[string]any{"turnId": turnID, "status": string(turn.Status)})
+		return
+	}
+	canceledID, err := s.store.CancelRunningDialogueTurn(ctx, dialogueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel turn")
+		return
+	}
+	// Kill the in-flight model round so it aborts (only the turn that is
+	// actively running in the worker is interrupted). If the worker had already
+	// moved on (race) canceledID is "" — the turn was terminalized by the row
+	// flip alone and no cancel func applies.
+	if s.turnWorker != nil {
+		s.turnWorker.CancelRunningTurn(turnID)
+	}
+	s.publishDialogueSimple("dialogue.turn.canceled", dialogueID, map[string]any{
+		"turn_id": turnID,
+	})
+	// Re-signal the worker so it drains the next pending turn for this dialogue
+	// now that the running turn is terminal.
+	if s.turnWorker != nil {
+		s.turnWorker.Signal()
+	}
+	_ = canceledID
+	writeJSON(w, http.StatusAccepted, map[string]any{"turnId": turnID, "status": string(model.TurnStatusCanceled)})
+}
+
+// forkDialogue creates a new dialogue draft seeded by a fork target prompt,
+// originating from sourceDialogueID. It is the new_application turn side
+// effect: the new dialogue starts in routing so it gets its own first-message
+// route, and carries no messages of its own yet. Returns the new dialogue id.
+func (s *Server) forkDialogue(ctx context.Context, sourceDialogueID, seedPrompt string) string {
+	now := time.Now()
+	newID := "dlg_" + idpkg.New()
+	dlg := model.DialogueSession{
+		ID:            newID,
+		InitialPrompt: seedPrompt,
+		Status:        model.DialogueStatusRouting,
+		Intent:        model.DialogueIntentRouting,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.store.CreateDialogueSession(ctx, dlg); err != nil {
+		return ""
+	}
+	return newID
 }
 
 // selectDialogueRoute handles POST /api/dialogues/:id/route. It persists the

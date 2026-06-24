@@ -367,9 +367,13 @@ const (
 	DialogueIntentBusinessProcessingAgent DialogueIntent = "business_processing_agent"
 )
 
-// DialogueStatus is the lifecycle state of a dialogue session. It moves
-// routing -> recommending -> drafting_application|drafting_business_agent ->
-// resolved|failed|abandoned.
+// DialogueStatus is the lifecycle state of a dialogue session. A fresh dialogue
+// starts in routing, then transitions through the route/clarification/drafting
+// phases. Once its first application is resolved (or an existing app is opened)
+// it becomes a CONTINUING session that stays open for follow-up turns: active,
+// analyzing, waiting_user, change_confirmation, task_running, and (eventually)
+// archived. The terminal-only states resolved/failed/abandoned are retained for
+// legacy rows and the dormant business-agent flow.
 type DialogueStatus string
 
 const (
@@ -380,7 +384,32 @@ const (
 	DialogueStatusResolved              DialogueStatus = "resolved"
 	DialogueStatusFailed                DialogueStatus = "failed"
 	DialogueStatusAbandoned             DialogueStatus = "abandoned"
+	// Continuing-session phases (Task 2). A resolved/opened dialogue backfills to
+	// active and stays open so the user can send follow-up messages; each message
+	// is analyzed as a turn rather than re-routing the whole session.
+	DialogueStatusActive             DialogueStatus = "active"
+	DialogueStatusAnalyzing          DialogueStatus = "analyzing"
+	DialogueStatusWaitingUser        DialogueStatus = "waiting_user"
+	DialogueStatusChangeConfirmation DialogueStatus = "change_confirmation"
+	DialogueStatusTaskRunning        DialogueStatus = "task_running"
+	DialogueStatusArchived           DialogueStatus = "archived"
 )
+
+// IsContinuingDialogueStatus reports whether a status belongs to a continuing
+// (open) dialogue session — one whose session route is already established and
+// that accepts follow-up turns via POST .../messages. The pre-route routing
+// status and the legacy terminal states are NOT continuing.
+func IsContinuingDialogueStatus(s DialogueStatus) bool {
+	switch s {
+	case DialogueStatusActive,
+		DialogueStatusAnalyzing,
+		DialogueStatusWaitingUser,
+		DialogueStatusChangeConfirmation,
+		DialogueStatusTaskRunning:
+		return true
+	}
+	return false
+}
 
 // DialogueSession is the durable parent of a multi-turn dialogue that routes a
 // user request to one of the three Factory outcomes (existing app, generated
@@ -417,4 +446,72 @@ type DialogueMessage struct {
 	Content      string    `json:"content"`
 	MetadataJSON string    `json:"metadata_json,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// TurnIntent is the per-message user need inferred for one turn of a CONTINUING
+// dialogue session (distinct from the one-time session route). It is exactly one
+// of the five values below; anything else is rejected.
+type TurnIntent string
+
+const (
+	// TurnIntentApplicationModification is a change to an application already
+	// linked to the dialogue. The turn produces a change summary; after
+	// confirmation a new application version is generated.
+	TurnIntentApplicationModification TurnIntent = "application_modification"
+	// TurnIntentNewApplication is a request for a distinct application. The turn
+	// forks the dialogue: a new dialogue draft is created and dialogue.forked is
+	// emitted.
+	TurnIntentNewApplication TurnIntent = "new_application"
+	// TurnIntentApplicationInquiry is a question about an existing application
+	// that needs no generation job.
+	TurnIntentApplicationInquiry TurnIntent = "application_inquiry"
+	// TurnIntentTaskControl controls an in-flight generation task (cancel, retry).
+	// It produces no new job.
+	TurnIntentTaskControl TurnIntent = "task_control"
+	// TurnIntentGeneralDialogue is conversational follow-up that needs no job.
+	TurnIntentGeneralDialogue TurnIntent = "general_dialogue"
+)
+
+// ValidTurnIntent reports whether s is one of the five allowed turn intents.
+func ValidTurnIntent(s string) bool {
+	switch TurnIntent(s) {
+	case TurnIntentApplicationModification,
+		TurnIntentNewApplication,
+		TurnIntentApplicationInquiry,
+		TurnIntentTaskControl,
+		TurnIntentGeneralDialogue:
+		return true
+	}
+	return false
+}
+
+// TurnStatus is the lifecycle state of one analysis turn. A turn starts pending
+// (queued behind an in-flight turn for the same dialogue), becomes running while
+// the model analyzes it, and ends in a terminal state (completed/canceled/
+// failed). At most one turn per dialogue is running at a time.
+type TurnStatus string
+
+const (
+	TurnStatusPending   TurnStatus = "pending"
+	TurnStatusRunning   TurnStatus = "running"
+	TurnStatusCompleted TurnStatus = "completed"
+	TurnStatusCanceled  TurnStatus = "canceled"
+	TurnStatusFailed    TurnStatus = "failed"
+)
+
+// DialogueTurn is one per-message analysis round within a continuing dialogue
+// session. It links the triggering user message to the inferred turn intent and
+// its lifecycle. Created at message-accept time; the turn worker claims the
+// oldest pending turn per dialogue, runs the turn-intent round, and marks it
+// terminal before the next turn begins.
+type DialogueTurn struct {
+	ID         string     `json:"id"`
+	DialogueID string     `json:"dialogue_id"`
+	MessageID  string     `json:"message_id"`
+	Intent     TurnIntent `json:"intent"`
+	Status     TurnStatus `json:"status"`
+	SummaryJSON string    `json:"summary_json,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
 }
