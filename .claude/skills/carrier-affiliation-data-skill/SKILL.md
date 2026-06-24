@@ -73,6 +73,7 @@ Rules:
 - Prefer a server-side proxy for production. For an internal static-only demo,
   `VITE_ONTOLOGY_AUTH_TOKEN` may be used only when the environment is trusted
   and the UI clearly marks the data source as internal authenticated data.
+
 ## Source Tiering
 
 Read `references/source-tiering.md` when deciding how to obtain data.
@@ -92,6 +93,33 @@ skills:
 ## Ontology API
 
 Read `references/ontology-api.md` before implementing the DaaS adapter.
+
+**Required request headers — the Space-scope selector is MANDATORY.** Without
+`scopeType: Space` the API silently defaults to `个人范围` (personal scope) and
+returns `resultCode 10001 "未找到实体"` for EVERY entity, even though the token is
+valid and has access. Verified 2026-06-24: adding `scopeType: Space` turns 10001
+into real data (11 carriers, 501 platforms, 11.4M ADS-B rows, 48 carrier track logs).
+
+- `Authorization: Bearer <ONTOLOGY_AUTH_TOKEN>`
+- `Spaceid: <ONTOLOGY_SPACE_ID>`
+- `scopeType: Space` ← value must be exactly `Space` (capital S); case-sensitive.
+  Without it every entity query returns `10001`, which looks like "no data / wrong
+  token" but is really just the missing scope selector.
+- `Content-Type: application/json`
+
+A generated nginx reverse proxy (or server-side proxy) must inject all four
+headers so the browser never sees the token. Example nginx location:
+
+```nginx
+location /api/ontology/ {
+    proxy_pass http://<ontology-host-or-static-ip>:8081/;
+    proxy_set_header Host <ontology-host>;
+    proxy_set_header Authorization "Bearer <token>";
+    proxy_set_header Spaceid "<space-id>";
+    proxy_set_header scopeType "Space";
+    proxy_set_header Content-Type "application/json";
+}
+```
 
 All list endpoints use the same request shape:
 
@@ -117,11 +145,11 @@ into object arrays keyed by `columnNames`.
 Read `references/output-contract.md` before wiring generated UI data providers.
 The normalized output must provide:
 
-- `adsbTracks`: `{ icao, aircraftType, time, lat, lon, altFt, speedKt, callsign }`
-- `carrierPositions`: `{ carrierId, name, track: [{ time, lat, lon }] }`
-- `aircraft`: `{ icao, name, aircraftType, callsign, mmsi }`
-- `surfaceClassifier`: callable or declared source for `sea | land | unknown`
-- `judgementParameters`: association distance, confidence threshold, departed
+- `adsb_tracks`: `{ icao, aircraft_type, time, lat, lon, alt_ft, speed_kt, callsign }`
+- `carrier_positions`: `{ carrier_id, name, track: [{ time, lat, lon }] }`
+- `aircraft`: `{ icao, name, aircraft_type, callsign, mmsi }`
+- `surface_classifier`: callable or declared source for `sea | land | unknown`
+- `judgement_parameters`: association distance, confidence threshold, departed
   days, near-ground altitude, and minimum bound associations.
 
 ## Generated App Requirements
@@ -163,3 +191,6 @@ approximate and marked low confidence.
 - Do not use recent OpenSky REST state vectors as a three-year historical data
   source.
 - Do not silently fall back to mock data when `dataPolicy` requires real data.
+- Do not omit `scopeType: Space` from ontology requests — without it the API
+  returns `10001` for every entity and the app will look data-less despite valid
+  credentials.
