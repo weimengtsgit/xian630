@@ -437,17 +437,27 @@ export function useDialogueSessions() {
     }
   }, [loadView, refreshSessions, state.selectedDialogueId, submitting])
 
-  // archive marks the selected dialogue as archived. NOTE: the backend defines an
-  // `archived` DialogueStatus but exposes NO archive endpoint (verified: no route
-  // in factory-server/internal/server/server.go). This action is rendered but
-  // currently surfaces a clear error until the backend ships the endpoint; it is
-  // a NOTED CONCERN rather than a guessed contract.
+  // archive marks the selected dialogue as archived. The backend endpoint
+  // (POST /api/dialogues/:id/archive) is idempotent and sets status to
+  // `archived`, emitting `dialogue.archived`. On success we refresh the list +
+  // the selected view so the status reflects `archived`.
   const archive = useCallback(async () => {
     const sess = state.view && state.view.session
     if (!sess || submitting) return null
-    setError('归档接口尚未提供（后端已定义 archived 状态但未开放归档端点）。')
-    return null
-  }, [state.view, submitting])
+    setSubmitting(true)
+    setError(null)
+    try {
+      await factoryApi.archiveDialogue(sess.id)
+      await refreshSessions()
+      await loadView(sess.id)
+      return true
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [loadView, refreshSessions, state.view, submitting])
 
   // Per-dialogue work-trace SSE subscription (Constraint #7: detailed trace
   // events come ONLY via this dialogueId-filtered, sequence-replayable stream).

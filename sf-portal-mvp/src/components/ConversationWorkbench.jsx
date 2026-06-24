@@ -213,9 +213,9 @@ export function ConversationWorkbench({
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
         {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
-        {/* Archive control: the backend defines an `archived` status but ships no
-            archive endpoint yet (NOTED CONCERN). Render the action so the surface
-            is complete; the hook surfaces a clear error until the endpoint exists. */}
+        {/* Archive control: archive a resolved dialogue. The backend endpoint
+            (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
+            refreshes the view so the composer is replaced by a terminal hint. */}
         {onArchive && session && status === 'resolved' ? (
           <button type="button" onClick={onArchive} disabled={submitting} title="归档此会话">
             <Archive size={12} /> 归档
@@ -226,7 +226,7 @@ export function ConversationWorkbench({
             resolved. Only true terminal-without-deployment states lock it. */}
         {status === 'resolved' && !versionDeployed ? (
           <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
-        ) : status === 'abandoned' || status === 'failed' ? (
+        ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
           <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
         ) : locked && !versionDeployed ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>

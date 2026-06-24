@@ -133,6 +133,10 @@ export const factoryApi = {
   createDialogue: ({ initialPrompt }) =>
     request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
   deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
+  // archiveDialogue sets a dialogue's status to `archived`. The backend endpoint
+  // is idempotent and emits `dialogue.archived`; it returns 200 with no required
+  // body beyond success, so we treat any resolved value uniformly.
+  archiveDialogue: id => request(`/api/dialogues/${id}/archive`, { method: 'POST' }),
   // sendDialogueMessage handles BOTH response shapes the backend returns for
   // POST /api/dialogues/:id/messages:
   //   - 202 {dialogueId, turnId, acceptedAt}  on a CONTINUING (already-routed)
