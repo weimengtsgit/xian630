@@ -1,6 +1,6 @@
 ---
 name: carrier-affiliation-data-skill
-description: Use when a requirement needs carrier-air-wing affiliation data, ADS-B tracks, carrier positions, carrier aircraft master data, land/sea classification, ontology/DaaS carrier entities, or public fallback sources for carrier-aircraft association analysis.
+description: Use when a requirement needs carrier-air-wing affiliation data, ADS-B tracks, carrier positions, carrier aircraft master data, land/sea classification, ontology/DaaS carrier entities, or public fallback sources for carrier-aircraft association analysis. Use real data by default; skip this skill only when the user explicitly requests mock or demo data.
 ---
 
 # Carrier Affiliation Data Skill
@@ -18,13 +18,27 @@ their scenario; there is no cross-skill priority relationship.
 
 ## Default Rule
 
-- Use real data by default when `dataPolicy` is `live_api` or `mock_then_api`.
+- Use real data by default.
+- Skip this skill only when the user explicitly asks for `mock`, `demo data`, or `sample data`.
 - Use the customer ontology/DaaS API first when ontology credentials are present.
 - Do not ask the final user to type tokens or credentials.
 - Do not fabricate ADS-B tracks, carrier positions, aircraft ownership, or
   surface classification to make a demo look complete.
 - If a required source is unavailable, return an explicit failure or partial
   provenance warning.
+
+## Current Source Status (as of 2026-06-24)
+
+Some documented sources are currently unreachable — route around them instead of
+failing the build:
+
+- **Weather (`meteorological_environment-BT`) — UNAVAILABLE.** Do not call the
+  weather list endpoint. If a job needs wind/weather, route to
+  `deck-wind-data-skill` (Open-Meteo GFS) and label the provenance accordingly.
+- **MCP-based data access — UNAVAILABLE (auth failure).** Do not rely on the MCP
+  path; obtain data via the documented REST endpoints and tier fallbacks.
+
+Re-check before relying on these; they may be restored without a skill edit.
 
 ## Required Configuration
 

@@ -65,8 +65,14 @@ func TestResolveEnvOverrides(t *testing.T) {
 	if cfg.ArtifactRoot != "/tmp/factory-runs" {
 		t.Fatalf("ArtifactRoot = %q", cfg.ArtifactRoot)
 	}
-	if cfg.WorkspaceRoot != "/tmp/xian630" {
-		t.Fatalf("WorkspaceRoot = %q", cfg.WorkspaceRoot)
+	// WorkspaceRoot is resolved to an ABSOLUTE path (see
+	// TestResolveWorkspaceRootAbsolute), so compare against the absolutized env
+	// value rather than the raw "/tmp/xian630" — on Windows filepath.Abs of a
+	// Unix-style path yields C:\tmp\xian630. Resolve applies filepath.Abs to the
+	// same input, so both sides agree on every platform.
+	wantWorkspace, _ := filepath.Abs("/tmp/xian630")
+	if cfg.WorkspaceRoot != wantWorkspace {
+		t.Fatalf("WorkspaceRoot = %q, want %q", cfg.WorkspaceRoot, wantWorkspace)
 	}
 	if cfg.LogPath != "/tmp/factory.log" {
 		t.Fatalf("LogPath = %q", cfg.LogPath)

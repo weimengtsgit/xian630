@@ -67,7 +67,7 @@ Output ONLY this JSON object (no prose, no ```json fences):
     "primaryView": "",
     "mainEntities": [],
     "blueprintRefs": ["carrier-formation-replay"],
-    "dataPolicy": "mock_data",
+    "dataPolicy": "live_api",
     "acceptanceFocus": [],
     "generationProfile": {
       "base": ["software-factory-app"],
@@ -159,12 +159,36 @@ catalog index is `.claude/skills/requirement-clarification/blueprints.json`.
 - `operations_management`: `software-factory-app`, `defense-operations-ui`, `operations-management-console`
 - `command_dashboard`: `software-factory-app`, `defense-operations-ui`, `command-dashboard`
 
+## Default dataPolicy — 真实数据优先 (real data first)
+
+- **Default to `live_api`.** Unless the user *explicitly* asks for `mock`,
+  `demo`, `sample`, `演示`, `离线假数据`, or otherwise clearly wants fake/offline
+  data, set `dataPolicy` to `live_api` (or `mock_then_api` when the user wants
+  "real first"). Never default to `mock_data`.
+- `mock_data` is allowed **only** when the user explicitly requests mock/demo/
+  sample/演示/离线假数据. When that happens, the UI of the generated app must
+  clearly label its data as mock/演示.
+- **No silent downgrade to mock.** If a requirement hits a real-data domain (see
+  Data Skill Mapping) but no real-data capability/source is available for it, do
+  NOT change `dataPolicy` to `mock_data`. Keep `dataPolicy` as the real-data
+  policy and record the capability gap explicitly in `workLog` (and in
+  问题/风险): state which domain has no usable real source so the user decides,
+  rather than the app silently shipping fabricated data.
+
+## mock_then_api 语义
+
+`mock_then_api` means **real-data first, fail honestly** — it is NOT "fall back to
+mock on failure". Treat it identically to `live_api` for the honest-data contract:
+the app must attempt the real fetch, and on failure show an explicit error/empty
+state (logged in `output.json` `warnings`). It must never fabricate data or
+silently substitute mock.
+
 ## Data Skill Mapping
 
 When `dataPolicy` is `live_api` or `mock_then_api` (the app fetches real data)
-**and** the requirement matches one of the data domains below, put the
-corresponding skill into `requirement.generationProfile.data`. When `dataPolicy`
-is `mock_data`, do not add any data skill.
+**and** the requirement matches one of the data domains below, you MUST put the
+corresponding skill into `requirement.generationProfile.data` — this is mandatory,
+not optional. When `dataPolicy` is `mock_data`, do not add any data skill.
 
 - Tide / tidal height / departure window / draft threshold / port tide level: `tide-data-skill`
 - 10 m wind / deck wind / wind speed & direction / launch or recovery conditions: `deck-wind-data-skill`
@@ -173,6 +197,6 @@ is `mock_data`, do not add any data skill.
 
 These rules apply to **any** app whose intent matches a domain, including novel
 apps that are not preset scenarios and regardless of `appType`. If no domain
-matches, emit an empty `data` array. Set `dataPolicy` from intent: when the user
-wants real-time / live data, use `live_api` or `mock_then_api`; otherwise
-`mock_data`.
+matches, emit an empty `data` array. Remember the default above: `dataPolicy`
+defaults to `live_api` (real data first); only choose `mock_data` when the user
+explicitly requests mock/demo/sample/演示 data.
