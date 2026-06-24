@@ -19,6 +19,48 @@ const (
 	AppStatusMissing  AppStatus = "missing"
 )
 
+// ApplicationVersionStatus is the lifecycle state of a single application
+// version in its lineage. The string value is persisted verbatim into the
+// application_versions.status column.
+type ApplicationVersionStatus string
+
+const (
+	// ApplicationVersionQueued is the initial state of a version whose build
+	// job has not started yet.
+	ApplicationVersionQueued ApplicationVersionStatus = "queued"
+	// ApplicationVersionBuilding is a version whose job is currently running.
+	ApplicationVersionBuilding ApplicationVersionStatus = "building"
+	// ApplicationVersionFailed is a version whose job ended without producing
+	// a deployable result; it is never promoted.
+	ApplicationVersionFailed ApplicationVersionStatus = "failed"
+	// ApplicationVersionEffective is the single currently-served version of an
+	// application; at most one version per app is effective at a time.
+	ApplicationVersionEffective ApplicationVersionStatus = "effective"
+	// ApplicationVersionSuperseded is a formerly-effective version that a newer
+	// promotion has replaced.
+	ApplicationVersionSuperseded ApplicationVersionStatus = "superseded"
+)
+
+// ApplicationVersion is one immutable entry in an application's version
+// lineage: the job that produced it, the parent version it was built from, the
+// artifact path it serves, and (once promoted) the deployment it resolved to.
+// The lineage is strictly ordered by CreatedAt; ParentVersionID links each
+// version to its baseline. The UNIQUE(job_id) constraint enforces one version
+// per job.
+type ApplicationVersion struct {
+	ID              string                  `json:"id"`
+	ApplicationID   string                  `json:"application_id"`
+	ParentVersionID string                  `json:"parent_version_id,omitempty"`
+	JobID           string                  `json:"job_id"`
+	Status          ApplicationVersionStatus `json:"status"`
+	SourcePath      string                  `json:"source_path,omitempty"`
+	DeploymentID    string                  `json:"deployment_id,omitempty"`
+	CreatedAt       time.Time               `json:"created_at"`
+	// PromotedAt is set when (and only when) the version becomes Effective; it
+	// is nil for queued/building/failed/superseded versions.
+	PromotedAt *time.Time `json:"promoted_at,omitempty"`
+}
+
 type JobStatus string
 
 const (
