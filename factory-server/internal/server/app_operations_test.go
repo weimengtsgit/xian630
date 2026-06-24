@@ -419,28 +419,37 @@ func TestStopAlreadyStoppedIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRebuildReturnsConflictWhenExecutorBusy(t *testing.T) {
+func TestRebuildReturnsConflictWhenAppBusy(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
-	_, r := newOpsServer(t, fr)
-	// Pre-acquire the global executor lock as if a job is running (Task 10).
-	// We reach into the server via a fresh instance to hold the flag.
-	srv2, r2 := newOpsServer(t, fr)
-	srv2.execBusy.Store(true)
+	srv, r := newOpsServer(t, fr)
+	// Seed a RUNNING pipeline job for the app's slug: a rebuild conflicts with a
+	// running job of the SAME app (they both write generated-apps/<slug>/ + the
+	// same image tag). The executor-busy conflict is now per-app, not global —
+	// so a job for an unrelated app must NOT block this rebuild.
+	job := model.Job{
+		ID:              "job_running_for_rebuild",
+		AppSlug:         "east-sea-situation",
+		Status:          model.JobStatusRunning,
+		CurrentStepKind: model.StepRequirementAnalysis,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	if err := srv.store.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("seed running job: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rebuild", nil)
 	rec := httptest.NewRecorder()
-	r2.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 	var body map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&body)
-	if body["error"] != "executor busy" {
-		t.Errorf("body = %v, want executor busy", body)
+	if body["error"] != "app busy" {
+		t.Errorf("body = %v, want app busy", body)
 	}
-	// Not used, but keeps r referenced for symmetry with the helper.
-	_ = r
 }
 
 func TestRebuildBuildsImageAndReturnsBuilt(t *testing.T) {

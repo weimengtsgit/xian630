@@ -112,13 +112,20 @@ func itoa(n int) string {
 
 func newTestExecutor(t *testing.T, runner StepRunner) (*Executor, *store.Store) {
 	t.Helper()
+	return newTestExecutorWithConcurrency(t, runner, 1)
+}
+
+// newTestExecutorWithConcurrency builds an executor whose worker pool runs up to
+// maxConcurrent jobs at once. maxConcurrent defaults to 1 to keep the legacy
+// single-step-at-a-time tests deterministic; the scheduler test uses 3.
+func newTestExecutorWithConcurrency(t *testing.T, runner StepRunner, maxConcurrent int) (*Executor, *store.Store) {
+	t.Helper()
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	busy := new(atomic.Bool)
-	return NewExecutor(st, runner, busy), st
+	return NewExecutor(st, runner, maxConcurrent), st
 }
 
 // drain runs RunOnce until no queued job remains (or attempts exceed 32).
@@ -351,7 +358,178 @@ func TestExecutorRetryRejectsNonFailed(t *testing.T) {
 	}
 }
 
-// TestExecutorCancel starts a step that blocks until ctx is cancelled, then
+// seedJobWithSlug creates a queued job bound to a specific app_slug (the per-app
+// serialization key) with all six FixedSteps seeded as pending and returns its id.
+func seedJobWithSlug(t *testing.T, st *store.Store, appSlug string) string {
+	t.Helper()
+	now := time.Now()
+	jobID := "job_test_" + itoa(int(randCounter.Add(1)))
+	job := model.Job{
+		ID:              jobID,
+		AppSlug:         appSlug,
+		UserPrompt:      "build me a thing",
+		Status:          model.JobStatusQueued,
+		CurrentStepKind: model.StepRequirementAnalysis,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	for _, def := range FixedSteps() {
+		step := model.JobStep{
+			ID:       "step_test_" + string(def.Kind) + "_" + itoa(int(randCounter.Add(1))),
+			JobID:    jobID,
+			Kind:     def.Kind,
+			Seq:      def.Seq,
+			AgentKey: def.AgentKey,
+			Status:   model.StepStatusPending,
+			Attempt:  0,
+		}
+		if err := st.CreateJobStep(context.Background(), step); err != nil {
+			t.Fatalf("create step %s: %v", def.Kind, err)
+		}
+	}
+	return jobID
+}
+
+// TestSchedulerRunsIndependentApplicationsButSerializesOneApplication is the
+// Task-5 concurrency test. With a 3-worker pool it queues app_a/v1, app_b/v1,
+// app_a/v2 and asserts: app_a/v1 and app_b/v1 start CONCURRENTLY (two different
+// apps), while app_a/v2 (same app as v1) stays QUEUED until app_a/v1 reaches a
+// terminal state. Determinism comes from a blocking fake runner: the two
+// first-app jobs block inside Run until released, holding their app slots so the
+// claim for app_a/v2 returns nil; releasing app_a/v1 frees its slot so the next
+// worker claim picks app_a/v2.
+func TestSchedulerRunsIndependentApplicationsButSerializesOneApplication(t *testing.T) {
+	// runner blocks every step until the test closes its release channel.
+	releaseA1 := make(chan struct{})
+	releaseB1 := make(chan struct{})
+	runner := &blockingRunner{
+		releases: map[string]chan struct{}{"a1": releaseA1, "b1": releaseB1},
+		started:  make(chan string, 4),
+	}
+	e, st := newTestExecutorWithConcurrency(t, runner, 3)
+
+	// Seed three jobs across two apps. created_at ordering: a1 < b1 < a2.
+	idA1 := seedJobWithSlug(t, st, "app-a")
+	idB1 := seedJobWithSlug(t, st, "app-b")
+	idA2 := seedJobWithSlug(t, st, "app-a")
+	runner.bindJob(idA1, "a1")
+	runner.bindJob(idB1, "b1")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.Start(ctx)
+	e.Signal()
+
+	// app_a/v1 and app_b/v1 must both start (concurrent different-app runs).
+	// Order is non-deterministic, so collect two starts into a set.
+	collectStarted := func(n int) map[string]bool {
+		got := map[string]bool{}
+		for i := 0; i < n; i++ {
+			select {
+			case s := <-runner.started:
+				got[s] = true
+			case <-time.After(2 * time.Second):
+				t.Fatalf("timeout waiting for start #%d; got %v", i+1, got)
+			}
+		}
+		return got
+	}
+	first := collectStarted(2)
+	if !first["a1"] || !first["b1"] {
+		t.Fatalf("expected a1 AND b1 to start concurrently; got %v", first)
+	}
+
+	// app_a/v2 must NOT start while app_a/v1 is running (same-app serialization).
+	timer := time.NewTimer(300 * time.Millisecond)
+loopA2Blocked:
+	for {
+		select {
+		case got := <-runner.started:
+			if got != "a1" && got != "b1" {
+				t.Fatalf("app_a/v2 (or another job) started while app_a/v1 running: got %q (same-app race)", got)
+			}
+		case <-timer.C:
+			break loopA2Blocked
+		}
+	}
+	timer.Stop()
+	// And it must still be queued, not running.
+	if j := mustJob(t, st, idA2); j.Status != model.JobStatusQueued {
+		t.Fatalf("app_a/v2 = %s, want queued (same-app serialization held)", j.Status)
+	}
+
+	// Free app-a's slot by completing app_a/v1. Once a1 is no longer running,
+	// app-a's slot is free and a2 MUST eventually become runnable (serialization
+	// is live, not sticky). a1 runs through its remaining steps first (same-app
+	// FIFO), so we wait for a2 to LEAVE the queued state within a generous bound.
+	close(releaseA1)
+	waitForNotQueued := func(jobID string) {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if j := mustJob(t, st, jobID); j.Status != model.JobStatusQueued {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("job %s never left queued (app-a slot never freed)", jobID)
+	}
+	waitForNotQueued(idA2)
+
+	// Tear down: release b1 and cancel so workers exit cleanly.
+	close(releaseB1)
+	cancel()
+}
+
+// blockingRunner is a StepRunner that blocks each Run until a per-job release
+// channel is closed, then returns a succeeded result. It reports each start on
+// the started channel keyed by the bound label (so the test can distinguish the
+// three jobs). It is the deterministic oracle for the scheduler concurrency test.
+type blockingRunner struct {
+	mu       sync.Mutex
+	releases map[string]chan struct{}
+	bindings map[string]string // jobID -> label
+	started   chan string
+}
+
+func (b *blockingRunner) bindJob(jobID, label string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bindings == nil {
+		b.bindings = map[string]string{}
+	}
+	b.bindings[jobID] = label
+}
+
+func (b *blockingRunner) Run(ctx context.Context, job model.Job, _ model.JobStep, _ runner.StepRecordEmitter) (StepResult, error) {
+	b.mu.Lock()
+	label := b.bindings[job.ID]
+	ch := b.releases[label]
+	b.mu.Unlock()
+
+	// Announce start (non-blocking; the channel is buffered to 4).
+	if label != "" {
+		select {
+		case b.started <- label:
+		default:
+		}
+	}
+
+	// Block until the test releases this job, OR the run ctx is cancelled (tear
+	// down). The select on ctx.Done() prevents a goroutine leak at test end.
+	if ch != nil {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return StepResult{Status: model.StepStatusCanceled, ErrorCode: model.ErrorCanceled}, ctx.Err()
+		}
+	}
+	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+
 // cancels the job concurrently and asserts both step and job reach canceled and
 // the runner's ctx was cancelled.
 func TestExecutorCancel(t *testing.T) {
@@ -394,23 +572,66 @@ func TestExecutorCancel(t *testing.T) {
 	}
 }
 
-// TestExecutorRunOnceBusySkipped asserts that when busy is already held,
-// RunOnce is a no-op (returns nil without picking a job) — the single-active-job
-// invariant.
-func TestExecutorRunOnceBusySkipped(t *testing.T) {
-	runner := &fakeRunner{}
-	e, st := newTestExecutor(t, runner)
-	id := seedJob(t, st)
-	if !e.busy.CompareAndSwap(false, true) {
-		t.Fatalf("preset busy")
+// TestExecutorRunOnceSerializesSameApp asserts the per-app serialization invariant
+// that replaces the old single-global-slot design: once one job for an app is
+// running, a second RunOnce for a DIFFERENT queued job of the SAME app claims
+// nothing (nil) until the running job's app slot frees. This is the same-app
+// serialization guarantee the destructive race (two jobs writing
+// generated-apps/<slug>/ + the same image tag) requires. Determinism: a blocking
+// fake holds a1 in running so the claim for a2 returns nil; completing a1 frees
+// the slot so a2 becomes claimable.
+func TestExecutorRunOnceSerializesSameApp(t *testing.T) {
+	release := make(chan struct{})
+	runner := &blockingRunner{releases: map[string]chan struct{}{}, started: make(chan string, 4)}
+	e, st := newTestExecutorWithConcurrency(t, runner, 2)
+
+	a1 := seedJobWithSlug(t, st, "app-a")
+	a2 := seedJobWithSlug(t, st, "app-a")
+	runner.bindJob(a1, "a1")
+	runner.releases["a1"] = release
+
+	// RunOnce #1 claims a1 and runs its requirement_analysis step, which blocks
+	// in the fake runner until `release` is closed — holding a1 in running.
+	doneCh := make(chan error, 1)
+	go func() { doneCh <- e.RunOnce(context.Background()) }()
+	select {
+	case <-runner.started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("a1 never started")
 	}
-	defer e.busy.Store(false)
+	if j := mustJob(t, st, a1); j.Status != model.JobStatusRunning {
+		t.Fatalf("a1 = %s, want running", j.Status)
+	}
+
+	// RunOnce #2: a2 is queued but app-a has a running job → claim returns nil
+	// → RunOnce is a no-op. a2 must stay queued.
 	if err := e.RunOnce(context.Background()); err != nil {
-		t.Fatalf("RunOnce while busy: %v", err)
+		t.Fatalf("RunOnce #2: %v", err)
 	}
-	// Job should remain queued, untouched.
-	if j := mustJob(t, st, id); j.Status != model.JobStatusQueued {
-		t.Fatalf("job = %s, want queued (busy held)", j.Status)
+	if j := mustJob(t, st, a2); j.Status != model.JobStatusQueued {
+		t.Fatalf("a2 = %s, want queued (same-app serialization held while a1 runs)", j.Status)
+	}
+
+	// Release a1 → its step completes, advanceOrComplete re-queues a1 for the
+	// next step. a1 is no longer running, so app-a's slot frees.
+	close(release)
+	if err := <-doneCh; err != nil {
+		t.Fatalf("RunOnce #1 returned %v", err)
+	}
+	if j := mustJob(t, st, a1); j.Status != model.JobStatusQueued {
+		t.Fatalf("a1 = %s, want queued (re-queued for next step)", j.Status)
+	}
+
+	// RunOnce #3: a1 (re-queued) and a2 are both app-a; only one may run. The
+	// oldest runnable is claimed. a2 must still NOT be running concurrently.
+	runner.releases["a1"] = nil // let subsequent a1 steps run without blocking
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce #3: %v", err)
+	}
+	// Exactly one of {a1, a2} may be non-queued; the other must stay queued.
+	s1, s2 := mustJob(t, st, a1).Status, mustJob(t, st, a2).Status
+	if s1 != model.JobStatusQueued && s2 != model.JobStatusQueued {
+		t.Fatalf("both app-a jobs advanced (a1=%s a2=%s) — same-app serialization broken", s1, s2)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -37,15 +36,28 @@ type StepResult struct {
 	NeedsUserInput bool
 }
 
-// Executor drives the fixed pipeline forward: it picks the oldest queued job,
-// runs its current step, and records the transition. At most one job runs at a
-// time — the busy flag is shared with the server (rebuild CAS-409s while held).
+// Executor drives the fixed pipeline forward: it runs up to MaxConcurrentJobs
+// jobs at once across DIFFERENT applications, serializing jobs of the SAME
+// application (ClaimNextRunnableJob excludes a queued job whose app_slug already
+// has a running job). Jobs are claimed atomically by N worker goroutines; the
+// per-job cancel map lets Cancel interrupt the in-flight step of any running job.
 type Executor struct {
 	store  *store.Store
 	runner StepRunner
-	busy   *atomic.Bool
+	// maxConcurrent bounds the worker pool. Workers loop: claim a runnable job →
+	// run one step → loop. When no job is claimable a worker blocks on signal
+	// until Signaled (on queue/retry/advance) or ctx is cancelled.
+	maxConcurrent int
 
-	signal chan struct{}
+	// wakeL/wakeC broadcast idle workers on Signal. A single Signal() must be
+	// able to wake multiple idle workers at once (a queued batch may have N
+	// runnable jobs across different apps), so a buffered-1 channel is not
+	// enough. sync.Cond Broadcast wakes every worker waiting on wakeC; workers
+	// that find nothing claimable go back to waiting. For N≤16 workers the
+	// thundering-herd is harmless — ClaimNextRunnableJob serializes losers to
+	// nil under the single-connection pool.
+	wakeL sync.Mutex
+	wakeC *sync.Cond
 
 	OnUpdate func(context.Context, ExecutionUpdate)
 	// OnRecord is invoked AFTER a step_execution_record is successfully
@@ -63,9 +75,12 @@ type Executor struct {
 	OnTrace func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
 	RunLog  *runlog.Logger
 
-	// cancel of the currently-running step (if any), so Cancel can kill it.
-	currentCancel atomic.Value // func()
-	currentJobID  atomic.Value // string
+	// cancels maps a running jobID → the CancelFunc of its in-flight step's ctx,
+	// guarded by cancelsMu. runJobStep adds on start and removes on end (defer);
+	// Cancel looks up + invokes under the lock. A mutex is required because N
+	// workers now run concurrently, each touching the map.
+	cancelsMu sync.Mutex
+	cancels   map[string]context.CancelFunc
 }
 
 type ExecutionUpdate struct {
@@ -253,78 +268,119 @@ const (
 	systemRecordRetry       = "步骤已重试"
 )
 
-// NewExecutor builds an Executor over st using runner and sharing busy with the
-// server. The Executor is idle until Start is called (or RunOnce is driven by a
-// test).
-func NewExecutor(st *store.Store, runner StepRunner, busy *atomic.Bool) *Executor {
-	return &Executor{
-		store:  st,
-		runner: runner,
-		busy:   busy,
-		signal: make(chan struct{}, 1),
+// NewExecutor builds an Executor over st using runner with a worker pool of
+// maxConcurrent workers. maxConcurrent must be >= 1; the caller (config.Resolve)
+// clamps it to [1,16]. The Executor is idle until Start is called (or RunOnce is
+// driven by a test).
+func NewExecutor(st *store.Store, runner StepRunner, maxConcurrent int) *Executor {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
 	}
+	e := &Executor{
+		store:         st,
+		runner:        runner,
+		maxConcurrent: maxConcurrent,
+		cancels:       make(map[string]context.CancelFunc),
+	}
+	e.wakeC = sync.NewCond(&e.wakeL)
+	return e
 }
 
-// Start launches the drain loop that processes queued jobs whenever Signaled.
-// It returns immediately; the loop exits when ctx is cancelled.
+// Start launches the worker pool. Up to MaxConcurrent workers run concurrently;
+// each loops claiming a runnable job (one whose app has no running job),
+// running one step, and re-looping. When no job is claimable a worker waits on
+// wakeC until Signaled (on queue/retry/advance) — a single Signal Broadcasts to
+// all idle workers so a queued batch can fan out across apps. A watcher goroutine
+// Broadcasts on ctx cancellation so idle workers exit promptly at shutdown.
+// Start returns immediately; workers exit when ctx is cancelled.
 func (e *Executor) Start(ctx context.Context) {
+	// Watcher: Broadcast on ctx cancel so idle workers stuck in Wait wake and
+	// observe ctx.Err(). This is the standard sync.Cond + cancellation pattern.
 	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-e.signal:
-				for {
-					if ctx.Err() != nil {
-						return
-					}
-					if err := e.RunOnce(ctx); err != nil {
-						log.Printf("executor: run once: %v", err)
-						break
-					}
-					// Stop draining when nothing is queued.
-					if j, _ := e.store.GetOldestQueuedJob(ctx); j == nil {
-						break
-					}
-				}
-			}
-		}
+		<-ctx.Done()
+		e.Signal()
 	}()
+	for i := 0; i < e.maxConcurrent; i++ {
+		workerID := fmt.Sprintf("executor-%d", i)
+		go e.worker(ctx, workerID)
+	}
 }
 
-// Signal is a non-blocking notify that wakes the drain loop.
-func (e *Executor) Signal() {
-	select {
-	case e.signal <- struct{}{}:
-	default:
+// worker is one pool goroutine. It drains runnable jobs until none remain, then
+// waits on wakeC for the next wake. On every wake it drains again.
+func (e *Executor) worker(ctx context.Context, workerID string) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		// Drain: claim+run until no job is claimable. This keeps a worker busy
+		// across a multi-step job's queued→advance→queued cycle without an
+		// extra signal round-trip, and naturally stops when every queued job's
+		// app is busy (or nothing is queued).
+		ran := false
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			claimed, err := e.store.ClaimNextRunnableJob(ctx, workerID)
+			if err != nil {
+				log.Printf("executor: claim: %v", err)
+				break
+			}
+			if claimed == nil {
+				break // nothing runnable right now; await next signal
+			}
+			if err := e.runJobStep(ctx, *claimed); err != nil {
+				log.Printf("executor: run job step %s: %v", claimed.ID, err)
+			}
+			ran = true
+		}
+		if ran {
+			// A finished step may have queued another job (advanceOrComplete
+			// re-queues) whose app is now free — re-check before waiting.
+			continue
+		}
+		// Nothing runnable: wait for the next Signal (new work) or the watcher's
+		// shutdown Broadcast (ctx cancel). The claim loop above re-checks
+		// ctx.Err() on every wake, so a spurious wake at shutdown exits cleanly.
+		e.wakeL.Lock()
+		if ctx.Err() == nil {
+			e.wakeC.Wait()
+		}
+		e.wakeL.Unlock()
 	}
+}
+
+// Signal is a non-blocking notify that wakes ALL idle workers (Broadcast), so a
+// queued batch of independent-app jobs can fan out across the pool. A worker
+// that finds nothing claimable goes back to waiting.
+func (e *Executor) Signal() {
+	e.wakeL.Lock()
+	e.wakeC.Broadcast()
+	e.wakeL.Unlock()
 }
 
 // ErrNoQueuedJob is returned by RunOnce when there is no queued job to process.
 var ErrNoQueuedJob = errors.New("executor: no queued job")
 
-// RunOnce processes the oldest queued job by exactly one step. It is a no-op
-// (nil return) when the busy flag is already held — the single-active-job
-// invariant. It is the main entry point used by both the drain loop and tests.
+// RunOnce claims and runs the next runnable job by exactly one step. It returns
+// nil (no-op) when no job is claimable — every queued job's app already has a
+// running job, or nothing is queued. It is the main entry point used by tests;
+// the worker pool drives the same runJobStep path.
 func (e *Executor) RunOnce(ctx context.Context) error {
-	// Acquire the single execution slot.
-	if !e.busy.CompareAndSwap(false, true) {
-		return nil
-	}
-	defer e.busy.Store(false)
-
-	job, err := e.store.GetOldestQueuedJob(ctx)
+	claimed, err := e.store.ClaimNextRunnableJob(ctx, "runonce")
 	if err != nil {
-		return fmt.Errorf("get oldest queued job: %w", err)
+		return fmt.Errorf("claim next runnable job: %w", err)
 	}
-	if job == nil {
+	if claimed == nil {
 		return nil
 	}
-	return e.runJobStep(ctx, *job)
+	return e.runJobStep(ctx, *claimed)
 }
 
-// runJobStep runs one step for the given (queued) job. The caller has already
-// acquired the busy flag.
+// runJobStep runs one step for the given (already-claimed/running) job. The
+// caller (worker/RunOnce) has already flipped the job to running via the claim;
+// this function runs the step, records the transition, and finalizes.
 func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	// Find the step the job is currently pointing at.
 	step, err := e.store.GetStepByKind(ctx, job.ID, job.CurrentStepKind)
@@ -337,12 +393,8 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 		return fmt.Errorf("job %s has no step for current kind %s", job.ID, job.CurrentStepKind)
 	}
 
-	// Flip job+step to running. Reload the job so the runner sees its current
-	// state; the MarkStepRunning call clears prior error fields and bumps the
-	// attempt below.
-	if err := e.store.MarkJobRunning(ctx, job.ID, "executor"); err != nil {
-		return fmt.Errorf("mark job running: %w", err)
-	}
+	// The claim already flipped the job to running + stamped started_at, so we
+	// only bump the step attempt + flip the step to running here.
 	if err := e.store.IncrementStepAttempt(ctx, step.ID); err != nil {
 		return fmt.Errorf("increment attempt: %w", err)
 	}
@@ -367,13 +419,18 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 		"attempt":   currentStep.Attempt,
 	})
 
-	// Cancellable context for this run, stored so Cancel can interrupt it.
+	// Cancellable context for this run, stored in the per-job cancel map so
+	// Cancel can interrupt it. Added on start, removed on end (defer) — the map
+	// is guarded by cancelsMu because N workers run concurrently.
 	runCtx, cancel := context.WithCancel(ctx)
-	e.currentCancel.Store(cancelFunc(cancel))
-	e.currentJobID.Store(job.ID)
+	e.cancelsMu.Lock()
+	e.cancels[job.ID] = cancel
+	e.cancelsMu.Unlock()
 	defer func() {
-		e.currentCancel.Store(cancelFunc(func() {}))
-		e.currentJobID.Store("")
+		cancel()
+		e.cancelsMu.Lock()
+		delete(e.cancels, job.ID)
+		e.cancelsMu.Unlock()
 	}()
 
 	// Build the scoped reporter for this attempt. The executor owns sequence +
@@ -592,24 +649,20 @@ func (e *Executor) Cancel(ctx context.Context, jobID string) error {
 	if job == nil {
 		return errors.New("job not found")
 	}
-	// If this is the active job, kill its runner first.
-	if active, _ := e.currentJobID.Load().(string); active == jobID {
-		if fn, ok := e.currentCancel.Load().(func()); ok && fn != nil {
-			fn()
-		}
+	// If this job has an in-flight step, cancel its runner ctx first. The lookup
+	// + invocation happen under cancelsMu so a worker removing the entry (on
+	// step end) and Cancel (on user request) never race on the map.
+	e.cancelsMu.Lock()
+	if cancel, ok := e.cancels[jobID]; ok {
+		cancel()
 	}
+	e.cancelsMu.Unlock()
 	// Record the canceled state for both job and current step. Using the store
 	// helper keeps the queued/active cases consistent.
 	if err := e.store.CancelJob(ctx, jobID); err != nil {
 		return fmt.Errorf("cancel job: %w", err)
 	}
 	return nil
-}
-
-// cancelFunc adapts context.CancelFunc (func()) to the empty func() stored in
-// an atomic.Value; storing a typed nil CancelFunc would surprise Load.
-func cancelFunc(f context.CancelFunc) func() {
-	return func() { f() }
 }
 
 func (e *Executor) notify(ctx context.Context, jobID, stepID string) {

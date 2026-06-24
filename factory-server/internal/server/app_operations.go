@@ -293,17 +293,14 @@ func (s *Server) stopApp(w http.ResponseWriter, r *http.Request) {
 
 // rebuildApp handles POST /api/apps/:id/rebuild. It rebuilds the app's image
 // (tag = app.Source) but does NOT re-run the container — start must be invoked
-// separately. It holds the global executor lock so it conflicts with any
-// in-flight job (Task 10 will share this lock).
+// separately. The executor-busy conflict is now scoped PER APP: a rebuild
+// conflicts only with a running pipeline JOB for the same app (same app_slug),
+// not with jobs of unrelated apps. This is because a rebuild and a same-app job
+// both write generated-apps/<slug>/ and the same image tag (a destructive race),
+// while different apps touch disjoint dirs. The per-app appLock is still held so
+// a rebuild also conflicts with start/stop/delete of the same app.
 func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	appID := Param(r, "id")
-
-	// Global executor lock: only one job/rebuild at a time across the server.
-	if !s.execBusy.CompareAndSwap(false, true) {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "executor busy"})
-		return
-	}
-	defer s.execBusy.Store(false)
 
 	if !s.appLock(appID).TryLock() {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "app busy"})
@@ -322,6 +319,13 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	// Per-app executor conflict: a running JOB for this app's slug writes the
+	// same generated-apps/<slug>/ dir + image tag a rebuild targets. Serialize.
+	if n, _ := s.store.CountRunningJobsByAppSlug(ctx, app.Slug); n > 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "app busy"})
+		return
+	}
+
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
 	img, _, err := s.containerRuntime().BuildImage(ctx, buildApp, tag)

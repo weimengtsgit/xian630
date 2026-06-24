@@ -268,6 +268,100 @@ func (s *Store) GetOldestQueuedJob(ctx context.Context) (*model.Job, error) {
 	return j, nil
 }
 
+// ClaimNextRunnableJob atomically claims the next job a worker should run:
+// the oldest QUEUED job whose app_slug has NO currently RUNNING job, flipped to
+// running with lock_owner stamped and started_at stamped on first run. It
+// returns (nil, nil) when no such job exists (every queued job's app already has
+// a running job, or nothing is queued).
+//
+// ATOMICITY: the claim is a BeginTx→SELECT→UPDATE→Commit transaction (two
+// statements), NOT a single UPDATE. Atomicity depends on the single-connection
+// pool (store.Open pins SetMaxOpenConns(1)): concurrent workers' BeginTx calls
+// serialize on that one connection, so worker B cannot begin until worker A
+// commits — its SELECT then sees the row already flipped to running. Do NOT
+// raise SetMaxOpenConns (e.g. for read concurrency) without first collapsing
+// the SELECT+UPDATE into a single conditional UPDATE: a bare
+// SELECT-then-UPDATE double-claims once the pool can hand out >1 connection,
+// because Go's database/sql releases the connection back to the pool between the
+// two statements and two workers can SELECT the same queued row before either
+// UPDATEs.
+//
+// SERIALIZATION KEY IS app_slug (NOT application_id). Two jobs for the same app
+// both write generated-apps/<slug>/ and the same image tag — a destructive race
+// — so the claim must serialize them by slug. application_id is empty for
+// generation jobs until the app registers mid-run, so keying the claim on it
+// would fail to serialize same-app generation jobs. app_slug is the stable
+// per-lineage key present at seed for BOTH job kinds: generation pre-allocates
+// it (dialogue_handlers.go), and modification targets an existing app whose slug
+// is known. The claim therefore excludes queued jobs whose app_slug matches any
+// running job's app_slug.
+func (s *Store) ClaimNextRunnableJob(ctx context.Context, workerID string) (*model.Job, error) {
+	now := ms(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Inside the transaction: SELECT the oldest eligible queued job, then UPDATE
+	// it to running by id. Because the pool has a single connection
+	// (SetMaxOpenConns(1)), a second worker's BeginTx blocks until this tx
+	// commits — so its SELECT cannot see the same queued row the first worker is
+	// about to flip. This serialization is the atomicity guarantee; it relies on
+	// the single-connection pool, NOT on SQLite's writer lock alone.
+	var jobID string
+	err = tx.QueryRowContext(ctx, `
+SELECT j.id FROM jobs j
+WHERE j.status = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM jobs r
+    WHERE r.status = ? AND r.app_slug = j.app_slug AND r.app_slug <> ''
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM jobs r
+    WHERE r.status = ? AND r.app_slug = '' AND j.app_slug = ''
+  )
+ORDER BY j.created_at ASC
+LIMIT 1`,
+		string(model.JobStatusQueued),
+		string(model.JobStatusRunning),
+		string(model.JobStatusRunning)).Scan(&jobID)
+	if err == sql.ErrNoRows {
+		// Nothing eligible: commit the read tx (no write lock held) and return.
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs
+SET status = ?, lock_owner = ?, started_at = COALESCE(started_at, ?), updated_at = ?
+WHERE id = ?`,
+		string(model.JobStatusRunning), workerID, now, now, jobID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	// Re-read so the returned job reflects the flipped status + started_at.
+	return s.GetJob(ctx, jobID)
+}
+
+// CountRunningJobsByAppSlug returns the number of jobs currently in the running
+// state for the given app_slug. rebuildApp uses it to scope the executor-busy
+// conflict per app: a rebuild conflicts only with a running JOB for the same
+// app, not with jobs of unrelated apps.
+func (s *Store) CountRunningJobsByAppSlug(ctx context.Context, appSlug string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE status = ? AND app_slug = ?`,
+		string(model.JobStatusRunning), appSlug).Scan(&n)
+	return n, err
+}
+
 // MarkJobRunning flips a job to running, sets lock_owner, stamps started_at the
 // first time the job runs, and bumps updated_at.
 func (s *Store) MarkJobRunning(ctx context.Context, jobID, lockOwner string) error {

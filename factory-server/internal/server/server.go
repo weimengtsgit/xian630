@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/agents"
@@ -38,7 +37,6 @@ type Server struct {
 	runner      deploy.CommandRunner                                               // default: &deploy.OSRunner{}
 	runtime     deploy.ContainerRuntime                                             // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
-	execBusy    *atomic.Bool                                                       // global executor lock (Task 10 holds it during jobs)
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
 
 	// Job pipeline executor (Task 10). Runs the fixed six-step factory pipeline
@@ -181,7 +179,6 @@ func (a claudeCommandAdapter) RunStreamWithInput(ctx context.Context, dir, input
 // owned by the server (initialized here) so callers don't need to supply them.
 // The signature is stable: adding deploy wiring does not change it.
 func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
-	execBusy := new(atomic.Bool)
 	runLogger := runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups)
 	osRunner := &deploy.OSRunner{}
 
@@ -212,7 +209,6 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		runner:      osRunner,
 		runtime:     runtime,
 		healthCheck: deploy.CheckHTTP,
-		execBusy:    execBusy,
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers
 		runLog:      runLogger,
 	}
@@ -271,7 +267,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		log.Printf("FACTORY_LLM_CONSOLE=1: claude request/response traces stream to stderr")
 	}
 	dispatch := executor.NewDispatcher(factory, claude)
-	s.exec = executor.NewExecutor(st, dispatch, execBusy)
+	s.exec = executor.NewExecutor(st, dispatch, cfg.MaxConcurrentJobs)
 	s.exec.RunLog = runLogger
 	s.exec.OnUpdate = func(ctx context.Context, update executor.ExecutionUpdate) {
 		s.publishStepUpdated(ctx, update.StepID)
