@@ -103,7 +103,17 @@ assert.match(jobCenterJsx, /created_at|排队时间|创建时间/, 'JobCenter mu
 const focusTaskJs = readFileSync(new URL('../src/hooks/focusTask.js', import.meta.url), 'utf8')
 assert.match(focusTaskJs, /selectFocusTask/, 'a focus-task selector (selectFocusTask) must exist')
 const jobSelectionJs = readFileSync(new URL('../src/hooks/jobSelection.js', import.meta.url), 'utf8')
-assert.match(workbenchJsx, /resolvedApplication.*name|applicationHeaderTitle/, 'workbench header must prefer the resolved application name')
-assert.doesNotMatch(jobSelectionJs, /job\.app_name\s*\|\|/, 'task title must not fall back to job.app_name')
+assert.match(
+  workbenchJsx,
+  /const applicationHeaderTitle = resolvedApplication &&\s*\(\s*resolvedApplication\.name \|\| resolvedApplication\.slug\s*\)/,
+  'applicationHeaderTitle must resolve the application name, then slug',
+)
+assert.match(
+  workbenchJsx,
+  /const workbenchTitle = applicationHeaderTitle \|\| \(session \? titleForDialogue\(session\) : '新会话'\)/,
+  'workbenchTitle must fall back to the dialogue title or 新会话',
+)
+assert.match(workbenchJsx, /<strong>\{workbenchTitle\}<\/strong>/, 'workbench header must render workbenchTitle')
+assert.doesNotMatch(jobSelectionJs, /\bapp_name\b/, 'task title selection must not use app_name')
 
 console.log('check-visible-work-trace: OK')
