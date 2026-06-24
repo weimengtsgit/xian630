@@ -58,10 +58,11 @@ func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...s
 }
 
 type fakeStreamCommandRunner struct {
-	dir   string
-	name  string
-	args  []string
-	lines []string
+	dir      string
+	name     string
+	args     []string
+	lines    []string
+	exitCode int
 }
 
 func (f *fakeStreamCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
@@ -76,7 +77,7 @@ func (f *fakeStreamCommandRunner) RunStream(ctx context.Context, dir, name strin
 		stdout.WriteByte('\n')
 		onStdoutLine(line)
 	}
-	return runner.CommandResult{Stdout: stdout.String(), ExitCode: 0}, nil
+	return runner.CommandResult{Stdout: stdout.String(), ExitCode: f.exitCode}, nil
 }
 
 func TestRunnerWritesArtifactsAndNormalizesEvents(t *testing.T) {
@@ -176,6 +177,21 @@ func TestRunnerTreatsConfirmedOutputAsReadyToConfirm(t *testing.T) {
 	}
 	if !sawReady {
 		t.Fatalf("missing clarification.ready_to_confirm event; events=%#v", events)
+	}
+}
+
+func TestPromptTextForcesSimplifiedChinese(t *testing.T) {
+	r := Runner{}
+	prompt := r.promptText(`C:\tmp\input.json`)
+	for _, want := range []string{
+		"Simplified Chinese",
+		"workLog content",
+		"question text",
+		"recommendation copy",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 
@@ -354,6 +370,131 @@ func TestRunnerUsesClaudeStreamJSONAndEmitsLiveOutputDeltas(t *testing.T) {
 	}
 	if !sawStarted || !sawPartialText || !sawCompleted {
 		t.Fatalf("live stream events missing started=%v partialText=%v completed=%v; got %v", sawStarted, sawPartialText, sawCompleted, eventTypes(events))
+	}
+}
+
+// TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice proves that when the Claude
+// Code CLI returns an upstream API error (here a GLM 529 overloaded) instead of
+// a clarification document, the live completed event surfaces the real reason
+// rather than the optimistic "结构化澄清结果接收完成，正在解析。" fallback — so the
+// user sees why the round failed before the session flips to "已失败".
+func TestRunnerSurfacesClaudeAPIErrorAsVisibleNotice(t *testing.T) {
+	root := t.TempDir()
+	apiErr := `API Error: 529 {"type":"error","error":{"type":"overloaded_error","code":"1305","message":"[1305][该模型当前访问量过大，请您稍后再试]"}}`
+	fr := &fakeStreamCommandRunner{
+		exitCode: 1,
+		lines: []string{
+			`{"type":"system","subtype":"init"}`,
+			`{"type":"assistant","message":{"content":[{"type":"text","text":` + strconv.Quote(apiErr) + `}]}}`,
+			`{"type":"result","subtype":"success","is_error":true,"result":` + strconv.Quote(apiErr) + `}`,
+		},
+	}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	var events []StreamEvent
+	_, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_err", Round: 1, MaxRounds: 3, InitialPrompt: "x",
+	}, func(ev StreamEvent) { events = append(events, ev) })
+	if err == nil {
+		t.Fatalf("RunRound: expected error for API failure, got nil")
+	}
+	var completed *StreamEvent
+	for i := range events {
+		if events[i].Type == "clarification.message.completed" && events[i].MessageID == "live_round_1" {
+			completed = &events[i]
+			break
+		}
+	}
+	if completed == nil {
+		t.Fatalf("missing live_round_1 completed event; got %v", eventTypes(events))
+	}
+	wl, ok := completed.Data.(WorkLog)
+	if !ok {
+		t.Fatalf("completed event data is not a WorkLog: %#v", completed.Data)
+	}
+	if strings.Contains(wl.Content, "正在解析") {
+		t.Fatalf("completed event still shows optimistic fallback: %q", wl.Content)
+	}
+	if !strings.Contains(wl.Content, "需求澄清失败") || !strings.Contains(wl.Content, "529") {
+		t.Fatalf("completed event does not surface the real API error: %q", wl.Content)
+	}
+}
+
+func TestRunnerParsesToolUseWrappedJSONFromAssistantEvent(t *testing.T) {
+	root := t.TempDir()
+	payload := `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [
+    {
+      "type": "analysis",
+      "content": "Need one more clarification before generation."
+    }
+  ],
+  "questions": [
+    {
+      "id": "deck_scope",
+      "label": "Deck scope",
+      "question": "Should the app show all carrier activity areas or a selected subset?",
+      "required": true,
+      "recommendation": "all_known_areas",
+      "multiSelect": false,
+      "options": [
+        {
+          "value": "all_known_areas",
+          "label": "All known areas",
+          "reason": "Matches the current request."
+        }
+      ],
+      "allowCustom": false
+    }
+  ],
+  "requirement": {
+    "appType": "command_dashboard",
+    "appName": "Deck Wind Calculator",
+    "targetUsers": ["Operations staff"],
+    "coreScenario": "Assess deck-wind feasibility by area",
+    "primaryView": "Area list with wind and deck-wind range",
+    "mainEntities": ["activity area", "wind field", "carrier"],
+    "blueprintRefs": ["carrier-deck-wind-calculator"],
+    "dataPolicy": "live_api",
+    "acceptanceFocus": ["deck_wind_range"],
+    "generationProfile": {
+      "base": ["software-factory-app"],
+      "domain": ["defense-operations-ui"],
+      "pattern": ["command-dashboard"]
+    }
+  },
+  "recommendedBlueprints": [
+    {
+      "slug": "carrier-deck-wind-calculator",
+      "name": "Deck wind calculator",
+      "appType": "command_dashboard",
+      "reason": "Direct match for deck-wind monitoring.",
+      "referenceKind": "structure|interaction|data-model|style"
+    }
+  ]
+}`
+	content := "Plan notes\n```json\n" + payload + "\n```"
+	assistantLine := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"C:\\\\temp\\\\output.json","content":` + strconv.Quote(content) + `}}]}}`
+	fr := &fakeStreamCommandRunner{lines: []string{
+		`{"type":"system","subtype":"init"}`,
+		assistantLine,
+	}}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_tool_use", Round: 1, MaxRounds: 3, InitialPrompt: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if out.Status != "waiting_user" {
+		t.Fatalf("status = %q", out.Status)
+	}
+	if out.Requirement.AppName != "Deck Wind Calculator" {
+		t.Fatalf("appName = %q", out.Requirement.AppName)
+	}
+	if len(out.Questions) != 1 || out.Questions[0].ID != "deck_scope" {
+		t.Fatalf("questions = %#v", out.Questions)
 	}
 }
 

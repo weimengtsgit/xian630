@@ -40,6 +40,53 @@ type Question struct {
 	DefaultAnswer string `json:"defaultAnswer"`
 }
 
+// SkillPaths is a []string that unmarshals usedSkills from EITHER of the two
+// shapes agents actually emit:
+//
+//   - the documented contract: an array of skill file paths
+//     ["…/software-factory-app/SKILL.md", …], or
+//   - an array of objects {path, purpose} that some agents produce when they
+//     also document WHY each skill was followed.
+//
+// Both are accepted; objects are normalized to their `path` value so the rest
+// of the pipeline still sees []string (len is the only thing the validators
+// and executors depend on). Without this, the object shape fails json.Unmarshal
+// with a type mismatch that ReadAndDecode then misreports as
+// output_invalid_json (real failure: job_fb9b8586864a6fe52876d4c8, every retry).
+// Exported because the executor's own code_generation decode struct reuses it.
+type SkillPaths []string
+
+func (s *SkillPaths) UnmarshalJSON(data []byte) error {
+	// null / absent decodes to an empty slice (the validators treat empty as
+	// "usedSkills required" → schema_validation_failed).
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(raw))
+	for _, el := range raw {
+		// Documented shape: a bare path string.
+		var str string
+		if err := json.Unmarshal(el, &str); err == nil {
+			out = append(out, str)
+			continue
+		}
+		// Richer shape: an object {path, purpose, …} — take its path.
+		var obj struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(el, &obj); err == nil && obj.Path != "" {
+			out = append(out, obj.Path)
+			continue
+		}
+		// Unknown element shape: record the raw token so the non-empty check
+		// still reflects that a skill was reported (we never silently drop one).
+		out = append(out, string(el))
+	}
+	*s = out
+	return nil
+}
+
 // codeGenManifestPath is the path, relative to a generated app projectDir, at
 // which the manifest must exist after code_generation (design §5.3, §8).
 const codeGenManifestRel = ".factory/app.json"
@@ -72,7 +119,13 @@ func ReadAndDecode(path string, target any) error {
 	}
 	payload := extractJSONObject(string(raw))
 	if err := json.Unmarshal([]byte(payload), target); err != nil {
-		return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)
+		repaired := repairUnescapedStringQuotes(payload)
+		if repaired == payload {
+			return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)
+		}
+		if err := json.Unmarshal([]byte(repaired), target); err != nil {
+			return fmt.Errorf("%s: %w", path, ErrOutputInvalidJSON)
+		}
 	}
 	return nil
 }
@@ -123,6 +176,63 @@ func extractJSONObject(s string) string {
 		}
 	}
 	return s[start:]
+}
+
+func repairUnescapedStringQuotes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inStr := false
+	esc := false
+	changed := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !inStr {
+			b.WriteByte(c)
+			if c == '"' {
+				inStr = true
+			}
+			continue
+		}
+		if esc {
+			b.WriteByte(c)
+			esc = false
+			continue
+		}
+		if c == '\\' {
+			b.WriteByte(c)
+			esc = true
+			continue
+		}
+		if c == '"' {
+			if quoteTerminatesString(s, i) {
+				b.WriteByte(c)
+				inStr = false
+			} else {
+				b.WriteString(`\"`)
+				changed = true
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	if !changed {
+		return s
+	}
+	return b.String()
+}
+
+func quoteTerminatesString(s string, quote int) bool {
+	for i := quote + 1; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case ':', ',', '}', ']':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // requirementAnalysisOutput mirrors the FROZEN requirement shape the
@@ -195,7 +305,7 @@ type solutionDesignOutput struct {
 	Questions      []Question `json:"questions"`
 	App            any        `json:"app,omitempty"`
 	ArtifactPlan   any        `json:"artifactPlan,omitempty"`
-	UsedSkills     []string   `json:"usedSkills"`
+	UsedSkills     SkillPaths `json:"usedSkills"`
 	Warnings       []string   `json:"warnings,omitempty"`
 	// WorkLog: see requirementAnalysisOutput.WorkLog.
 	WorkLog []workLogEntry `json:"workLog"`
@@ -223,7 +333,7 @@ type codeGenerationOutput struct {
 	CreatedFiles   []string   `json:"createdFiles"`
 	NeedsUserInput bool       `json:"needsUserInput"`
 	Questions      []Question `json:"questions"`
-	UsedSkills     []string   `json:"usedSkills"`
+	UsedSkills     SkillPaths `json:"usedSkills"`
 	Warnings       []string   `json:"warnings,omitempty"`
 	// WorkLog: see requirementAnalysisOutput.WorkLog.
 	WorkLog []workLogEntry `json:"workLog"`

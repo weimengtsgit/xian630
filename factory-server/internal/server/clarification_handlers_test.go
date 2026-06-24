@@ -135,7 +135,29 @@ func newClarTestServer(t *testing.T, fake runner.CommandRunner) (*Server, *Route
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
+	workspaceRoot := t.TempDir()
+	writeServerCatalog(t, workspaceRoot, `{
+  "version": 1,
+  "scenes": {
+    "carrier-formation-replay": { "surface": "application", "order": 1 },
+    "carrier-homeport-tide-window": { "surface": "blueprint" },
+    "carrier-deck-wind-calculator": { "surface": "blueprint" },
+    "merchant-density-grid-alert": { "surface": "blueprint" },
+    "social-sighting-cluster-alert": { "surface": "blueprint" },
+    "carrier-air-wing-affiliation-inference": { "surface": "blueprint" }
+  }
+}`)
+	for _, slug := range []string{
+		"carrier-formation-replay",
+		"carrier-homeport-tide-window",
+		"carrier-deck-wind-calculator",
+		"merchant-density-grid-alert",
+		"social-sighting-cluster-alert",
+		"carrier-air-wing-affiliation-inference",
+	} {
+		writeServerSceneManifest(t, workspaceRoot, slug)
+	}
+	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: workspaceRoot}, st, scanner.Scanner{})
 	srv.clarifier = clarification.Runner{
 		Cmd:           fake,
 		WorkspaceRoot: t.TempDir(),
@@ -1285,7 +1307,7 @@ func TestRunRoundSanitizesUnsafeBlueprintRefs(t *testing.T) {
     "mainEntities": ["编队","事件"],
     "dataPolicy": "mock_data",
     "acceptanceFocus": ["轨迹联动"],
-    "blueprintRefs": ["carrier-formation-replay", "../x"],
+    "blueprintRefs": ["carrier-homeport-tide-window", "../x"],
     "generationProfile": {"base":["software-factory-app"]}
   }
 }`
@@ -1314,8 +1336,60 @@ func TestRunRoundSanitizesUnsafeBlueprintRefs(t *testing.T) {
 	if len(persisted.BlueprintRefs) != 1 {
 		t.Fatalf("persisted blueprintRefs = %#v, want exactly 1 (safe slug only)", persisted.BlueprintRefs)
 	}
-	if persisted.BlueprintRefs[0] != "carrier-formation-replay" {
-		t.Fatalf("persisted blueprintRef[0] = %q, want 'carrier-formation-replay'", persisted.BlueprintRefs[0])
+	if persisted.BlueprintRefs[0] != "carrier-homeport-tide-window" {
+		t.Fatalf("persisted blueprintRef[0] = %q, want 'carrier-homeport-tide-window'", persisted.BlueprintRefs[0])
+	}
+}
+
+func TestRunRoundDropsNonBlueprintRefsFromSceneCatalog(t *testing.T) {
+	const disabledBlueprintOutput = `{
+  "status": "ready_to_confirm",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"收敛"}],
+  "questions": [],
+  "requirement": {
+    "appType": "situation_replay",
+    "appName": "航母编队复盘应用",
+    "targetUsers": ["作战参谋"],
+    "coreScenario": "复盘近 1 个月航迹",
+    "primaryView": "地图 + 时间轴",
+    "mainEntities": ["编队","事件"],
+    "dataPolicy": "mock_data",
+    "acceptanceFocus": ["轨迹联动"],
+    "blueprintRefs": ["carrier-formation-replay"],
+    "generationProfile": {"base":["software-factory-app"]}
+  },
+  "recommendedBlueprints": [
+    {
+      "slug":"carrier-formation-replay",
+      "name":"航母编队月度航迹复盘",
+      "appType":"situation_replay",
+      "reason":"匹配",
+      "referenceKind":"reference"
+    }
+  ]
+}`
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: disabledBlueprintOutput})
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母编队复盘应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	var persisted struct {
+		BlueprintRefs []string `json:"blueprintRefs"`
+	}
+	if err := json.Unmarshal([]byte(got.RequirementJSON), &persisted); err != nil {
+		t.Fatalf("unmarshal persisted requirement: %v", err)
+	}
+	if len(persisted.BlueprintRefs) != 0 {
+		t.Fatalf("persisted blueprintRefs = %#v, want none for disabled blueprint", persisted.BlueprintRefs)
 	}
 }
 

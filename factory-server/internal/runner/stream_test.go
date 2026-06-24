@@ -45,7 +45,7 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 	return false
 }
 
-// TestStreamClaudeEventsCapturesThinkingAndFileDeltas feeds the parser a REAL
+// TestStreamClaudeEventsEmitsThinkingAndCapturesFileDeltas feeds the parser a REAL
 // CLI stream-json shape (verified against a live code_generation capture: each
 // event is a top-level NDJSON object; content blocks are NESTED inside
 // assistant.message.content[]) and asserts 方案 B behavior:
@@ -53,13 +53,13 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 //   - Write/Edit tool_use blocks become file_delta records (+N / +A -B);
 //   - Read/Grep/Glob become activity records with a redacted RELATIVE path;
 //   - non-allowlisted tools (WebSearch) and system events are ignored.
-func TestStreamClaudeEventsCapturesThinkingAndFileDeltas(t *testing.T) {
+func TestStreamClaudeEventsEmitsThinkingAndCapturesFileDeltas(t *testing.T) {
 	emit := &recordEmitter{}
 	stream := strings.Join([]string{
 		// 1. system init — ignored (not an assistant turn).
 		`{"type":"system","subtype":"init","session_id":"abc"}`,
 		// 2. assistant turn with a thinking block (方案 B: reasoning IS shown).
-		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先分析需求，再规划文件结构"}]}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"THINKING_CANARY"}]}}`,
 		// 3. assistant turn with a Read tool_use on an ABSOLUTE path → activity,
 		//    path redacted to a RELATIVE form (no leading /, no home dir).
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/Users/dev/repo/generated-apps/demo/src/App.jsx"}}]}}`,
@@ -75,12 +75,12 @@ func TestStreamClaudeEventsCapturesThinkingAndFileDeltas(t *testing.T) {
 	}, "\n")
 	streamClaudeEvents(context.Background(), emit, stream)
 
-	// 方案 B: thinking IS captured.
+	// Thinking records ARE emitted to the portal (not hidden).
 	if !emit.hasKind(model.ExecutionRecordThinking) {
-		t.Fatalf("no thinking record (方案 B regression); records=%#v", emit.records)
+		t.Fatalf("thinking record should be emitted; records=%#v", emit.records)
 	}
-	if !emit.contentContaining("先分析需求") {
-		t.Errorf("thinking text not captured; records=%#v", emit.records)
+	if !emit.contentContaining("THINKING_CANARY") {
+		t.Errorf("thinking text missing from records=%#v", emit.records)
 	}
 
 	// Write → file_delta with +N, no " -" minus marker.

@@ -72,7 +72,8 @@ Output ONLY this JSON object (no prose, no ```json fences):
     "generationProfile": {
       "base": ["software-factory-app"],
       "domain": ["defense-operations-ui"],
-      "pattern": ["map-timeline-replay"]
+      "pattern": ["map-timeline-replay"],
+      "data": []
     }
   }
 }
@@ -89,9 +90,9 @@ Output ONLY this JSON object (no prose, no ```json fences):
   field. `recommendedValue` is a typed JSON value (string for scalars, array for
   list fields like `targetUsers`, `mainEntities`, `acceptanceFocus`).
 - `requirement.blueprintRefs` — server-side-only metadata. Blueprints are an
-  internal Factory reference; populate `blueprintRefs` when the intent matches,
-  but NEVER surface blueprints in any user-facing output and never describe a
-  blueprint as a template, sample, or copy source.
+  internal Factory reference; populate `blueprintRefs` when the intent matches;
+  otherwise use an empty array. NEVER surface blueprints in any user-facing
+  output and never describe a blueprint as a template, sample, or copy source.
 
 ## Rules
 
@@ -123,10 +124,12 @@ Output ONLY this JSON object (no prose, no ```json fences):
 - `coreScenario`
 - `primaryView`
 - `mainEntities`
-- `blueprintRefs` (internal Factory reference only)
 - `dataPolicy`
 - `acceptanceFocus`
 - `generationProfile`
+
+`blueprintRefs` is optional and may be an empty array when no internal Factory
+reference matches the user's app.
 
 ## Supported App Types
 
@@ -155,3 +158,20 @@ catalog index is `.claude/skills/requirement-clarification/blueprints.json`.
 - `situation_replay`: `software-factory-app`, `defense-operations-ui`, `map-timeline-replay`
 - `operations_management`: `software-factory-app`, `defense-operations-ui`, `operations-management-console`
 - `command_dashboard`: `software-factory-app`, `defense-operations-ui`, `command-dashboard`
+
+## Data Skill Mapping
+
+When `dataPolicy` is `live_api` or `mock_then_api` (the app fetches real data)
+**and** the requirement matches one of the data domains below, put the
+corresponding skill into `requirement.generationProfile.data`. When `dataPolicy`
+is `mock_data`, do not add any data skill.
+
+- Tide / tidal height / departure window / draft threshold / port tide level: `tide-data-skill`
+- 10 m wind / deck wind / wind speed & direction / launch or recovery conditions: `deck-wind-data-skill`
+- AIS / merchant density / shipping density / 50-nautical-mile grid / historical vessel traffic: `ais-density-data-skill` (**historical mode**: uses free downloadable AIS archives only, no real-time API; coverage limited to free-source regions — U.S. waters via MarineCadastre, Danish waters via DMA, global-but-fishing via GFW)
+
+These rules apply to **any** app whose intent matches a domain, including novel
+apps that are not preset scenarios and regardless of `appType`. If no domain
+matches, emit an empty `data` array. Set `dataPolicy` from intent: when the user
+wants real-time / live data, use `live_api` or `mock_then_api`; otherwise
+`mock_data`.

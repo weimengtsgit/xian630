@@ -87,8 +87,8 @@ state = applyConversationEvent(state, 'clarification.blueprint.recommended', {
   session_id: 'clar_1',
   data: [{ id: 'carrier-formation-replay', name: '航母编队复盘', reason: '匹配复盘场景' }],
 })
-assert.equal(state.timeline.at(-1).type, 'blueprint_recommendation')
-assert.equal(state.timeline.at(-1).blueprints[0].id, 'carrier-formation-replay')
+assert.equal(state.timeline.at(-1).type, 'question_group')
+assert.equal(state.timeline.some(item => item.type === 'blueprint_recommendation'), false)
 
 state = {
   ...state,

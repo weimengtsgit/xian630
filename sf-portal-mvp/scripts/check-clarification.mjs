@@ -119,7 +119,7 @@ assert.equal(s.requirement.primaryView, 'map')
 assert.equal(s.questions.length, 0, 'ready_to_confirm must clear stale clarification questions')
 
 // ---------------------------------------------------------------------------
-// blueprint.recommended -> blueprints array
+// blueprint.recommended is retired: blueprints are internal Factory metadata.
 // ---------------------------------------------------------------------------
 s = initialClarificationState()
 s = applyClarificationEvent(s, 'clarification.blueprint.recommended', {
@@ -131,8 +131,7 @@ s = applyClarificationEvent(s, 'clarification.blueprint.recommended', {
   ],
 })
 assert.equal(Array.isArray(s.blueprints), true)
-assert.equal(s.blueprints.length, 2)
-assert.equal(s.blueprints[0].name, 'A')
+assert.equal(s.blueprints.length, 0)
 
 // ---------------------------------------------------------------------------
 // confirmed -> session replaced (realistic confirmed-session payload: the

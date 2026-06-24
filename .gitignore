@@ -62,6 +62,10 @@ bin/
 
 # Software factory runtime artifacts
 /factory-server/.factory-runs/
+/generated-apps
+__debug*
+.cc-status
+*.exe
 
 # Superpowers brainstorming companion artifacts
 .superpowers/

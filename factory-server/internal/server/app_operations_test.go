@@ -79,6 +79,7 @@ func newOpsServer(t *testing.T, fr *srvRunner) (*Server, *Router) {
 
 	srv := New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
 	srv.runner = fr
+	srv.runtime = deploy.NewPodman(fr)
 	srv.healthCheck = func(context.Context, string, time.Duration) error { return nil }
 	return srv, srv.routes()
 }
@@ -146,7 +147,7 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	if dep.HostPort < 18000 || dep.HostPort > 18999 {
 		t.Errorf("host_port = %d, want in [18000,18999]", dep.HostPort)
 	}
-	wantURL := "http://127.0.0.1:" + itoaStr(dep.HostPort)
+	wantURL := containerHealthURL(dep.HostPort)
 	if dep.URL != wantURL {
 		t.Errorf("url = %q, want %q", dep.URL, wantURL)
 	}
@@ -164,6 +165,29 @@ func TestStartBuildsRunsHealthchecksAndMarksRunning(t *testing.T) {
 	}
 	if app.RuntimeURL != wantURL {
 		t.Errorf("app runtime_url = %q, want %q", app.RuntimeURL, wantURL)
+	}
+}
+
+func TestStartUsesConfiguredContainerRuntime(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	srv.runtime = deploy.NewDocker(fr)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/start", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if hasCall(fr.calls, "podman", "build") || hasCall(fr.calls, "podman", "run") {
+		t.Fatalf("start app hardcoded podman despite configured docker runtime: calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "docker", "build", "-t", "localhost/software-factory/east-sea-situation:preset", ".") {
+		t.Fatalf("missing docker build call; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "docker", "run", "-d", "--name sf-east-sea-situation-", "-p ", ":80") {
+		t.Fatalf("missing docker run call; calls=%v", fr.calls)
 	}
 }
 

@@ -60,7 +60,14 @@ func newWS(t *testing.T) AttemptWorkspace {
 
 func joinArgs(args []string) string { return strings.Join(args, " ") }
 
+func clearClaudeModelEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("CLAUDE_CODE_MODEL", "")
+	t.Setenv("ANTHROPIC_MODEL", "")
+}
+
 func TestClaudeRunReadOnlyArgv(t *testing.T) {
+	clearClaudeModelEnv(t)
 	fr := &fakeRunner{stdout: "hello stdout"}
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
 	ws := newWS(t)
@@ -78,10 +85,11 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 		t.Fatalf("stdin = %q, want prompt %q", fr.stdin, prompt)
 	}
 	got := joinArgs(fr.argv)
-	// Task 3: every stage now appends stream-json flags so the runner can parse
-	// tool_use events into activity records as they happen. plan mode +
-	// Read/Grep/Glob + Bash/Edit/Write disallow are unchanged.
-	wantRo := "--print --permission-mode plan --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write --output-format stream-json --include-partial-messages --verbose"
+	// Task 3: every stage appends stream-json flags so the runner can parse
+	// tool_use events into activity records. Read-only stages now avoid plan
+	// mode because some Claude-compatible providers turn it into an approval
+	// loop and emit prose instead of the required JSON contract.
+	wantRo := "--print --permission-mode acceptEdits --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write --output-format stream-json --include-partial-messages --verbose"
 	if got != wantRo {
 		t.Errorf("read-only argv =\n got: %q\nwant: %q", got, wantRo)
 	}
@@ -116,6 +124,7 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 }
 
 func TestClaudeRunCodegenArgv(t *testing.T) {
+	clearClaudeModelEnv(t)
 	fr := &fakeRunner{stdout: "ok"}
 	workspace := t.TempDir()
 	r := ClaudeRunner{Runner: fr, Binary: "claude", WorkDir: workspace}
@@ -150,6 +159,22 @@ func TestClaudeRunCodegenArgv(t *testing.T) {
 	}
 }
 
+func TestClaudeRunAppendsModelArgFromEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_MODEL", "glm-5.1")
+	t.Setenv("ANTHROPIC_MODEL", "")
+	fr := &fakeRunner{stdout: "ok"}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	if err := r.Run(context.Background(), ws, "P", nil, false, nil); err != nil {
+		t.Fatalf("Run err = %v", err)
+	}
+	got := joinArgs(fr.argv)
+	if !strings.Contains(got, "--model glm-5.1") {
+		t.Fatalf("argv missing model override: %q", got)
+	}
+}
+
 func TestClaudeRunNonzeroExit(t *testing.T) {
 	fr := &fakeRunner{exitCode: 1, stdout: "boom"}
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
@@ -162,6 +187,49 @@ func TestClaudeRunNonzeroExit(t *testing.T) {
 	// even on failure stdout/stderr must be captured for audit
 	if _, e := os.Stat(ws.StdoutPath()); e != nil {
 		t.Errorf("stdout.log not written on nonzero exit: %v", e)
+	}
+}
+
+// TestClaudeRunToleratesSpuriousErrorAfterSuccess: the Claude Code CLI can emit a
+// genuine success result AND a spurious trailing "error_during_execution"
+// (e.g. "only prompt commands are supported in streaming mode", seen with
+// stdin-piped prompts under stream-json during acceptEdits code generation) and
+// then exit 1. When a success result is present, the non-zero exit is a transport
+// quirk, not a step failure — Run must proceed so completed work is not
+// discarded. Reproduces the job_32a76c2b0d13b0509c675798 code_generation failure.
+func TestClaudeRunToleratesSpuriousErrorAfterSuccess(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done"}`,
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["only prompt commands are supported in streaming mode"]}`,
+		"",
+	}, "\n")
+	fr := &fakeRunner{exitCode: 1, stdout: stdout}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	if err := r.Run(context.Background(), ws, "P", nil, false, nil); err != nil {
+		t.Fatalf("Run err = %v, want nil (success result present tolerates non-zero exit)", err)
+	}
+}
+
+// TestClaudeRunNonzeroExitStillFailsWithoutSuccess: a non-zero exit whose stdout
+// holds only an error result (no subtype:"success") is a real failure and must
+// still surface ErrRunnerExitNonzero — the tolerance is strictly opt-in on a
+// present success result, never a blanket ignore of non-zero exits.
+func TestClaudeRunNonzeroExitStillFailsWithoutSuccess(t *testing.T) {
+	stdout := strings.Join([]string{
+		`{"type":"system","subtype":"init"}`,
+		`{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["real failure"]}`,
+		"",
+	}, "\n")
+	fr := &fakeRunner{exitCode: 1, stdout: stdout}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	err := r.Run(context.Background(), ws, "P", nil, false, nil)
+	if !errors.Is(err, ErrRunnerExitNonzero) {
+		t.Fatalf("err = %v, want ErrRunnerExitNonzero", err)
 	}
 }
 

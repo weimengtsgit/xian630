@@ -3,10 +3,11 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,48 @@ const defaultContainerPort = 80
 const healthCheckTimeout = 10 * time.Second
 
 const activeDeploymentProbeTimeout = 1500 * time.Millisecond
+
+// containerHealthURL builds the health-check URL for a container's host port.
+// On Windows+WSL2, port forwarding through wslrelay is unreliable (IPv6-only
+// on some installs, HTTP-broken on others), so we prefer the WSL VM IP.
+func containerHealthURL(hostPort int) string {
+	ip := wslVMIP()
+	return fmt.Sprintf("http://%s:%d", ip, hostPort)
+}
+
+// containerAppURL builds the user-facing URL for a generated app's host port —
+// the link shown in the portal. Override the host with FACTORY_APP_URL_HOST (e.g.
+// the site's public/internal IP) for containerized deploys; defaults to the
+// health-probe host so local/WSL dev keeps working.
+func containerAppURL(hostPort int) string {
+	return fmt.Sprintf("http://%s:%d", appURLHost(), hostPort)
+}
+
+// appURLHost honours FACTORY_APP_URL_HOST, falling back to the health-probe host.
+func appURLHost() string {
+	if v := os.Getenv("FACTORY_APP_URL_HOST"); v != "" {
+		return v
+	}
+	return wslVMIP()
+}
+
+// wslVMIP returns the host a container health probe should target. On
+// Windows+WSL2 it is the WSL VM IP; in a containerized deploy set
+// FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
+func wslVMIP() string {
+	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
+		return v
+	}
+	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
+		"ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\\s)\\d+\\.\\d+\\.\\d+\\.\\d+'").Output()
+	if err == nil {
+		ip := strings.TrimSpace(string(out))
+		if ip != "" {
+			return ip
+		}
+	}
+	return "127.0.0.1"
+}
 
 // errResponse pairs an HTTP status with a structured error_code, written as
 // {"error": <message>, "error_code": <code>}.
@@ -87,7 +130,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 		return nil, nil, errResponse{http.StatusNotFound, model.ErrorUnknown, "not found"}
 	}
 
-	pod := deploy.NewPodman(s.runner)
+	rt := s.containerRuntime()
 	// Idempotent fast path, but only after confirming the recorded deployment is
 	// reachable. The DB can be stale after a manual podman stop or a server
 	// restart, so a blind return would show "running" while nothing is usable.
@@ -100,8 +143,8 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 			s.publishAppUpdated(ctx, appID)
 			return active, app, nil
 		}
-		_, _ = pod.StopContainer(ctx, active.ContainerName)
-		_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+		_, _ = rt.StopContainer(ctx, active.ContainerName)
+		_, _ = rt.RemoveContainer(ctx, active.ContainerName)
 		_ = s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped")
 		_ = s.store.SetAppRuntime(ctx, appID, string(model.AppStatusStopped), "")
 		s.publishDeploymentUpdated(ctx, active.ID)
@@ -112,7 +155,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	buildApp := s.workspaceApp(*app)
 
 	// 1. Build image.
-	img, _, err := pod.BuildImage(ctx, buildApp, tag)
+	img, _, err := rt.BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
@@ -126,22 +169,23 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	}
 
 	// 3. Run container.
-	cr, _, err := pod.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
+	cr, _, err := rt.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
 	if err != nil {
 		if cr.Name != "" {
-			_, _ = pod.RemoveContainer(ctx, cr.Name)
+			_, _ = rt.RemoveContainer(ctx, cr.Name)
 		}
 		s.markAppError(ctx, appID)
 		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "podman run failed"}
 	}
 
-	url := "http://127.0.0.1:" + strconv.Itoa(hostPort)
+	healthURL := containerHealthURL(hostPort)
+	url := containerAppURL(hostPort)
 
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
-	if err := s.healthCheck(ctx, url, healthCheckTimeout); err != nil {
-		_, _ = pod.StopContainer(ctx, cr.Name)
-		_, _ = pod.RemoveContainer(ctx, cr.Name)
+	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
+		_, _ = rt.StopContainer(ctx, cr.Name)
+		_, _ = rt.RemoveContainer(ctx, cr.Name)
 		now := time.Now()
 		failedDep := model.Deployment{
 			ID:            "dep_" + idpkg.New(),
@@ -226,10 +270,10 @@ func (s *Server) stopApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pod := deploy.NewPodman(s.runner)
+	rt := s.containerRuntime()
 	// Best-effort cleanup: a missing container must not fail the stop.
-	_, _ = pod.StopContainer(ctx, active.ContainerName)
-	_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+	_, _ = rt.StopContainer(ctx, active.ContainerName)
+	_, _ = rt.RemoveContainer(ctx, active.ContainerName)
 
 	if err := s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped"); err != nil {
 		writeError(w, http.StatusInternalServerError, "update deployment")
@@ -280,7 +324,7 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
-	img, _, err := deploy.NewPodman(s.runner).BuildImage(ctx, buildApp, tag)
+	img, _, err := s.containerRuntime().BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
@@ -308,6 +352,13 @@ func (s *Server) workspaceApp(app model.Application) model.Application {
 		app.Path = filepath.Join(root, app.Path)
 	}
 	return app
+}
+
+func (s *Server) containerRuntime() deploy.ContainerRuntime {
+	if s.runtime != nil {
+		return s.runtime
+	}
+	return deploy.NewPodman(s.runner)
 }
 
 // portInUse returns an isUsed predicate for the port Allocator that reports a
@@ -375,13 +426,13 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list deployments")
 		return
 	}
-	pod := deploy.NewPodman(s.runner)
+	rt := s.containerRuntime()
 	for _, dep := range deps {
 		if dep.ContainerName == "" {
 			continue
 		}
-		_, _ = pod.StopContainer(ctx, dep.ContainerName)
-		_, _ = pod.RemoveContainer(ctx, dep.ContainerName)
+		_, _ = rt.StopContainer(ctx, dep.ContainerName)
+		_, _ = rt.RemoveContainer(ctx, dep.ContainerName)
 	}
 
 	tombstone := ""

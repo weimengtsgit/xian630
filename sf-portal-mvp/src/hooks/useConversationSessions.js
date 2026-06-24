@@ -15,7 +15,6 @@ const CLARIFICATION_TYPES = new Set([
   'clarification.message.completed',
   'clarification.question.created',
   'clarification.summary.updated',
-  'clarification.blueprint.recommended',
   'clarification.ready_to_confirm',
   'clarification.confirmed',
   'clarification.failed',

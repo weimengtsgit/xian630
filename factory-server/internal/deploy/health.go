@@ -3,7 +3,9 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -19,9 +21,34 @@ const perRequestTimeout = 2 * time.Second
 // elapses (design §5.6: "10 秒内返回 200-399"). It honors ctx cancellation.
 // On timeout/failure it returns an error whose message contains
 // "health_check_failed".
+// isLocalhost reports whether host is a loopback or link-local address that
+// should never go through a proxy.
+func isLocalhost(host string) bool {
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsLinkLocalUnicast()
+	}
+	return false
+}
+
+// noProxyTransport is an http.RoundTripper that bypasses any configured proxy
+// for requests to localhost — container health checks are always local and must
+// never be routed through a SOCKS/HTTP proxy.
+var noProxyTransport = &http.Transport{
+	Proxy: func(r *http.Request) (*url.URL, error) {
+		if isLocalhost(r.URL.Hostname()) {
+			return nil, nil // direct, no proxy
+		}
+		return http.ProxyFromEnvironment(r)
+	},
+	DialContext: (&net.Dialer{Timeout: perRequestTimeout}).DialContext,
+}
+
 func CheckHTTP(ctx context.Context, url string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	client := &http.Client{Timeout: perRequestTimeout}
+	client := &http.Client{Timeout: perRequestTimeout, Transport: noProxyTransport}
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

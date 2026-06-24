@@ -1340,8 +1340,8 @@ func (s *Server) patchDialogueRequirement(w http.ResponseWriter, r *http.Request
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
-	current.BlueprintRefs = incoming.BlueprintRefs
-	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs)
+	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
+	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs, current.GenerationProfile)
 	reqBytes, _ := json.Marshal(current)
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	s.publishDialogueChild(ctx, id, childID, current)
@@ -1409,11 +1409,12 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	req := s.parseRequirement(sess.RequirementJSON)
-	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs)
 	if !blueprintRefsAllSafe(req.BlueprintRefs) {
 		writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
 		return
 	}
+	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	if missing := missingRequiredFields(req); len(missing) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "confirmed requirement missing required fields", "missing": missing})
 		return

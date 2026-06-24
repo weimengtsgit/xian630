@@ -619,7 +619,9 @@ func TestExistingAppOpenStartsStoppedApp(t *testing.T) {
 	// Use a server whose runner/healthCheck are faked so the start succeeds.
 	srv, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeExistingAppHighConfidenceOutput})
 	// Fake deploy runner + health check so startAppInternal succeeds.
-	srv.runner = &fakeDeployRunner{}
+	deployRunner := &fakeDeployRunner{}
+	srv.runner = deployRunner
+	srv.runtime = deploy.NewPodman(deployRunner)
 	srv.healthCheck = func(ctx context.Context, url string, timeout time.Duration) error { return nil }
 
 	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "航母编队复盘"})
