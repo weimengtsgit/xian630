@@ -33,8 +33,29 @@ func containerHealthURL(hostPort int) string {
 	return fmt.Sprintf("http://%s:%d", ip, hostPort)
 }
 
-// wslVMIP returns the WSL VM's IPv4 address, falling back to ::1 then 127.0.0.1.
+// containerAppURL builds the user-facing URL for a generated app's host port —
+// the link shown in the portal. Override the host with FACTORY_APP_URL_HOST (e.g.
+// the site's public/internal IP) for containerized deploys; defaults to the
+// health-probe host so local/WSL dev keeps working.
+func containerAppURL(hostPort int) string {
+	return fmt.Sprintf("http://%s:%d", appURLHost(), hostPort)
+}
+
+// appURLHost honours FACTORY_APP_URL_HOST, falling back to the health-probe host.
+func appURLHost() string {
+	if v := os.Getenv("FACTORY_APP_URL_HOST"); v != "" {
+		return v
+	}
+	return wslVMIP()
+}
+
+// wslVMIP returns the host a container health probe should target. On
+// Windows+WSL2 it is the WSL VM IP; in a containerized deploy set
+// FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
 func wslVMIP() string {
+	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
+		return v
+	}
 	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
 		"ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\\s)\\d+\\.\\d+\\.\\d+\\.\\d+'").Output()
 	if err == nil {
@@ -137,11 +158,12 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url := containerHealthURL(hostPort)
+	healthURL := containerHealthURL(hostPort)
+	url := containerAppURL(hostPort)
 
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
-	if err := s.healthCheck(ctx, url, healthCheckTimeout); err != nil {
+	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
 		_, _ = pod.StopContainer(ctx, cr.Name)
 		_, _ = pod.RemoveContainer(ctx, cr.Name)
 		now := time.Now()

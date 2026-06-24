@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL || 'http://127.0.0.1:8787'
+// See src/api/client.js: `??` keeps an empty build-time value (same-origin /api
+// via the edge proxy) and falls back to the local factory address only in dev.
+const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL ?? 'http://127.0.0.1:8787'
 
 // subscribeFactoryEvents(onEvent, { onError } = {})
 //

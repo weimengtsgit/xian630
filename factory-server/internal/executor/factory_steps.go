@@ -35,6 +35,17 @@ func (f *FactoryRunner) runtime() deploy.ContainerRuntime {
 	return deploy.NewPodman(f.Cmds)
 }
 
+// appURLHost returns the host used in the user-facing deployment URL for a
+// generated app. Override with FACTORY_APP_URL_HOST (e.g. the site's public or
+// internal IP) when factory runs in a container; otherwise fall back to the
+// health-probe host so local/WSL dev keeps working.
+func appURLHost() string {
+	if v := os.Getenv("FACTORY_APP_URL_HOST"); v != "" {
+		return v
+	}
+	return wslVMHealthIP()
+}
+
 type FactoryRunner struct {
 	Store   *store.Store
 	Cmds    deploy.CommandRunner // used for npm and all container-runtime shell-outs
@@ -301,13 +312,13 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 
 	// Health check; on failure stop+remove (best-effort), mark deployment failed,
 	// mark app error.
-	healthIP := wslVMHealthIP()
-	url := fmt.Sprintf("http://%s:%d", healthIP, host)
+	healthURL := fmt.Sprintf("http://%s:%d", wslVMHealthIP(), host)
+	url := fmt.Sprintf("http://%s:%d", appURLHost(), host)
 	health := f.Health
 	if health == nil {
 		health = deploy.CheckHTTP
 	}
-	if herr := health(ctx, url, 10*time.Second); herr != nil {
+	if herr := health(ctx, healthURL, 10*time.Second); herr != nil {
 		_, _ = rt.StopContainer(ctx, container.Name)
 		_, _ = rt.RemoveContainer(ctx, container.Name)
 		_ = f.Store.CreateDeployment(ctx, model.Deployment{
@@ -385,9 +396,13 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, rt deploy.C
 	}
 }
 
-// wslVMHealthIP returns the WSL2 VM's IPv4 address so health probes can reach
-// containers directly, bypassing unreliable wslrelay port forwarding.
+// wslVMHealthIP returns the host a container health probe should target. On
+// Windows+WSL2 it is the WSL VM IP (wslrelay forwarding is unreliable); in a
+// containerized deploy set FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
 func wslVMHealthIP() string {
+	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
+		return v
+	}
 	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
 		`ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+'`).Output()
 	if err == nil {
