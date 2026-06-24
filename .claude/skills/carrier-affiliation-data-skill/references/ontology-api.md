@@ -35,6 +35,12 @@ The documentation page is:
 http://ceshi.projects.bingosoft.net:8081/ontology_docs/?doc=catalog
 ```
 
+> The same catalog documents an **ontology MCP** connection guide (`本体 MCP 接口与连接指南`)
+> as an alternative access path to the ontology. **As of 2026-06-24 the MCP transport
+> connects but token auth fails (协议通 / token不通), so it is unusable.** Use the REST
+> entity endpoints below instead. When the MCP token is fixed it may serve as an
+> alternative to REST.
+
 The entity endpoints are relative to the ontology service base URL.
 
 ## Entity Endpoints
@@ -51,6 +57,10 @@ The entity endpoints are relative to the ontology service base URL.
 | Behavior law list | `CarrierStrikeGroupOperationalBehaviorLaws` | `POST /daasDMS/entity/CarrierStrikeGroupOperationalBehaviorLaws/list` | `cycleRule`, `reappearProb`, `standardDuration`, `minDuration`, `maxDuration`, `startTime`, `endTime`, `summary`, `refAviationCarrier` |
 | Behavior law save | `CarrierStrikeGroupOperationalBehaviorLaws` | `POST /daasDMS/entity/CarrierStrikeGroupOperationalBehaviorLaws/save` | `values[]` with entity camel-case keys |
 | Weather | `meteorological_environment-BT` | `POST /daasDMS/entity/meteorological_environment-BT/list` | `geoData`, `date`, `timeStart`, `timeEnd`, `windSpeed`, `windDirection`, `heightRange`, `humidity`, `visibilityCode` |
+
+> **Availability (2026-06-24):** the Weather endpoint (`meteorological_environment-BT`)
+> is **currently unavailable**. Do not call it. If a job needs wind/weather, route to
+> `deck-wind-data-skill` (Open-Meteo GFS) instead and record that in provenance.
 
 ## Request Shape
 

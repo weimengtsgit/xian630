@@ -21,6 +21,14 @@ Failure modes:
 - 401/403 -> `SOURCE_AUTH_FAILED`
 - malformed `details.rows` -> `SOURCE_RESPONSE_INVALID`
 
+> **Access path = REST endpoints only.** Tier 1 means the REST entity endpoints
+> (`POST /daasDMS/entity/<Entity>/list`) with the committed `ONTOLOGY_AUTH_TOKEN`,
+> which work. The ontology MCP path (`本体 MCP 接口与连接指南`, in the docs catalog)
+> is **not** part of Tier 1 and must not be conflated with it: as of 2026-06-24 the
+> MCP transport connects but token auth fails (协议通 / token不通), so it is
+> unavailable. Do not drop to lower tiers merely because MCP is down — the REST
+> endpoints still serve Tier 1.
+
 ## Tier 2: opensky-historical
 
 Use OpenSky historical data only when the consumer has approved OpenSky Trino

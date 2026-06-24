@@ -35,8 +35,12 @@ failing the build:
 - **Weather (`meteorological_environment-BT`) — UNAVAILABLE.** Do not call the
   weather list endpoint. If a job needs wind/weather, route to
   `deck-wind-data-skill` (Open-Meteo GFS) and label the provenance accordingly.
-- **MCP-based data access — UNAVAILABLE (auth failure).** Do not rely on the MCP
-  path; obtain data via the documented REST endpoints and tier fallbacks.
+- **Ontology MCP (`本体 MCP 接口`, documented in the catalog) — UNAVAILABLE (auth).**
+  The ontology docs catalog documents an MCP connection guide (`本体 MCP 接口与连接指南`)
+  as an alternative access path. As of now the transport connects (协议通) but token
+  auth fails (token不通), so it is unusable. Use the REST entity endpoints
+  (`POST /daasDMS/entity/<Entity>/list`) and tier fallbacks instead — those work
+  with the committed `ONTOLOGY_AUTH_TOKEN`.
 
 Re-check before relying on these; they may be restored without a skill edit.
 
