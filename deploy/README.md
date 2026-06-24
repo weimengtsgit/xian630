@@ -51,6 +51,25 @@ curl http://127.0.0.1/healthz          # {"ok":true}
 
 嵌入链接：`http://<内网IP或公网IP>/`（端口为 `PORTAL_PORT`，默认 80）。
 
+## 快速切换 claude 网关/模型
+
+每个网关存为 `deploy/gateways/<名字>.env`（仅含 `ANTHROPIC_BASE_URL` /
+`ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`，可选 `FACTORY_FAKE_CLAUDE`）。用
+`sf-gw.sh` 一条命令切换（改 `.env` 并 force-recreate factory，约 3-5 秒中断）：
+
+```bash
+cd deploy
+bash sf-gw.sh list              # 列出所有 profile
+bash sf-gw.sh use cc580         # 切到 cc.580ai.net / claude-sonnet-4-5-20250929
+bash sf-gw.sh use volc-ark      # 切到火山 Ark coding plan (GLM-5.2)
+bash sf-gw.sh use fake          # 切到确定性假生成(无网关/无 token/无成本)
+bash sf-gw.sh current           # 查看当前运行中的 factory 用的是什么
+```
+
+新增网关：在 `gateways/` 下放一个 `<名字>.env` 即可，无需改脚本。注意每个网关
+的**模型名不同**（如 cc.580ai 要带日期的 `claude-sonnet-4-5-20250929`，火山要
+`ark-code-latest`），短名常 `model_not_found`。
+
 ## 宿主 registries 镜像（让生成的应用拉基础镜像成功）
 
 生成应用的 Dockerfile 里通常是 `FROM node:xx-alpine` 等公共镜像，由**宿主** podman
