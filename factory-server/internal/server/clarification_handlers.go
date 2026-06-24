@@ -65,10 +65,26 @@ type confirmClarificationBody struct {
 // round that actually ran. No response-side round override is needed.
 type clarificationView struct {
 	model.ClarificationSession
-	Requirement      clarification.Requirement `json:"requirement"`
-	CreatedJob       *model.Job                `json:"created_job,omitempty"`
-	Application      *model.Application        `json:"application,omitempty"`
-	ApplicationState string                    `json:"application_state,omitempty"`
+	Requirement      clarification.Requirement  `json:"requirement"`
+	Messages         []clarificationMessageView `json:"messages,omitempty"`
+	CreatedJob       *model.Job                 `json:"created_job,omitempty"`
+	Application      *model.Application         `json:"application,omitempty"`
+	ApplicationState string                     `json:"application_state,omitempty"`
+}
+
+// clarificationMessageView is a child clarification thread entry in the response
+// shape the conversation workbench reads. The portal's openChildQuestions scans
+// role/kind/metadata_json to surface the open high-impact question card, and
+// latestConsolidation reads the round-5 consolidation message — without these in
+// the child view the question card can never render (only the requirement
+// summary shows). The standalone clarification surface fetches its thread via
+// GET /clarifications/:id/messages, so it keeps the message-free viewFromSession.
+type clarificationMessageView struct {
+	ID           string `json:"id,omitempty"`
+	Role         string `json:"role"`
+	Kind         string `json:"kind"`
+	Content      string `json:"content"`
+	MetadataJSON string `json:"metadata_json,omitempty"`
 }
 
 func (s *Server) viewFromSession(sess *model.ClarificationSession) clarificationView {
@@ -81,6 +97,32 @@ func (s *Server) viewFromSession(sess *model.ClarificationSession) clarification
 		// frontend always sees {} rather than a zero struct with nil slices.
 		v.Requirement.GenerationProfile = nil
 	}
+	return v
+}
+
+// viewFromSessionWithMessages builds the base view and attaches the persisted
+// child message thread. It is used by the dialogue composition path so the
+// conversation workbench can render the open high-impact question card and the
+// round-5 consolidation table (openChildQuestions/latestConsolidation read
+// child.messages). Errors loading messages are non-fatal: the view degrades to
+// the message-free shape rather than failing the whole composed dialogue view.
+func (s *Server) viewFromSessionWithMessages(ctx context.Context, sess *model.ClarificationSession) clarificationView {
+	v := s.viewFromSession(sess)
+	msgs, err := s.store.ListClarificationMessages(ctx, sess.ID)
+	if err != nil {
+		return v
+	}
+	views := make([]clarificationMessageView, 0, len(msgs))
+	for _, m := range msgs {
+		views = append(views, clarificationMessageView{
+			ID:           m.ID,
+			Role:         m.Role,
+			Kind:         m.Kind,
+			Content:      m.Content,
+			MetadataJSON: m.MetadataJSON,
+		})
+	}
+	v.Messages = views
 	return v
 }
 
@@ -1024,6 +1066,18 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	// round advanced while status/work-log writes above are uncommitted.
 	if err := s.store.UpdateClarificationRound(ctx, sessID, roundN); err != nil {
 		return sess, roundN, false
+	}
+
+	// B1: in the dialogue flow, signal the portal to reload the composed view now
+	// that the round has persisted its question, requirement, and status. A round
+	// only mirrors its analysis delta as dialogue.clarification.delta (above), and
+	// deltas do not trigger a view reload — without this non-delta signal the
+	// dispatcher never sets needsRefresh, the workbench stays on the pre-round
+	// view, and the high-impact question card never renders. publishDialogueChild
+	// emits clarification.summary.updated (standalone surface) + the
+	// dialogue-attributed dialogue.clarification.updated (portal reload trigger).
+	if dialogueID != "" {
+		s.publishDialogueChild(ctx, dialogueID, sessID, out.Requirement)
 	}
 
 	refreshed, err := s.store.GetClarificationSession(ctx, sessID)

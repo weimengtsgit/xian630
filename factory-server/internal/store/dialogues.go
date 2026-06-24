@@ -171,6 +171,44 @@ WHERE id = ?`,
 	return err
 }
 
+// ClearDialoguesReferencingApp nulls resolved_application_id on every dialogue
+// that pointed at appID — used when the application is deleted so no dialogue
+// row carries a dangling reference to a non-existent application (which would
+// otherwise make composeDialogueView silently drop resolvedApplication and lock
+// the continuous loop). The dialogue status is left untouched: the session can
+// still re-generate. Returns the ids of the dialogues that were reconciled so
+// the caller can publish refresh events.
+func (s *Store) ClearDialoguesReferencingApp(ctx context.Context, appID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM dialogue_sessions WHERE resolved_application_id = ?`, appID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(ids) > 0 {
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET resolved_application_id = '', updated_at = ?
+WHERE resolved_application_id = ?`,
+			ms(time.Now()), appID); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
 // DeleteDialogueSession removes one dialogue session and its transcript
 // messages in a transaction. Linked jobs, apps, agents, and execution records
 // are intentionally left untouched.

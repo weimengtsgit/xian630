@@ -627,6 +627,15 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete app")
 		return
 	}
+	// Reconcile dialogues that referenced this app: null their
+	// resolved_application_id so composeDialogueView does not silently dereference
+	// a missing application (which would drop resolvedApplication and stall the
+	// continuous loop). Best-effort: a store error here must not undo the delete.
+	if dlgIDs, rerr := s.store.ClearDialoguesReferencingApp(ctx, appID); rerr == nil {
+		for _, did := range dlgIDs {
+			s.publishDialogueSimple("dialogue.clarification.updated", did, map[string]any{"app_deleted": appID})
+		}
+	}
 	if tombstone != "" {
 		_ = os.RemoveAll(tombstone)
 	}

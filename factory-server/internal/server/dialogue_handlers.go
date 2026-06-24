@@ -409,7 +409,7 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 	if dlg.ClarificationSessionID != "" {
 		child, err := s.store.GetClarificationSession(ctx, dlg.ClarificationSessionID)
 		if err == nil && child != nil {
-			cv := s.viewFromSession(child)
+			cv := s.viewFromSessionWithMessages(ctx, child)
 			view.Child = &cv
 		}
 	}
@@ -1331,7 +1331,7 @@ func (s *Server) requireDialogueChild(ctx context.Context, id string) (*model.Di
 	if child == nil {
 		return dlg, "", nil, false, nil
 	}
-	cv := s.viewFromSession(child)
+	cv := s.viewFromSessionWithMessages(ctx, child)
 	view, _ := s.composeDialogueView(ctx, id)
 	return dlg, dlg.ClarificationSessionID, &cv, true, view
 }

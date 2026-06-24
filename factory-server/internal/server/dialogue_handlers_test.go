@@ -438,6 +438,96 @@ func TestDialogueClarificationStreamsDeltaWithDialogueID(t *testing.T) {
 	}
 }
 
+// TestDialogueClarificationPublishesReloadOnRound verifies B1: when a child
+// clarification round completes in the dialogue flow, the server publishes a
+// non-delta dialogue.clarification.updated carrying the PARENT dialogue_id. The
+// conversation workbench reloads the composed view only on a non-delta dialogue.*
+// event; a round otherwise mirrors just its analysis delta, which does not
+// trigger a reload. Without this signal the high-impact question card never
+// renders even though the question is persisted.
+func TestDialogueClarificationPublishesReloadOnRound(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	_ = drainClarificationHub(ch)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	events := drainClarificationHub(ch)
+	var sawReload bool
+	for _, ev := range events {
+		if ev.Type != "dialogue.clarification.updated" {
+			continue
+		}
+		data, ok := ev.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("dialogue.clarification.updated data is not a map: %#v", ev.Data)
+		}
+		if data["dialogue_id"] != dlgID {
+			t.Fatalf("dialogue.clarification.updated must carry the PARENT dialogue_id %s, got %#v", dlgID, data["dialogue_id"])
+		}
+		sawReload = true
+	}
+	if !sawReload {
+		t.Fatalf("round did not emit dialogue.clarification.updated reload signal; events=%#v", eventTypes(events))
+	}
+}
+
+// TestDialogueViewChildExposesQuestionMessages verifies B2: the composed
+// dialogue view's child carries the persisted clarification message thread,
+// including the open high-impact question. The workbench's openChildQuestions
+// reads child.messages role/kind/metadata_json to render the question card;
+// before this fix child.messages was always empty, so only the requirement
+// summary showed and the user could never answer / reach ready_to_confirm.
+func TestDialogueViewChildExposesQuestionMessages(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	view, err := srv.composeDialogueView(context.Background(), dlgID)
+	if err != nil || view == nil {
+		t.Fatalf("composeDialogueView: err=%v view=%v", err, view != nil)
+	}
+	if view.Child == nil {
+		t.Fatalf("composed view has no child clarification")
+	}
+	var sawQuestion bool
+	for _, m := range view.Child.Messages {
+		if m.Role == "agent" && m.Kind == "question" && strings.Contains(m.MetadataJSON, "appType") {
+			sawQuestion = true
+			break
+		}
+	}
+	if !sawQuestion {
+		t.Fatalf("child view messages do not expose the open question; messages=%#v", view.Child.Messages)
+	}
+}
+
 // TestCreateDialogueRejectsInventedSlug verifies the server validates the
 // router's returned slug against the candidate sets and rejects an invented slug.
 // On rejection the dialogue is marked failed, NO route record is persisted
