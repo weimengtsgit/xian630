@@ -70,6 +70,28 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.confirmed_requirement_json: %w", err)
 	}
+	// Added by the application-version-lineage task. Left unused by
+	// CreateJob/scanJob until Job gains these fields.
+	if err := s.ensureColumn(ctx, "jobs", "dialogue_id",
+		`ALTER TABLE jobs ADD COLUMN dialogue_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.dialogue_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "application_id",
+		`ALTER TABLE jobs ADD COLUMN application_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.application_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "base_version_id",
+		`ALTER TABLE jobs ADD COLUMN base_version_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.base_version_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "kind",
+		`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.kind: %w", err)
+	}
 	if err := s.ensureColumn(ctx, "applications", "display_order",
 		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
 		db.Close()

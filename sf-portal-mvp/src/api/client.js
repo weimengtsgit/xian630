@@ -24,6 +24,41 @@ async function request(path, options = {}) {
   return response.json()
 }
 
+// requestWithStatus is the 200/202-bifurcation variant for endpoints that may
+// return EITHER a composed view (200) OR an async ack (202). It exposes the
+// status so the caller can distinguish the two paths WITHOUT consuming the body
+// twice. Resolves { status, body } where body is the parsed JSON (or null when
+// the 202 ack carried no body). Errors share the SAME typed-error shape as
+// `request`.
+async function requestWithStatus(path, options = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  })
+  if (!response.ok) {
+    const body = await response.text()
+    const err = new Error(`${response.status} ${body}`)
+    err.status = response.status
+    err.bodyText = body
+    try {
+      err.data = JSON.parse(body)
+    } catch {
+      err.data = null
+    }
+    throw err
+  }
+  const text = await response.text()
+  let body = null
+  if (text) {
+    try {
+      body = JSON.parse(text)
+    } catch {
+      body = null
+    }
+  }
+  return { status: response.status, body }
+}
+
 // requestText mirrors `request` but resolves the body as TEXT (used for
 // artifact content, which the backend serves as plain text). On failure it
 // produces the SAME typed-error shape as `request` (status / message / bodyText
@@ -98,8 +133,50 @@ export const factoryApi = {
   createDialogue: ({ initialPrompt }) =>
     request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
   deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
-  sendDialogueMessage: (id, content) =>
-    request(`/api/dialogues/${id}/messages`, { method: 'POST', body: JSON.stringify({ content }) }),
+  // archiveDialogue sets a dialogue's status to `archived`. The backend endpoint
+  // is idempotent and emits `dialogue.archived`; it returns 200 with no required
+  // body beyond success, so we treat any resolved value uniformly.
+  archiveDialogue: id => request(`/api/dialogues/${id}/archive`, { method: 'POST' }),
+  // sendDialogueMessage handles BOTH response shapes the backend returns for
+  // POST /api/dialogues/:id/messages:
+  //   - 202 {dialogueId, turnId, acceptedAt}  on a CONTINUING (already-routed)
+  //     session: the turn is processed asynchronously by the per-dialogue turn
+  //     worker. There is NO composed view body — return the ack as-is.
+  //   - 200 <DialogueView>                    on a non-continuing (pre-route or
+  //     freshly-created) unlocked session: return the composed view.
+  // A locked session still 409s and surfaces via the typed error (preserved).
+  // The hook inspects `.status` to decide whether to poll the trace stream
+  // (202) or apply the returned view immediately (200).
+  async sendDialogueMessage(id, content) {
+    const { status, body } = await requestWithStatus(
+      `/api/dialogues/${id}/messages`,
+      { method: 'POST', body: JSON.stringify({ content }) },
+    )
+    if (status === 202) {
+      // Async ack: surface {dialogueId, turnId, acceptedAt}. Body may be null
+      // for an empty 202; synthesize a minimal ack so the caller's branch is
+      // uniform. Never throw on a missing body for the 202 path.
+      return body || { dialogueId: id, turnId: null, acceptedAt: null, accepted: true }
+    }
+    // 200: the composed view. Keep returning the view for the existing flow.
+    return body
+  },
+  // cancelDialogueTurn cancels the currently-processing turn of a continuing
+  // session. Returns the cancel status (202 accepted / 200 already-terminal).
+  cancelDialogueTurn: (id, turnId) =>
+    request(`/api/dialogues/${id}/turns/${turnId}/cancel`, { method: 'POST' }),
+  confirmDialogueChange: id =>
+    request(`/api/dialogues/${id}/changes/confirm`, { method: 'POST' }),
+  // getDialogueTrace is the REST hydration / replay endpoint for a dialogue's
+  // visible work-trace rows, ascending by sequence, honoring afterSequence.
+  // Used on open + on a detected replay gap (sequence jump) to re-sync.
+  getDialogueTrace: (id, afterSequence) =>
+    request(`/api/dialogues/${id}/work-trace${afterSequence != null ? `?afterSequence=${afterSequence}` : ''}`),
+  // rollbackApp is the confirm-gated version rollback. The body MUST carry an
+  // explicit confirm flag ({confirm: true}) — the backend rejects a rollback
+  // without it (destructive, retain-prior-service-on-failure contract).
+  rollbackApp: (appId, body = {}) =>
+    request(`/api/apps/${appId}/rollback`, { method: 'POST', body: JSON.stringify({ confirm: true, ...body }) }),
   selectDialogueRoute: (id, { intent, ...rest }) =>
     request(`/api/dialogues/${id}/route`, { method: 'POST', body: JSON.stringify({ intent, ...rest }) }),
   openDialogueApplication: (id, applicationID) =>

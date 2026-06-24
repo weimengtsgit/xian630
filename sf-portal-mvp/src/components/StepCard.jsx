@@ -70,19 +70,11 @@ function formatDuration(ms) {
   return s > 0 ? `${m}m${s}s` : `${m}m`
 }
 
-// Excerpt of the latest record summary for the step (plain text, single line).
-function excerpt(text, max = 60) {
-  if (!text) return null
-  const flat = String(text).replace(/\s+/g, ' ').trim()
-  return flat.length > max ? flat.slice(0, max) + '…' : flat
-}
-
 /**
  * One card in the 3x2 step matrix. Renders a single fixed stage with:
  *   - Lucide status icon + status text label (color is never the sole signal)
- *   - stage name (e.g. 需求分析)
- *   - agent role / key
- *   - duration, latest-summary excerpt, attempt label
+ *   - stage name (e.g. 需求分析) with the attempt index inline (第 N 次)
+ *   - duration (when present)
  *   - unread badge (counts ONLY the live SSE tail — see useJobs.getUnreadCount)
  *
  * The card is a <button> with aria-pressed (selected) + aria-label so keyboard
@@ -99,7 +91,6 @@ export function StepCard({
 }) {
   const status = (step && (step.status || step.state)) || 'pending'
   const displayName = label || STAGE_LABELS[kind] || kind
-  const agentRole = (step && (step.agent_key || step.agent)) || STAGE_AGENT_ROLE[kind] || kind
   const attempt =
     (summary && (summary.attempt ?? summary.latest_attempt)) ??
     (step && (step.attempt ?? step.latest_attempt)) ??
@@ -107,16 +98,6 @@ export function StepCard({
   const durationMs =
     (summary && (summary.duration_ms ?? summary.durationMs)) ||
     (step && (step.duration_ms ?? step.durationMs)) ||
-    null
-  // Excerpt text: backend Task 4 summary shape exposes the latest record at
-  // summary.latest_record.content (there is NO summary.summary string). Mirror
-  // the drawer's record-renderer fallback chain so any record kind shows text.
-  const summaryText =
-    (summary &&
-      summary.latest_record &&
-      (summary.latest_record.content ||
-        summary.latest_record.text ||
-        summary.latest_record.message)) ||
     null
 
   const unread = Number.isFinite(unreadCount) ? unreadCount : 0
@@ -143,22 +124,15 @@ export function StepCard({
 
       <div className="sc-card-title">
         <span className="sc-stage-name">{displayName}</span>
+        {attempt != null ? <span className="sc-attempt">第 {attempt} 次</span> : null}
         <ChevronRight size={14} className="sc-chevron" />
       </div>
 
-      <div className="sc-card-meta">
-        <span className="sc-agent" title={agentRole}>
-          {agentRole}
-        </span>
-        {attempt != null ? (
-          <span className="sc-attempt">第 {attempt} 次</span>
-        ) : null}
-        {formatDuration(durationMs) ? (
+      {formatDuration(durationMs) ? (
+        <div className="sc-card-meta">
           <span className="sc-duration">{formatDuration(durationMs)}</span>
-        ) : null}
-      </div>
-
-      {excerpt(summaryText) ? <p className="sc-summary">{excerpt(summaryText)}</p> : null}
+        </div>
+      ) : null}
     </button>
   )
 }

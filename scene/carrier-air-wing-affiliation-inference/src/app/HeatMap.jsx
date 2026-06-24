@@ -1,16 +1,50 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { Map as MapIcon, Layers } from "lucide-react";
 import { fmtDateTime } from "./statusHelpers.js";
-import { WORLD_HEIGHT, WORLD_WIDTH, projectWorld } from "../logic/worldProjection.js";
+import { buildMapData, boundsForMapData } from "../logic/mapData.js";
+import { isSatelliteSourceError, resolveMapClickAction } from "../logic/mapInteraction.js";
 
-// Lower-right panel — 起降热力地图 (inline SVG, no map tiles).
-// Layers: red sea takeoff/landing heat points, blue carrier tracks, optional
-// land/unknown audit points. Timeline replay scrubs the visible window. Hover/
-// click an event → detail popover.
-const W = WORLD_WIDTH;
-const H = WORLD_HEIGHT;
-const LATITUDE_LINES = [-60, -30, 0, 30, 60];
-const LONGITUDE_LINES = [-120, -60, 0, 60, 120];
+// Lower-right panel — 起降热力地图 (MapLibre GL satellite basemap + GeoJSON overlays).
+// Layers: red/orange sea takeoff/landing heat points, cyan carrier tracks, optional
+// land/unknown audit points. Timeline replay scrubs the visible window. Hover/click an
+// event → detail popover.
+const tileUrl = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+const mapStyle = {
+  version: 8,
+  sources: {
+    satellite: { type: "raster", tiles: [tileUrl], tileSize: 256, attribution: "Tiles © Esri" },
+  },
+  layers: [
+    {
+      id: "satellite",
+      type: "raster",
+      source: "satellite",
+      paint: { "raster-brightness-max": 0.62, "raster-contrast": 0.26, "raster-saturation": -0.08 },
+    },
+  ],
+};
+
+const SOURCE_NAMES = ["sea-events", "audit-events", "carrier-tracks", "carrier-positions"];
+
+const EMPTY_FC = { type: "FeatureCollection", features: [] };
+
+// --- Selection-dependent MapLibre paint-expression helpers ---
+// Each returns a MapLibre expression comparing the feature's carrierId / icao
+// property to the current selection. When nothing is selected, no feature
+// matches the highlight branch (falls back to the default value).
+const trackLineWidth = (sel) => ["case", ["==", ["get", "carrierId"], sel ?? null], 2.5, 1.2];
+const trackLineOpacity = (sel) => ["case", ["==", ["get", "carrierId"], sel ?? null], 0.95, 0.55];
+const positionRadius = (sel) => ["case", ["==", ["get", "carrierId"], sel ?? null], 6, 3.5];
+const seaRadius = (sel) => ["case", ["==", ["get", "icao"], sel ?? null], 6, 4];
+const seaStrokeColor = (sel) => [
+  "case",
+  ["==", ["get", "icao"], sel ?? null],
+  "#edfaff",
+  "rgba(0,0,0,0.5)",
+];
+const seaStrokeWidth = (sel) => ["case", ["==", ["get", "icao"], sel ?? null], 1.2, 0.5];
 
 export function HeatMap({
   events,
@@ -20,10 +54,17 @@ export function HeatMap({
   onSelectEvent,
   onSelectCarrier,
 }) {
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const initialFitDone = useRef(false);
+
+  const [mapError, setMapError] = useState(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const [hover, setHover] = useState(null);
   const [showSea, setShowSea] = useState(true);
   const [showTracks, setShowTracks] = useState(true);
   const [showAudit, setShowAudit] = useState(true);
+
   // timeline replay: a window [startMs, endMs]; default = full range.
   const allTimes = useMemo(
     () => events.map((e) => Date.parse(e.time)).sort((a, b) => a - b),
@@ -36,25 +77,254 @@ export function HeatMap({
   const winStart = minT;
   const winEnd = minT + span * winFrac;
 
-  const inWindow = (e) => {
-    const t = Date.parse(e.time);
-    return t >= winStart && t <= winEnd;
-  };
-
-  const seaEvents = events.filter((e) => e.suspected && inWindow(e));
-  const auditEvents = events.filter(
-    (e) => (e.surfaceType === "land" || e.surfaceType === "unknown") && inWindow(e)
+  // Live windowed map data (drives the update effect).
+  const mapData = useMemo(
+    () => buildMapData({ events, carriers, winStart, winEnd }),
+    [events, carriers, winStart, winEnd]
   );
 
-  const pop = hover
-    ? (() => {
-        const [px, py] = projectWorld(hover.lat, hover.lon, W, H);
-        // position popover near the point, clamped to the SVG box
-        const left = Math.min(Math.max(px, 0), W - 250);
-        const top = py > H / 2 ? py - 120 : py + 12;
-        return { evt: hover, left, top };
-      })()
-    : null;
+  // Initial windowed map data used only for the one-time fitBounds.
+  // Computed once with the full range (winFrac defaults to 1).
+  const initialMapData = useRef(null);
+  if (initialMapData.current === null) {
+    initialMapData.current = buildMapData({ events, carriers, winStart: minT, winEnd: maxT });
+  }
+
+  // --- Mount effect: create the map ONCE ---
+  useEffect(() => {
+    if (mapRef.current) return; // StrictMode double-invoke guard
+    if (!mapContainerRef.current) return;
+
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: mapStyle,
+      center: [140, 35],
+      zoom: 2,
+      attributionControl: false,
+    });
+    mapRef.current = map;
+
+    map.addControl(new maplibregl.NavigationControl(), "top-left");
+    map.addControl(new maplibregl.ScaleControl({ unit: "nautical" }), "bottom-left");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+
+    map.on("error", (event) => {
+      if (isSatelliteSourceError(event)) {
+        setMapError(true);
+      }
+    });
+
+    map.on("load", () => {
+      // 4 GeoJSON sources
+      map.addSource("sea-events", { type: "geojson", data: EMPTY_FC });
+      map.addSource("audit-events", { type: "geojson", data: EMPTY_FC });
+      map.addSource("carrier-tracks", { type: "geojson", data: EMPTY_FC });
+      map.addSource("carrier-positions", { type: "geojson", data: EMPTY_FC });
+
+      // Layer order: tracks → positions → audit → sea (sea on top)
+      map.addLayer({
+        id: "carrier-tracks",
+        type: "line",
+        source: "carrier-tracks",
+        layout: { visibility: "visible" },
+        paint: {
+          "line-color": "#68ddff",
+          "line-width": trackLineWidth(selectedCarrierId),
+          "line-opacity": trackLineOpacity(selectedCarrierId),
+        },
+      });
+
+      map.addLayer({
+        id: "carrier-positions",
+        type: "circle",
+        source: "carrier-positions",
+        layout: { visibility: "visible" },
+        paint: {
+          "circle-radius": positionRadius(selectedCarrierId),
+          "circle-color": "#68ddff",
+          "circle-stroke-color": "#0a1a24",
+          "circle-stroke-width": 1,
+          "circle-opacity": 0.9,
+        },
+      });
+
+      map.addLayer({
+        id: "audit-events",
+        type: "circle",
+        source: "audit-events",
+        layout: { visibility: "visible" },
+        paint: {
+          "circle-radius": 5,
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-color": [
+            "match",
+            ["get", "surfaceType"],
+            "land",
+            "rgba(127,235,155,0.85)",
+            "rgba(143,176,191,0.85)",
+          ],
+          "circle-stroke-width": 1.4,
+        },
+      });
+
+      map.addLayer({
+        id: "sea-events",
+        type: "circle",
+        source: "sea-events",
+        layout: { visibility: "visible" },
+        paint: {
+          "circle-radius": seaRadius(selectedIcao),
+          "circle-color": [
+            "match",
+            ["get", "eventType"],
+            "takeoff",
+            "#ff665e",
+            "#ff9a78",
+          ],
+          "circle-stroke-color": seaStrokeColor(selectedIcao),
+          "circle-stroke-width": seaStrokeWidth(selectedIcao),
+          "circle-opacity": [
+            "case",
+            ["==", ["get", "bindingStatus"], "bound"],
+            0.95,
+            0.55,
+          ],
+        },
+      });
+
+      // MapLibre returns every rendered feature under the pointer. Resolve that
+      // set once so an event on a track still drills into its aircraft row.
+      map.on("click", (e) => {
+        const action = resolveMapClickAction(map.queryRenderedFeatures(e.point));
+        if (!action) return;
+
+        if (action.kind === "carrier") {
+          if (onSelectCarrier) onSelectCarrier(action.carrierId);
+          return;
+        }
+
+        const evt = events.find((ev) => ev.id === action.eventId);
+        if (!evt) return;
+        if (action.kind === "event") {
+          if (evt) {
+            setHover(evt);
+            if (onSelectEvent) onSelectEvent(evt);
+          }
+          return;
+        }
+        setHover(evt);
+      });
+
+      // --- hover handlers ---
+      const enterPointer = () => {
+        map.getCanvas().style.cursor = "pointer";
+      };
+      const leaveCursor = () => {
+        map.getCanvas().style.cursor = "";
+      };
+      const handleSeaHover = (e) => {
+        enterPointer();
+        const f = e.features && e.features[0];
+        if (!f || !f.properties) return;
+        const evt = events.find((ev) => ev.id === f.properties.id);
+        if (evt) setHover(evt);
+      };
+      const handleAuditHover = (e) => {
+        enterPointer();
+        const f = e.features && e.features[0];
+        if (!f || !f.properties) return;
+        const evt = events.find((ev) => ev.id === f.properties.id);
+        if (evt) setHover(evt);
+      };
+      const clearHover = () => {
+        leaveCursor();
+        setHover(null);
+      };
+
+      map.on("mouseenter", "sea-events", handleSeaHover);
+      map.on("mouseenter", "audit-events", handleAuditHover);
+      map.on("mouseenter", "carrier-tracks", enterPointer);
+      map.on("mouseenter", "carrier-positions", enterPointer);
+      map.on("mouseleave", "sea-events", clearHover);
+      map.on("mouseleave", "audit-events", clearHover);
+      map.on("mouseleave", "carrier-tracks", leaveCursor);
+      map.on("mouseleave", "carrier-positions", leaveCursor);
+
+      // One-time fit to the full data range.
+      if (!initialFitDone.current) {
+        const bounds = boundsForMapData(initialMapData.current);
+        if (bounds) {
+          map.fitBounds(bounds, { padding: 48, maxZoom: 6, duration: 0 });
+        }
+        initialFitDone.current = true;
+      }
+
+      setMapLoaded(true);
+    });
+
+    // ResizeObserver keeps the map sized to the panel.
+    const ro = new ResizeObserver(() => {
+      map.resize();
+    });
+    ro.observe(mapContainerRef.current);
+
+    return () => {
+      ro.disconnect();
+      map.remove();
+      mapRef.current = null;
+      setMapLoaded(false);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Update effect: push new data + visibility without rebuilding the map ---
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    const update = () => {
+      for (const name of SOURCE_NAMES) {
+        const src = map.getSource(name);
+        if (!src) continue;
+        const collection =
+          name === "sea-events"
+            ? mapData.seaEvents
+            : name === "audit-events"
+            ? mapData.auditEvents
+            : name === "carrier-tracks"
+            ? mapData.carrierTracks
+            : mapData.carrierPositions;
+        src.setData(collection);
+      }
+
+      const setVis = (layer, on) => {
+        if (map.getLayer(layer)) {
+          map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
+        }
+      };
+      setVis("sea-events", showSea);
+      setVis("carrier-tracks", showTracks);
+      setVis("carrier-positions", showTracks);
+      setVis("audit-events", showAudit);
+
+      // Push live selection highlight paint (recomputed from current selection).
+      const setPaint = (layer, prop, expr) => {
+        if (map.getLayer(layer)) {
+          map.setPaintProperty(layer, prop, expr);
+        }
+      };
+      setPaint("carrier-tracks", "line-width", trackLineWidth(selectedCarrierId));
+      setPaint("carrier-tracks", "line-opacity", trackLineOpacity(selectedCarrierId));
+      setPaint("carrier-positions", "circle-radius", positionRadius(selectedCarrierId));
+      setPaint("sea-events", "circle-radius", seaRadius(selectedIcao));
+      setPaint("sea-events", "circle-stroke-color", seaStrokeColor(selectedIcao));
+      setPaint("sea-events", "circle-stroke-width", seaStrokeWidth(selectedIcao));
+    };
+
+    update();
+  }, [mapData, showSea, showTracks, showAudit, mapLoaded, selectedCarrierId, selectedIcao]);
+
+  // Popover renders at a fixed anchor at the top of the map panel (no pixel projection).
+  const pop = hover ? { evt: hover } : null;
 
   return (
     <section className="cai-mapwrap">
@@ -63,112 +333,16 @@ export function HeatMap({
           <MapIcon size={14} style={{ verticalAlign: "-2px" }} /> 全球起降热力地图
         </h2>
         <span className="meta">
-          海上 {seaEvents.length} · 审计 {auditEvents.length}
+          海上 {mapData.seaEvents.features.length} · 审计 {mapData.auditEvents.features.length}
         </span>
       </div>
-      <div className="cai-mapsvg-wrap">
-        <svg className="cai-mapsvg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
-          {/* graticule + frame */}
-          <rect x={0} y={0} width={W} height={H} fill="rgba(4,16,28,0.4)" stroke="rgba(104,221,255,0.18)" />
-          {LATITUDE_LINES.map((la) => {
-            const [, y] = projectWorld(la, 0, W, H);
-            return <line key={"la" + la} x1={0} y1={y} x2={W} y2={y} stroke="rgba(104,221,255,0.08)" />;
-          })}
-          {LONGITUDE_LINES.map((lo) => {
-            const [x] = projectWorld(0, lo, W, H);
-            return <line key={"lo" + lo} x1={x} y1={0} x2={x} y2={H} stroke="rgba(104,221,255,0.08)" />;
-          })}
+      <div className="cai-mapcanvas-wrap">
+        <div ref={mapContainerRef} className="cai-mapcanvas" />
 
-          {/* Honshu land hint (upper-right band) */}
-          <path
-            d={`M ${projectWorld(37.5, 139.5, W, H)[0]} ${projectWorld(37.5, 139.5, W, H)[1]}
-                L ${projectWorld(37.5, 142, W, H)[0]} ${projectWorld(37.5, 142, W, H)[1]}
-                L ${projectWorld(35.8, 142, W, H)[0]} ${projectWorld(35.8, 142, W, H)[1]}
-                L ${projectWorld(35.8, 139.5, W, H)[0]} ${projectWorld(35.8, 139.5, W, H)[1]} Z`}
-            fill="rgba(80,110,90,0.18)"
-            stroke="rgba(127,235,155,0.25)"
-          />
-          <text x={projectWorld(36.5, 140.5, W, H)[0]} y={projectWorld(36.5, 140.5, W, H)[1]} fill="rgba(143,176,191,0.6)" fontSize={9}>
-            本州（陆）
-          </text>
-
-          {/* carrier tracks (blue) */}
-          {showTracks &&
-            carriers.map((c) => {
-              const pts = c.track
-                .filter((p) => {
-                  const t = Date.parse(p.time);
-                  return t >= winStart && t <= winEnd;
-                })
-                .map((p) => projectWorld(p.lat, p.lon, W, H));
-              const isHi = selectedCarrierId === c.id;
-              if (pts.length < 1) return null;
-              const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`).join(" ");
-              return (
-                <g key={c.id} style={{ cursor: "pointer" }} onClick={() => onSelectCarrier && onSelectCarrier(c.id)}>
-                  <path d={d} fill="none" stroke={isHi ? "#68ddff" : "rgba(104,221,255,0.55)"} strokeWidth={isHi ? 2 : 1.2} />
-                  {pts.map((p, i) => (
-                    <circle key={i} cx={p[0]} cy={p[1]} r={isHi ? 3 : 2} fill={isHi ? "#68ddff" : "rgba(104,221,255,0.7)"} />
-                  ))}
-                </g>
-              );
-            })}
-
-          {/* audit points (land/unknown) — hollow */}
-          {showAudit &&
-            auditEvents.map((e) => {
-              const [x, y] = projectWorld(e.lat, e.lon, W, H);
-              const hi = e.icao === selectedIcao;
-              return (
-                <rect
-                  key={e.id}
-                  x={x - 4}
-                  y={y - 4}
-                  width={8}
-                  height={8}
-                  fill="none"
-                  stroke={e.surfaceType === "land" ? "rgba(127,235,155,0.7)" : "rgba(143,176,191,0.7)"}
-                  strokeWidth={1.2}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => setHover(e)}
-                  onMouseEnter={() => setHover(e)}
-                >
-                  <title>{e.icao} · {e.surfaceType}（审计）</title>
-                </rect>
-              );
-            })}
-
-          {/* sea events (red heat points) */}
-          {showSea &&
-            seaEvents.map((e) => {
-              const [x, y] = projectWorld(e.lat, e.lon, W, H);
-              const hi = e.icao === selectedIcao;
-              const isTo = e.eventType === "takeoff";
-              return (
-                <g
-                  key={e.id}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => { setHover(e); onSelectEvent && onSelectEvent(e); }}
-                  onMouseEnter={() => setHover(e)}
-                >
-                  {hi && (
-                    <circle cx={x} cy={y} r={11} fill="none" stroke="#ff665e" strokeWidth={1.2} className="cai-ev-pulse" />
-                  )}
-                  <circle
-                    cx={x}
-                    cy={y}
-                    r={hi ? 6 : 4}
-                    fill={isTo ? "#ff665e" : "#ff9a78"}
-                    stroke={hi ? "#edfaff" : "rgba(0,0,0,0.5)"}
-                    strokeWidth={hi ? 1.2 : 0.5}
-                    opacity={e.bindingStatus === "bound" ? 0.95 : 0.55}
-                  >
-                    <title>{e.icao} · {isTo ? "起飞" : "降落"} · {e.bindingStatus}</title>
-                  </circle>
-                </g>
-              );
-            })}
-        </svg>
+        {/* basemap failure status */}
+        {mapError && (
+          <div className="cai-map-status">底图加载受限</div>
+        )}
 
         {/* legend */}
         <div className="cai-map-legend">
@@ -194,9 +368,9 @@ export function HeatMap({
           </button>
         </div>
 
-        {/* hover popover */}
+        {/* hover popover (fixed anchor at top of map panel) */}
         {pop && (
-          <div className="cai-popover" style={{ left: pop.left, top: pop.top }}>
+          <div className="cai-popover" style={{ left: 12, top: 12 }}>
             <h5>{pop.evt.icao} · {pop.evt.eventType === "takeoff" ? "起飞" : "降落"}</h5>
             <div className="pr"><span className="k">机型</span><span className="v">{pop.evt.aircraftType}</span></div>
             <div className="pr"><span className="k">时间</span><span className="v">{fmtDateTime(pop.evt.time)}</span></div>

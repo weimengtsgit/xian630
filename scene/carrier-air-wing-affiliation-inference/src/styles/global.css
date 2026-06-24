@@ -54,9 +54,9 @@ button {
   position: relative;
   width: 100vw;
   height: 100vh;
-  min-width: 1366px;
-  min-height: 760px;
-  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
   display: grid;
   grid-template-rows: 56px 1fr;
   background:
@@ -171,8 +171,10 @@ button {
 .cai-main {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(520px, 1.35fr) 1fr;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr);
   grid-template-rows: 1fr 1fr;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -180,6 +182,7 @@ button {
 .cai-list {
   grid-column: 1;
   grid-row: 1 / 3;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -474,6 +477,7 @@ button {
 .cai-tree {
   grid-column: 2;
   grid-row: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -567,25 +571,40 @@ button {
   position: relative;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(4,16,28,0.4), rgba(2,10,18,0.2)),
     #04121f;
 }
 
-.cai-mapsvg-wrap {
+.cai-mapcanvas-wrap {
   position: relative;
   flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
-.cai-mapsvg {
+.cai-mapcanvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   display: block;
 }
-.cai-mapsvg text { pointer-events: none; }
+.cai-map-status {
+  position: absolute;
+  z-index: 20;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  background: rgba(9,24,38,0.92);
+  border: 1px solid rgba(255,170,90,0.6);
+  color: #ffb37a;
+  font-size: 11px;
+}
 
 .cai-map-legend {
   position: absolute;
@@ -723,18 +742,51 @@ button {
 }
 .cai-source-footer b { color: #cfe6f0; }
 
-/* ── Small viewport hint ───────────────────────────────────────────────── */
-@media (max-width: 1365px), (max-height: 759px) {
-  .cai-shell::after {
-    content: "建议使用 1366×760 以上桌面视口查看";
-    position: absolute;
-    z-index: 50;
-    right: 16px;
-    bottom: 16px;
-    padding: 8px 10px;
-    background: rgba(4,14,22,0.88);
-    border: 1px solid rgba(104,221,255,0.32);
-    color: #d9f5ff;
-    font-size: 12px;
+/* ── Narrow desktop breakpoint: stack panels, allow scroll ──────────────── */
+@media (max-width: 1100px) {
+  .cai-shell {
+    overflow: auto;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .cai-topbar {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+  .cai-title,
+  .cai-paramsbar,
+  .cai-status {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .cai-title {
+    min-height: 56px;
+  }
+  .cai-paramsbar,
+  .cai-status {
+    justify-content: flex-start;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .cai-paramsbar {
+    border-left: 0;
+    border-right: 0;
+  }
+  .cai-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    overflow: auto;
+  }
+  .cai-list {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .cai-tree {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .cai-mapwrap {
+    grid-column: 1;
+    grid-row: 3;
+    min-height: 320px;
   }
 }

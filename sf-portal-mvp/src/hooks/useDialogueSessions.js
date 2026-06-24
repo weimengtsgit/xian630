@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { factoryApi } from '../api/client'
-import { subscribeFactoryEvents } from '../api/events'
+import { subscribeFactoryEvents, subscribeDialogueTrace } from '../api/events'
 import {
   applyDialogueEvent,
   buildDialogueTimeline,
@@ -8,6 +8,13 @@ import {
   lockedFromView,
   openQuestionsForView,
 } from './dialogueTimeline'
+import {
+  applyTraceEvent,
+  applyTraceEvents,
+  initialWorkTraceState,
+  resetWorkTraceState,
+} from './workTraceState'
+import { selectFocusTask } from './focusTask'
 
 // dialogue.* + wrapped clarification.* event types drive a TARGETED refresh keyed
 // by dialogue_id. We do NOT refetch all sessions on each streaming delta (the old
@@ -49,6 +56,35 @@ export function useDialogueSessions() {
   const [deletingDialogueId, setDeletingDialogueId] = useState(null)
   const mountedRef = useRef(true)
 
+  // ---- continuous-workbench state (Task 7) --------------------------------
+  // workTrace: the folded, ascending, deduped visible trace for the SELECTED
+  // dialogue, fed by the per-dialogue SSE stream (Constraint #7 — NOT the global
+  // /api/events). Reset + re-hydrated whenever the selected dialogue changes.
+  const [workTrace, setWorkTrace] = useState(initialWorkTraceState())
+  // pendingTurn: a 202 ack {dialogueId, turnId, acceptedAt} from send when the
+  // session is CONTINUING (route already locked). The workbench renders a
+  // cancel-current-turn control against it. Cleared when the trace shows the
+  // turn completing, or on cancel.
+  const [pendingTurn, setPendingTurn] = useState(null)
+  // focusTask: the active-or-newest-terminal job scoped to the selected
+  // dialogue (Constraint #10 — switching history syncs the focus task). Driven
+  // by the job list the App passes in via setJobsForFocus; null when no list.
+  const [jobsForFocus, setJobsForFocus] = useState([])
+  // pendingTurnRef mirrors pendingTurn so the SSE onEvent closure (which must
+  // NOT re-subscribe the stream on every turn change) reads the latest value.
+  const pendingTurnRef = useRef(null)
+  useEffect(() => {
+    pendingTurnRef.current = pendingTurn
+  }, [pendingTurn])
+  // selectedDialogueIdRef mirrors state.selectedDialogueId so the loadView
+  // closure (a stable useCallback([]) that cannot read `state` without a stale
+  // closure) can distinguish a real dialogue SWITCH (reset the trace stream)
+  // from a same-dialogue refresh.
+  const selectedDialogueIdRef = useRef(null)
+  useEffect(() => {
+    selectedDialogueIdRef.current = state.selectedDialogueId
+  }, [state.selectedDialogueId])
+
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
   // action, or when a background event arrives for an unselected dialogue that the
@@ -73,6 +109,8 @@ export function useDialogueSessions() {
         selectedDialogueId: null,
         view: null,
       }))
+      setWorkTrace(initialWorkTraceState())
+      setPendingTurn(null)
       return null
     }
     const view = await factoryApi.getDialogue(id)
@@ -86,6 +124,15 @@ export function useDialogueSessions() {
         requirement: view.child ? (view.child.requirement || null) : null,
         needsRefresh: null,
       }))
+      // Switching the selected dialogue resets the trace stream (Constraint #10):
+      // the per-dialogue SSE effect re-subscribes and re-hydrates from scratch.
+      // Compare against the ref: loadView is a stable useCallback, so `state`
+      // would be a stale closure here, and `prev` is only the setState-updater
+      // parameter (out of scope outside that arrow).
+      if (selectedDialogueIdRef.current !== id) {
+        setWorkTrace(resetWorkTraceState(id))
+        setPendingTurn(null)
+      }
     }
     return view
   }, [])
@@ -121,7 +168,10 @@ export function useDialogueSessions() {
 
   // send routes a new user turn. When no dialogue is selected (or the selected one
   // is terminal) it CREATES a dialogue with the prompt; otherwise it appends a
-  // routed message (pre-lock re-routing).
+  // routed message (pre-lock re-routing). On a CONTINUING (route-locked) session
+  // the backend returns a 202 ack {dialogueId, turnId, acceptedAt} instead of a
+  // composed view — we surface it as a pending turn and let the trace stream
+  // drive the follow-up refresh.
   const send = useCallback(async content => {
     const prompt = String(content || '').trim()
     if (!prompt || submitting) return null
@@ -129,6 +179,7 @@ export function useDialogueSessions() {
     setError(null)
     try {
       let view
+      let ack = null
       const sess = state.view && state.view.session
       // A locked business-agent drafting dialogue has no free-text /messages path
       // (it 409s). Route its refinement — including the 重新描述 action — to the
@@ -138,11 +189,26 @@ export function useDialogueSessions() {
       } else if (!state.view || terminal(state.view.session.status)) {
         view = await factoryApi.createDialogue({ initialPrompt: prompt })
       } else {
-        view = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
+        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
+        // 202 ack (continuing session): result carries {dialogueId, turnId, acceptedAt}
+        // and NO composed view. 200 path: result IS the composed view (has .session).
+        if (result && result.session) {
+          view = result
+        } else {
+          ack = result
+        }
       }
       await refreshSessions()
-      await loadView(view.session.id)
-      return view
+      if (view) {
+        await loadView(view.session.id)
+      } else if (ack && sess) {
+        // Async turn: record the pending turn so the workbench renders a
+        // cancel-current-turn control and the trace stream drives progress. We
+        // DO NOT reload the view synchronously — the per-dialogue SSE events
+        // (needsRefresh) will refresh it once the worker advances the state.
+        if (mountedRef.current) setPendingTurn(ack)
+      }
+      return view || ack
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
       throw err
@@ -334,6 +400,134 @@ export function useDialogueSessions() {
     }
   }, [deletingDialogueId, refreshSessions, state.selectedDialogueId])
 
+  // ---- continuous-workbench actions (Task 7) ------------------------------
+  // cancelTurn cancels the currently-processing turn (the 202 ack's turnId) of
+  // a continuing session. Clears the pending-turn indicator.
+  const cancelTurn = useCallback(async () => {
+    const sess = state.view && state.view.session
+    if (!sess || !pendingTurn || submitting) return null
+    setSubmitting(true)
+    setError(null)
+    try {
+      const dialogueId = sess.id
+      const turnId = pendingTurn.turnId
+      if (!turnId) {
+        if (mountedRef.current) setPendingTurn(null)
+        return null
+      }
+      await factoryApi.cancelDialogueTurn(dialogueId, turnId)
+      if (mountedRef.current) setPendingTurn(null)
+      await refreshSessions()
+      await loadView(dialogueId)
+      return true
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [loadView, refreshSessions, state.view, pendingTurn, submitting])
+
+  // rollback rolls a generated application back to the prior effective version
+  // (confirm-gated server-side; we always send {confirm: true}). Used by the
+  // version/rollback control in the workbench after a version deploys.
+  const rollback = useCallback(async appId => {
+    if (!appId || submitting) return null
+    setSubmitting(true)
+    setError(null)
+    try {
+      const result = await factoryApi.rollbackApp(appId)
+      await refreshSessions()
+      if (state.selectedDialogueId) await loadView(state.selectedDialogueId)
+      return result
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [loadView, refreshSessions, state.selectedDialogueId, submitting])
+
+  const confirmChange = useCallback(async () => {
+    const sess = state.view && state.view.session
+    if (!sess || submitting) return null
+    setSubmitting(true)
+    setError(null)
+    try {
+      const result = await factoryApi.confirmDialogueChange(sess.id)
+      await refreshSessions()
+      await loadView(sess.id)
+      return result
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [loadView, refreshSessions, state.view, submitting])
+
+  // archive marks the selected dialogue as archived. The backend endpoint
+  // (POST /api/dialogues/:id/archive) is idempotent and sets status to
+  // `archived`, emitting `dialogue.archived`. On success we refresh the list +
+  // the selected view so the status reflects `archived`.
+  const archive = useCallback(async () => {
+    const sess = state.view && state.view.session
+    if (!sess || submitting) return null
+    setSubmitting(true)
+    setError(null)
+    try {
+      await factoryApi.archiveDialogue(sess.id)
+      await refreshSessions()
+      await loadView(sess.id)
+      return true
+    } catch (err) {
+      if (mountedRef.current) setError(err.message || String(err))
+      throw err
+    } finally {
+      if (mountedRef.current) setSubmitting(false)
+    }
+  }, [loadView, refreshSessions, state.view, submitting])
+
+  // Per-dialogue work-trace SSE subscription (Constraint #7: detailed trace
+  // events come ONLY via this dialogueId-filtered, sequence-replayable stream).
+  // Re-subscribes when the selected dialogue changes; resets + re-hydrates the
+  // folded trace. The reducer isolates + dedups, so hydration + live overlap is
+  // idempotent.
+  useEffect(() => {
+    const dialogueId = state.selectedDialogueId
+    if (!dialogueId) {
+      setWorkTrace(initialWorkTraceState())
+      return undefined
+    }
+    // Seed the state scoped to the selected dialogue; the SSE helper hydrates
+    // from afterSequence=0 and folds each row through applyTraceEvent.
+    let unsubscribe = () => {}
+    setWorkTrace(resetWorkTraceState(dialogueId))
+    unsubscribe = subscribeDialogueTrace(dialogueId, {
+      afterSequence: 0,
+      getDialogueTrace: factoryApi.getDialogueTrace,
+      onEvent: row => {
+        if (!mountedRef.current) return
+        setWorkTrace(prev => applyTraceEvent(prev, row))
+        // A trace that marks the pending turn terminal clears the indicator.
+        // We key off the turn lifecycle event types the executor emits.
+        const t = row && row.type
+        if (
+          pendingTurnRef.current &&
+          (t === 'turn.completed' || t === 'turn.failed' || t === 'turn.canceled' || t === 'task.completed')
+        ) {
+          setPendingTurn(null)
+        }
+      },
+      onError: () => {
+        /* best-effort: the helper REST-reloads on gap; the reducer dedups. */
+      },
+    })
+    return () => unsubscribe()
+    // pendingTurn is read inside onEvent for the terminal-clear side effect, but
+    // must NOT re-subscribe the stream on every turn change; read it via ref.
+  }, [state.selectedDialogueId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Mount: hydrate the list and auto-select the most recent dialogue. Subscribe to
   // dialogue.* events. Targeted refresh: a content event for the selected dialogue
   // sets needsRefresh, which we drain by refetching ONE view (debounced via rAF so
@@ -387,6 +581,13 @@ export function useDialogueSessions() {
 
   const session = state.view && state.view.session
   const locked = lockedFromView(state.view)
+  // Focus task for the SELECTED dialogue (Constraint #10 — switching a history
+  // session syncs its focus task). Memoized cheaply over the job list + dialogue.
+  // No selected session (e.g. just clicked "新建会话") ⇒ no focus task, so the
+  // task panel shows its empty placeholder instead of the cross-session fallback
+  // (which would otherwise surface the previous session's task in a workbench
+  // whose conversation has already been cleared).
+  const focusTask = state.view ? selectFocusTask(jobsForFocus, state.selectedDialogueId) : null
 
   return {
     ...state,
@@ -410,5 +611,15 @@ export function useDialogueSessions() {
     retry,
     abandon,
     deleteDialogue,
+    // Task 7 continuous-workbench surface:
+    workTrace: workTrace.items,
+    workTraceCursor: workTrace.highestSequence,
+    pendingTurn,
+    focusTask,
+    setJobsForFocus,
+    cancelTurn,
+    rollback,
+    confirmChange,
+    archive,
   }
 }

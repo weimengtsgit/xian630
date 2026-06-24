@@ -1,19 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  Archive,
+  Ban,
   Check,
   Edit3,
   ExternalLink,
+  GitCommit,
   Loader2,
   MessageSquarePlus,
   History,
   PlayCircle,
   RefreshCw,
+  RotateCcw,
   Send,
   Trash2,
   X,
 } from 'lucide-react'
-import { statusText, titleForDialogue } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import './ConversationWorkbench.css'
 
 export function ConversationWorkbench({
@@ -39,9 +43,27 @@ export function ConversationWorkbench({
   onRetry,
   onAbandon,
   onDeleteSession,
+  workTrace,
+  pendingTurn,
+  focusTask,
+  taskPanel,
+  onCancelTurn,
+  onConfirmChange,
+  onRollback,
+  onArchive,
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const textareaRef = useRef(null)
+  // Auto-grow the composer textarea with its content (capped by the CSS
+  // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
+  const resizeTextarea = () => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(resizeTextarea, [input])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
@@ -61,6 +83,22 @@ export function ConversationWorkbench({
   const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
+
+  // ---- continuous-workbench derived state (Task 7) ------------------------
+  const traceItems = Array.isArray(workTrace) ? workTrace : []
+  const hasPendingTurn = !!(pendingTurn && pendingTurn.turnId)
+  const workbenchTitle = resolveWorkbenchTitle(view, session)
+  // A version has deployed when the view carries a resolved application with a
+  // runtime url, OR the trace shows a deployment/version event. We render the
+  // "vN 已生效，可继续描述修改需求" hint then, and keep the composer active.
+  const deployedApp = view && view.resolvedApplication
+  const versionLabel = deployedApp && (deployedApp.version || deployedApp.version_label || (deployedApp.status === 'running' ? 'v1' : ''))
+  const versionDeployed = !!(deployedApp && (deployedApp.runtimeUrl || deployedApp.runtime_url || deployedApp.status === 'running'))
+  // Change-summary confirmation: a trace event of type change_confirmation or
+  // dialogue.change.proposed surfaces a confirm panel (the continuous loop).
+  const changeProposal = traceItems.find(
+    it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
+  )
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -89,7 +127,7 @@ export function ConversationWorkbench({
       <header className="cw-header">
         <div className="cw-title">
           <span className="cw-kicker">会话工作台</span>
-          <strong>{session ? titleForDialogue(session) : '新会话'}</strong>
+          <strong>{workbenchTitle}</strong>
         </div>
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
@@ -98,25 +136,77 @@ export function ConversationWorkbench({
         </div>
       </header>
 
+      {/* The focus task belongs to the selected dialogue. Keeping the task
+          panel inside this workbench makes a history-session switch change the
+          conversation, task status, timing, and task actions as one unit. */}
+      {focusTask && taskPanel ? <div className="cw-focus-task">{taskPanel}</div> : null}
+
       <div className="cw-body">
-        {timeline.length === 0 ? (
+        {timeline.length === 0 && traceItems.length === 0 ? (
           <div className="cw-empty">输入需求后，将自动识别是复用已有应用，还是生成新应用。</div>
-        ) : (
-          timeline.map(item => (
-            <TimelineItem
-              key={item.id}
-              item={item}
-              draftAnswers={draftAnswers}
-              setDraftAnswers={setDraftAnswers}
-              submitting={submitting}
-              onSelectRoute={onSelectRoute}
-              onOpenApp={onOpenApp}
-              onAcceptConsolidation={onAcceptConsolidation}
-              onSend={onSend}
-            />
-          ))
-        )}
+        ) : null}
+        {timeline.map(item => (
+          <TimelineItem
+            key={item.id}
+            item={item}
+            draftAnswers={draftAnswers}
+            setDraftAnswers={setDraftAnswers}
+            submitting={submitting}
+            onSelectRoute={onSelectRoute}
+            onOpenApp={onOpenApp}
+            onAcceptConsolidation={onAcceptConsolidation}
+            onSend={onSend}
+          />
+        ))}
+
+        {/* Continuous-workbench trace surface (Task 7): the dialogue-scoped,
+            sequence-replayable visible work-trace. Rendered as a compact
+            activity list appended after the composed timeline items. */}
+        {traceItems.length > 0 ? <WorkTraceList items={traceItems} /> : null}
+
+        {/* After a version deploys, surface the "已生效，可继续描述修改需求"
+            hint and keep the composer active (continuous loop). */}
+        {versionDeployed ? (
+          <div className="cw-version-hint">
+            <GitCommit size={14} />
+            <span>{versionLabel ? `${versionLabel} ` : ''}已生效，可继续描述修改需求</span>
+            {deployedApp && (deployedApp.runtimeUrl || deployedApp.runtime_url) ? (
+              <a className="cw-version-open" href={deployedApp.runtimeUrl || deployedApp.runtime_url} target="_blank" rel="noreferrer">
+                <ExternalLink size={12} /> 打开
+              </a>
+            ) : null}
+            {/* Confirm-gated rollback to the prior effective version. */}
+            {onRollback && deployedApp && deployedApp.id ? (
+              <RollbackControl appId={deployedApp.id} onRollback={onRollback} submitting={submitting} />
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Change-summary confirmation panel: the continuous loop surfaces a
+            proposed change for the user to confirm before the worker applies it. */}
+        {changeProposal ? (
+          <div className="cw-change-confirm">
+            <strong>变更确认</strong>
+            <span>{(changeProposal.payload && (changeProposal.payload.summary || changeProposal.payload.description)) || '有新的变更建议待确认。'}</span>
+            <button type="button" className="primary" onClick={onConfirmChange} disabled={submitting}>
+              {submitting ? '处理中' : '确认变更'}
+            </button>
+          </div>
+        ) : null}
       </div>
+
+      {/* Pending-turn indicator + cancel-current-turn control (202 ack path). */}
+      {hasPendingTurn ? (
+        <div className="cw-pending-turn">
+          <Loader2 size={14} className="spin" />
+          <span>本轮处理中{pendingTurn.acceptedAt ? `（${formatAcceptedAt(pendingTurn.acceptedAt)}）` : ''}</span>
+          {onCancelTurn ? (
+            <button type="button" className="cw-cancel-turn" onClick={onCancelTurn} disabled={submitting} title="取消本轮">
+              <Ban size={12} /> 取消本轮
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {activeQuestions.length > 0 ? (
         <div className="cw-answer-bar">
@@ -140,18 +230,30 @@ export function ConversationWorkbench({
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
         {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
-        {status === 'resolved' ? (
+        {/* Archive control: archive a resolved dialogue. The backend endpoint
+            (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
+            refreshes the view so the composer is replaced by a terminal hint. */}
+        {onArchive && session && status === 'resolved' ? (
+          <button type="button" onClick={onArchive} disabled={submitting} title="归档此会话">
+            <Archive size={12} /> 归档
+          </button>
+        ) : null}
+        {/* Continuous loop: a version that deployed keeps the composer ACTIVE so
+            the user can describe further changes, even though the dialogue is
+            resolved. Only true terminal-without-deployment states lock it. */}
+        {status === 'resolved' && !versionDeployed ? (
           <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
-        ) : status === 'abandoned' || status === 'failed' ? (
+        ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
           <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
-        ) : locked ? (
+        ) : locked && !versionDeployed ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
           <>
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder="输入需求或补充说明"
+              placeholder={versionDeployed ? '继续描述修改需求' : '输入需求或补充说明'}
               disabled={submitting}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
             />
@@ -592,4 +694,96 @@ function formatValue(value) {
   if (Array.isArray(value)) return value.join('、')
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+// ---- continuous-workbench components (Task 7) ------------------------------
+
+// WorkTraceList renders the dialogue-scoped visible work-trace as a compact
+// activity list. Each row is one backend WorkTraceEvent (folded ascending,
+// deduped, isolated to the selected dialogue by workTraceState). The payload is
+// already summarized server-side; we surface its label/title/text only.
+function WorkTraceList({ items }) {
+  const list = Array.isArray(items) ? items : []
+  if (list.length === 0) return null
+  return (
+    <div className="cw-trace">
+      <strong>执行轨迹</strong>
+      <ul className="cw-trace-list">
+        {list.map(it => (
+          <li key={it.id || `${it.sequence}`} className={`cw-trace-item cw-trace-${traceClassFor(it.type)}`}>
+            <span className="cw-trace-type">{traceLabelFor(it.type)}</span>
+            <span className="cw-trace-text">{traceText(it)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// RollbackControl is the confirm-gated rollback to the prior effective version.
+// Destructive → requires an explicit second click after arming.
+function RollbackControl({ appId, onRollback, submitting }) {
+  const [armed, setArmed] = useState(false)
+  const submit = () => {
+    if (submitting) return
+    if (!armed) {
+      setArmed(true)
+      return
+    }
+    onRollback(appId)
+    setArmed(false)
+  }
+  return (
+    <button
+      type="button"
+      className={`cw-rollback${armed ? ' cw-rollback-armed' : ''}`}
+      onClick={submit}
+      disabled={submitting}
+      title={armed ? '再次点击确认回滚到上一版本' : '回滚到上一版本'}
+    >
+      <RotateCcw size={12} />
+      <span>{armed ? '确认回滚' : '回滚'}</span>
+    </button>
+  )
+}
+
+function traceLabelFor(type) {
+  const map = {
+    'intent.recognized': '意图',
+    'task.started': '任务开始',
+    'task.completed': '任务完成',
+    'tool.completed': '工具',
+    'turn.completed': '回合完成',
+    'turn.failed': '回合失败',
+    'turn.canceled': '已取消',
+    'change.proposed': '变更建议',
+    'change_confirmation': '变更确认',
+    'dialogue.change.proposed': '变更建议',
+    'version.promoted': '版本生效',
+    'deployment.completed': '部署完成',
+  }
+  return map[type] || type || '事件'
+}
+
+function traceClassFor(type) {
+  if (!type) return 'info'
+  if (type.includes('failed')) return 'error'
+  if (type.includes('canceled') || type.includes('cancelled')) return 'warn'
+  if (type.includes('completed') || type.includes('promoted')) return 'ok'
+  return 'info'
+}
+
+function traceText(it) {
+  const p = it.payload || {}
+  const text = p.summary || p.message || p.text || p.description || p.label || ''
+  if (text) return String(text)
+  if (p.tool) return `${p.tool}${p.action ? ` · ${p.action}` : ''}`
+  return ''
+}
+
+function formatAcceptedAt(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }

@@ -51,7 +51,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- until Job gains these fields; backfilled on existing DBs via
     -- Store.ensureColumn in Open.
     clarification_session_id  TEXT    NOT NULL DEFAULT '',
-    confirmed_requirement_json TEXT NOT NULL DEFAULT ''
+    confirmed_requirement_json TEXT NOT NULL DEFAULT '',
+    -- Added in the application-version-lineage task. Left unused by
+    -- CreateJob/scanJob until Job gains these fields; backfilled on existing
+    -- DBs via Store.ensureColumn in Open.
+    dialogue_id     TEXT    NOT NULL DEFAULT '',
+    application_id  TEXT    NOT NULL DEFAULT '',
+    base_version_id TEXT    NOT NULL DEFAULT '',
+    kind            TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS job_steps (
@@ -169,7 +176,7 @@ CREATE TABLE IF NOT EXISTS dialogue_sessions (
     draft_json             TEXT    NOT NULL DEFAULT '',
     error_code             TEXT    NOT NULL DEFAULT '',
     error_message          TEXT    NOT NULL DEFAULT '',
-    status                 TEXT    NOT NULL,            -- routing|recommending|drafting_application|drafting_business_agent|resolved|failed|abandoned
+    status                 TEXT    NOT NULL,            -- routing|recommending|drafting_application|drafting_business_agent|resolved|failed|abandoned|active|analyzing|waiting_user|change_confirmation|task_running|archived
     intent                 TEXT    NOT NULL DEFAULT 'routing', -- routing|existing_application|application_generation|business_processing_agent
     route_locked           INTEGER NOT NULL DEFAULT 0,
     clarification_session_id TEXT  NOT NULL DEFAULT '',
@@ -198,3 +205,73 @@ CREATE TABLE IF NOT EXISTS dialogue_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_dialogue_messages_created
 ON dialogue_messages(dialogue_id, created_at);
+
+-- Dialogue turns: one per-message analysis round within a CONTINUING dialogue
+-- session. Each user message on an active session creates a pending turn; the
+-- turn worker claims the oldest pending turn per dialogue, runs the turn-intent
+-- round, and marks it terminal before the next turn begins. See
+-- model.DialogueTurn / TurnIntent / TurnStatus.
+CREATE TABLE IF NOT EXISTS dialogue_turns (
+    id           TEXT    PRIMARY KEY,
+    dialogue_id  TEXT    NOT NULL,
+    message_id   TEXT    NOT NULL DEFAULT '',
+    intent       TEXT    NOT NULL DEFAULT '', -- application_modification|new_application|application_inquiry|task_control|general_dialogue
+    status       TEXT    NOT NULL DEFAULT 'pending', -- pending|running|completed|canceled|failed
+    summary_json TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    started_at   INTEGER,
+    ended_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_turns_dialogue
+ON dialogue_turns(dialogue_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dialogue_turns_status
+ON dialogue_turns(status, created_at);
+
+-- Application versions: the immutable, ordered lineage of an application. One
+-- application has many versions ordered by created_at; each version records
+-- the job that produced it and the parent version it was built from
+-- (parent_version_id, empty for the root). job_id is UNIQUE so one job yields
+-- at most one version. promoted_at is non-NULL only for the effective version.
+-- See model.ApplicationVersion / ApplicationVersionStatus.
+CREATE TABLE IF NOT EXISTS application_versions (
+    id                TEXT    PRIMARY KEY,
+    app_id            TEXT    NOT NULL,
+    parent_version_id TEXT    NOT NULL DEFAULT '',
+    job_id            TEXT    NOT NULL UNIQUE,
+    status            TEXT    NOT NULL,    -- queued|building|failed|effective|superseded
+    source_path       TEXT    NOT NULL DEFAULT '',
+    deployment_id     TEXT    NOT NULL DEFAULT '',
+    created_at        INTEGER NOT NULL,
+    promoted_at       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_application_versions_app
+ON application_versions(app_id, created_at DESC);
+
+-- Work-trace events: the durable, VISIBLE, immutable activity audit trail scoped
+-- to a dialogue session (Constraint #8). One row per surfaced agent activity:
+-- an intent recognized, a tool used, data gathered, a validation result, a task/
+-- version/deployment transition, a warning or error. sequence is per
+-- dialogue_id, allocated MAX(sequence)+1 inside one transaction by the store
+-- (safe under the single-connection pool); UNIQUE(dialogue_id, sequence)
+-- enforces it; the first event for a dialogue is sequence 1.
+--
+-- SECURITY (Constraint #9): only allowlisted Type values persist here, and the
+-- store gate rejects provider thinking/thinking_delta, raw request/response
+-- bodies, headers, credentials, and uncapped command output before insert. This
+-- table NEVER holds raw hidden reasoning. See model.WorkTraceEvent.
+CREATE TABLE IF NOT EXISTS work_trace_events (
+    id             TEXT    PRIMARY KEY,
+    dialogue_id    TEXT    NOT NULL,
+    sequence       INTEGER NOT NULL,
+    task_id        TEXT    NOT NULL DEFAULT '',
+    application_id TEXT    NOT NULL DEFAULT '',
+    version_id     TEXT    NOT NULL DEFAULT '',
+    step_id        TEXT    NOT NULL DEFAULT '',
+    attempt        INTEGER NOT NULL DEFAULT 0,
+    type           TEXT    NOT NULL,            -- allowlisted category, never thinking/raw body
+    payload_json   TEXT    NOT NULL DEFAULT '', -- producer-summarized, capped + structurally redacted
+    created_at     INTEGER NOT NULL,
+    UNIQUE(dialogue_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_work_trace_replay
+ON work_trace_events(dialogue_id, sequence);

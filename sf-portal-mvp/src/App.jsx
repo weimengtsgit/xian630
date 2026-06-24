@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { ApplicationsPanel } from './components/ApplicationsPanel'
@@ -20,6 +21,20 @@ function App() {
   const agents = useAgents()
   const jobs = useJobs()
   const dialogue = useDialogueSessions()
+
+  // Feed the live job list into the dialogue hook so it can select a dialogue-
+  // scoped focus task (Constraint #10). The hook filters by dialogue_id
+  // server-side; passing the full list is cheap and stays in sync on every
+  // job.created/updated SSE.
+  useEffect(() => {
+    dialogue.setJobsForFocus(jobs.jobs)
+  }, [jobs.jobs, dialogue.setJobsForFocus])
+
+  // A session switch is also a task-context switch. Hydrate details only for
+  // this dialogue's focus task; never retain the previous session's global job.
+  useEffect(() => {
+    jobs.selectJob(dialogue.focusTask ? dialogue.focusTask.id : null).catch(() => {})
+  }, [dialogue.focusTask, jobs.selectJob])
 
   // Regeneration is another generate request. Task 5 gates bare POST /api/jobs
   // to require a confirmed requirement, so regeneration MUST flow through
@@ -53,22 +68,6 @@ function App() {
         </div>
 
         <div className="wb-col wb-center">
-          <JobCenter
-            activeJob={jobs.activeJob}
-            steps={jobs.steps}
-            loading={jobs.loading}
-            onCancel={jobs.cancelJob}
-            onRetry={jobs.retryCurrentStep}
-            summary={jobs.summary}
-            artifacts={jobs.artifacts}
-            selectedStepId={jobs.selectedStepId}
-            selectedAttempt={jobs.selectedAttempt}
-            selectStepAttempt={jobs.selectStepAttempt}
-            getRecords={jobs.getRecords}
-            getUnreadCount={jobs.getUnreadCount}
-            loadStepRecords={jobs.loadStepRecords}
-            getArtifactContent={factoryApiGetArtifactContent}
-          />
           <ConversationWorkbench
             session={dialogue.session}
             view={dialogue.view}
@@ -81,11 +80,32 @@ function App() {
             deletingDialogueId={dialogue.deletingDialogueId}
             historyOpen={dialogue.historyOpen}
             setHistoryOpen={dialogue.setHistoryOpen}
+            workTrace={dialogue.workTrace}
+            pendingTurn={dialogue.pendingTurn}
+            focusTask={dialogue.focusTask}
+            taskPanel={
+              <JobCenter
+                activeJob={dialogue.focusTask || null}
+                steps={jobs.steps}
+                loading={jobs.loading}
+                onCancel={jobs.cancelJob}
+                onRetry={jobs.retryCurrentStep}
+                summary={jobs.summary}
+                artifacts={jobs.artifacts}
+                selectedStepId={jobs.selectedStepId}
+                selectedAttempt={jobs.selectedAttempt}
+                selectStepAttempt={jobs.selectStepAttempt}
+                getRecords={jobs.getRecords}
+                getUnreadCount={jobs.getUnreadCount}
+                loadStepRecords={jobs.loadStepRecords}
+                getArtifactContent={factoryApiGetArtifactContent}
+              />
+            }
             onNewSession={dialogue.newDialogue}
             onSelectSession={dialogue.selectDialogue}
             onSend={prompt => {
-              if (jobs.activeJob && jobs.activeJob.status === 'waiting_user') {
-                return jobs.answerJob(jobs.activeJob.id, prompt)
+              if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
+                return jobs.answerJob(dialogue.focusTask.id, prompt)
               }
               return dialogue.send(prompt)
             }}
@@ -97,6 +117,10 @@ function App() {
             onRetry={dialogue.retry}
             onAbandon={dialogue.abandon}
             onDeleteSession={dialogue.deleteDialogue}
+            onCancelTurn={dialogue.cancelTurn}
+            onConfirmChange={dialogue.confirmChange}
+            onRollback={dialogue.rollback}
+            onArchive={dialogue.archive}
           />
         </div>
 

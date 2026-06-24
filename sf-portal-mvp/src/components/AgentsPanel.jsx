@@ -97,7 +97,7 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
   return (
     <div className="agents-panel">
       <div className="panel-header">
-        <h2>智能体</h2>
+        <h2>软件开发</h2>
         <div className="agents-header-actions">
           <span className="panel-count">{list.length} 个</span>
           <button

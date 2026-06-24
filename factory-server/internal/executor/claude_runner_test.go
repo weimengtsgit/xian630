@@ -563,3 +563,198 @@ func TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies(t *t
 		t.Errorf("operational prompt.md is empty")
 	}
 }
+
+// captureTraceEmitter is BOTH a runner.StepRecordEmitter and a
+// runner.TraceEmitter: it records every Emit and Trace call so tests can assert
+// the safe-trace contract (which trace TYPES and payloads the claude runner
+// produced). Implementing both interfaces lets it serve as the single emitter
+// passed to Run, so the runner reaches the trace capability via the same
+// StepRecordEmitter seam the executor uses in production.
+type captureTraceEmitter struct {
+	events []captureTrace
+}
+
+type captureTrace struct {
+	traceType string
+	payload   string
+}
+
+func (c *captureTraceEmitter) Emit(context.Context, model.ExecutionRecordKind, string) error {
+	return nil
+}
+
+// Trace records a trace event for later assertion.
+func (c *captureTraceEmitter) Trace(_ context.Context, traceType, payload string) error {
+	c.events = append(c.events, captureTrace{traceType: traceType, payload: payload})
+	return nil
+}
+
+func (c *captureTraceEmitter) hasType(t string) bool {
+	for _, e := range c.events {
+		if e.traceType == t {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *captureTraceEmitter) payloadContaining(substr string) bool {
+	for _, e := range c.events {
+		if strings.Contains(e.payload, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// fakeStreamCodegenCommand writes a code_generation output.json + manifest AND
+// returns stream-json stdout so the runner's stream parser produces safe traces.
+// It is local to these tests (the audit-test fakeStreamClaudeCommand does not
+// create the manifest codegen needs).
+type fakeStreamCodegenCommand struct {
+	t         *testing.T
+	workspace string
+	output    map[string]any
+	stdout    string
+}
+
+func (f fakeStreamCodegenCommand) Run(_ context.Context, dir string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f fakeStreamCodegenCommand) RunWithInput(_ context.Context, dir string, _ string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f fakeStreamCodegenCommand) run(dir string, name string, args ...string) (runner.CommandResult, error) {
+	if name == "git" {
+		return runner.CommandResult{ExitCode: 0}, nil
+	}
+	raw, err := json.MarshalIndent(f.output, "", "  ")
+	if err != nil {
+		f.t.Fatalf("marshal output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "output.json"), raw, 0o644); err != nil {
+		f.t.Fatalf("write output.json: %v", err)
+	}
+	if projectDir, _ := f.output["projectDir"].(string); projectDir != "" {
+		appDir := filepath.Join(f.workspace, projectDir)
+		_ = os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755)
+		manifest := `{"schemaVersion":1,"slug":"demo","name":"Demo","type":"timeline-replay","source":"generated","entry":"static-vite","path":"generated-apps/demo","build":{"command":"npm run build","outputDir":"dist"},"docker":{"enabled":true,"dockerfile":"Dockerfile","context":".","runtimePort":80}}`
+		_ = os.WriteFile(filepath.Join(appDir, ".factory", "app.json"), []byte(manifest), 0o644)
+	}
+	return runner.CommandResult{ExitCode: 0, Stdout: f.stdout}, nil
+}
+
+// TestClaudeStepRunnerEmitsSafeTracesFromStream asserts the claude step runner
+// converts assistant text + a safe tool_use from the stream-json stdout into
+// safe trace events (assistant_output + tool), while hidden thinking in the
+// stream NEVER reaches a trace. This is the executor-side proof of the Task 4
+// producer contract.
+func TestClaudeStepRunnerEmitsSafeTracesFromStream(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeStreamCodegenCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"projectDir":     "generated-apps/demo",
+			"createdFiles":   []string{"generated-apps/demo/.factory/app.json"},
+			"needsUserInput": false,
+			"questions":      []any{},
+			"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+			"warnings":       []string{},
+		},
+		stdout: strings.Join([]string{
+			`{"type":"assistant","message":{"content":[{"type":"text","text":"生成中"}]}}`,
+			`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/rules.ts"}}]}}`,
+			`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"SECRET_REASONING"}]}}`,
+			`{"type":"result","subtype":"success","is_error":false,"result":"{}"}`,
+		}, "\n"),
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepCodeGeneration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	trace := &captureTraceEmitter{}
+
+	res, err := r.Run(context.Background(), job, step, trace)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
+	}
+
+	// Assistant text + tool_use → safe trace events.
+	if !trace.hasType(string(model.WorkTraceAssistant)) {
+		t.Errorf("no assistant_output trace; events=%#v", trace.events)
+	}
+	if !trace.hasType(string(model.WorkTraceTool)) {
+		t.Errorf("no tool trace; events=%#v", trace.events)
+	}
+	// src/rules.ts may appear (sanitized) in the tool trace — fine; the assertion
+	// below is that SECRET_REASONING never appears.
+	// HARD SECURITY: hidden thinking never reaches a trace.
+	if trace.payloadContaining("SECRET_REASONING") {
+		t.Errorf("hidden reasoning leaked into a trace: %#v", trace.events)
+	}
+}
+
+// TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput asserts that
+// when the agent signals NeedsUserInput (high-impact uncertainty), the claude
+// step runner emits a clarification.required trace BEFORE returning the
+// waiting_user status. The trigger is deterministic (NeedsUserInput=true +
+// Questions), testable via a fake output.
+func TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeStreamCodegenCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"projectDir":     "generated-apps/demo",
+			"createdFiles":   []string{"generated-apps/demo/.factory/app.json"},
+			"needsUserInput": true,
+			"questions": []map[string]string{
+				{"id": "q1", "question": "数据源用哪个？", "defaultAnswer": "公开 API"},
+			},
+			"usedSkills": []string{".claude/skills/software-factory-app/SKILL.md"},
+			"warnings":   []string{},
+		},
+		stdout: `{"type":"result","subtype":"success","is_error":false,"result":"{}"}`,
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepCodeGeneration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	trace := &captureTraceEmitter{}
+
+	res, err := r.Run(context.Background(), job, step, trace)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser {
+		t.Fatalf("status = %s, want waiting_user", res.Status)
+	}
+	if !trace.hasType(string(model.WorkTraceClarification)) {
+		t.Errorf("no clarification trace emitted on NeedsUserInput; events=%#v", trace.events)
+	}
+	if !trace.payloadContaining("数据源用哪个") {
+		t.Errorf("clarification payload missing the question: %#v", trace.events)
+	}
+}

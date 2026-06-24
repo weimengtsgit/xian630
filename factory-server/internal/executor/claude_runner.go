@@ -47,6 +47,15 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	if emit == nil {
 		emit = runner.NopEmitter{}
 	}
+	// Discover the safe-trace seam from the emitter. The executor's real
+	// stepEmitter implements runner.TraceEmitter; NopEmitter and test emitters
+	// yield a nop trace path. Every safe trace (assistant observation, tool
+	// action, clarification) flows through this seam → server
+	// recordAndPublishWorkTrace → the persist-before-publish gate. The runner's
+	// stream parser (streamClaudeEvents) reaches the SAME seam via
+	// runner.TraceEmitterFrom, so stream-derived tool/observation traces and the
+	// clarification trace below share one gated path.
+	trace := runner.TraceEmitterFrom(emit)
 	switch step.Kind {
 	case model.StepRequirementAnalysis, model.StepSolutionDesign, model.StepCodeGeneration:
 	default:
@@ -112,13 +121,13 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	case model.StepRequirementAnalysis:
 		out, err := runner.ValidateRequirementAnalysis(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(out, err), nil
+		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
 	case model.StepSolutionDesign:
 		out, err := runner.ValidateSolutionDesign(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(out, err), nil
+		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
 	case model.StepCodeGeneration:
-		res := c.finishCodeGeneration(ctx, job, step, ws.OutputPath(), baseline)
+		res := c.finishCodeGeneration(ctx, trace, job, step, ws.OutputPath(), baseline)
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		return res, nil
 	default:
@@ -142,7 +151,67 @@ func (c *ClaudeStepRunner) emitWorkLog(ctx context.Context, emit runner.StepReco
 	}
 }
 
-func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, job model.Job, step model.JobStep, outputPath string, baseline map[string]bool) StepResult {
+// emitClarificationTrace is the Step 3 high-impact-uncertainty trigger. When the
+// agent signals NeedsUserInput (it cannot proceed without user clarification),
+// it emits a clarification.required trace (WorkTraceClarification) carrying the
+// question(s) the user must answer. Low-risk warnings (where the agent made a
+// default choice without blocking) emit an assumption.recorded trace
+// (WorkTraceAssumption) so they appear in the change summary. Both flow through
+// the trace seam → the server's recordAndPublishWorkTrace gate.
+//
+// The deterministic trigger is NeedsUserInput (the gate-closed signal from the
+// validated output). Finer "high-impact vs low-risk" classification is keyed on
+// whether questions are present: questions ⇒ clarification (the turn pauses);
+// warnings-only ⇒ assumption (the turn continues). trace is a nop when the
+// emitter has no trace capability, so this is safe to call unconditionally.
+func emitClarificationTrace(ctx context.Context, trace runner.TraceEmitter, questions []runner.Question, warnings []string) {
+	if trace == nil {
+		return
+	}
+	if len(questions) > 0 {
+		_ = trace.Trace(ctx, string(model.WorkTraceClarification), clarificationPayload(questions))
+	}
+	for _, w := range warnings {
+		if w = strings.TrimSpace(w); w != "" {
+			_ = trace.Trace(ctx, string(model.WorkTraceAssumption), assumptionPayload(w))
+		}
+	}
+}
+
+// clarificationPayload builds a JSON payload for a clarification.required trace
+// carrying ONLY the question text and the agent's suggested default answer — the
+// public clarification the user must resolve. No tool I/O or reasoning.
+func clarificationPayload(questions []runner.Question) string {
+	type q struct {
+		Question      string `json:"question"`
+		DefaultAnswer string `json:"defaultAnswer,omitempty"`
+	}
+	out := make([]q, 0, len(questions))
+	for _, qq := range questions {
+		out = append(out, q{Question: qq.Question, DefaultAnswer: qq.DefaultAnswer})
+	}
+	b, err := json.Marshal(struct {
+		Questions []q `json:"questions"`
+	}{Questions: out})
+	if err != nil {
+		return `{"questions":[]}`
+	}
+	return string(b)
+}
+
+// assumptionPayload builds a JSON payload for an assumption.recorded trace
+// carrying one low-risk warning the agent defaulted on.
+func assumptionPayload(warning string) string {
+	b, err := json.Marshal(struct {
+		Assumption string `json:"assumption"`
+	}{Assumption: warning})
+	if err != nil {
+		return `{"assumption":""}`
+	}
+	return string(b)
+}
+
+func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runner.TraceEmitter, job model.Job, step model.JobStep, outputPath string, baseline map[string]bool) StepResult {
 	var raw codeGenerationStepOutput
 	// Decode with the SAME lenient path the validators use (runner.ReadAndDecode):
 	// output.json is LLM-produced, so it may carry extra audit fields or be
@@ -160,6 +229,12 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, job model.J
 		return c.failureFromError(err)
 	}
 	if out.NeedsUserInput {
+		// Step 3 (high-impact uncertainty): the agent flagged it cannot proceed
+		// without user input. Emit a clarification.required trace BEFORE the
+		// waiting transition so the dialogue's work-trace shows the question(s)
+		// inline. The existing finalize→MarkStepWaitingUser then leaves the turn
+		// waiting. Routed through the gate (persist-before-publish + allowlist).
+		emitClarificationTrace(ctx, trace, out.Questions, raw.Warnings)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
 	}
 
@@ -227,11 +302,14 @@ func (c *ClaudeStepRunner) applicationFromManifest(projectDir string) (model.App
 	}, nil
 }
 
-func (c *ClaudeStepRunner) resultFromValidatedOutput(out runner.StepOutput, err error) StepResult {
+func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace runner.TraceEmitter, out runner.StepOutput, err error) StepResult {
 	if err != nil {
 		return c.failureFromError(err)
 	}
 	if out.NeedsUserInput {
+		// Step 3 (high-impact uncertainty): emit clarification.required before
+		// the waiting transition. See finishCodeGeneration for the rationale.
+		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
 	}
 	return StepResult{Status: model.StepStatusSucceeded}

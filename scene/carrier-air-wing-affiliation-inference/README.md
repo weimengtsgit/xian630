@@ -146,8 +146,11 @@ Clicking an aircraft jumps to the left-side detail row.
 
 ### Lower Right: 起降热力地图
 
-Use a global equirectangular map projection so future global ADS-B and carrier
-position adapters remain visible without changing the UI contract.
+The panel renders its base map with **MapLibre GL** using public **Esri World
+Imagery** raster satellite tiles, so it **requires network access** to load the
+satellite base map. The event and carrier **GeoJSON overlays remain visible when
+the base map is limited or unavailable** (the 底图加载受限 state), so the
+inference and binding data stays observable offline or on a restricted network.
 
 Map layers:
 
