@@ -109,6 +109,13 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agents.prompt: %w", err)
 	}
+	// agents.created_at: when the agent was generated (seeded or created from a
+	// dialogue). Existing rows backfill to 0; the UI renders 0 as no time.
+	if err := s.ensureColumn(ctx, "agents", "created_at",
+		`ALTER TABLE agents ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agents.created_at: %w", err)
+	}
 	// clarification_sessions.open_high_impact_json: persisted snapshot of the
 	// currently-open high-impact confirmation items (D3 / ADR 0006). The
 	// non-model readiness sites (advanceAfterUserTurn round-cap promotion and

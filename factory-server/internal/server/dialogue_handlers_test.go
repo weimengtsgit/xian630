@@ -1634,6 +1634,29 @@ func TestListAndDeleteDialogue(t *testing.T) {
 	}
 }
 
+// TestDeleteDialogueAllowsDraftingStatus verifies a dialogue in an in-flight
+// drafting status can now be deleted (the old behavior refused with 409). This
+// unblocks "zombie" dialogues stuck in drafting that the user otherwise could
+// never remove.
+func TestDeleteDialogueAllowsDraftingStatus(t *testing.T) {
+	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: "dlg_draft", Status: model.DialogueStatusDraftingApplication, InitialPrompt: "x",
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	del := doJSON(t, r, http.MethodDelete, "/api/dialogues/dlg_draft", nil)
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete drafting status = %d, want 200 (body=%s)", del.Code, del.Body.String())
+	}
+	if got, _ := st.GetDialogueSession(ctx, "dlg_draft"); got != nil {
+		t.Fatalf("drafting dialogue still exists after delete")
+	}
+}
+
 // TestMessagesWhileUnlockedRepeatsRouting verifies that while unlocked, POST
 // .../messages repeats the routing procedure.
 func TestMessagesWhileUnlockedRepeatsRouting(t *testing.T) {

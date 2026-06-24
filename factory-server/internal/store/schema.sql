@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS agents (
     category          TEXT    NOT NULL DEFAULT 'software_development', -- software_development | business_processing
     prompt            TEXT    NOT NULL DEFAULT '',                     -- system prompt for business_processing agents
     enabled           INTEGER NOT NULL DEFAULT 1,
-    sort_order        INTEGER NOT NULL DEFAULT 0
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL DEFAULT 0                       -- unix ms; when the agent was generated/seeded
 );
 
 CREATE TABLE IF NOT EXISTS jobs (

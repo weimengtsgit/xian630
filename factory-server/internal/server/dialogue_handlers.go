@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -738,11 +739,11 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	// A drafting dialogue may still have a runner appending messages (round in
-	// flight), so it cannot be safely deleted. routing/recommending/resolved/
-	// failed/abandoned are all safe: the synchronous rounds have completed.
-	if dlg.Status == model.DialogueStatusDraftingApplication || dlg.Status == model.DialogueStatusDraftingBusinessAgent {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "in-flight dialogue cannot be deleted", "status": dlg.Status})
+	// A dialogue may now be deleted in any status. If it is still in flight,
+	// cancel any linked active job first so a runner is not left appending to a
+	// dialogue that is about to disappear.
+	if err := s.cancelDialogueJobs(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel in-flight jobs")
 		return
 	}
 	if err := s.store.DeleteDialogueSession(r.Context(), id); err != nil {
@@ -751,6 +752,33 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishDialogueSimple("dialogue.deleted", id, map[string]string{"id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
+// cancelDialogueJobs cancels every still-active job linked to a dialogue. A
+// missing or already-terminal job is skipped. Used before deleting a dialogue,
+// which the user can now remove in any status — without this an in-flight
+// runner would keep appending to a dialogue that no longer exists.
+func (s *Server) cancelDialogueJobs(ctx context.Context, dialogueID string) error {
+	if s.exec == nil {
+		return nil
+	}
+	jobs, err := s.store.ListJobsByDialogue(ctx, dialogueID)
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		switch j.Status {
+		case model.JobStatusQueued, model.JobStatusRunning, model.JobStatusWaitingUser:
+		default:
+			continue
+		}
+		if err := s.exec.Cancel(ctx, j.ID); err != nil {
+			// Best-effort: a job that already finished or is unknown must not
+			// block the delete.
+			log.Printf("delete dialogue %s: cancel job %s: %v", dialogueID, j.ID, err)
+		}
+	}
+	return nil
 }
 
 // archiveDialogue handles POST /api/dialogues/:id/archive. It transitions a

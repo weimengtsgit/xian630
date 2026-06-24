@@ -15,25 +15,24 @@ import (
 // mock_data or an unset policy it is a no-op, because mock is explicitly allowed
 // there and must not be penalized.
 //
-// dataSkills is the confirmed requirement's generationProfile.data skill list
-// (e.g. ["tide-data-skill"]). It gates the numeric-synthesis rule: Math.sin /
-// cos / random in a data-layer file is only treated as a violation when the app
-// actually declared a data capability, so a generic app using Math.random for a
-// non-data purpose is not false-positived.
+// dataSkills is the confirmed requirement's generationProfile.data skill list.
+// It is currently accepted but UNUSED: an earlier "Math.sin/cos/random in a
+// data-layer file" rule was removed because it could not distinguish synthetic
+// series generation from legitimate geometry/distance calculations (haversine,
+// map projections, sampling), which falsely blocked real data-science apps. The
+// parameter stays in the signature for call-site stability.
 //
 // The rules are deliberately CONSERVATIVE and high-precision: they target
 // explicit mock tells (mock source filenames, isMock:true, mock data providers,
 // MOCK_/mockData identifiers and synthetic-generator comments in data-layer
-// files, and Math.sin/cos/random series generators). Test files, vendored
-// dependencies, and build output are never scanned, so legitimate test mocks and
-// third-party code cannot trip the audit. A hit returns ErrSchemaValidationFailed
-// (wrapped) naming the offending file(s) and reason(s); finishCodeGeneration maps
-// that onto a failed code_generation step.
+// files). Test files, vendored dependencies, and build output are never scanned,
+// so legitimate test mocks and third-party code cannot trip the audit. A hit
+// returns ErrSchemaValidationFailed (wrapped) naming the offending file(s) and
+// reason(s); finishCodeGeneration maps that onto a failed code_generation step.
 func AuditHonestData(projectDir, dataPolicy string, dataSkills []string) error {
 	if dataPolicy != "live_api" && dataPolicy != "mock_then_api" {
 		return nil
 	}
-	hasDataSkill := len(dataSkills) > 0
 
 	var findings []string
 	add := func(rel, reason string) {
@@ -86,18 +85,13 @@ func AuditHonestData(projectDir, dataPolicy string, dataSkills []string) error {
 			add(relSlash, "包含 mock data provider 字样")
 		}
 
-		// Rules D/E are scoped to data-layer files to avoid UI noise.
+		// Rule D is scoped to data-layer files to avoid UI noise.
 		if isDataLayerFile(relSlash) {
 			if loc := mockIdentRe.FindString(body); loc != "" {
 				add(relSlash, "数据层出现合成/mock 标识符: "+loc)
 			}
 			if syntheticCommentRe.MatchString(body) {
 				add(relSlash, "数据层出现合成数据生成器注释（假数据/演示数据/合成数据/模拟数据/mock data/synthetic）")
-			}
-			// Rule E: Math.sin/cos/random generating a core series — only when the
-			// app declared a numeric data capability.
-			if hasDataSkill && mathSynthRe.MatchString(body) {
-				add(relSlash, "数据层使用 Math.sin/cos/random 生成核心数据序列（疑似合成）")
 			}
 		}
 		return nil
@@ -162,12 +156,11 @@ func auditSkipFile(relSlash, name string) bool {
 }
 
 var (
-	mockSourceStemRe    = regexp.MustCompile(`^mock(s)?([-_]?data)?$`)
-	isMockTrueRe        = regexp.MustCompile(`(?i)isMock\s*:\s*true`)
-	mockProviderRe      = regexp.MustCompile(`(?i)mock[ _-]?data[ _-]?provider`)
-	mockIdentRe         = regexp.MustCompile(`(?i)\b(MOCK_[A-Z0-9_]+|mockData|mockTide|mockWind|mockCells|fakeData|sampleData|demoData)\b`)
-	syntheticCommentRe  = regexp.MustCompile(`(?i)(//|/\*|\*|#)\s*(假数据|演示数据|合成数据|模拟数据|mock data|synthetic|fake data)`)
-	mathSynthRe         = regexp.MustCompile(`\bMath\.(sin|cos|random)\b`)
+	mockSourceStemRe   = regexp.MustCompile(`^mock(s)?([-_]?data)?$`)
+	isMockTrueRe       = regexp.MustCompile(`(?i)isMock\s*:\s*true`)
+	mockProviderRe     = regexp.MustCompile(`(?i)mock[ _-]?data[ _-]?provider`)
+	mockIdentRe        = regexp.MustCompile(`(?i)\b(MOCK_[A-Z0-9_]+|mockData|mockTide|mockWind|mockCells|fakeData|sampleData|demoData)\b`)
+	syntheticCommentRe = regexp.MustCompile(`(?i)(//|/\*|\*|#)\s*(假数据|演示数据|合成数据|模拟数据|mock data|synthetic|fake data)`)
 )
 
 // isDataLayerFile reports whether rel points at a data-acquisition / data-store
