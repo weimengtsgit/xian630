@@ -515,3 +515,57 @@ type DialogueTurn struct {
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 }
+
+// WorkTraceEvent is one durable, immutable, VISIBLE line of a dialogue's
+// activity audit trail: an intent recognized, a tool used, data gathered, a
+// validation result, a task status change, a warning/error. Sequence is per
+// dialogue_id and assigned by the store (MAX+1 in one transaction, enforced by
+// UNIQUE(dialogue_id, sequence)); the first event for a dialogue is sequence 1.
+//
+// SECURITY contract (Constraint #9): only allowlisted Type values may persist
+// here, and the payload gate in the store rejects provider thinking/thinking
+// deltas, raw request/response bodies, headers, credentials, and uncapped
+// command output. PayloadJSON holds a producer-supplied, already-summarized/
+// redacted JSON document (Task 4 produces safe payloads); the store enforces a
+// byte cap and structural sensitive-key stripping as a defense-in-depth gate.
+// NEVER reach this table with raw hidden reasoning — that must never leave the
+// producer, and the gate rejects it if it does.
+type WorkTraceEvent struct {
+	ID           string    `json:"id"`
+	DialogueID   string    `json:"dialogue_id"`
+	Sequence     int64     `json:"sequence"`
+	TaskID       string    `json:"task_id,omitempty"`
+	ApplicationID string   `json:"application_id,omitempty"`
+	VersionID    string    `json:"version_id,omitempty"`
+	StepID       string    `json:"step_id,omitempty"`
+	Attempt      int       `json:"attempt,omitempty"`
+	Type         string    `json:"type"`
+	PayloadJSON  string    `json:"payload_json"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// WorkTraceType is the category of a visible work-trace event. Only values in
+// the allowlist (see store.AllowedWorkTraceTypes) may persist or stream. The
+// categories are the "what is happening the user may see" surface: reasoning
+// surfacing (intent/approach/assumption/clarification), actions (tool/data),
+// checks (validation), decisions (change confirmation), lifecycle (task/version/
+// deployment), and signals (warning/error). Provider thinking and raw bodies are
+// deliberately NOT categories — they are rejected before reaching the type.
+type WorkTraceType string
+
+const (
+	WorkTraceIntent        WorkTraceType = "intent"        // recognized user intent surfaced
+	WorkTraceApproach      WorkTraceType = "approach"      // chosen approach/plan surfaced
+	WorkTraceAssumption    WorkTraceType = "assumption"    // stated assumption surfaced
+	WorkTraceClarification WorkTraceType = "clarification" // clarification question/answer
+	WorkTraceTool          WorkTraceType = "tool"          // tool action summary (not raw I/O)
+	WorkTraceData          WorkTraceType = "data"          // data gathered/produced summary
+	WorkTraceValidation    WorkTraceType = "validation"    // validation/check result
+	WorkTraceChangeConfirm WorkTraceType = "change_confirmation" // proposed change awaiting user confirm
+	WorkTraceTask          WorkTraceType = "task"          // task status transition
+	WorkTraceVersion       WorkTraceType = "version"       // application version transition
+	WorkTraceDeployment    WorkTraceType = "deployment"    // deployment transition
+	WorkTraceWarning       WorkTraceType = "warning"       // non-fatal warning surfaced
+	WorkTraceError         WorkTraceType = "error"         // error surfaced
+	WorkTraceAssistant     WorkTraceType = "assistant_output" // assistant text output
+)

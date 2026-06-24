@@ -443,6 +443,14 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/dialogues/:id/business-agent/continue", s.continueDialogueBusinessAgent)
 	r.Handle("POST", "/api/dialogues/:id/business-agent/consolidation", s.applyDialogueBusinessConsolidation)
 
+	// Dialogue-scoped visible work-trace transport (Task 3). REST hydration +
+	// SSE stream, both filtered to :id, sequence-replayable. Constraint #7: the
+	// model's process/conclusions/task status flow ONLY through this
+	// dialogueId-filtered, sequence-replayable trace. The global /api/events
+	// stream above stays for legacy consumers.
+	r.Handle("GET", "/api/dialogues/:id/work-trace", s.dialogueTraceEvents)
+	r.Handle("GET", "/api/dialogues/:id/work-trace/stream", s.dialogueTraceStream)
+
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)
 	return r

@@ -246,3 +246,32 @@ CREATE TABLE IF NOT EXISTS application_versions (
 );
 CREATE INDEX IF NOT EXISTS idx_application_versions_app
 ON application_versions(app_id, created_at DESC);
+
+-- Work-trace events: the durable, VISIBLE, immutable activity audit trail scoped
+-- to a dialogue session (Constraint #8). One row per surfaced agent activity:
+-- an intent recognized, a tool used, data gathered, a validation result, a task/
+-- version/deployment transition, a warning or error. sequence is per
+-- dialogue_id, allocated MAX(sequence)+1 inside one transaction by the store
+-- (safe under the single-connection pool); UNIQUE(dialogue_id, sequence)
+-- enforces it; the first event for a dialogue is sequence 1.
+--
+-- SECURITY (Constraint #9): only allowlisted Type values persist here, and the
+-- store gate rejects provider thinking/thinking_delta, raw request/response
+-- bodies, headers, credentials, and uncapped command output before insert. This
+-- table NEVER holds raw hidden reasoning. See model.WorkTraceEvent.
+CREATE TABLE IF NOT EXISTS work_trace_events (
+    id             TEXT    PRIMARY KEY,
+    dialogue_id    TEXT    NOT NULL,
+    sequence       INTEGER NOT NULL,
+    task_id        TEXT    NOT NULL DEFAULT '',
+    application_id TEXT    NOT NULL DEFAULT '',
+    version_id     TEXT    NOT NULL DEFAULT '',
+    step_id        TEXT    NOT NULL DEFAULT '',
+    attempt        INTEGER NOT NULL DEFAULT 0,
+    type           TEXT    NOT NULL,            -- allowlisted category, never thinking/raw body
+    payload_json   TEXT    NOT NULL DEFAULT '', -- producer-summarized, capped + structurally redacted
+    created_at     INTEGER NOT NULL,
+    UNIQUE(dialogue_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_work_trace_replay
+ON work_trace_events(dialogue_id, sequence);
