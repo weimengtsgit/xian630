@@ -310,7 +310,7 @@ assert.equal(state.needsRefresh, 'dlg_1', 'wrapped clarification event must requ
 
 assert.equal(titleForDialogue(recommendingView.session), '我想看航母编队态势')
 assert.equal(statusText('routing'), '识别需求中')
-assert.equal(statusText('recommending'), '推荐应用中')
+assert.equal(statusText('recommending'), '推荐智能体中')
 assert.equal(statusText('drafting_application'), '需求澄清中')
 assert.equal(statusText('drafting_business_agent'), '配置 Agent 中')
 assert.equal(statusText('resolved'), '已完成')
@@ -373,8 +373,8 @@ assert.ok(
   'composer must be gated (disabled or suppressed) when locked',
 )
 
-// App recommendation cards: running => 打开应用; stopped => 启动并打开.
-assert.match(workbenchJsx, /打开应用/, 'running recommendation card must offer 打开应用')
+// App recommendation cards: running => 打开智能体; stopped => 启动并打开.
+assert.match(workbenchJsx, /打开智能体/, 'running recommendation card must offer 打开智能体')
 assert.match(workbenchJsx, /启动并打开/, 'stopped recommendation card must offer 启动并打开')
 
 // Route cards render when intent is ambiguous.
@@ -393,8 +393,8 @@ assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation
 assert.doesNotMatch(workbenchJsx, /onSelectRoute\('business_processing_agent'\)/, 'route choices must not expose business_processing_agent')
 assert.doesNotMatch(workbenchJsx, /配置业务 Agent/, 'route choices must not show 配置业务 Agent')
 assert.doesNotMatch(workbenchJsx, /创建一个业务处理 Agent/, 'route choices must not show 创建一个业务处理 Agent')
-assert.match(workbenchJsx, /复用已有应用/, 'route choices must still offer existing-app reuse')
-assert.match(workbenchJsx, /生成新应用/, 'route choices must still offer app generation')
+assert.match(workbenchJsx, /复用已有智能体/, 'route choices must still offer existing-agent reuse')
+assert.match(workbenchJsx, /生成新智能体/, 'route choices must still offer agent generation')
 assert.match(workbenchJsx, /canReuseExistingApplication/, 'route choices must hide reuse when no application is recommended')
 
 const genericReasonRule = routingSkill.match(/- `userFacingReason`[\s\S]*?- `needsRouteConfirmation`/)

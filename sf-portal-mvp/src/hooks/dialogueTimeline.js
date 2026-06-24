@@ -44,7 +44,7 @@ export const initialDialogueState = () => ({
 export function statusText(status) {
   const map = {
     routing: '识别需求中',
-    recommending: '推荐应用中',
+    recommending: '推荐智能体中',
     drafting_application: '需求澄清中',
     drafting_business_agent: '配置 Agent 中',
     resolved: '已完成',
@@ -388,7 +388,7 @@ function appendResolvedOutcome(items, view) {
   let label = ''
   if (view.resolvedApplication) {
     kind = 'application'
-    label = view.resolvedApplication.name || view.resolvedApplication.slug || '应用已就绪'
+    label = view.resolvedApplication.name || view.resolvedApplication.slug || '智能体已就绪'
   } else if (view.createdAgent) {
     kind = 'agent'
     label = view.createdAgent.name || 'Agent 已创建'
