@@ -1,4 +1,4 @@
-# 海域网格商船密度异常告警器 · 社媒海上目击聚合告警地图
+# 开源社区异常监测 · 社媒海上目击聚合告警地图
 
 Social-sighting cluster alert dashboard — a maritime command board that ingests
 (mocks of) public Twitter + Instagram posts matching carrier/warship/large-ship/
@@ -6,12 +6,6 @@ at-sea keywords in multiple languages, extracts GPS geotag or image-EXIF
 coordinates, scatters them on a global sea-area map, and highlights clusters
 where multiple distinct accounts post similar content in the same sea area
 during a short window (a suspected **目击潮** / sighting tide).
-
-> **Display name note.** This app shares its display name with the
-> `merchant-density-grid-alert` scenario (intentional — both use the customer's
-> original scenario name). They are distinguished by **slug** and
-> **description**: this one is `social-sighting-cluster-alert` /
-> 社媒海上目击聚合告警地图.
 
 ## 数据边界 / Data is mock
 

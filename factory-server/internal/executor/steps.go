@@ -33,7 +33,7 @@ func FixedSteps() []StepDefinition {
 		{Kind: model.StepSolutionDesign, Seq: 2, AgentKey: "solution-designer", Mode: ModeClaude},
 		{Kind: model.StepCodeGeneration, Seq: 3, AgentKey: "code-generator", Mode: ModeClaude},
 		{Kind: model.StepTestVerification, Seq: 4, AgentKey: "tester", Mode: ModeFactoryWithOptionalClaudeAnalysis},
-		{Kind: model.StepImageBuild, Seq: 5, AgentKey: "deployer", Mode: ModeFactory},
+		{Kind: model.StepImageBuild, Seq: 5, AgentKey: "image-builder", Mode: ModeFactory},
 		{Kind: model.StepDeployment, Seq: 6, AgentKey: "deployer", Mode: ModeFactory},
 	}
 }

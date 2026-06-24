@@ -32,6 +32,69 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	return err
 }
 
+// createJobStepInTx inserts a job step row inside an already-open transaction.
+// It is the building block SeedClarificationJob uses so the job + all its steps
+// + the clarification link are committed atomically.
+func createJobStepInTx(ctx context.Context, tx *sql.Tx, step model.JobStep) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
+		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
+		boolToInt(step.NeedsUserInput), step.UserPrompt, string(step.ErrorCode), step.ErrorMessage,
+		step.ClaudeSessionID, step.CCStatusSessionID)
+	return err
+}
+
+// SeedClarificationJob atomically creates a confirmed clarification's generation
+// job: it inserts the job row, all of its steps, and links the clarification
+// session to the job inside a SINGLE transaction. If any statement fails the
+// whole transaction rolls back, so a confirmation failure leaves NO orphaned job
+// (and the caller marks the clarification failed). jobOnCreateStepHook, when
+// non-nil, is invoked once per step insert and lets tests inject a mid-seed
+// failure to verify rollback.
+func (s *Store) SeedClarificationJob(ctx context.Context, job model.Job, steps []model.JobStep, clarificationID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
+		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
+		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON); err != nil {
+		return err
+	}
+	for _, step := range steps {
+		if s.jobOnCreateStepHook != nil {
+			if err := s.jobOnCreateStepHook(step); err != nil {
+				return err
+			}
+		}
+		if err := createJobStepInTx(ctx, tx, step); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE clarification_sessions SET created_job_id = ?, updated_at = ? WHERE id = ?`,
+		job.ID, ms(time.Now()), clarificationID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetJobStepSeedHook installs a callback invoked once per job-step insert
+// inside SeedClarificationJob. It is a test seam used to inject a mid-seed
+// failure so the atomic rollback contract can be verified; it has no effect in
+// production (the field is always nil there).
+func (s *Store) SetJobStepSeedHook(fn func(model.JobStep) error) {
+	s.jobOnCreateStepHook = fn
+}
+
 // ListJobSteps returns the steps for a job ordered by sequence.
 func (s *Store) ListJobSteps(ctx context.Context, jobID string) ([]model.JobStep, error) {
 	rows, err := s.db.QueryContext(ctx, `

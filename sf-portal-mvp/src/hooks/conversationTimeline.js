@@ -52,10 +52,6 @@ export function buildTimelineFromMessages(messages = [], session = null) {
     }
   }
   const requirement = session && session.requirement
-  const blueprints = blueprintsFromRequirement(requirement)
-  if (blueprints.length > 0) {
-    items.push({ id: `${session.id || 'draft'}_blueprints`, type: 'blueprint_recommendation', blueprints })
-  }
   if (requirement && (requirement.appName || requirement.appType || requirement.coreScenario)) {
     items.push({ id: `${session.id || 'draft'}_requirement`, type: 'requirement_summary', requirement })
   }
@@ -87,8 +83,6 @@ export function applyConversationEvent(state, type, ev) {
     case 'clarification.summary.updated':
     case 'clarification.ready_to_confirm':
       return applyRequirementEvent(state, type, ev)
-    case 'clarification.blueprint.recommended':
-      return applyBlueprintEvent(state, ev)
     case 'clarification.confirmed':
     case 'clarification.failed':
     case 'clarification.abandoned':
@@ -180,18 +174,6 @@ function applyRequirementEvent(state, type, ev) {
   }
 }
 
-function applyBlueprintEvent(state, ev) {
-  const blueprints = Array.isArray(ev.data) ? ev.data : ev.data ? [ev.data] : []
-  const timeline = state.timeline.filter(item => item.type !== 'blueprint_recommendation' || item.live !== true)
-  return {
-    ...state,
-    blueprints,
-    timeline: blueprints.length > 0
-      ? [...timeline, { id: `${ev.session_id}_blueprints_live`, type: 'blueprint_recommendation', live: true, blueprints }]
-      : timeline,
-  }
-}
-
 function applyStatusEvent(state, type, ev) {
   const status = type.replace('clarification.', '')
   const session = state.session ? { ...state.session, status } : state.session
@@ -200,14 +182,6 @@ function applyStatusEvent(state, type, ev) {
     session,
     timeline: [...state.timeline, { id: `${ev.session_id}_${type}`, type: 'system_status', status, data: ev.data || null }],
   }
-}
-
-function blueprintsFromRequirement(requirement) {
-  const refs = requirement && Array.isArray(requirement.blueprintRefs) ? requirement.blueprintRefs : []
-  return refs.map((ref, i) => {
-    if (ref && typeof ref === 'object') return ref
-    return { id: String(ref || `blueprint_${i}`), name: String(ref || `blueprint_${i}`) }
-  }).filter(bp => bp.id || bp.name)
 }
 
 function findLastUserMessageIndex(messages = []) {

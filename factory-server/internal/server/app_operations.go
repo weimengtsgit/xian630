@@ -79,6 +79,11 @@ func (e errResponse) write(w http.ResponseWriter) {
 	writeJSON(w, e.status, map[string]any{"error": e.msg, "error_code": string(e.code)})
 }
 
+// Error lets errResponse satisfy the error interface so startAppInternal can
+// return it as a typed error that the HTTP handlers unpack back into a
+// structured response.
+func (e errResponse) Error() string { return e.msg }
+
 // startApp handles POST /api/apps/:id/start. It is idempotent: if a running
 // deployment already exists for the app it is returned with 200. Otherwise it
 // builds the image, allocates a host port, runs the container and probes the
@@ -94,34 +99,52 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.appLock(appID).Unlock()
 
-	app, err := s.store.GetApplication(r.Context(), appID)
+	dep, _, err := s.startAppInternal(r.Context(), appID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get app")
+		if er, ok := err.(errResponse); ok {
+			er.write(w)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "start app")
 		return
+	}
+	writeJSON(w, http.StatusOK, dep)
+}
+
+// startAppInternal is the shared start operation used by BOTH the legacy
+// POST /api/apps/:id/start handler AND the dialogue .../open handler. It holds
+// NO per-app lock itself (the HTTP handlers acquire appLock before calling so the
+// per-app TryLock→409 semantics are preserved). It builds the image, allocates a
+// port, runs the container, probes health, and persists the running deployment +
+// flips the app to running. It returns the running Deployment and the refreshed
+// Application on success. On failure it returns an errResponse (carrying the
+// HTTP status + error_code) so HTTP handlers can write the structured error;
+// the dialogue handler treats it as a non-resolving failure. Idempotent: an
+// already-running, reachable deployment is returned as the fast path.
+func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Deployment, *model.Application, error) {
+	app, err := s.store.GetApplication(ctx, appID)
+	if err != nil {
+		return nil, nil, errResponse{http.StatusInternalServerError, model.ErrorUnknown, "get app"}
 	}
 	if app == nil {
-		writeError(w, http.StatusNotFound, "not found")
-		return
+		return nil, nil, errResponse{http.StatusNotFound, model.ErrorUnknown, "not found"}
 	}
 
-	ctx := r.Context()
-	pod := deploy.NewPodman(s.runner)
+	rt := s.containerRuntime()
 	// Idempotent fast path, but only after confirming the recorded deployment is
 	// reachable. The DB can be stale after a manual podman stop or a server
 	// restart, so a blind return would show "running" while nothing is usable.
 	if active, _ := s.store.GetActiveDeployment(ctx, appID); active != nil {
 		if err := s.healthCheck(ctx, active.URL, activeDeploymentProbeTimeout); err == nil {
 			if err := s.store.SetAppRuntime(ctx, appID, string(model.AppStatusRunning), active.URL); err != nil {
-				writeError(w, http.StatusInternalServerError, "set app runtime")
-				return
+				return nil, nil, errResponse{http.StatusInternalServerError, model.ErrorUnknown, "set app runtime"}
 			}
 			s.publishDeploymentUpdated(ctx, active.ID)
 			s.publishAppUpdated(ctx, appID)
-			writeJSON(w, http.StatusOK, active)
-			return
+			return active, app, nil
 		}
-		_, _ = pod.StopContainer(ctx, active.ContainerName)
-		_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+		_, _ = rt.StopContainer(ctx, active.ContainerName)
+		_, _ = rt.RemoveContainer(ctx, active.ContainerName)
 		_ = s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped")
 		_ = s.store.SetAppRuntime(ctx, appID, string(model.AppStatusStopped), "")
 		s.publishDeploymentUpdated(ctx, active.ID)
@@ -132,30 +155,27 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	buildApp := s.workspaceApp(*app)
 
 	// 1. Build image.
-	img, _, err := pod.BuildImage(ctx, buildApp, tag)
+	img, _, err := rt.BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
-		return
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
 	}
 
 	// 2. Allocate host port from the design-default pool 18000-18999.
 	hostPort, err := deploy.DefaultAllocator().Choose(s.portInUse(ctx))
 	if err != nil {
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorPortUnavailable, "port unavailable"}.write(w)
-		return
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorPortUnavailable, "port unavailable"}
 	}
 
 	// 3. Run container.
-	cr, _, err := pod.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
+	cr, _, err := rt.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
 	if err != nil {
 		if cr.Name != "" {
-			_, _ = pod.RemoveContainer(ctx, cr.Name)
+			_, _ = rt.RemoveContainer(ctx, cr.Name)
 		}
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "podman run failed"}.write(w)
-		return
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "podman run failed"}
 	}
 
 	healthURL := containerHealthURL(hostPort)
@@ -164,8 +184,8 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
 	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
-		_, _ = pod.StopContainer(ctx, cr.Name)
-		_, _ = pod.RemoveContainer(ctx, cr.Name)
+		_, _ = rt.StopContainer(ctx, cr.Name)
+		_, _ = rt.RemoveContainer(ctx, cr.Name)
 		now := time.Now()
 		failedDep := model.Deployment{
 			ID:            "dep_" + idpkg.New(),
@@ -182,8 +202,7 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.CreateDeployment(ctx, failedDep)
 		s.publishDeploymentUpdated(ctx, failedDep.ID)
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "health check failed"}.write(w)
-		return
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "health check failed"}
 	}
 
 	// 5. Success: persist the running deployment and flip the app to running.
@@ -202,17 +221,19 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 		StartedAt:     &now,
 	}
 	if err := s.store.CreateDeployment(ctx, dep); err != nil {
-		writeError(w, http.StatusInternalServerError, "create deployment")
-		return
+		return nil, nil, errResponse{http.StatusInternalServerError, model.ErrorUnknown, "create deployment"}
 	}
 	if err := s.store.SetAppRuntime(ctx, appID, string(model.AppStatusRunning), url); err != nil {
-		writeError(w, http.StatusInternalServerError, "set app runtime")
-		return
+		return nil, nil, errResponse{http.StatusInternalServerError, model.ErrorUnknown, "set app runtime"}
 	}
 	s.publishDeploymentUpdated(ctx, dep.ID)
 	s.publishAppUpdated(ctx, appID)
 
-	writeJSON(w, http.StatusOK, dep)
+	refreshed, _ := s.store.GetApplication(ctx, appID)
+	if refreshed != nil {
+		app = refreshed
+	}
+	return &dep, app, nil
 }
 
 // stopApp handles POST /api/apps/:id/stop. It is idempotent: no active
@@ -249,10 +270,10 @@ func (s *Server) stopApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pod := deploy.NewPodman(s.runner)
+	rt := s.containerRuntime()
 	// Best-effort cleanup: a missing container must not fail the stop.
-	_, _ = pod.StopContainer(ctx, active.ContainerName)
-	_, _ = pod.RemoveContainer(ctx, active.ContainerName)
+	_, _ = rt.StopContainer(ctx, active.ContainerName)
+	_, _ = rt.RemoveContainer(ctx, active.ContainerName)
 
 	if err := s.store.UpdateDeploymentStatus(ctx, active.ID, "stopped"); err != nil {
 		writeError(w, http.StatusInternalServerError, "update deployment")
@@ -303,7 +324,7 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
-	img, _, err := deploy.NewPodman(s.runner).BuildImage(ctx, buildApp, tag)
+	img, _, err := s.containerRuntime().BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
@@ -331,6 +352,13 @@ func (s *Server) workspaceApp(app model.Application) model.Application {
 		app.Path = filepath.Join(root, app.Path)
 	}
 	return app
+}
+
+func (s *Server) containerRuntime() deploy.ContainerRuntime {
+	if s.runtime != nil {
+		return s.runtime
+	}
+	return deploy.NewPodman(s.runner)
 }
 
 // portInUse returns an isUsed predicate for the port Allocator that reports a
@@ -398,13 +426,13 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list deployments")
 		return
 	}
-	pod := deploy.NewPodman(s.runner)
+	rt := s.containerRuntime()
 	for _, dep := range deps {
 		if dep.ContainerName == "" {
 			continue
 		}
-		_, _ = pod.StopContainer(ctx, dep.ContainerName)
-		_, _ = pod.RemoveContainer(ctx, dep.ContainerName)
+		_, _ = rt.StopContainer(ctx, dep.ContainerName)
+		_, _ = rt.RemoveContainer(ctx, dep.ContainerName)
 	}
 
 	tombstone := ""

@@ -204,7 +204,7 @@ export function App() {
       <header className="sca-topbar">
         <div className="sca-title">
           <Ship size={20} color="#68ddff" />
-          <h1>海域网格商船密度异常告警器</h1>
+          <h1>开源社区异常监测</h1>
           <span className="sca-sub">社媒海上目击聚合告警地图</span>
         </div>
 

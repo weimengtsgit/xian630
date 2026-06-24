@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/weimengtsgit/xian630/factory-server/internal/catalog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
+	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 )
 
 // publishClarificationEvent forwards a normalized clarification.StreamEvent onto
@@ -385,6 +385,7 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -399,7 +400,7 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      req,
+		Data:      clarification.PublicRequirement(req),
 	})
 	// Advance the round exactly like the free-text path (P2#2): the structured
 	// answer + merged requirement must be visible to the next clarifier round,
@@ -458,6 +459,7 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 		}
 	}
 	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+	req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	reqBytes, _ := json.Marshal(req)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update requirement")
@@ -472,7 +474,7 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      req,
+		Data:      clarification.PublicRequirement(req),
 	})
 
 	advanced, ok := s.advanceAfterUserTurn(r.Context(), id, updated)
@@ -545,9 +547,10 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
-	// Always (re)compute the profile from appType — never trust the client —
-	// but preserve the server-derived `data` skill group across the recompute.
-	current.GenerationProfile = recomputeGenerationProfile(current.GenerationProfile, current.AppType)
+	// Always (re)compute the profile from the application type and internal
+	// blueprint refs — never trust the client-supplied skill list — while
+	// preserving the server-derived `data` group selected during clarification.
+	current.GenerationProfile = generationProfileForRequirement(current.AppType, current.BlueprintRefs, current.GenerationProfile)
 
 	reqBytes, _ := json.Marshal(current)
 	if err := s.store.UpdateClarificationRequirement(r.Context(), id, string(reqBytes)); err != nil {
@@ -562,7 +565,7 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	s.publishClarificationEvent(clarification.StreamEvent{
 		Type:      "clarification.summary.updated",
 		SessionID: id,
-		Data:      current,
+		Data:      clarification.PublicRequirement(current),
 	})
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 }
@@ -695,24 +698,27 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid requirement json")
 			return
 		}
+		if !blueprintRefsAllSafe(incoming.BlueprintRefs) {
+			writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
+			return
+		}
 		// The confirmed requirement may carry business fields; recompute the
 		// profile from appType so a client can never inject one at confirm time,
-		// but preserve the persisted `data` skill group (req is still the
-		// persisted requirement here) across the recompute.
-		incoming.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, incoming.AppType)
+		// plus internal blueprint refs, while preserving the persisted `data`
+		// skill group across the recompute.
+		incoming.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
+		incoming.GenerationProfile = generationProfileForRequirement(incoming.AppType, incoming.BlueprintRefs, req.GenerationProfile)
 		req = incoming
 	} else {
+		if !blueprintRefsAllSafe(req.BlueprintRefs) {
+			writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
+			return
+		}
 		// Recompute the profile defensively even on the persisted requirement,
-		// preserving the server-derived `data` skill group.
-		req.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, req.AppType)
-	}
-
-	// Fail closed on unsafe blueprintRef slugs (P2#1): unified check covers BOTH
-	// the client-supplied requirement (body.Requirement branch above) AND the
-	// empty-body path that confirms the persisted requirement as-is.
-	if !blueprintRefsAllSafe(req.BlueprintRefs) {
-		writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
-		return
+		// preserving the server-derived `data` skill group and blueprint-derived
+		// pattern skills.
+		req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	}
 
 	if missing := missingRequiredFields(req); len(missing) > 0 {
@@ -750,12 +756,9 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	if err := s.store.CreateJob(r.Context(), job); err != nil {
-		writeError(w, http.StatusInternalServerError, "create job")
-		return
-	}
+	steps := make([]model.JobStep, 0, len(stepPlan))
 	for i, sp := range stepPlan {
-		step := model.JobStep{
+		steps = append(steps, model.JobStep{
 			ID:       "step_" + idpkg.New(),
 			JobID:    jobID,
 			Kind:     sp.kind,
@@ -763,15 +766,14 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 			AgentKey: sp.agentKey,
 			Status:   model.StepStatusPending,
 			Attempt:  0,
-		}
-		if err := s.store.CreateJobStep(r.Context(), step); err != nil {
-			writeError(w, http.StatusInternalServerError, "create step")
-			return
-		}
+		})
 	}
-
-	if err := s.store.LinkClarificationJob(r.Context(), id, jobID); err != nil {
-		writeError(w, http.StatusInternalServerError, "link job")
+	// Seed the job + steps + clarification link in ONE transaction: on failure
+	// there is NO orphaned job and the session is moved to a diagnosable failed
+	// state (never left ready_to_confirm with no linked job).
+	if err := s.store.SeedClarificationJob(r.Context(), job, steps, id); err != nil {
+		_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return
 	}
 	if err := s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusConfirmed, "", ""); err != nil {
@@ -853,7 +855,7 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 		CurrentRequirement: s.parseRequirement(sess.RequirementJSON),
 	}
 
-	cfg := catalog.Load(s.cfg.WorkspaceRoot)
+	cfg := s.loadSceneCatalog(ctx)
 	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
 		s.publishClarificationEvent(s.filterClarificationEvent(cfg, ev))
 	})
@@ -893,7 +895,10 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
 	out.Requirement.BlueprintRefs = s.sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
-	out.RecommendedBlueprints = s.filterRecommendedBlueprints(cfg, out.RecommendedBlueprints)
+	// The LLM may suggest business fields and safe blueprint refs, but the skill
+	// profile is always Factory-derived from those refs, while preserving the
+	// LLM-selected `data` group.
+	out.Requirement.GenerationProfile = generationProfileForRequirement(out.Requirement.AppType, out.Requirement.BlueprintRefs, out.Requirement.GenerationProfile)
 	now := time.Now()
 	reqBytes, _ := json.Marshal(out.Requirement)
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
@@ -919,6 +924,22 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 			Role:         "agent",
 			Kind:         "question",
 			MetadataJSON: string(qBytes),
+			CreatedAt:    now,
+		}); err != nil {
+			return sess, roundN, false
+		}
+	}
+	// Persist the round-5 consolidation list as a recommendation_consolidation
+	// message so the round-6 adjust handler (Task 4 dialogue facade) can load it
+	// via ApplyConsolidationAdjustment without a model turn.
+	if len(out.Consolidation) > 0 {
+		consBytes, _ := json.Marshal(out.Consolidation)
+		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
+			ID:           "cmsg_" + idpkg.New(),
+			SessionID:    sessID,
+			Role:         "agent",
+			Kind:         "recommendation_consolidation",
+			MetadataJSON: string(consBytes),
 			CreatedAt:    now,
 		}); err != nil {
 			return sess, roundN, false
@@ -1074,39 +1095,36 @@ func blueprintRefsAllSafe(refs []string) bool {
 // abort the whole round; the executor drops unsafe refs for Reads regardless.
 func (s *Server) sanitizeBlueprintRefs(refs []string) []string {
 	out := refs[:0:0]
-	cfg := catalog.Load(s.cfg.WorkspaceRoot)
+	catalog, err := scanner.LoadSceneCatalogForSurface(s.cfg.WorkspaceRoot)
+	if err != nil {
+		return out
+	}
 	for _, slug := range refs {
-		if executor.SafeName(slug) && catalog.BlueprintEnabled(cfg, slug) {
+		if executor.SafeName(slug) && catalog.IsBlueprint(slug) {
 			out = append(out, slug)
 		}
 	}
 	return out
 }
 
-func (s *Server) filterClarificationEvent(cfg catalog.Config, ev clarification.StreamEvent) clarification.StreamEvent {
+func (s *Server) filterClarificationEvent(cfg scanner.SceneCatalog, ev clarification.StreamEvent) clarification.StreamEvent {
 	switch ev.Type {
 	case "clarification.summary.updated", "clarification.ready_to_confirm":
 		req, ok := ev.Data.(clarification.Requirement)
 		if !ok {
 			return ev
 		}
-		req.BlueprintRefs = catalog.FilterBlueprintRefs(cfg, req.BlueprintRefs)
+		req.BlueprintRefs = filterBlueprintRefs(cfg, req.BlueprintRefs)
 		ev.Data = req
-	case "clarification.blueprint.recommended":
-		refs, ok := ev.Data.([]clarification.BlueprintRef)
-		if !ok {
-			return ev
-		}
-		ev.Data = s.filterRecommendedBlueprints(cfg, refs)
 	}
 	return ev
 }
 
-func (s *Server) filterRecommendedBlueprints(cfg catalog.Config, refs []clarification.BlueprintRef) []clarification.BlueprintRef {
+func filterBlueprintRefs(cfg scanner.SceneCatalog, refs []string) []string {
 	out := refs[:0:0]
-	for _, bp := range refs {
-		if catalog.BlueprintEnabled(cfg, bp.Slug) {
-			out = append(out, bp)
+	for _, ref := range refs {
+		if cfg.IsBlueprint(ref) {
+			out = append(out, ref)
 		}
 	}
 	return out
@@ -1176,7 +1194,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 	case "appType", "app_type":
 		if value != "" {
 			req.AppType = value
-			req.GenerationProfile = recomputeGenerationProfile(req.GenerationProfile, value)
+			req.GenerationProfile = generationProfileForRequirement(value, req.BlueprintRefs, req.GenerationProfile)
 		}
 	case "appName", "app_name":
 		if value != "" {
@@ -1202,6 +1220,7 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
 	case "blueprintRefs", "blueprint_refs":
 		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
+		req.GenerationProfile = generationProfileForRequirement(req.AppType, req.BlueprintRefs, req.GenerationProfile)
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
@@ -1332,20 +1351,50 @@ func generationProfileForAppType(appType string) map[string][]string {
 	}
 }
 
-// recomputeGenerationProfile rebuilds base/domain/pattern from appType while
-// preserving the data-skill group the clarification runner already derived.
-// generationProfile is server-derived and never client-supplied: base/domain/
-// pattern always come from appType, but the `data` group is selected during
-// clarification (per the requirement-clarification Data Skill Mapping) and MUST
-// survive the appType recompute at patch/confirm time — otherwise the selected
-// data skills are stripped before the job reaches code_generation.
-func recomputeGenerationProfile(existing map[string][]string, appType string) map[string][]string {
-	fresh := generationProfileForAppType(appType)
-	if dataGroup := existing["data"]; len(dataGroup) > 0 {
-		if fresh == nil {
-			fresh = map[string][]string{}
+// generationProfileForRequirement derives the Factory-owned profile from the
+// supported application type, then augments it with capabilities required by
+// internal scene blueprints. It also preserves the server/model-derived `data`
+// skill group that was selected during clarification; client-supplied skill
+// lists are still rejected before this helper is called.
+func generationProfileForRequirement(appType string, blueprintRefs []string, existingProfiles ...map[string][]string) map[string][]string {
+	profile := generationProfileForAppType(appType)
+	for _, slug := range blueprintRefs {
+		for group, additions := range blueprintProfileAdditions[slug] {
+			if profile == nil {
+				profile = map[string][]string{}
+			}
+			profile[group] = appendUniqueSkills(profile[group], additions)
 		}
-		fresh["data"] = append([]string(nil), dataGroup...)
 	}
-	return fresh
+	if len(existingProfiles) > 0 {
+		if dataGroup := existingProfiles[0]["data"]; len(dataGroup) > 0 {
+			if profile == nil {
+				profile = map[string][]string{}
+			}
+			profile["data"] = append([]string(nil), dataGroup...)
+		}
+	}
+	return profile
+}
+
+var blueprintProfileAdditions = map[string]map[string][]string{
+	"carrier-air-wing-affiliation-inference": {
+		"pattern": {"maritime-alert-dashboard", "affiliation-inference-dashboard"},
+	},
+}
+
+func appendUniqueSkills(current, additions []string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, existing := range current {
+			if existing == addition {
+				found = true
+				break
+			}
+		}
+		if !found {
+			current = append(current, addition)
+		}
+	}
+	return current
 }

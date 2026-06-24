@@ -27,6 +27,8 @@ type agentCreateBody struct {
 	Description     string `json:"description"`
 	ClaudeAgentName string `json:"claude_agent_name"`
 	SkillsJSON      string `json:"skills_json"`
+	Category        string `json:"category"`
+	Prompt          string `json:"prompt"`
 	Enabled         *bool  `json:"enabled"`
 }
 
@@ -53,6 +55,30 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if !json.Valid([]byte(skillsJSON)) {
 		writeError(w, http.StatusBadRequest, "skills_json must be valid json")
+		return
+	}
+
+	// Manual agent creation is intentionally restrictive: the software-
+	// development category is owned by the six registry-seeded pipeline agents,
+	// so a manually-created agent cannot claim it; a business-processing agent
+	// must carry a non-empty system prompt. The normal creator of business
+	// agents is the dialogue confirmation path, not the browser.
+	category := model.AgentCategoryBusinessProcessing
+	if c := strings.TrimSpace(body.Category); c != "" {
+		category = model.AgentCategory(c)
+	}
+	prompt := strings.TrimSpace(body.Prompt)
+	switch category {
+	case model.AgentCategorySoftwareDevelopment:
+		writeError(w, http.StatusBadRequest, "software_development category is reserved for pipeline agents")
+		return
+	case model.AgentCategoryBusinessProcessing:
+		if prompt == "" {
+			writeError(w, http.StatusBadRequest, "business_processing agents require a non-empty prompt")
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "category must be software_development or business_processing")
 		return
 	}
 
@@ -90,6 +116,8 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		Description:     strings.TrimSpace(body.Description),
 		ClaudeAgentName: claudeAgentName,
 		SkillsJSON:      skillsJSON,
+		Category:        category,
+		Prompt:          prompt,
 		Enabled:         enabled,
 		SortOrder:       sortOrder,
 	}

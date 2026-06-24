@@ -17,6 +17,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runlog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
@@ -55,7 +56,11 @@ type Server struct {
 	// pipeline's ClaudeStepRunner). Tests override this field with a fake
 	// runner.CommandRunner to avoid invoking claude.
 	clarifier clarification.Runner
-	runLog    *runlog.Logger
+	// dialogueRouter runs the two model-driven dialogue contracts (intent routing
+	// + business-agent drafting) via the real Claude Code CLI. Mirrors clarifier:
+	// product path is ALWAYS the real CLI; tests override this field with a fake.
+	dialogueRouter dialogue.Runner
+	runLog         *runlog.Logger
 }
 
 type claudeCommandAdapter struct {
@@ -226,6 +231,14 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		ArtifactRoot:  cfg.ArtifactRoot,
 	}
+	// Dialogue routing + business-agent drafting run against the REAL Claude
+	// Code CLI in production, mirroring clarifier. Tests override
+	// s.dialogueRouter directly.
+	s.dialogueRouter = dialogue.Runner{
+		Cmd:           claudeCmd,
+		WorkspaceRoot: cfg.WorkspaceRoot,
+		ArtifactRoot:  cfg.ArtifactRoot,
+	}
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
 		Store:        st,
 		Workspace:    cfg.WorkspaceRoot,
@@ -299,6 +312,15 @@ func (s *Server) Start(ctx context.Context) error {
 		if err := s.store.UpsertAgent(ctx, a); err != nil {
 			log.Printf("upsert agent %s: %v", a.Key, err)
 		}
+	}
+
+	// Idempotently backfill legacy clarification sessions into the new dialogue
+	// parent resource: one application_generation dialogue per legacy session,
+	// linked via clarification_session_id. Best-effort — a backfill failure
+	// must not prevent the server from listening (re-running startup retries
+	// any unbackfilled rows; FindDialogueByClarificationID prevents dups).
+	if err := s.store.BackfillClarificationDialogues(ctx); err != nil {
+		log.Printf("backfill clarification dialogues: %v", err)
 	}
 
 	s.srv = &http.Server{Addr: s.cfg.Addr, Handler: corsMiddleware(s.routes())}
@@ -377,6 +399,26 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/clarifications/:id/retry-current-round", s.retryClarificationRound)
 	r.Handle("POST", "/api/clarifications/:id/confirm", s.confirmClarification)
 	r.Handle("POST", "/api/clarifications/:id/abandon", s.abandonClarification)
+
+	// Dialogue API (Task 4). A facade over intent routing, child clarification,
+	// and business-agent drafting. The legacy /api/clarifications endpoints stay
+	// readable for backfilled history; new chat goes through /api/dialogues.
+	r.Handle("POST", "/api/dialogues", s.createDialogue)
+	r.Handle("GET", "/api/dialogues", s.listDialogues)
+	r.Handle("GET", "/api/dialogues/:id", s.getDialogue)
+	r.Handle("DELETE", "/api/dialogues/:id", s.deleteDialogue)
+	r.Handle("POST", "/api/dialogues/:id/messages", s.addDialogueMessage)
+	r.Handle("POST", "/api/dialogues/:id/route", s.selectDialogueRoute)
+	r.Handle("POST", "/api/dialogues/:id/applications/:applicationID/open", s.openDialogueApp)
+	r.Handle("POST", "/api/dialogues/:id/clarification/answers", s.answerDialogueClarification)
+	r.Handle("POST", "/api/dialogues/:id/clarification/answers/batch", s.answerDialogueClarificationBatch)
+	r.Handle("PATCH", "/api/dialogues/:id/clarification/requirement", s.patchDialogueRequirement)
+	r.Handle("POST", "/api/dialogues/:id/clarification/retry-current-round", s.retryDialogueClarificationRound)
+	r.Handle("POST", "/api/dialogues/:id/clarification/confirm", s.confirmDialogueClarification)
+	r.Handle("POST", "/api/dialogues/:id/clarification/abandon", s.abandonDialogue)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/confirm", s.confirmDialogueBusinessAgent)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/continue", s.continueDialogueBusinessAgent)
+	r.Handle("POST", "/api/dialogues/:id/business-agent/consolidation", s.applyDialogueBusinessConsolidation)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

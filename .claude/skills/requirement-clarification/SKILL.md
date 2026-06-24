@@ -1,42 +1,41 @@
 ---
 name: requirement-clarification
-description: Guide a user from an initial software factory request to a structured confirmed requirement before any generation job is created.
+description: Guide a user from an initial software factory request to a structured confirmed application requirement, one decision at a time, over an adaptive 6-round flow.
 ---
 
 # Requirement Clarification
 
-Use this skill when Factory asks you to run a clarification round for a software factory user request.
+Use this skill when Factory asks you to run a clarification round for a software
+factory user request. Clarification is now **application-only** and follows an
+**adaptive, one-decision-at-a-time, 6-round** flow.
 
-## Brainstorming Method
+## Adaptive Method (6 rounds)
 
-Use a lightweight brainstorming loop inside each clarification round:
+1. **Rounds 1–4 — one decision at a time.** Each round you may emit ZERO
+   questions or EXACTLY ONE required question, with 2–3 options and a
+   recommendation. Never emit more than one question in a round — Factory
+   rejects a round with multiple questions.
+2. **Round 5 — consolidation (only if still incomplete after round 4).** Emit a
+   `consolidation` list: one entry per remaining missing field, each with a
+   recommended typed value, a reason, and alternatives. This is a model round.
+3. **Round 6 — no model turn.** Factory merges the consolidation with the user's
+   single field adjustment via `ApplyConsolidationAdjustment` without calling
+   you again, then marks `ready_to_confirm`.
 
-1. Restate the user's intent in product terms.
-2. Identify the smallest missing decision that blocks a confirmed requirement.
-3. Ask at most three high-value questions in the round.
-4. For every question, provide a recommended answer and a concise reason.
-5. When there are meaningful product directions, describe the trade-off in
-   `workLog` and encode the options as structured `questions`.
-6. When enough information is present, stop asking and return
-   `ready_to_confirm` with a complete `requirement`.
-
-The `workLog` is the user-facing model analysis process. It must explain what
-was identified, why an option is recommended, and what remains unconfirmed. It
-must not expose hidden chain-of-thought.
+When enough information is present, stop asking and return `ready_to_confirm`
+with a complete `requirement` and a `normalizedScenarioName`.
 
 ## Output Contract
 
-You must write `output.json` with this shape:
+Output ONLY this JSON object (no prose, no ```json fences):
 
 ```json
 {
-  "status": "waiting_user",
+  "status": "waiting_user | ready_to_confirm",
   "round": 1,
+  "normalizedScenarioName": "航母编队月度航迹复盘",
   "workLog": [
-    {
-      "type": "analysis",
-      "content": "识别到这是态势复盘类应用。"
-    }
+    { "type": "analysis", "content": "识别到这是态势复盘类应用。" }
   ],
   "questions": [
     {
@@ -45,15 +44,19 @@ You must write `output.json` with this shape:
       "question": "请选择应用类型",
       "required": true,
       "recommendation": "situation_replay",
-      "multiSelect": false,
       "options": [
-        {
-          "value": "situation_replay",
-          "label": "态势复盘类",
-          "reason": "适合地图、轨迹、事件和时间轴"
-        }
+        { "value": "situation_replay", "label": "态势复盘类", "reason": "适合地图、轨迹、事件和时间轴" },
+        { "value": "command_dashboard", "label": "指挥仪表盘类", "reason": "适合关键指标监控" }
       ],
       "allowCustom": false
+    }
+  ],
+  "consolidation": [
+    {
+      "field": "primaryView",
+      "recommendedValue": "地图 + 时间轴",
+      "reason": "匹配态势复盘场景",
+      "alternatives": ["列表"]
     }
   ],
   "requirement": {
@@ -72,39 +75,46 @@ You must write `output.json` with this shape:
       "pattern": ["map-timeline-replay"],
       "data": []
     }
-  },
-  "recommendedBlueprints": [
-    {
-      "slug": "carrier-formation-replay",
-      "name": "航母编队月度航迹复盘",
-      "appType": "situation_replay",
-      "reason": "近一月编队航迹+事件+时间轴复盘，与需求高度匹配，可作页面结构与数据模型风格参考",
-      "referenceKind": "structure|interaction|data-model|style"
-    }
-  ]
+  }
 }
 ```
 
+- `status` is `waiting_user` (more clarification needed, at most one question)
+  or `ready_to_confirm` (complete, no questions).
+- `normalizedScenarioName` — a concise scenario name the model supplies. Factory
+  appends a trusted Base36 serial in a later step; do NOT include any serial or
+  numeric suffix here.
+- `questions` — at most ONE question per round (rounds 1–4); each with 2–3
+  options. More than one question is a contract violation.
+- `consolidation` — emitted at round 5 only. One entry per remaining missing
+  field. `recommendedValue` is a typed JSON value (string for scalars, array for
+  list fields like `targetUsers`, `mainEntities`, `acceptanceFocus`).
+- `requirement.blueprintRefs` — server-side-only metadata. Blueprints are an
+  internal Factory reference; populate `blueprintRefs` when the intent matches;
+  otherwise use an empty array. NEVER surface blueprints in any user-facing
+  output and never describe a blueprint as a template, sample, or copy source.
+
 ## Rules
 
-- `status` must be either `waiting_user` or `ready_to_confirm`.
-- Use `waiting_user` when more clarification is needed and `questions` is non-empty.
-- Use `ready_to_confirm` when all required fields are complete and `questions` is empty.
-- Never output `confirmed`; the Factory server reserves that status for after
-  the user clicks the final “确认并生成” action and a generation job is created.
-- Ask at most 3 questions per round.
-- For a single-choice question, `recommendation` is a string option value and
-  `multiSelect` is false or omitted.
-- For a multi-select question, set `multiSelect: true` and make
-  `recommendation` an array of recommended option values, e.g.
-  `["window_calculation", "status_display"]`.
-- Do not exceed 3 rounds.
-- Do not create a generation job.
-- Do not generate code.
-- Do not expose hidden chain-of-thought.
-- Generate user-facing `workLog` entries that explain what you identified, why you recommend an option, and what remains unconfirmed.
-- Treat “确认”, “可以”, “开始生成”, and “确认并生成” as confirmation intent when the required fields are complete.
-- If the request is a new app while an active session exists, return an `intent_conflict` question with options to continue current requirement or abandon and start a new one.
+- Never output `confirmed`; Factory reserves that status for after the user
+  clicks the final confirm action and a generation job is created.
+- Ask at most ONE question per round (rounds 1–4). Each question has 2–3
+  options and a recommendation. Do NOT exceed 6 rounds.
+- Do not create a generation job. Do not generate code.
+- Never expose hidden chain-of-thought or thinking. The `workLog` is the only
+  user-facing analysis surface — it explains what you identified, why you
+  recommend an option, and what remains unconfirmed. Never relay hidden
+  reasoning.
+- Never describe a blueprint as a template, sample, or copy source. Blueprints
+  are an internal Factory reference only and must not appear in user-facing
+  output.
+- Never invent application or blueprint slugs. Only reference blueprints that
+  exist in `.claude/skills/requirement-clarification/blueprints.json`.
+- Treat “确认”, “可以”, “开始生成”, and “确认并生成” as confirmation intent when
+  the required fields are complete.
+- If the request is a new app while an active session exists, return an
+  `intent_conflict` question with options to continue the current requirement or
+  abandon and start a new one.
 
 ## Required Confirmed Requirement Fields
 
@@ -114,10 +124,12 @@ You must write `output.json` with this shape:
 - `coreScenario`
 - `primaryView`
 - `mainEntities`
-- `blueprintRefs`
 - `dataPolicy`
 - `acceptanceFocus`
 - `generationProfile`
+
+`blueprintRefs` is optional and may be an empty array when no internal Factory
+reference matches the user's app.
 
 ## Supported App Types
 
@@ -127,19 +139,19 @@ You must write `output.json` with this shape:
 
 ## 场景蓝本 Catalog (Scene Blueprint Catalog)
 
-The repo ships preset 场景蓝本 (scene blueprints) under `scene/<slug>/`. They are reference
-scenarios, NOT copyable code templates. The catalog index is
-`.claude/skills/requirement-clarification/blueprints.json`.
+The repo ships preset 场景蓝本 (scene blueprints) under `scene/<slug>/`. The
+catalog index is `.claude/skills/requirement-clarification/blueprints.json`.
 
-When clarifying a user request:
-- You MAY recommend one or more similar blueprints whose `appType`, `primaryView`,
-  `mainEntities`, `dataModelStyle`, or `matchKeywords` overlap the user's intent.
-- A blueprint is a STYLE / STRUCTURE / INTERACTION / DATA-MODEL REFERENCE ONLY. The generated
-  app must be original code under `generated-apps/<slug>/`; never copy `scene/` source files.
-- Put recommended blueprint slugs in the output `requirement.blueprintRefs` (array of slug
-  strings) and full recommendation cards in `recommendedBlueprints`.
-- Only recommend blueprints that actually exist in `blueprints.json`. Do not invent slugs.
-- If no blueprint is a good match, emit `"blueprintRefs": []` and `"recommendedBlueprints": []`.
+- You MAY match a user intent to one or more blueprints whose `appType`,
+  `primaryView`, `mainEntities`, `dataModelStyle`, or `matchKeywords` overlap.
+- A blueprint is a STYLE / STRUCTURE / INTERACTION / DATA-MODEL REFERENCE ONLY.
+  The generated app is original code under `generated-apps/<slug>/`; never copy
+  `scene/` source files.
+- Put matched blueprint slugs in `requirement.blueprintRefs` (server-side only).
+  Do NOT emit any user-visible blueprint recommendation card or event —
+  blueprints are never surfaced to the user.
+- Only reference blueprints that exist in `blueprints.json`. Do not invent slugs.
+- If no blueprint matches, emit `"blueprintRefs": []`.
 
 ## Generation Profile Mapping
 

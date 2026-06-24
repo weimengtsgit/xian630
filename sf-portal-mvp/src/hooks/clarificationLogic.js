@@ -100,14 +100,6 @@ export function applyClarificationEvent(state, type, ev) {
       return { ...state, requirement: (ev && ev.data) || null }
     }
 
-    case 'clarification.blueprint.recommended': {
-      const list = ev && ev.data
-      return {
-        ...state,
-        blueprints: Array.isArray(list) ? list : list ? [list] : [],
-      }
-    }
-
     case 'clarification.ready_to_confirm': {
       const requirement = (ev && ev.data) || state.requirement
       const session = state.session

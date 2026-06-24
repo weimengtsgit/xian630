@@ -35,10 +35,50 @@ func seedApp() model.Application {
 	}
 }
 
+// writeServerCatalog writes the validated scene catalog under a workspace root.
+func writeServerCatalog(t *testing.T, root, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir .factory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".factory", "scene-catalog.json"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+}
+
+func writeServerSceneManifest(t *testing.T, root, slug string) {
+	t.Helper()
+	dir := filepath.Join(root, "scene", slug, ".factory")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir scene manifest %s: %v", slug, err)
+	}
+	raw := `{
+  "schemaVersion": 1,
+  "slug": "` + slug + `",
+  "name": "` + slug + `",
+  "type": "command_dashboard",
+  "source": "preset",
+  "description": "` + slug + `",
+  "entry": "static-vite",
+  "path": "scene/` + slug + `",
+  "build": { "command": "npm run build", "outputDir": "dist" },
+  "runtime": { "devCommand": "npm run dev", "defaultPort": 5173 }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "app.json"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write scene manifest %s: %v", slug, err)
+	}
+}
+
 // newTestServer builds a Server backed by an in-memory store seeded with one
-// preset app, returning the server and its configured router for httptest.
+// preset app, returning the server and its configured router for httptest. The
+// workspace root carries a catalog that marks the seed preset as an application
+// surface so GET /api/apps is fail-closed-consistent.
 func newTestServer(t *testing.T) (*Server, *Router) {
 	t.Helper()
+	root := t.TempDir()
+	writeServerCatalog(t, root, `{"version":1,"scenes":{"east-sea-situation":{"surface":"application","order":1}}}`)
+	writeServerSceneManifest(t, root, "east-sea-situation")
+
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -49,7 +89,7 @@ func newTestServer(t *testing.T) (*Server, *Router) {
 		t.Fatalf("seed app: %v", err)
 	}
 
-	srv := New(config.Config{}, st, scanner.Scanner{})
+	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
 	return srv, srv.routes()
 }
 
@@ -73,40 +113,52 @@ func TestListApplications(t *testing.T) {
 	}
 }
 
-func TestListApplicationsFiltersAppsByUnifiedCatalog(t *testing.T) {
+// TestListApplicationsFiltersBlueprintPresetAndKeepsGenerated is the catalog-
+// driven server integration test: a blueprint/hidden preset is dropped, a
+// generated app is returned, and the exact application/blueprint split holds.
+func TestListApplicationsFiltersBlueprintPresetAndKeepsGenerated(t *testing.T) {
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
-	hidden := seedApp()
-	hidden.ID = "app-hidden-preset"
-	hidden.Slug = "hidden-preset"
-	hidden.Name = "Hidden Preset"
-	hidden.ManifestPath = "scene/hidden-preset/.factory/app.json"
-	hidden.Path = "scene/hidden-preset"
+	blueprint := seedApp()
+	blueprint.ID = "app-blueprint-preset"
+	blueprint.Slug = "blueprint-preset"
+	blueprint.Name = "Blueprint Preset"
+	blueprint.ManifestPath = "scene/blueprint-preset/.factory/app.json"
+	blueprint.Path = "scene/blueprint-preset"
 	visible := seedApp()
 	visible.ID = "app-visible-preset"
 	visible.Slug = "visible-preset"
 	visible.Name = "Visible Preset"
 	visible.ManifestPath = "scene/visible-preset/.factory/app.json"
 	visible.Path = "scene/visible-preset"
-	if err := st.UpsertApplication(context.Background(), hidden); err != nil {
-		t.Fatalf("seed hidden: %v", err)
-	}
-	if err := st.UpsertApplication(context.Background(), visible); err != nil {
-		t.Fatalf("seed visible: %v", err)
+	visible.DisplayOrder = 1
+	gen := seedApp()
+	gen.ID = "app-generated-demo"
+	gen.Slug = "generated-demo"
+	gen.Name = "Generated Demo"
+	gen.Source = model.AppSourceGenerated
+	gen.ManifestPath = "generated-apps/generated-demo/.factory/app.json"
+	gen.Path = "generated-apps/generated-demo"
+	for _, a := range []model.Application{blueprint, visible, gen} {
+		if err := st.UpsertApplication(context.Background(), a); err != nil {
+			t.Fatalf("seed %s: %v", a.Slug, err)
+		}
 	}
 
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".factory"), 0o755); err != nil {
-		t.Fatalf("mkdir config dir: %v", err)
-	}
-	rawConfig := `{"apps":{"hidden-preset":false,"visible-preset":{"enabled":true,"showInAppList":true}}}`
-	if err := os.WriteFile(filepath.Join(root, ".factory", "catalog.json"), []byte(rawConfig), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeServerCatalog(t, root, `{
+  "version": 1,
+  "scenes": {
+    "blueprint-preset": { "surface": "blueprint" },
+    "visible-preset": { "surface": "application", "order": 1 }
+  }
+}`)
+	writeServerSceneManifest(t, root, "blueprint-preset")
+	writeServerSceneManifest(t, root, "visible-preset")
 
 	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
 	req := httptest.NewRequest(http.MethodGet, "/api/apps", nil)
@@ -120,14 +172,51 @@ func TestListApplicationsFiltersAppsByUnifiedCatalog(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&apps); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	slugs := make([]string, 0, len(apps))
 	for _, app := range apps {
-		if app.Slug == "hidden-preset" {
-			t.Fatalf("hidden preset still listed: %#v", apps)
+		slugs = append(slugs, app.Slug)
+		if app.Slug == "blueprint-preset" {
+			t.Fatalf("blueprint preset returned: %#v", apps)
 		}
 	}
-	if len(apps) != 1 || apps[0].Slug != "visible-preset" {
-		t.Fatalf("apps = %#v, want only visible-preset", apps)
+	// Generated app visible even though absent from catalog; visible preset kept.
+	if !contains(slugs, "visible-preset") || !contains(slugs, "generated-demo") {
+		t.Fatalf("apps = %#v, want visible-preset + generated-demo", apps)
 	}
+	if len(apps) != 2 {
+		t.Fatalf("app count = %d, want 2 (visible-preset + generated-demo)", len(apps))
+	}
+}
+
+// TestListApplicationsFailClosedOnMissingCatalog asserts a missing catalog
+// produces an error rather than a permissive full list.
+func TestListApplicationsFailClosedOnMissingCatalog(t *testing.T) {
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.UpsertApplication(context.Background(), seedApp()); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+
+	// No .factory/scene-catalog.json under the (temp) root.
+	srv := New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
+	req := httptest.NewRequest(http.MethodGet, "/api/apps", nil)
+	rec := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (fail-closed)", rec.Code)
+	}
+}
+
+func contains(items []string, want string) bool {
+	for _, s := range items {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGetApplication(t *testing.T) {

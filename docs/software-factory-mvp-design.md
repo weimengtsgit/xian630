@@ -7,12 +7,13 @@
 MVP 的目标是打通一条本地单用户闭环：
 
 1. 用户在门户对话框输入应用需求。
-2. Factory 创建生成任务，并按固定阶段串行执行。
-3. Claude Agent 负责需求分析、方案设计和代码生成。
-4. Factory 负责测试、构建、Podman 部署和状态持久化。
-5. 生成应用写入 `generated-apps/<app-slug>/`。
-6. 预置应用从 `scene/*/.factory/app.json` 导入。
-7. 门户展示应用、任务、Agent 和运行详情。
+2. Factory 创建对话会话，推断对话意图并路由到已有应用复用、应用生成或业务处理智能体建议。
+3. 应用生成路由下进入需求澄清会话，用户确认需求后 Factory 创建生成任务，并按固定阶段串行执行。
+4. Claude Agent 负责需求分析、方案设计和代码生成。
+5. Factory 负责测试、镜像构建、Podman 部署和状态持久化。
+6. 生成应用写入 `generated-apps/<app-slug>/`。
+7. 预置应用按场景目录的 `application` 表面从 `scene/*/.factory/app.json` 导入。
+8. 门户展示应用、对话会话、任务、Agent 和运行详情。
 
 ## 2. MVP 边界
 
@@ -86,13 +87,46 @@ factory-server also owns:
 ~/.software-factory/state.db
 ```
 
-## 4. 需求澄清到生成任务
+## 4. 对话会话到生成任务
 
-用户第一次输入需求描述后，Factory 不直接创建生成任务。系统先创建一个独立的需求澄清会话，由需求分析 agent 引导用户补齐关键需求，用户确认后才创建生成任务。
+用户第一次输入需求描述后，Factory 不直接创建生成任务。系统先创建一个**对话会话（dialogue session）**：一个可持久化、可恢复的对话资源，先由模型识别用户**对话意图**，再路由到三种结果之一：
 
-### 4.1 需求澄清会话
+1. **已有应用复用**：判定某个已配置的预置应用即可满足需求，推荐并直接打开/启动，而不是重复生成。
+2. **应用生成**：创建一个从属的**需求澄清会话**，由需求分析 agent 引导用户补齐关键需求，用户确认后才创建生成任务。
+3. **业务处理智能体建议**：根据用户描述起草一个**业务处理智能体**定义（名称、描述、prompt），供用户确认后登记展示。
 
-需求澄清会话是对话态资源，不占用生成任务队列，也不会在应用列表中创建运行中应用卡片。它可以被确认、放弃或继续补充。
+用户在一次对话会话中确认某一路由（`route.confirmed`）后，该路由即被锁定；提出一个新的应用或智能体需求需要新建一个对话会话。
+
+```ts
+type DialogueIntent =
+  | "existing_application_reuse"
+  | "application_generation"
+  | "business_processing_agent";
+
+type DialogueStatus =
+  | "draft"
+  | "intent_inferred"
+  | "route_confirmed"
+  | "clarifying"
+  | "resolved"
+  | "abandoned"
+```
+
+### 4.1 对话会话与三路由
+
+对话会话是入口态资源，不占用生成任务队列，也不会在应用列表中创建运行中应用卡片。它可被路由确认、解析完成（`resolved`）或放弃（`abandoned`）。
+
+- 首条用户消息创建对话会话，模型推断 `DialogueIntent`。
+- 意图在用户确认路由前可随用户补充而更新（`intent.updated`）；一旦 `route.confirmed`，路由锁定。
+- **已有应用复用**：Factory 产出结构化推荐（`application.recommended`），用户确认后直接打开或启动对应应用，对话会话进入 `resolved`。
+- **业务处理智能体建议**：Factory 起草智能体定义（`agent_draft.updated`），用户确认后登记为业务处理智能体（`agent.created`，`category=business_processing`），对话会话进入 `resolved`。本阶段业务处理智能体只登记展示，不直接执行。
+- **应用生成**：Factory 在该对话会话下创建从属的需求澄清会话（见 4.2），澄清确认后才创建生成任务。
+- 用户确认前不得创建生成任务，不得启动代码生成、构建或部署。
+- 如果真实 Claude Code runner 失败，对话会话/澄清会话进入失败态，不得创建生成任务，也不得创建应用卡片。UI 提供“重试本轮”“手动编辑摘要”“放弃”等操作。
+
+### 4.2 需求澄清会话（应用生成路由的子流）
+
+应用生成路由确定后，Factory 在对话会话下创建一个需求澄清会话。需求澄清会话是软件开发子流，不占用生成任务队列，用于在创建任何生成任务之前精炼应用需求。
 
 ```ts
 type ClarificationStatus =
@@ -104,19 +138,18 @@ type ClarificationStatus =
   | "abandoned"
 ```
 
-澄清规则：
+自适应澄清规则（最多 6 轮，无第七轮）：
 
-- 最多 3 轮澄清。
-- 每轮最多提出 3 个推荐选项问题。
+- **第 1–4 轮**：每轮**最多 1 个**结构化推荐选项问题，每个问题给出 2–3 个选项。模型逐轮识别当前最需要补齐的字段。
+- **第 5 轮（推荐收敛）**：不再发散追问，而是把剩余决策项汇总为一份推荐取值集合（`推荐收敛确认`），列出每项的推荐值和理由，供用户整体接受或定点调整。
+- **第 6 轮（单字段调整）**：仅允许用户对推荐收敛结果做**单个字段**的调整，随后会话进入 `ready_to_confirm`。
+- 不存在第七轮。第 6 轮后必须可确认；若用户仍未显式确认，按推荐收敛结果处理。
 - 用户可随时输入“确认”“可以”“开始生成”等确认意图。
-- 如果 3 轮后仍未显式确认，需求分析 agent 必须收敛为推荐方案，而不是继续发散追问。
 - 用户确认前不得创建生成任务，不得启动代码生成、构建或部署。
-- 用户点击“确认并生成”后，Factory 立即确认会话、创建生成任务、置为 `queued` 并唤醒 executor。
-- 第一阶段只允许一个 active clarification session。当前存在 `active`、`waiting_user` 或 `ready_to_confirm` 会话时，新输入默认作为当前会话补充。
-- 如果用户输入明显是新应用需求，需求分析 agent 必须引导用户选择“放弃当前澄清并开始新需求”或“继续修改当前需求”。MVP 不做 paused 草稿池。
-- 如果真实 Claude Code clarification runner 失败，澄清会话进入 `failed`，不得创建生成任务，也不得创建应用卡片。UI 提供“重试本轮”“手动编辑摘要”“放弃”三个操作。
+- 用户点击“确认并生成”后，Factory 立即确认澄清会话、创建生成任务、置为 `queued` 并唤醒 executor。
+- 如果真实 Claude Code clarification runner 失败，澄清会话进入 `failed`，不得创建生成任务。UI 提供“重试本轮”“手动编辑摘要”“放弃”操作。
 
-澄清会话输出三类面向用户的信息：
+需求澄清会话输出三类面向用户的信息：
 
 - 系统状态日志：Factory 固定生成，例如“需求分析 agent 已启动”“等待用户确认”。
 - 分析工作日志：需求分析 agent 结构化生成，用于解释识别到的业务域、缺失字段、推荐理由。它不是原始内部思考过程，也不是从原始思考链抽取的内容。
@@ -177,7 +210,22 @@ type ClarificationStatus =
 
 用户手动编辑确认需求摘要时，只能编辑业务字段：`appType`、`appName`、`targetUsers`、`coreScenario`、`primaryView`、`mainEntities`、`dataPolicy`、`acceptanceFocus`。`generationProfile`、`constraints`、`risks` 和 `slug` 由 Factory 根据业务字段派生，不在普通用户界面直接编辑。
 
-需求澄清会话采用消息级流式输出，不做 token 级流式，不展示内部工具调用级事件。SSE 事件粒度为：
+对话会话与需求澄清会话采用消息级流式输出，不做 token 级流式，不展示内部工具调用级事件。门户消费的安全 SSE 事件族包括 `app.*`、`job.*`、`step.*`、`deployment.*`、`clarification.*`（历史/回填）以及新增的 `dialogue.*` 族。`dialogue.*` 包含：
+
+```text
+dialogue.created
+dialogue.intent.updated
+dialogue.application.recommended
+dialogue.route.confirmed
+dialogue.agent_draft.updated
+dialogue.agent.created
+dialogue.clarification.updated
+dialogue.resolved
+dialogue.abandoned
+dialogue.deleted
+```
+
+`clarification.*` 族作为历史/回填事件保留：
 
 ```text
 clarification.created
@@ -190,6 +238,8 @@ clarification.ready_to_confirm
 clarification.confirmed
 job.created
 ```
+
+内部场景蓝本 slug、原始 stdout/stderr、思维链 `thinking_delta` 等内容**不**推送给浏览器。
 
 需求澄清会话第一版直接接真实 Claude Code clarification runner，不先做产品路径上的 fake runner。测试可以使用后端 fake 或 fixture runner 验证 API、状态机和 UI，但本地演示路径应默认调用真实 Claude Code CLI，并加载项目级 `requirement-clarification` skill。
 
@@ -281,10 +331,10 @@ Step 与执行方映射：
 | `solution_design` | `solution-designer` | Claude Runner | 产出页面、组件、数据模型和文件计划 |
 | `code_generation` | `code-generator` | Claude Runner | 写入 `generated-apps/<slug>/` 代码和 manifest |
 | `test_verification` | `tester` | Factory 命令为主，Claude 可选分析失败日志 | Factory 执行依赖安装、构建和契约检查 |
-| `image_build` | `deployer` | Factory 命令 | Factory 执行固定 Podman build 命令 |
+| `image_build` | `image-builder` | Factory 命令 | Factory 执行固定 Podman build 命令 |
 | `deployment` | `deployer` | Factory 命令 | Factory 分配端口、启动容器、做健康检查 |
 
-`agent_key` 用于 UI 展示和审计归属，不代表每个 Step 都会启动 Claude CLI。`test_verification`、`image_build`、`deployment` 的关键命令由 Factory 固定执行，不能由 Claude 自由拼接命令。
+这六个 `agent_key` 对应六个**软件开发智能体**：需求分析、方案设计、代码生成、测试、镜像构建、部署。历史上镜像构建与部署曾合并为单个“构建部署” agent，现拆分为独立的 `image-builder`（镜像构建，`image_build`）与 `deployer`（部署，`deployment`）。`agent_key` 用于 UI 展示和审计归属，不代表每个 Step 都会启动 Claude CLI。`test_verification`、`image_build`、`deployment` 的关键命令由 Factory 固定执行，不能由 Claude 自由拼接命令。
 
 状态转移规则：
 
@@ -688,7 +738,7 @@ Factory 可用 Agent 定义。它不是 `cc-status` 里的运行实例。
 
 ```text
 id
-key                 requirement-analyst | solution-designer | code-generator | tester | deployer
+key                 requirement-analyst | solution-designer | code-generator | tester | image-builder | deployer
 name
 role
 description
@@ -830,10 +880,21 @@ created_at
 
 ## 8. 应用注册机制
 
+### 8.1 场景目录
+
+预置场景的展示表面由单一的**场景目录** `.factory/scene-catalog.json` 决定，它是应用列表展示与对话意图分类候选的共享来源。每个场景被分配到且仅到一个表面：
+
+- `application`：作为预置应用出现在门户应用列表。当前为 `carrier-formation-replay`、`aircraft-carrier-track`、`east-sea-situation`。
+- `blueprint`：作为**隐藏的内部场景蓝本**，仅作为生成应用需求时的内部参考，**绝不**向用户展示为产品约束、能力边界或可直接打开的应用。当前为 `carrier-homeport-tide-window`、`carrier-deck-wind-calculator`、`merchant-density-grid-alert`、`social-sighting-cluster-alert`（展示名：开源社区异常监测）。
+
+`preset-apps.json` 不再驱动运行时展示或路由。历史 `showInAppList` / `recommendedBlueprints` 等开关已被场景目录取代。
+
+### 8.2 应用扫描与命名
+
 Factory 启动时扫描：
 
 ```text
-scene/*/.factory/app.json
+scene/*/.factory/app.json        （仅 surface=application 进入应用列表）
 generated-apps/*/.factory/app.json
 ```
 
@@ -876,6 +937,16 @@ manifest 统一字段：
 - 启动时 upsert `applications` 表。
 - manifest 删除后，DB 中应用不物理删除，标记为 `missing`。
 - 运行态字段如 `runtime_url` 和容器名只保存在 DB，不写回 manifest。
+
+#### 生成应用命名（Factory 拥有）
+
+生成应用的名称由 Factory 而非模型直接决定，流程为：
+
+1. 模型根据确认需求摘要产出**规范化场景名称**（简洁、面向人类、非 demo 名称、非 slug、非原始输入全文）。
+2. Factory 追加一个 4 位 Base36 随机序列，并派生一个安全 slug。
+3. 最终生成应用名为 `<规范化场景名称>-<序列>`（例如 `航母编队航迹复盘-K7M2`）。
+
+不再使用 `demoN` 类名称。客户原始场景措辞作为对话与需求上下文保留（**客户场景名称**），即使生成应用获得规范化名称。
 
 预置应用可以在门户里启动、停止、重新构建和部署。预置源码只读，不能直接编辑。如果用户要基于预置应用改造，必须复制到 `generated-apps/` 形成新应用。
 
@@ -967,7 +1038,7 @@ Runner 工具权限按阶段收紧：
 
 生成能力包职责：
 
-- `requirement-clarification`：需求澄清会话行为、最多 3 轮、每轮最多 3 问、确认需求摘要 8 个必填字段、应用类型识别、`generationProfile` 生成。
+- `requirement-clarification`：需求澄清会话行为、自适应最多 6 轮（第 1–4 轮每轮最多 1 问/2–3 选项、第 5 轮推荐收敛、第 6 轮单字段调整，无第七轮）、确认需求摘要必填字段、应用类型识别、`generationProfile` 生成。
 - `software-factory-app`：统一 React/Vite 工程结构、manifest、Dockerfile、nginx、构建与部署约束。
 - `defense-operations-ui`：统一军工/海军业务视觉语言、信息密度、深色态势风格和交互规范。
 - `map-timeline-replay`：地图范围、轨迹、事件点、时间轴、对象详情和复盘交互。
@@ -1138,12 +1209,12 @@ GET /api/events
 
 Agent 区展示：
 
-- Factory Agent 定义卡片：需求分析、方案设计、代码生成、测试、构建部署。
+- Factory Agent 定义卡片：需求分析、方案设计、代码生成、测试、镜像构建、部署。
 - 当前是否参与任务。
 - 最近执行时间。
 - 点击后查看关联 Claude session、subagent、skill。
 
-对话框始终固定在中间底部。用户第一次输入创建需求澄清会话，不直接创建生成任务。任务运行时，用户仍可补充需求、回答澄清、发送停止、重试、继续等指令。新建需求进入澄清会话或队列，不打断当前任务。
+对话框始终固定在中间底部。用户第一次输入创建对话会话，由模型推断对话意图并路由到已有应用复用、应用生成或业务处理智能体建议；应用生成路由确定后才进入需求澄清会话，不直接创建生成任务。任务运行时，用户仍可补充需求、回答澄清、发送停止、重试、继续等指令。新建需求进入新的对话会话或队列，不打断当前任务。
 
 ## 12. 视觉风格
 

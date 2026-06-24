@@ -53,21 +53,21 @@ func TestListAgents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got) != 5 {
-		t.Fatalf("len = %d, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("len = %d, want 6", len(got))
 	}
 	keys := map[string]bool{}
 	for _, a := range got {
 		keys[a.Key] = true
 	}
-	for _, k := range []string{"requirement-analyst", "solution-designer", "code-generator", "tester", "deployer"} {
+	for _, k := range []string{"requirement-analyst", "solution-designer", "code-generator", "tester", "image-builder", "deployer"} {
 		if !keys[k] {
 			t.Fatalf("missing agent key %s", k)
 		}
 	}
 	// Agents should be ordered by sort_order ascending.
-	if got[0].SortOrder != 1 || got[4].SortOrder != 5 {
-		t.Fatalf("sort order not ascending: first=%d last=%d", got[0].SortOrder, got[4].SortOrder)
+	if got[0].SortOrder != 1 || got[5].SortOrder != 6 {
+		t.Fatalf("sort order not ascending: first=%d last=%d", got[0].SortOrder, got[5].SortOrder)
 	}
 }
 
@@ -81,6 +81,8 @@ func TestCreateAgent(t *testing.T) {
 		"description":"审查需求和设计输出",
 		"claude_agent_name":"review-agent",
 		"skills_json":"[\"review\"]",
+		"category":"business_processing",
+		"prompt":"你是评审助手",
 		"enabled":true
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
@@ -101,8 +103,11 @@ func TestCreateAgent(t *testing.T) {
 	if got.Key != "review-agent" || got.Name != "评审智能体" || got.Role != "reviewer" {
 		t.Fatalf("created agent mismatch: %+v", got)
 	}
-	if got.SortOrder != 6 {
-		t.Fatalf("sort_order = %d, want 6", got.SortOrder)
+	if got.Category != model.AgentCategoryBusinessProcessing || got.Prompt != "你是评审助手" {
+		t.Fatalf("category/prompt mismatch: %+v", got)
+	}
+	if got.SortOrder != 7 {
+		t.Fatalf("sort_order = %d, want 7", got.SortOrder)
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
@@ -115,18 +120,18 @@ func TestCreateAgent(t *testing.T) {
 	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(all) != 6 {
-		t.Fatalf("len = %d, want 6", len(all))
+	if len(all) != 7 {
+		t.Fatalf("len = %d, want 7", len(all))
 	}
-	if all[5].Key != "review-agent" {
-		t.Fatalf("last key = %q, want review-agent", all[5].Key)
+	if all[6].Key != "review-agent" {
+		t.Fatalf("last key = %q, want review-agent", all[6].Key)
 	}
 }
 
 func TestCreateAgentCreateAliasRoute(t *testing.T) {
 	_, r := newAgentTestServer(t)
 
-	body := bytes.NewBufferString(`{"key":"audit-agent","name":"审计智能体","role":"auditor"}`)
+	body := bytes.NewBufferString(`{"key":"audit-agent","name":"审计智能体","role":"auditor","category":"business_processing","prompt":"你是审计助手"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/create", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -168,7 +173,7 @@ func TestCreateAgentInvalidSkillsJSON(t *testing.T) {
 func TestCreateAgentDuplicateKey(t *testing.T) {
 	_, r := newAgentTestServer(t)
 
-	body := bytes.NewBufferString(`{"key":"tester","name":"重复测试","role":"tester"}`)
+	body := bytes.NewBufferString(`{"key":"tester","name":"重复测试","role":"tester","category":"business_processing","prompt":"dup"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -176,6 +181,34 @@ func TestCreateAgentDuplicateKey(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
+// TestCreateAgentRejectsSoftwareDevelopmentCategory asserts manual creation
+// cannot claim the pipeline-owned software_development category.
+func TestCreateAgentRejectsSoftwareDevelopmentCategory(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	body := bytes.NewBufferString(`{"key":"fake-pipeline","name":"伪流水线","role":"code_generation","category":"software_development","prompt":"x"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateAgentRejectsBusinessAgentWithoutPrompt asserts a business agent
+// must carry a non-empty prompt.
+func TestCreateAgentRejectsBusinessAgentWithoutPrompt(t *testing.T) {
+	_, r := newAgentTestServer(t)
+	body := bytes.NewBufferString(`{"key":"no-prompt","name":"无提示词","role":"ops","category":"business_processing"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
 	}
 }
 

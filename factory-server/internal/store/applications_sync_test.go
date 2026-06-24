@@ -156,3 +156,57 @@ END`); err != nil {
 		t.Fatalf("deployments = %#v, want original deployment after rollback", deps)
 	}
 }
+
+// TestApplicationDisplayOrderRoundTrip locks in the display_order column: it is
+// written on upsert, preserved on conflict refresh, and read back by all three
+// accessors (list/get/get-by-slug). Exercises the additive ensureColumn
+// migration implicitly via Open.
+func TestApplicationDisplayOrderRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	app := appNow("app-ordered", "ordered", "scene/ordered/.factory/app.json", model.AppSourcePreset)
+	app.DisplayOrder = 7
+	if err := st.UpsertApplication(ctx, app); err != nil {
+		t.Fatalf("seed ordered: %v", err)
+	}
+
+	// List sees the order.
+	list, err := st.ListApplications(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, a := range list {
+		if a.ID == app.ID && a.DisplayOrder != 7 {
+			t.Fatalf("list display_order = %d, want 7", a.DisplayOrder)
+		}
+	}
+
+	// Get sees the order.
+	got, err := st.GetApplication(ctx, app.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: %#v %v", got, err)
+	}
+	if got.DisplayOrder != 7 {
+		t.Fatalf("get display_order = %d, want 7", got.DisplayOrder)
+	}
+
+	// GetBySlug sees the order.
+	bySlug, err := st.GetApplicationBySlug(ctx, app.Slug)
+	if err != nil || bySlug == nil {
+		t.Fatalf("get by slug: %#v %v", bySlug, err)
+	}
+	if bySlug.DisplayOrder != 7 {
+		t.Fatalf("get-by-slug display_order = %d, want 7", bySlug.DisplayOrder)
+	}
+
+	// Re-upsert refreshes the order.
+	app.DisplayOrder = 9
+	if err := st.UpsertApplication(ctx, app); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	got2, _ := st.GetApplication(ctx, app.ID)
+	if got2.DisplayOrder != 9 {
+		t.Fatalf("refreshed display_order = %d, want 9", got2.DisplayOrder)
+	}
+}

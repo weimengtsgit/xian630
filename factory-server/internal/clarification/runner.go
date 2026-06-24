@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -68,6 +70,14 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	outBytes, _ := json.MarshalIndent(out, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "output.json"), outBytes, 0o644); err != nil {
 		return RoundOutput{}, err
+	}
+	// Adaptive invariant: rounds 1–4 accept ZERO questions or EXACTLY ONE
+	// required question. A model round emitting more than one question is a
+	// contract violation — reject it rather than silently truncating. Round 5
+	// (consolidation) emits no questions by construction; this guard still
+	// holds it to the same discipline.
+	if !IsReadyToConfirmStatus(out.Status) && len(out.Questions) > 1 {
+		return RoundOutput{}, fmt.Errorf("clarification round %d emitted %d questions; adaptive contract allows at most one: %w", out.Round, len(out.Questions), ErrAdaptiveTooManyQuestions)
 	}
 	events := normalizeEvents(input.SessionID, out, normalizeOptions{SkipWorkLogs: streamed})
 	if err := writeStream(filepath.Join(dir, "stream.jsonl"), events); err != nil {
@@ -344,12 +354,49 @@ func truncateNotice(s string) string {
 func (r Runner) prompt(inputPath string) string {
 	return "Use .claude/skills/requirement-clarification/SKILL.md. " +
 		fmt.Sprintf("The round input is at the absolute path %s — read it with the Read tool. ", inputPath) +
-		"Output ONLY valid JSON matching the requirement clarification contract." +
-		" Consult .claude/skills/requirement-clarification/blueprints.json for the 场景蓝本 catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s) and emit recommendedBlueprints cards. Blueprints are style/structure references only — never propose copying scene source."
+		"Output ONLY valid JSON matching the adaptive requirement clarification contract. " +
+		"Emit at most ONE required question per round (rounds 1–4), each with 2–3 options. " +
+		"At round 5 (only if still incomplete) emit a consolidation list recommending a value for every remaining field. " +
+		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs."
 }
+
+// ErrAdaptiveTooManyQuestions is returned when a clarification round emits more
+// than one question. The adaptive contract allows at most one required question
+// per round.
+var ErrAdaptiveTooManyQuestions = errors.New("adaptive contract allows at most one question per round")
 
 type normalizeOptions struct {
 	SkipWorkLogs bool
+}
+
+// PublicRequirement projects a Requirement into its user-facing form, stripping
+// the internal BlueprintRefs. It is the ONLY shape that may appear in a
+// user-facing SSE event; the raw Requirement (with blueprintRefs) is retained
+// on the persisted RoundOutput returned to the caller and written to
+// output.json. Handlers in other packages MUST route every clarification /
+// dialogue event payload through this helper rather than publishing the raw
+// Requirement, which carries internal Factory blueprint slugs.
+func PublicRequirement(r Requirement) requirementView {
+	return requirementWithoutBlueprintRefs(r)
+}
+
+// requirementWithoutBlueprintRefs projects a Requirement into its user-facing
+// form, stripping the internal BlueprintRefs. It is the ONLY shape that may
+// appear in a user-facing SSE event; the raw Requirement (with blueprintRefs)
+// is retained on the persisted RoundOutput returned to the caller and written
+// to output.json. PublicRequirement is the exported alias used by handlers.
+func requirementWithoutBlueprintRefs(r Requirement) requirementView {
+	return requirementView{
+		AppType:           r.AppType,
+		AppName:           r.AppName,
+		TargetUsers:       r.TargetUsers,
+		CoreScenario:      r.CoreScenario,
+		PrimaryView:       r.PrimaryView,
+		MainEntities:      r.MainEntities,
+		DataPolicy:        r.DataPolicy,
+		AcceptanceFocus:   r.AcceptanceFocus,
+		GenerationProfile: r.GenerationProfile,
+	}
 }
 
 func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions) []StreamEvent {
@@ -371,16 +418,25 @@ func normalizeEvents(sessionID string, out RoundOutput, opts ...normalizeOptions
 	for _, q := range out.Questions {
 		events = append(events, StreamEvent{Type: "clarification.question.created", SessionID: sessionID, Data: q})
 	}
-	events = append(events, StreamEvent{Type: "clarification.summary.updated", SessionID: sessionID, Data: out.Requirement})
-	if len(out.RecommendedBlueprints) > 0 {
+	// Blueprints are internal server-side metadata (Requirement.BlueprintRefs).
+	// They MUST NOT appear in any user-facing SSE event. Emit a projection that
+	// omits the field entirely so it cannot leak by omission — the persisted
+	// RoundOutput.Requirement (returned to the caller and written to output.json)
+	// still carries blueprintRefs intact.
+	events = append(events, StreamEvent{Type: "clarification.summary.updated", SessionID: sessionID, Data: requirementWithoutBlueprintRefs(out.Requirement)})
+	// Adaptive: emit a consolidation event for the round-5 recommendation list.
+	// Blueprints are no longer surfaced in any user-facing event (the
+	// clarification.blueprint.recommended event has been removed); blueprints
+	// are an internal Factory reference persisted only in requirement metadata.
+	if len(out.Consolidation) > 0 {
 		events = append(events, StreamEvent{
-			Type:      "clarification.blueprint.recommended",
+			Type:      "clarification.consolidation.updated",
 			SessionID: sessionID,
-			Data:      out.RecommendedBlueprints,
+			Data:      out.Consolidation,
 		})
 	}
 	if IsReadyToConfirmStatus(out.Status) {
-		events = append(events, StreamEvent{Type: "clarification.ready_to_confirm", SessionID: sessionID, Data: out.Requirement})
+		events = append(events, StreamEvent{Type: "clarification.ready_to_confirm", SessionID: sessionID, Data: requirementWithoutBlueprintRefs(out.Requirement)})
 	}
 	return events
 }
@@ -719,7 +775,6 @@ func looksLikeRoundOutput(out RoundOutput) bool {
 	}
 	return len(out.WorkLog) > 0 ||
 		len(out.Questions) > 0 ||
-		len(out.RecommendedBlueprints) > 0 ||
 		!requirementIsZero(out.Requirement)
 }
 
@@ -743,7 +798,7 @@ func (r Runner) promptText(inputPath string) string {
 		"All human-readable output fields must use Simplified Chinese, including workLog content, question text, option labels, option descriptions, requirement summaries, and recommendation copy; only identifiers, slugs, file paths, enum keys, and code symbols may remain non-Chinese. " +
 		"Return the final clarification payload directly as raw JSON in the final assistant message only, with no markdown fences and no extra prose. " +
 		"Output ONLY valid JSON matching the requirement clarification contract. " +
-		"Consult .claude/skills/requirement-clarification/blueprints.json for the scene blueprint catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s) and emit recommendedBlueprints cards. Blueprints are style/structure references only and must never copy scene source."
+		"Consult .claude/skills/requirement-clarification/blueprints.json for the internal scene blueprint catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s). If no blueprint matches, use an empty blueprintRefs array. Blueprints are hidden style/structure references only: never emit user-facing blueprint recommendations, never call them templates, and never copy scene source."
 }
 
 func (r Runner) binary() string {
@@ -765,6 +820,182 @@ func (r Runner) artifactRoot() string {
 		return ".factory-runs"
 	}
 	return r.ArtifactRoot
+}
+
+// ErrConsolidationFieldUnknown is returned by ApplyConsolidationAdjustment when
+// the user-selected field is not present in the consolidation list.
+var ErrConsolidationFieldUnknown = errors.New("selected field is not in the consolidation list")
+
+// ErrConsolidationValueInvalid is returned by ApplyConsolidationAdjustment when
+// a consolidation entry's recommendedValue is malformed JSON or the wrong type
+// for its field.
+var ErrConsolidationValueInvalid = errors.New("consolidation recommendedValue is invalid for its field")
+
+// ApplyConsolidationAdjustment implements the round-6 merge (no model turn).
+// It (a) permits only the one selectedField the user adjusted, applying
+// selectedValue to it; (b) merges the persisted recommended values for every
+// OTHER missing field in the consolidation list; (c) validates completeness of
+// the result; and (d) returns the requirement marked ready_to_confirm. It does
+// NOT invoke the model. The handler (Task 4) calls this directly.
+//
+// current is the requirement carried into round 6 (the confirmed-so-far
+// fields). consolidation is the round-5 recommendation list. selectedField is
+// the single field the user chose to override; selectedValue is their pick. If
+// selectedField is empty, every missing field takes its recommendation (a pure
+// accept-all).
+func ApplyConsolidationAdjustment(current Requirement, consolidation []ConsolidationEntry, selectedField string, selectedValue any) (Requirement, error) {
+	if selectedField != "" {
+		known := false
+		for _, e := range consolidation {
+			if e.Field == selectedField {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return Requirement{}, fmt.Errorf("field %q: %w", selectedField, ErrConsolidationFieldUnknown)
+		}
+	}
+	out := current
+	// Apply the persisted recommended value for every consolidation field EXCEPT
+	// the selected one (which the user overrides).
+	for _, e := range consolidation {
+		if e.Field == selectedField {
+			if err := setRequirementField(&out, e.Field, selectedValue); err != nil {
+				return Requirement{}, fmt.Errorf("field %q selected value: %w", e.Field, err)
+			}
+			continue
+		}
+		// Only fill in fields that are currently empty/missing — a previously
+		// confirmed value is preserved, not overwritten by the recommendation.
+		if !requirementFieldEmpty(out, e.Field) {
+			continue
+		}
+		var v any
+		if err := json.Unmarshal(e.RecommendedValue, &v); err != nil {
+			return Requirement{}, fmt.Errorf("field %q: %w", e.Field, ErrConsolidationValueInvalid)
+		}
+		if err := setRequirementField(&out, e.Field, v); err != nil {
+			return Requirement{}, fmt.Errorf("field %q: %w", e.Field, err)
+		}
+	}
+	if err := validateRequirementComplete(out); err != nil {
+		return Requirement{}, err
+	}
+	return out, nil
+}
+
+// setRequirementField assigns a typed value to a named Requirement field by
+// JSON tag. It accepts the value shapes a consolidation entry carries (string
+// for scalar fields, []any for slice fields).
+func setRequirementField(req *Requirement, field string, value any) error {
+	v := reflect.ValueOf(req).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag != field {
+			continue
+		}
+		fv := v.Field(i)
+		switch fv.Kind() {
+		case reflect.String:
+			s, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("expected string for %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			fv.SetString(s)
+		case reflect.Slice:
+			arr, ok := value.([]any)
+			if !ok {
+				return fmt.Errorf("expected array for %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			out := make([]string, 0, len(arr))
+			for _, a := range arr {
+				s, ok := a.(string)
+				if !ok {
+					return fmt.Errorf("expected string element for %s: %w", field, ErrConsolidationValueInvalid)
+				}
+				out = append(out, s)
+			}
+			fv.Set(reflect.ValueOf(out))
+		case reflect.Map:
+			// generationProfile: map[string][]string. Consolidation does not
+			// typically adjust this (it is set early), but handle defensively.
+			b, err := json.Marshal(value)
+			if err != nil {
+				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			var m map[string][]string
+			if err := json.Unmarshal(b, &m); err != nil {
+				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
+			}
+			fv.Set(reflect.ValueOf(m))
+		default:
+			return fmt.Errorf("field %s unsupported kind %s: %w", field, fv.Kind(), ErrConsolidationValueInvalid)
+		}
+		return nil
+	}
+	return fmt.Errorf("field %q: %w", field, ErrConsolidationFieldUnknown)
+}
+
+// requirementFieldEmpty reports whether a Requirement field (by JSON tag) is at
+// its zero value, so ApplyConsolidationAdjustment only fills missing fields.
+func requirementFieldEmpty(req Requirement, field string) bool {
+	v := reflect.ValueOf(&req).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		if tag != field {
+			continue
+		}
+		fv := v.Field(i)
+		switch fv.Kind() {
+		case reflect.String:
+			return fv.String() == ""
+		case reflect.Slice, reflect.Map:
+			return fv.Len() == 0
+		}
+	}
+	return true
+}
+
+// validateRequirementComplete enforces the required confirmed-requirement
+// fields. It mirrors the SKILL.md "Required Confirmed Requirement Fields" list.
+func validateRequirementComplete(req Requirement) error {
+	missing := []string{}
+	if req.AppType == "" {
+		missing = append(missing, "appType")
+	}
+	if req.AppName == "" {
+		missing = append(missing, "appName")
+	}
+	if len(req.TargetUsers) == 0 {
+		missing = append(missing, "targetUsers")
+	}
+	if req.CoreScenario == "" {
+		missing = append(missing, "coreScenario")
+	}
+	if req.PrimaryView == "" {
+		missing = append(missing, "primaryView")
+	}
+	if len(req.MainEntities) == 0 {
+		missing = append(missing, "mainEntities")
+	}
+	if req.DataPolicy == "" {
+		missing = append(missing, "dataPolicy")
+	}
+	if len(req.AcceptanceFocus) == 0 {
+		missing = append(missing, "acceptanceFocus")
+	}
+	if len(req.GenerationProfile) == 0 {
+		missing = append(missing, "generationProfile")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("requirement incomplete, missing %s: %w", strings.Join(missing, ", "), ErrConsolidationValueInvalid)
+	}
+	return nil
 }
 
 func claudeModelArgs() []string {

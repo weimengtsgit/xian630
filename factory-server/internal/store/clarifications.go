@@ -93,6 +93,33 @@ LIMIT ?`, limit)
 	return out, rows.Err()
 }
 
+// ListAllClarificationSessions returns EVERY clarification session without the
+// shared list cap, ordered deterministically oldest-first (created_at ASC then
+// id ASC). It is intended for one-shot startup migrations (e.g. the legacy
+// dialogue backfill) that must visit every row, not for the paginated API
+// history — that still goes through ListClarificationSessions with its cap.
+func (s *Store) ListAllClarificationSessions(ctx context.Context) ([]model.ClarificationSession, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT `+clarificationSessionCols+`
+FROM clarification_sessions
+ORDER BY created_at ASC, id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.ClarificationSession{}
+	for rows.Next() {
+		cs, err := scanClarificationSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		if cs != nil {
+			out = append(out, *cs)
+		}
+	}
+	return out, rows.Err()
+}
+
 // DeleteClarificationSession removes one clarification session and its transcript
 // messages in a transaction. Linked jobs, apps, artifacts, and execution records
 // are intentionally left untouched.
