@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, MessageSquarePlus, History, Send, ChevronUp, ChevronDown, X } from 'lucide-react'
-import { AlertTriangle, Loader2, MessageSquarePlus, History, Send, X, Trash2 } from 'lucide-react'
+import { AlertTriangle, Loader2, MessageSquarePlus, History, Send, ChevronUp, ChevronDown, X } from 'lucide-react'
 import { titleForSession } from '../hooks/conversationTimeline'
 import './ConversationWorkbench.css'
 
