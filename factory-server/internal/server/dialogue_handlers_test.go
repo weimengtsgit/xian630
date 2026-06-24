@@ -1078,6 +1078,119 @@ func TestApplicationClarificationAcceptConsolidation(t *testing.T) {
 	}
 }
 
+// TestApplicationClarificationConsolidationGateHonorsOpenHighImpact is the D3
+// regression: a round-5 output can carry BOTH a consolidation list AND a
+// non-empty openHighImpact list (independent RoundOutput fields). Accepting the
+// recommendations (接受推荐) must NOT promote the child to ready_to_confirm while
+// openHighImpact is still open — the consolidation-apply path (no model turn)
+// must honor the same gate as advanceAfterUserTurn / normalizeClarificationReadiness.
+// With openHighImpact empty, accept-all must still reach ready_to_confirm.
+func TestApplicationClarificationConsolidationGateHonorsOpenHighImpact(t *testing.T) {
+	// round-5: consolidation present AND a non-empty openHighImpact list.
+	round5WithHighImpact := func() string {
+		out := clarification.RoundOutput{
+			Status: "waiting_user", Round: 5,
+			WorkLog: []clarification.WorkLog{{Type: "consolidation", Content: "收敛推荐 + 高影响项"}},
+			Requirement: clarification.Requirement{
+				AppType: "situation_replay", AppName: "航母编队复盘应用",
+				TargetUsers: []string{"作战参谋"}, PrimaryView: "地图 + 时间轴", DataPolicy: "mock_data",
+				GenerationProfile: map[string][]string{"base": {"software-factory-app"}, "domain": {"defense-operations-ui"}, "pattern": {"map-timeline-replay"}},
+			},
+			Consolidation: []clarification.ConsolidationEntry{
+				{Field: "coreScenario", RecommendedValue: json.RawMessage(`"复盘近 1 个月航迹"`), Reason: "推荐", Alternatives: []string{}},
+				{Field: "mainEntities", RecommendedValue: json.RawMessage(`["编队","事件"]`), Reason: "推荐"},
+				{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["轨迹联动"]`), Reason: "推荐"},
+			},
+			OpenHighImpact: []clarification.HighImpactItem{
+				{ID: "data_policy", Label: "数据来源策略", Recommendation: "mock_data", Options: []clarification.Option{{Value: "mock_data", Label: "Mock"}, {Value: "api_first", Label: "接口"}}},
+			},
+		}
+		b, _ := json.Marshal(out)
+		return string(b)
+	}()
+
+	setupChild := func(t *testing.T) (*Server, *Router, *store.Store, string, string) {
+		seq := &clarSequenceRunner{
+			outputs: []string{
+				roundOutputOneQuestion(1, "appType"),
+				roundOutputOneQuestion(2, "primaryView"),
+				roundOutputOneQuestion(3, "dataPolicy"),
+				roundOutputOneQuestion(4, "targetUsers"),
+				round5WithHighImpact,
+			},
+		}
+		srv, r, st := newDialogueTestServer(t, seq)
+		srv.dialogueRouter = dialogue.Runner{
+			Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+		}
+		create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+		var created dialogueView
+		json.NewDecoder(create.Body).Decode(&created)
+		_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+		var routed dialogueView
+		_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+		childID := routed.Session.ClarificationSessionID
+		if childID == "" {
+			t.Fatalf("no child clarification linked")
+		}
+		answerRound := func(questionID, value string) {
+			rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+				"questionId": questionID, "value": value,
+			})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+			}
+		}
+		answerRound("appType", "situation_replay")
+		answerRound("primaryView", "地图 + 时间轴")
+		answerRound("dataPolicy", "mock_data")
+		answerRound("targetUsers", "作战参谋")
+		// round 5 has now run; assert openHighImpact is persisted on the child.
+		child, _ := st.GetClarificationSession(context.Background(), childID)
+		if child == nil || strings.TrimSpace(child.OpenHighImpactJSON) == "" {
+			t.Fatalf("round-5 must persist openHighImpact: %+v", child)
+		}
+		return srv, r, st, created.Session.ID, childID
+	}
+
+	// --- Case A: openHighImpact open → accept-all must NOT promote ---
+	_, r, st, dlgID, childID := setupChild(t)
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	child, _ := st.GetClarificationSession(context.Background(), childID)
+	if child == nil {
+		t.Fatalf("child gone after accept")
+	}
+	if child.Status == model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("child status = ready_to_confirm, want non-ready (openHighImpact still open blocks consolidation-apply promotion)")
+	}
+	// The 确认并生成/confirm path must remain blocked while high-impact is open.
+	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/clarification/confirm", nil)
+	if confirmRec.Code == http.StatusOK {
+		t.Fatalf("confirm must be blocked while consolidation left openHighImpact open, got %d", confirmRec.Code)
+	}
+
+	// --- Case B: openHighImpact cleared → accept-all promotes to ready_to_confirm ---
+	_, r2, st2, dlgID2, childID2 := setupChild(t)
+	if err := st2.UpdateClarificationOpenHighImpact(context.Background(), childID2, ""); err != nil {
+		t.Fatalf("clear openHighImpact: %v", err)
+	}
+	accept2 := doJSON(t, r2, http.MethodPost, "/api/dialogues/"+dlgID2+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if accept2.Code != http.StatusOK {
+		t.Fatalf("accept (cleared) status = %d body=%s", accept2.Code, accept2.Body.String())
+	}
+	child2, _ := st2.GetClarificationSession(context.Background(), childID2)
+	if child2 == nil || child2.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("persisted child status = %+v, want ready_to_confirm once openHighImpact empty", child2)
+	}
+}
+
 // TestDialogueConfirmRollsBackOnMidSeedFailure asserts that when the job-seeding
 // transaction fails part-way through (a step insert errors), the confirm handler
 // leaves NO orphaned job row and moves the child clarification to a diagnosable

@@ -1425,7 +1425,18 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 		}
 		adjustedBytes, _ := json.Marshal(adjusted)
 		_ = s.store.UpdateClarificationRequirement(ctx, childID, string(adjustedBytes))
-		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusReadyToConfirm, "", "")
+		// D3 / ADR 0006: applying consolidation does NOT clear
+		// openHighImpact. A round can return BOTH a consolidation list AND a
+		// non-empty openHighImpact list (independent RoundOutput fields), so
+		// accepting the recommendations while a high-impact confirmation item
+		// is still open must NOT promote to ready_to_confirm — the same gate
+		// the sibling no-model sites (advanceAfterUserTurn,
+		// normalizeClarificationReadiness) enforce via openHighImpactOpen.
+		status := model.ClarificationStatusReadyToConfirm
+		if s.openHighImpactOpen(sess) {
+			status = model.ClarificationStatusWaitingUser
+		}
+		_ = s.store.SetClarificationStatus(ctx, childID, status, "", "")
 		s.publishDialogueChild(ctx, id, childID, adjusted)
 		_ = dlg
 		_ = cv

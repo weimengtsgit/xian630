@@ -1023,7 +1023,7 @@ func (s *Server) advanceAfterUserTurn(ctx context.Context, sessID string, sess *
 		// stays waiting_user so the user can still answer the blocking question.
 		// Only when openHighImpact is empty do we promote so the user can confirm.
 		status := model.ClarificationStatusReadyToConfirm
-		if len(s.parseOpenHighImpact(sess.OpenHighImpactJSON)) > 0 {
+		if s.openHighImpactOpen(sess) {
 			status = model.ClarificationStatusWaitingUser
 		}
 		if err := s.store.SetClarificationStatus(ctx, sessID, status, "", ""); err != nil {
@@ -1067,7 +1067,7 @@ func (s *Server) normalizeClarificationReadiness(ctx context.Context, sess *mode
 	// ready_to_confirm. Required fields may have been filled from blueprint
 	// assumptions; a confirmed high-impact decision requires an explicit user
 	// answer, so stay waiting_user while openHighImpact is non-empty.
-	if len(s.parseOpenHighImpact(sess.OpenHighImpactJSON)) > 0 {
+	if s.openHighImpactOpen(sess) {
 		return sess, nil
 	}
 	if err := s.store.SetClarificationStatus(ctx, sess.ID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
@@ -1221,8 +1221,7 @@ func (s *Server) parseRequirement(raw string) clarification.Requirement {
 }
 
 // parseOpenHighImpact reads the persisted open-high-impact JSON snapshot back
-// into the validated shape. The non-model readiness sites
-// (advanceAfterUserTurn, normalizeClarificationReadiness) call this to re-apply
+// into the validated shape. openHighImpactOpen (below) calls this to re-apply
 // the D3 gate from the persisted state without a model turn. Re-validation is
 // defensive: the list was validated by the runner before persist, but a corrupt
 // row should fail-safe to "open" only when the JSON genuinely decodes to items.
@@ -1235,6 +1234,21 @@ func (s *Server) parseOpenHighImpact(raw string) []clarification.HighImpactItem 
 		return nil
 	}
 	return items
+}
+
+// openHighImpactOpen is the single D3 / ADR 0006 gate predicate for the
+// non-model readiness sites: a session with open high-impact confirmation
+// items must NOT be promoted to ready_to_confirm regardless of message detail.
+// Every no-model promotion path (advanceAfterUserTurn's cap branch,
+// normalizeClarificationReadiness, and the consolidation-apply path in
+// answerDialogueClarificationBatch) MUST consult this helper so a future site
+// cannot silently bypass the gate. The model-output site runRoundAndPersist is
+// exempt: it inspects the fresh out.OpenHighImpact, not the persisted snapshot.
+func (s *Server) openHighImpactOpen(sess *model.ClarificationSession) bool {
+	if sess == nil {
+		return false
+	}
+	return len(s.parseOpenHighImpact(sess.OpenHighImpactJSON)) > 0
 }
 
 // applyAnswerToRequirement merges a structured answer into the requirement for a
