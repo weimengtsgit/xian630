@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -56,6 +57,61 @@ type errResponse struct {
 
 func (e errResponse) write(w http.ResponseWriter) {
 	writeJSON(w, e.status, map[string]any{"error": e.msg, "error_code": string(e.code)})
+}
+
+// commandFailureDetail returns a short excerpt of a failed container command's
+// captured output (docker build/run/stop/rm) — the real reason behind a generic
+// "image build failed". It prefers stderr and the "ERROR:" lines buildkit prints,
+// falling back to the last few meaningful lines. Empty when nothing was captured.
+func commandFailureDetail(res deploy.CommandResult) string {
+	out := strings.TrimSpace(res.Stderr)
+	if out == "" {
+		out = strings.TrimSpace(res.Stdout)
+	}
+	if out == "" {
+		return ""
+	}
+	lines := strings.Split(out, "\n")
+	var picked []string
+	for _, l := range lines {
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(l)), "ERROR") {
+			picked = append(picked, strings.TrimSpace(l))
+		}
+	}
+	if len(picked) == 0 {
+		for i := len(lines) - 1; i >= 0 && len(picked) < 6; i-- {
+			t := strings.TrimSpace(lines[i])
+			if t == "" || strings.HasPrefix(t, "------") {
+				continue
+			}
+			picked = append([]string{t}, picked...)
+		}
+	}
+	if len(picked) == 0 {
+		return ""
+	}
+	detail := strings.Join(picked, " | ")
+	if len(detail) > 800 {
+		detail = "…" + detail[len(detail)-799:]
+	}
+	return detail
+}
+
+// failMsg prefixes a generic failure label with the excerpted command detail, so
+// the API response carries the underlying docker/npm error instead of just
+// "image build failed".
+func failMsg(prefix string, res deploy.CommandResult) string {
+	if d := commandFailureDetail(res); d != "" {
+		return prefix + ": " + d
+	}
+	return prefix
+}
+
+// logCommandFailure writes a failed container command's FULL captured output to
+// the server console (stderr), complementing the short excerpt sent to the API.
+func logCommandFailure(stage, appID string, res deploy.CommandResult, err error) {
+	log.Printf("%s failed for app %s: %v\n--- stdout ---\n%s\n--- stderr ---\n%s",
+		stage, appID, err, res.Stdout, res.Stderr)
 }
 
 // startApp handles POST /api/apps/:id/start. It is idempotent: if a running
@@ -111,10 +167,11 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	buildApp := s.workspaceApp(*app)
 
 	// 1. Build image.
-	img, _, err := pod.BuildImage(ctx, buildApp, tag)
+	img, bres, err := pod.BuildImage(ctx, buildApp, tag)
 	if err != nil {
+		logCommandFailure("image build", appID, bres, err)
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
+		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, failMsg("image build failed", bres)}.write(w)
 		return
 	}
 
@@ -127,13 +184,14 @@ func (s *Server) startApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Run container.
-	cr, _, err := pod.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
+	cr, rres, err := pod.RunContainer(ctx, img, app.Slug, hostPort, defaultContainerPort)
 	if err != nil {
+		logCommandFailure("container run", appID, rres, err)
 		if cr.Name != "" {
 			_, _ = pod.RemoveContainer(ctx, cr.Name)
 		}
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, "podman run failed"}.write(w)
+		errResponse{http.StatusBadGateway, model.ErrorPodmanRunFailed, failMsg("container run failed", rres)}.write(w)
 		return
 	}
 
@@ -281,10 +339,11 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
-	img, _, err := s.runtime.BuildImage(ctx, buildApp, tag)
+	img, bres, err := s.runtime.BuildImage(ctx, buildApp, tag)
 	if err != nil {
+		logCommandFailure("image build", appID, bres, err)
 		s.markAppError(ctx, appID)
-		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
+		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, failMsg("image build failed", bres)}.write(w)
 		return
 	}
 
