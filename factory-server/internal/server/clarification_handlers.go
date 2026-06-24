@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -833,7 +834,28 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 // persisted session is the single source of truth. GET /api/clarifications/:id
 // reads it directly, and retryClarificationRound reads the current round from
 // the persisted session without a fallback.
+//
+// D2 (clarification delta reachability): when dialogueID is non-empty the round
+// is being run for the application-generation DIALOGUE flow (a child
+// clarification session linked to a parent dialogue). In that case each child
+// clarification.message.delta — which carries ONLY the safe work-log text the
+// runner derives from text_delta (never thinking_delta) — is ALSO republished
+// as a dialogue.clarification.delta carrying the parent dialogue_id so the
+// portal dispatcher folds it into the conversation timeline live (mirroring
+// dialogue.draft.delta). When dialogueID is empty this is the legacy standalone
+// clarification flow, whose own surface consumes the bare
+// clarification.message.delta; that path is unaffected.
 func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round int) (*model.ClarificationSession, int, bool) {
+	return s.runRoundAndPersistForDialogue(ctx, sessID, round, "")
+}
+
+// runRoundAndPersistForDialogue is the dialogue-aware variant. It behaves
+// identically to runRoundAndPersist, except that when dialogueID != "" each
+// child clarification.message.delta is additionally republished as a
+// dialogue.clarification.delta (set-not-append, full-so-far delta) carrying the
+// parent dialogue_id. The legacy bare clarification.message.delta is still
+// emitted unchanged so the standalone clarification surface keeps working.
+func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID string, round int, dialogueID string) (*model.ClarificationSession, int, bool) {
 	sess, err := s.store.GetClarificationSession(ctx, sessID)
 	if err != nil || sess == nil {
 		return sess, round, false
@@ -857,7 +879,26 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 
 	cfg := s.loadSceneCatalog(ctx)
 	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
-		s.publishClarificationEvent(s.filterClarificationEvent(cfg, ev))
+		filtered := s.filterClarificationEvent(cfg, ev)
+		s.publishClarificationEvent(filtered)
+		// D2: in the dialogue flow, mirror the safe work-log delta as a
+		// dialogue-attributed event so the portal folds it live. Only the
+		// work-log delta (text_delta-derived Content) is forwarded — the
+		// runner never emits thinking_delta as a clarification.message.delta,
+		// so raw reasoning never rides along (security #9).
+		if dialogueID != "" && filtered.Type == "clarification.message.delta" {
+			// Mirror dialogue.draft.delta's wire shape exactly (top-level
+			// dialogue_id/message_id/delta) so applyLiveAnalysisEvent — which
+			// reads ev.dialogue_id, ev.delta and ev.message_id — folds it
+			// identically. Uses the dialogue.StreamEvent shape (dialogue_id
+			// json tag) rather than the clarification one (session_id).
+			s.publishDialogueEvent(dialogue.StreamEvent{
+				Type:       "dialogue.clarification.delta",
+				DialogueID: dialogueID,
+				MessageID:  filtered.MessageID,
+				Delta:      filtered.Delta,
+			})
+		}
 	})
 	if err != nil {
 		// Round failed: advance the persisted round to the round we attempted so
@@ -1015,6 +1056,14 @@ func clarificationFailureCode(err error) model.ErrorCode {
 // answer and the conversation stalls before ready_to_confirm. Behavior is
 // identical to the prior inline logic, including the MaxRounds cap.
 func (s *Server) advanceAfterUserTurn(ctx context.Context, sessID string, sess *model.ClarificationSession) (*model.ClarificationSession, bool) {
+	return s.advanceAfterUserTurnForDialogue(ctx, sessID, sess, "")
+}
+
+// advanceAfterUserTurnForDialogue is the dialogue-aware variant. When dialogueID
+// is non-empty the next round is run via runRoundAndPersistForDialogue so its
+// streaming deltas are mirrored as dialogue.clarification.delta (D2). The legacy
+// callers (empty dialogueID) are unchanged.
+func (s *Server) advanceAfterUserTurnForDialogue(ctx context.Context, sessID string, sess *model.ClarificationSession, dialogueID string) (*model.ClarificationSession, bool) {
 	nextRound := sess.Round + 1
 	if nextRound > sess.MaxRounds {
 		// Reached the round cap without the clarifier declaring readiness.
@@ -1036,7 +1085,7 @@ func (s *Server) advanceAfterUserTurn(ctx context.Context, sessID string, sess *
 		return updated, true
 	}
 
-	updated, _, ok := s.runRoundAndPersist(ctx, sessID, nextRound)
+	updated, _, ok := s.runRoundAndPersistForDialogue(ctx, sessID, nextRound, dialogueID)
 	return updated, ok
 }
 

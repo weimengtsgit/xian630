@@ -517,7 +517,13 @@ export function applyDialogueEvent(state, type, ev) {
 const LIVE_DELTA_EVENTS = new Set([
   'dialogue.route.delta',
   'dialogue.draft.delta',
-  'clarification.message.delta',
+  // The dialogue flow mirrors each child clarification work-log delta as a
+  // dialogue-attributed event (D2 — clarification must stream live in the
+  // application-generation flow). The bare clarification.message.delta is NOT
+  // listed here: it is never routed into applyDialogueEvent by the dispatcher
+  // (it is not a dialogue.* type), and the legacy standalone clarification
+  // surface folds it via clarificationLogic.js, not this timeline.
+  'dialogue.clarification.delta',
 ])
 
 // applyLiveAnalysisEvent folds ONE *.delta event into state.liveAnalysis. The

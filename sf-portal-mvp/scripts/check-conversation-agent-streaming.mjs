@@ -234,6 +234,78 @@ assert.equal(
 console.log('check-conversation-agent-streaming: live analysis streaming + fold OK')
 
 // ============================================================================
+// D2 fix: clarification delta reachability in the dialogue flow
+//
+// The child clarification round's work-log deltas MUST stream live in the
+// application-generation dialogue. The backend mirrors each child
+// clarification.message.delta as a dialogue-attributed dialogue.clarification.delta
+// (carrying the parent dialogue_id). This block asserts:
+//   - the new type is registered on the global SSE bus (events.js)
+//   - the dispatcher routes it (DIALOGUE_TYPES in useDialogueSessions.js)
+//   - the timeline folds it into liveAnalysis (LIVE_DELTA_EVENTS)
+//   - the reducer folds a dialogue.clarification.delta exactly like a draft delta
+//   - the bare clarification.message.delta is NOT folded by the dialogue timeline
+//     (the legacy standalone clarification surface handles it via clarificationLogic)
+// ============================================================================
+
+// ---- Static: the new type is wired end-to-end -------------------------------
+const eventsSrc = readFileSync(new URL('../src/api/events.js', import.meta.url), 'utf8')
+assert.ok(
+  eventsSrc.includes("'dialogue.clarification.delta'"),
+  'events.js must register dialogue.clarification.delta on the global SSE bus',
+)
+// Legacy bare clarification.message.delta must STILL be registered so the
+// standalone clarification surface (useClarification / ClarificationPanel) keeps
+// streaming — we must not break it.
+assert.ok(
+  eventsSrc.includes("'clarification.message.delta'"),
+  'events.js must keep the bare clarification.message.delta for the legacy standalone surface',
+)
+
+const dispatcherSrc = readFileSync(new URL('../src/hooks/useDialogueSessions.js', import.meta.url), 'utf8')
+assert.ok(
+  dispatcherSrc.includes("'dialogue.clarification.delta'"),
+  'useDialogueSessions DIALOGUE_TYPES must include dialogue.clarification.delta so the dispatcher routes it',
+)
+
+const timelineSrc = readFileSync(new URL('../src/hooks/dialogueTimeline.js', import.meta.url), 'utf8')
+assert.ok(
+  timelineSrc.includes("'dialogue.clarification.delta'"),
+  'dialogueTimeline LIVE_DELTA_EVENTS must include dialogue.clarification.delta so it folds live',
+)
+
+// ---- Behavioral: a dialogue.clarification.delta folds into liveAnalysis -----
+//
+// The wire shape mirrors dialogue.draft.delta (top-level dialogue_id/message_id/delta).
+// applyLiveAnalysisEvent reads ev.delta and ev.message_id; applyDialogueEvent
+// extracts the dialogue id from ev.dialogue_id. The delta is set-not-append
+// (full-so-far text), keyed by the running message/turn.
+const clarifyBase = { ...initialDialogueState(), selectedDialogueId: 'dlg_clar' }
+
+let cSt = applyDialogueEvent(clarifyBase, 'dialogue.clarification.delta', {
+  dialogue_id: 'dlg_clar', message_id: 'worklog_1', delta: '正在分析需求',
+})
+assert.ok(cSt.liveAnalysis, 'a dialogue.clarification.delta for the selected dialogue must fold a liveAnalysis item')
+assert.equal(cSt.liveAnalysis.content, '正在分析需求', 'clarification delta content is the full-so-far text (set)')
+assert.notEqual(cSt.needsRefresh, 'dlg_clar', 'a clarification delta must NOT set needsRefresh (no per-token reload)')
+
+// A subsequent full-so-far delta replaces (set, not append).
+cSt = applyDialogueEvent(cSt, 'dialogue.clarification.delta', {
+  dialogue_id: 'dlg_clar', message_id: 'worklog_1', delta: '正在分析需求：收敛场景',
+})
+assert.equal(cSt.liveAnalysis.content, '正在分析需求：收敛场景', 'clarification delta is set (full-so-far), not appended')
+
+// Raw reasoning must never ride along even via this path (security #9).
+const cGuarded = applyLiveAnalysisEvent(clarifyBase, 'dialogue.clarification.delta', {
+  dialogue_id: 'dlg_clar', message_id: 'worklog_1', delta: '安全澄清文本',
+  thinking_delta: 'RAW REASONING',
+})
+assert.equal(cGuarded.liveAnalysis.content, '安全澄清文本', 'only the safe clarification delta text is folded')
+assert.equal(cGuarded.liveAnalysis.content.includes('RAW'), false, 'no thinking_delta reaches the live fold')
+
+console.log('check-conversation-agent-streaming: dialogue clarification delta reachability OK')
+
+// ============================================================================
 // Task 5: User-facing 智能体 label (D4)
 //
 // The user-facing noun for the produced product is 智能体; the internal entity

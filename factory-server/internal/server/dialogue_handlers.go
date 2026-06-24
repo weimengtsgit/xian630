@@ -1114,7 +1114,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		s.runRoundAndPersist(ctx, childID, 1)
+		s.runRoundAndPersistForDialogue(ctx, childID, 1, id)
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
 
 	case dialogue.IntentBusinessProcessingAgent:
@@ -1373,7 +1373,7 @@ func (s *Server) answerDialogueClarification(w http.ResponseWriter, r *http.Requ
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurn(ctx, childID, updated)
+	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
 	_ = advanced
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -1475,7 +1475,7 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurn(ctx, childID, updated)
+	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
 	_ = advanced
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -1608,7 +1608,7 @@ func (s *Server) retryDialogueClarificationRound(w http.ResponseWriter, r *http.
 	if retryRound < 1 {
 		retryRound = 1
 	}
-	s.runRoundAndPersist(ctx, childID, retryRound)
+	s.runRoundAndPersistForDialogue(ctx, childID, retryRound, id)
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")

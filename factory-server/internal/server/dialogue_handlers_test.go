@@ -347,6 +347,97 @@ func eventTypes(events []Event) []string {
 	return out
 }
 
+// TestDialogueClarificationStreamsDeltaWithDialogueID is the D2 regression: in
+// the application-generation dialogue flow, the child clarification round's
+// work-log deltas MUST be mirrored as a dialogue-attributed
+// dialogue.clarification.delta carrying the PARENT dialogue_id (not just the
+// bare clarification.message.delta carrying the child session id). Without this
+// mirroring the portal dispatcher drops the deltas and the bulk of a generation
+// conversation degrades to completion-reload. The test subscribes to the hub
+// BEFORE the route confirm runs child round 1 (which streams the work-log delta)
+// and asserts the dialogue-attributed delta arrives with the parent id.
+func TestDialogueClarificationStreamsDeltaWithDialogueID(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	// Subscribe BEFORE routing so the round-1 streaming deltas are captured.
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	_ = drainClarificationHub(ch)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	childID := ""
+	var routed dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&routed); err == nil {
+		childID = routed.Session.ClarificationSessionID
+	}
+	if childID == "" {
+		// Fall back to the store (some test fakes do not echo the link on the view).
+		d, _ := st.GetDialogueSession(context.Background(), dlgID)
+		if d != nil {
+			childID = d.ClarificationSessionID
+		}
+	}
+	if childID == "" {
+		t.Fatalf("no child clarification linked to dialogue %s", dlgID)
+	}
+
+	events := drainClarificationHub(ch)
+
+	// 1. The dialogue-attributed delta is emitted and carries the PARENT
+	//    dialogue_id (not the child session id).
+	var sawDialogueDelta bool
+	for _, ev := range events {
+		if ev.Type != "dialogue.clarification.delta" {
+			continue
+		}
+		sawDialogueDelta = true
+		// The hub publishes the dialogue.StreamEvent struct directly as Data.
+		se, ok := ev.Data.(dialogue.StreamEvent)
+		if !ok {
+			t.Fatalf("dialogue.clarification.delta data is not a dialogue.StreamEvent: %#v", ev.Data)
+		}
+		if se.DialogueID != dlgID {
+			t.Fatalf("dialogue.clarification.delta must carry the PARENT dialogue_id %s, got %q", dlgID, se.DialogueID)
+		}
+		if strings.TrimSpace(se.Delta) == "" {
+			t.Fatalf("dialogue.clarification.delta must carry non-empty safe work-log delta, got %q", se.Delta)
+		}
+		// Security #9: the mirrored delta carries only the safe `delta` text.
+		// The clarification runner never emits thinking_delta as a
+		// clarification.message.delta, and dialogue.StreamEvent has no
+		// thinking field, so raw reasoning cannot ride along.
+	}
+	if !sawDialogueDelta {
+		t.Fatalf("dialogue child round did not emit dialogue.clarification.delta; events=%#v", eventTypes(events))
+	}
+
+	// 2. The legacy bare clarification.message.delta is STILL emitted (the
+	//    standalone clarification surface depends on it) — regression guard
+	//    against breaking the legacy path.
+	sawBare := false
+	for _, ev := range events {
+		if ev.Type == "clarification.message.delta" {
+			sawBare = true
+			break
+		}
+	}
+	if !sawBare {
+		t.Fatalf("legacy bare clarification.message.delta must still be emitted for the standalone surface; events=%#v", eventTypes(events))
+	}
+}
+
 // TestCreateDialogueRejectsInventedSlug verifies the server validates the
 // router's returned slug against the candidate sets and rejects an invented slug.
 // On rejection the dialogue is marked failed, NO route record is persisted
