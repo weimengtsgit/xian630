@@ -1,14 +1,12 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
-  HelpCircle,
   ExternalLink,
   RotateCcw,
   Ban,
 } from 'lucide-react'
-import { factoryApi } from '../api/client'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
@@ -70,29 +68,9 @@ export function JobCenter({
   loadStepRecords,
   getArtifactContent,
 }) {
-  const [detail, setDetail] = useState(null)
   // Local drawer tab is owned by the drawer; JobCenter only owns whether the
   // drawer is open (driven by selectedStepId).
   const [drawerOpen, setDrawerOpen] = useState(false)
-
-  // For waiting_user we try to fetch job detail to surface a clarifying
-  // question if present; keep defensive — failures just hide the area.
-  useEffect(() => {
-    let cancelled = false
-    setDetail(null)
-    if (!activeJob || activeJob.status !== 'waiting_user') return undefined
-    factoryApi
-      .getJob(activeJob.id)
-      .then(d => {
-        if (!cancelled) setDetail(d)
-      })
-      .catch(() => {
-        if (!cancelled) setDetail(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeJob && activeJob.id, activeJob && activeJob.status])
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so
@@ -122,12 +100,6 @@ export function JobCenter({
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
   const canCancelHeader = activeJob && !isTerminal
-  const waitingQuestions =
-    detail &&
-    (detail.pending_questions ||
-      detail.clarify_questions ||
-      detail.waiting_questions ||
-      detail.questions)
 
   // --- Drawer wiring ------------------------------------------------------
   // Opening a card resolves the REAL stepId (from stepByKind / cardView) and
@@ -284,56 +256,6 @@ export function JobCenter({
           )
         })}
       </div>
-
-      {jobStatus === 'waiting_user' && (
-        <div className="jc-waiting">
-          <HelpCircle size={18} />
-          <div className="jc-waiting-body">
-            <strong>等待用户澄清</strong>
-            {Array.isArray(waitingQuestions) && waitingQuestions.length > 0 ? (
-              <ul>
-                {waitingQuestions.map((q, i) => {
-                  if (typeof q === 'string') return <li key={i}>{q}</li>
-                  // A clarification question may carry its prompt in `question`
-                  // or `text`; options may be the actual choices to surface.
-                  // Never dump raw JSON — if no text is available, fall back to
-                  // a generic prompt so the card stays readable.
-                  const text = q.question || q.text || ''
-                  const options = Array.isArray(q.options) ? q.options : []
-                  if (text) {
-                    return (
-                      <li key={i}>
-                        {text}
-                        {options.length > 0 ? (
-                          <ul className="jc-waiting-options">
-                            {options.map((opt, j) => (
-                              <li key={j}>{opt.label || opt.value || opt.id}</li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </li>
-                    )
-                  }
-                  if (options.length > 0) {
-                    return (
-                      <li key={i}>
-                        <ul className="jc-waiting-options">
-                          {options.map((opt, j) => (
-                            <li key={j}>{opt.label || opt.value || opt.id}</li>
-                          ))}
-                        </ul>
-                      </li>
-                    )
-                  }
-                  return <li key={i}>请在底部对话区查看并回复澄清问题</li>
-                })}
-              </ul>
-            ) : (
-              <p>任务需要你的补充输入，请在底部对话区回复或前往任务详情页回答。</p>
-            )}
-          </div>
-        </div>
-      )}
 
       {jobStatus === 'failed' && (
         <div className="jc-actions">

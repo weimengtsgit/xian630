@@ -644,12 +644,29 @@
 
 .sed-summary-block h4,
 .sed-error-block h4,
+.sed-clarification-block h4,
 .sed-artifact-title {
   margin: 0 0 6px;
   font-size: 12px;
   color: #8fb0bf;
   font-weight: 600;
 }
+.sed-clarification-block {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: rgba(45, 34, 12, 0.45);
+  border: 1px solid rgba(255, 196, 87, 0.4);
+  border-radius: 8px;
+}
+.sed-clarification-block h4 { color: #ffc457; }
+.sed-clarification-hint { margin: 0 0 8px; font-size: 11px; color: rgba(243, 234, 210, 0.62); }
+.sed-clarification-q { margin-top: 8px; }
+.sed-clarification-q + .sed-clarification-q { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255, 196, 87, 0.18); }
+.sed-clarification-text { margin: 0 0 6px; font-size: 12px; line-height: 1.5; color: #f3ead2; }
+.sed-clarification-options { margin: 0; padding-left: 18px; }
+.sed-clarification-options li { font-size: 12px; color: #d7eef8; line-height: 1.6; }
+.sed-clarification-rec { margin-left: 6px; padding: 0 5px; border-radius: 999px; background: rgba(126, 231, 135, 0.16); border: 1px solid rgba(126, 231, 135, 0.42); color: #9df3a6; font-style: normal; font-size: 10px; }
+.sed-clarification-default { display: block; margin-top: 4px; font-size: 11px; color: rgba(243, 234, 210, 0.55); }
 .sed-summary-text,
 .sed-error-text,
 .sed-artifact-text {

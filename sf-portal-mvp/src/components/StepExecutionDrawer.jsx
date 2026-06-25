@@ -132,6 +132,67 @@ const STATUS_TEXT = {
   cancelled: '已取消',
 }
 
+// ClarificationBlock renders the clarifying questions a step raised when it
+// paused for user input (waiting_user). The questions are persisted on the step
+// as `pending_questions` (a JSON string the backend writes via
+// MarkStepWaitingUser). This is a READ-ONLY view inside the drawer — the user
+// answers in the conversation area; the drawer just shows WHAT to answer.
+// Tolerates the agent's alternate field names (question/text, value/id).
+function ClarificationBlock({ step }) {
+  const raw = step && step.pending_questions
+  if (!raw) {
+    return (
+      <section className="sed-clarification-block">
+        <h4>等待用户澄清</h4>
+        <p className="sed-readonly-hint">请在底部对话区回复以继续。</p>
+      </section>
+    )
+  }
+  let questions = []
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    questions = Array.isArray(parsed) ? parsed : []
+  } catch {
+    questions = []
+  }
+  if (questions.length === 0) {
+    return (
+      <section className="sed-clarification-block">
+        <h4>等待用户澄清</h4>
+        <p className="sed-readonly-hint">请在底部对话区回复以继续。</p>
+      </section>
+    )
+  }
+  return (
+    <section className="sed-clarification-block">
+      <h4>等待用户澄清</h4>
+      <p className="sed-clarification-hint">请在底部对话区回复，回答后任务会继续。</p>
+      {questions.map((q, i) => {
+        const text = q.question || q.text || ''
+        const options = Array.isArray(q.options) ? q.options : []
+        return (
+          <div key={q.id || i} className="sed-clarification-q">
+            {text ? <p className="sed-clarification-text">{text}</p> : null}
+            {options.length > 0 ? (
+              <ul className="sed-clarification-options">
+                {options.map((opt, j) => (
+                  <li key={opt.value || opt.id || j}>
+                    {opt.label || opt.value || opt.id}
+                    {opt.recommended ? <em className="sed-clarification-rec">推荐</em> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {q.defaultAnswer ? (
+              <small className="sed-clarification-default">参考建议：{q.defaultAnswer}</small>
+            ) : null}
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
 function isPinnedToBottom(el, slack = 24) {
   if (!el) return false
   return el.scrollHeight - el.scrollTop - el.clientHeight <= slack
@@ -393,6 +454,10 @@ export function StepExecutionDrawer({
                   <h4>错误信息</h4>
                   <pre className="sed-error-text">{step.error_message}</pre>
                 </section>
+              ) : null}
+
+              {status === 'waiting_user' ? (
+                <ClarificationBlock step={step} />
               ) : null}
 
               <div className="sed-actions">
