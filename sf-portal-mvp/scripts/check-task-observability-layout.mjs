@@ -6,6 +6,8 @@ const jobCenterCss = readFileSync(new URL('../src/components/JobCenter.css', imp
 const drawerJsx = readFileSync(new URL('../src/components/StepExecutionDrawer.jsx', import.meta.url), 'utf8')
 const stepCardJsx = readFileSync(new URL('../src/components/StepCard.jsx', import.meta.url), 'utf8')
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+const clientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
+const useJobsJs = readFileSync(new URL('../src/hooks/useJobs.js', import.meta.url), 'utf8')
 
 // --- 3x2 matrix CSS rule ---------------------------------------------------
 assert.match(
@@ -62,6 +64,19 @@ assert.match(drawerJsx, /cancel|onCancel/i, 'overview tab must expose a cancel a
 assert.match(drawerJsx, /retry|onRetry/i, 'overview tab must expose a retry action')
 assert.match(drawerJsx, /running/, 'cancel visibility must gate on the running status')
 assert.match(drawerJsx, /failed/, 'retry visibility must gate on the failed status')
+assert.match(clientJs, /repairFromFailure/, 'client API must expose repairFromFailure')
+assert.match(clientJs, /\/repair-from-failure/, 'client API must call the repair-from-failure endpoint')
+assert.match(useJobsJs, /repairFromFailure/, 'useJobs must expose repairFromFailure')
+assert.match(appJsx, /onRepairFromFailure=\{jobs\.repairFromFailure\}/, 'App must pass repairFromFailure into JobCenter')
+assert.match(jobCenterJsx, /onRepairFromFailure/, 'JobCenter must accept and pass the repair action')
+assert.match(drawerJsx, /onRepairFromFailure/, 'StepExecutionDrawer must accept the repair action')
+assert.match(jobCenterJsx, /发送错误给代码修复/, 'failed JobCenter must show the repair button label')
+assert.match(drawerJsx, /发送错误给代码修复/, 'drawer must show the repair button label')
+assert.match(
+  drawerJsx,
+  /test_verification[\s\S]*image_build/,
+  'repair action must be gated to test_verification and image_build',
+)
 
 // Plaintext discipline: content rendered in <pre>, never dangerouslySetInnerHTML.
 assert.match(drawerJsx, /<pre/, 'content/artifact text must render in <pre> plaintext nodes')

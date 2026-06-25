@@ -260,6 +260,19 @@ export function useJobs() {
     [refresh],
   )
 
+  const repairFromFailure = useCallback(
+    async id => {
+      setError(null)
+      try {
+        await factoryApi.repairFromFailure(id)
+        await refresh()
+      } catch (err) {
+        setError(err.message || String(err))
+      }
+    },
+    [refresh],
+  )
+
   const answerJob = useCallback(
     async (id, answer) => {
       setError(null)
@@ -379,6 +392,7 @@ export function useJobs() {
     cancelJob,
     answerJob,
     retryCurrentStep,
+    repairFromFailure,
     // New (Task 5):
     selectedStepId,
     selectedAttempt,

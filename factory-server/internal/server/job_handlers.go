@@ -435,3 +435,18 @@ func (s *Server) retryCurrentStep(w http.ResponseWriter, r *http.Request) {
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)
 }
+
+func (s *Server) repairFromFailure(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	job, err := s.exec.RepairFromFailure(r.Context(), id)
+	if err != nil {
+		if err.Error() == "job not found" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+	writeJSON(w, http.StatusOK, job)
+}

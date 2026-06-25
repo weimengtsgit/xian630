@@ -584,6 +584,60 @@ func TestRetryCurrentStep(t *testing.T) {
 	}
 }
 
+func TestRepairFromFailure(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+
+	miss := doJSON(t, r, http.MethodPost, "/api/jobs/missing/repair-from-failure", nil)
+	if miss.Code != http.StatusNotFound {
+		t.Fatalf("miss status = %d, want 404", miss.Code)
+	}
+
+	job := createQueuedJob(t, st)
+	queued := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/repair-from-failure", nil)
+	if queued.Code != http.StatusConflict {
+		t.Fatalf("queued repair status = %d, want 409", queued.Code)
+	}
+
+	if err := st.AdvanceJobStep(context.Background(), job.ID, model.StepTestVerification); err != nil {
+		t.Fatalf("advance job: %v", err)
+	}
+	testStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepTestVerification)
+	if err != nil || testStep == nil {
+		t.Fatalf("get test step: %v", err)
+	}
+	if err := st.IncrementStepAttempt(context.Background(), testStep.ID); err != nil {
+		t.Fatalf("increment attempt: %v", err)
+	}
+	if err := st.MarkStepFailed(context.Background(), testStep.ID, model.ErrorBuildFailed, "build command failed"); err != nil {
+		t.Fatalf("mark step failed: %v", err)
+	}
+	if err := st.MarkJobFailed(context.Background(), job.ID); err != nil {
+		t.Fatalf("mark job failed: %v", err)
+	}
+
+	ok := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/repair-from-failure", nil)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("repair status = %d, want 200, body=%s", ok.Code, ok.Body.String())
+	}
+	var updated model.Job
+	if err := json.Unmarshal(ok.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued {
+		t.Fatalf("repaired job status = %s, want queued", updated.Status)
+	}
+	if updated.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("current step = %s, want code_generation", updated.CurrentStepKind)
+	}
+	codeStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepCodeGeneration)
+	if err != nil || codeStep == nil {
+		t.Fatalf("get code step: %v", err)
+	}
+	if !strings.Contains(codeStep.UserPrompt, "build command failed") {
+		t.Fatalf("code repair prompt missing failure context: %q", codeStep.UserPrompt)
+	}
+}
+
 // createQueuedJob inserts a queued job + six pending steps and returns the job.
 func createQueuedJob(t *testing.T, st *store.Store) model.Job {
 	t.Helper()

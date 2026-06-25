@@ -29,6 +29,23 @@ VALUES(?,?,?,?,?,?,?,?,?)`,
 	return err
 }
 
+// MaxStepExecutionRecordSequence returns the highest persisted sequence for a
+// (job, step, attempt) scope. A scope with no records returns 0.
+func (s *Store) MaxStepExecutionRecordSequence(ctx context.Context, jobID, stepID string, attempt int) (int, error) {
+	var seq sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+SELECT MAX(sequence)
+FROM step_execution_records
+WHERE job_id = ? AND step_id = ? AND attempt = ?`, jobID, stepID, attempt).Scan(&seq)
+	if err != nil {
+		return 0, err
+	}
+	if !seq.Valid {
+		return 0, nil
+	}
+	return int(seq.Int64), nil
+}
+
 // ListStepExecutionRecordPage returns one page of records for a single
 // (jobID, stepID, attempt) scope, ordered by sequence ascending. beforeSequence
 // is an exclusive upper bound on sequence — 0 means "no upper bound, latest

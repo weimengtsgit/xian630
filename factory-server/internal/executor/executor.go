@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -237,11 +238,11 @@ func (s *stepEmitter) Trace(ctx context.Context, traceType, payload string) erro
 		return nil
 	}
 	ev := model.WorkTraceEvent{
-		DialogueID: s.dialogueID,
-		TaskID:     s.jobID,
-		StepID:     s.stepID,
-		Attempt:    s.attempt,
-		Type:       traceType,
+		DialogueID:  s.dialogueID,
+		TaskID:      s.jobID,
+		StepID:      s.stepID,
+		Attempt:     s.attempt,
+		Type:        traceType,
 		PayloadJSON: payload,
 	}
 	_, _ = s.onTrace(ctx, ev) // best-effort: a gate error never aborts the run
@@ -637,6 +638,147 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	}
 	e.Signal()
 	return *updated, nil
+}
+
+// RepairFromFailure rewinds a failed test_verification or image_build step to
+// code_generation with a tightly-scoped repair prompt. It is intentionally
+// separate from RetryCurrentStep: retry re-runs the failed command, repair asks
+// code_generation to change only the generated code needed for the failure.
+func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.Job, error) {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("get job: %w", err)
+	}
+	if job == nil {
+		return model.Job{}, errors.New("job not found")
+	}
+	if job.Status != model.JobStatusFailed {
+		return model.Job{}, fmt.Errorf("job is %s, only failed jobs can be repaired", job.Status)
+	}
+	failedStep, err := e.store.GetStepByKind(ctx, jobID, job.CurrentStepKind)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("get failed step: %w", err)
+	}
+	if failedStep == nil {
+		return model.Job{}, fmt.Errorf("no step for current kind %s", job.CurrentStepKind)
+	}
+	if failedStep.Status != model.StepStatusFailed {
+		return model.Job{}, fmt.Errorf("current step is %s, only failed steps can be repaired", failedStep.Status)
+	}
+	if !repairableFailureKind(failedStep.Kind) {
+		return model.Job{}, fmt.Errorf("step %s cannot be repaired by code_generation", failedStep.Kind)
+	}
+
+	repairPrompt := e.buildRepairPrompt(ctx, *job, *failedStep)
+	codeStep, err := e.store.GetStepByKind(ctx, jobID, model.StepCodeGeneration)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("get code_generation step: %w", err)
+	}
+	if codeStep == nil {
+		return model.Job{}, errors.New("no code_generation step")
+	}
+
+	for _, def := range FixedSteps() {
+		if def.Seq < 3 {
+			continue
+		}
+		step, err := e.store.GetStepByKind(ctx, jobID, def.Kind)
+		if err != nil {
+			return model.Job{}, fmt.Errorf("get step %s: %w", def.Kind, err)
+		}
+		if step == nil {
+			continue
+		}
+		if err := e.store.ResetStepToPending(ctx, step.ID); err != nil {
+			return model.Job{}, fmt.Errorf("reset step %s: %w", def.Kind, err)
+		}
+	}
+	if err := e.store.SetStepUserPrompt(ctx, codeStep.ID, repairPrompt); err != nil {
+		return model.Job{}, fmt.Errorf("set repair prompt: %w", err)
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, model.StepCodeGeneration); err != nil {
+		return model.Job{}, fmt.Errorf("rewind job: %w", err)
+	}
+	if err := e.store.MarkJobQueued(ctx, jobID); err != nil {
+		return model.Job{}, fmt.Errorf("requeue job: %w", err)
+	}
+
+	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt)
+	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStep.ID, failedStep.Attempt); err == nil {
+		emitter.nextSeq = maxSeq + 1
+	}
+	emitter.emit(ctx, model.ExecutionRecordSystem, "repair_from_failure: sent failure context to code_generation")
+
+	updated, err := e.store.GetJob(ctx, jobID)
+	if err != nil || updated == nil {
+		if err == nil {
+			err = fmt.Errorf("job %s vanished after repair", jobID)
+		}
+		return model.Job{}, err
+	}
+	e.Signal()
+	return *updated, nil
+}
+
+func repairableFailureKind(kind model.StepKind) bool {
+	return kind == model.StepTestVerification || kind == model.StepImageBuild
+}
+
+func (e *Executor) buildRepairPrompt(ctx context.Context, job model.Job, failedStep model.JobStep) string {
+	var b strings.Builder
+	b.WriteString("repair_from_failure\n")
+	b.WriteString("本次不是重新生成应用，而是定向修复失败。只修复导致当前失败的问题，不要重写应用，不要改变原需求、方案、业务逻辑、数据来源、页面结构或无关样式。\n")
+	b.WriteString("修复完成后，在 output.json 的 warnings 或 output.md 中简要说明修改文件和修复摘要。\n\n")
+	b.WriteString("failed_step: ")
+	b.WriteString(string(failedStep.Kind))
+	b.WriteString("\nfailed_attempt: ")
+	b.WriteString(fmt.Sprintf("%d", failedStep.Attempt))
+	b.WriteString("\nerror_code: ")
+	b.WriteString(string(failedStep.ErrorCode))
+	b.WriteString("\nerror_message:\n")
+	b.WriteString(limitRepairContext(failedStep.ErrorMessage, 4000))
+	b.WriteString("\n\ncommand_output_tail:\n")
+	records, err := e.store.ListStepExecutionRecordPage(ctx, job.ID, failedStep.ID, failedStep.Attempt, 0, 80)
+	if err != nil {
+		b.WriteString("读取失败记录失败: ")
+		b.WriteString(err.Error())
+		return b.String()
+	}
+	for _, rec := range records {
+		switch rec.Kind {
+		case model.ExecutionRecordCommandStdout, model.ExecutionRecordCommandStderr, model.ExecutionRecordError, model.ExecutionRecordSummary:
+			b.WriteString("\n--- ")
+			b.WriteString(string(rec.Kind))
+			b.WriteString(" #")
+			b.WriteString(fmt.Sprintf("%d", rec.Sequence))
+			b.WriteString(" ---\n")
+			b.WriteString(limitRepairContext(rec.Content, 8000))
+			b.WriteString("\n")
+		}
+	}
+	return limitRepairContext(b.String(), 24000)
+}
+
+func limitRepairContext(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	marker := "\n...[truncated]\n"
+	keep := maxBytes - len(marker)
+	if keep <= 0 {
+		return marker
+	}
+	cut := 0
+	for i := range s {
+		if i > keep {
+			break
+		}
+		cut = i
+	}
+	if cut <= 0 {
+		return marker
+	}
+	return s[:cut] + marker
 }
 
 // Cancel marks the job (and its current step) canceled. If the job is the
