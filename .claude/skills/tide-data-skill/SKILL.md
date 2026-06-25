@@ -76,6 +76,26 @@ export async function fetchTideSeries(portKey, days = 3) {
 }
 ```
 
+When the generated React UI needs a single "load every configured port" helper,
+the data provider must export it explicitly. Do **not** import `fetchAllPorts`
+from the UI unless `src/data/tideProvider.js` actually exports it. A safe shape:
+
+```js
+export async function fetchAllPorts(portKeys, days = 3) {
+  const results = await Promise.allSettled(portKeys.map((key) => fetchTideSeries(key, days)));
+  return results.map((result, index) => (
+    result.status === "fulfilled"
+      ? result.value
+      : { port: portKeys[index], source: "failed", error: result.reason?.message || String(result.reason) }
+  ));
+}
+```
+
+If the UI card expects derived fields such as `windows`, `windowStatus`,
+`currentWindow`, or `nextWindow`, compute those fields in an exported adapter
+before passing data to React components. Keep real-fetch code in `src/data/`;
+put pure calculations such as window detection in `src/utils/`.
+
 Datum note: NOAA `MLLW` heights for these ports are small (~0.0–1.5 m). Any
 departure-window threshold in the app must be expressed in the **same datum**
 (meters above MLLW); do not compare MLLW heights against an unrelated "12.8 m

@@ -15,6 +15,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 )
 
 // defaultContainerPort is the in-container port every preset app listens on
@@ -154,6 +155,10 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
+	if err := s.prepareGeneratedStaticViteBuild(ctx, *app, buildApp.Path); err != nil {
+		s.markAppError(ctx, appID)
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
+	}
 
 	// 1. Build image.
 	img, _, err := rt.BuildImage(ctx, buildApp, tag)
@@ -329,6 +334,11 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
+	if err := s.prepareGeneratedStaticViteBuild(ctx, *app, buildApp.Path); err != nil {
+		s.markAppError(ctx, appID)
+		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
+		return
+	}
 	img, _, err := s.containerRuntime().BuildImage(ctx, buildApp, tag)
 	if err != nil {
 		s.markAppError(ctx, appID)
@@ -338,6 +348,76 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 
 	s.publishAppUpdated(ctx, appID)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "built", "image": img.FullName})
+}
+
+// prepareGeneratedStaticViteBuild mirrors the factory pipeline's static-vite
+// image strategy for direct start/rebuild actions. Generated apps often ship a
+// multi-stage Dockerfile that runs npm inside the container. In local Podman
+// environments that can fail on npm registry access; it also fails when the app
+// has no package-lock but the generated Dockerfile uses npm ci. Build dist/ on
+// the host, then replace the Dockerfile with an offline nginx image that serves
+// the prebuilt bundle.
+func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.Application, appDir string) error {
+	if app.Source != model.AppSourceGenerated {
+		return nil
+	}
+	manifestPath := filepath.Join(s.cfg.WorkspaceRoot, app.ManifestPath)
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	manifest, err := scanner.ParseManifest(raw)
+	if err != nil {
+		return err
+	}
+	if manifest.Entry != "static-vite" {
+		return nil
+	}
+
+	installName := "npm"
+	installArgs := []string{"install"}
+	if _, err := os.Stat(filepath.Join(appDir, "package-lock.json")); err == nil {
+		installArgs = []string{"ci"}
+	}
+	if res, err := s.runner.Run(ctx, appDir, installName, installArgs...); err != nil || res.ExitCode != 0 {
+		return fmt.Errorf("%s %s failed: %w", installName, strings.Join(installArgs, " "), err)
+	}
+
+	buildCmd := strings.TrimSpace(manifest.Build.Command)
+	if buildCmd == "" {
+		buildCmd = "npm run build"
+	}
+	buildArgs := strings.Fields(buildCmd)
+	if len(buildArgs) == 0 {
+		buildArgs = []string{"npm", "run", "build"}
+	}
+	if res, err := s.runner.Run(ctx, appDir, buildArgs[0], buildArgs[1:]...); err != nil || res.ExitCode != 0 {
+		return fmt.Errorf("%s failed: %w", buildCmd, err)
+	}
+
+	outputDir := manifest.Build.OutputDir
+	if outputDir == "" {
+		outputDir = "dist"
+	}
+	if _, err := os.Stat(filepath.Join(appDir, outputDir, "index.html")); err != nil {
+		return fmt.Errorf("build output missing index.html in %s: %w", outputDir, err)
+	}
+	return writeStaticViteDockerfile(appDir, outputDir)
+}
+
+func writeStaticViteDockerfile(appDir, outputDir string) error {
+	var b strings.Builder
+	b.WriteString("FROM nginx:alpine\n")
+	b.WriteString("COPY ")
+	b.WriteString(strings.Trim(outputDir, "/"))
+	b.WriteString("/ /usr/share/nginx/html/\n")
+	if _, err := os.Stat(filepath.Join(appDir, "nginx.conf")); err == nil {
+		b.WriteString("COPY nginx.conf /etc/nginx/nginx.conf\n")
+	}
+	b.WriteString("EXPOSE 80\n")
+	b.WriteString(`CMD ["nginx", "-g", "daemon off;"]`)
+	b.WriteString("\n")
+	return os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644)
 }
 
 // rollbackRequestBody is the explicit-confirm body for POST /api/apps/:id/rollback.

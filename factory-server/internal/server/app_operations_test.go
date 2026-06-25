@@ -25,6 +25,7 @@ type srvRunner struct {
 	calls   []srvCall
 	failIdx int // negative = never fail; else fail the i-th call with runnerErr
 	failErr error
+	onRun   func(dir, name string, args []string)
 }
 
 type srvCall struct {
@@ -36,6 +37,9 @@ type srvCall struct {
 func (r *srvRunner) Run(_ context.Context, dir, name string, args ...string) (deploy.CommandResult, error) {
 	idx := len(r.calls)
 	r.calls = append(r.calls, srvCall{dir: dir, name: name, args: append([]string(nil), args...)})
+	if r.onRun != nil {
+		r.onRun(dir, name, args)
+	}
 	if r.failIdx >= 0 && idx == r.failIdx {
 		return deploy.CommandResult{ExitCode: 1, Stderr: "forced failure"}, r.failErr
 	}
@@ -485,6 +489,83 @@ func TestRebuildBuildsImageAndReturnsBuilt(t *testing.T) {
 	// Rebuild must NOT run a container.
 	if hasCall(fr.calls, "podman", "run") {
 		t.Errorf("rebuild should not run a container; calls=%v", fr.calls)
+	}
+}
+
+func TestRebuildGeneratedStaticVitePrebuildsDistBeforeImageBuild(t *testing.T) {
+	root := ""
+	appDir := ""
+	fr := &srvRunner{failIdx: -1}
+	fr.onRun = func(dir, name string, args []string) {
+		if dir == appDir && name == "npm" && strings.Join(args, " ") == "run build" {
+			if err := os.MkdirAll(filepath.Join(appDir, "dist"), 0o755); err != nil {
+				t.Fatalf("mkdir dist: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(appDir, "dist", "index.html"), []byte("<div>ok</div>"), 0o644); err != nil {
+				t.Fatalf("write dist/index.html: %v", err)
+			}
+		}
+	}
+	srv, r := newOpsServer(t, fr)
+	root = srv.cfg.WorkspaceRoot
+	appDir = filepath.Join(root, "generated-apps", "demo-static")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app: %v", err)
+	}
+	manifest := `{
+  "schemaVersion": 1,
+  "slug": "demo-static",
+  "name": "Demo Static",
+  "type": "command_dashboard",
+  "source": "generated",
+  "entry": "static-vite",
+  "path": "generated-apps/demo-static",
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}`
+	if err := os.WriteFile(filepath.Join(appDir, ".factory", "app.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "package.json"), []byte(`{"scripts":{"build":"vite build"}}`), 0o644); err != nil {
+		t.Fatalf("write package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte("FROM node:18-alpine\nRUN npm ci\nRUN npm run build\n"), 0o644); err != nil {
+		t.Fatalf("write dockerfile: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-static", Slug: "demo-static", Name: "Demo Static", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-static",
+		ManifestPath: "generated-apps/demo-static/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed generated app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-demo-static/rebuild", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !hasCall(fr.calls, "npm", "install") {
+		t.Fatalf("generated static-vite rebuild should install dependencies on host; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "npm", "run build") {
+		t.Fatalf("generated static-vite rebuild should build dist on host; calls=%v", fr.calls)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(appDir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if strings.Contains(string(dockerfile), "npm ci") || strings.Contains(string(dockerfile), "npm run build") {
+		t.Fatalf("Dockerfile should serve prebuilt dist without in-container npm, got:\n%s", string(dockerfile))
+	}
+	if !strings.Contains(string(dockerfile), "COPY dist/ /usr/share/nginx/html/") {
+		t.Fatalf("Dockerfile should copy host-built dist, got:\n%s", string(dockerfile))
 	}
 }
 
