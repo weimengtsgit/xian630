@@ -437,7 +437,9 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
 	}
 	if step.Kind == model.StepSolutionDesign {
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。用户需求：" + job.UserPrompt +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。" +
+			"需要用户澄清时，questions 中每个问题必须用结构化字段：question 为问题文本（只描述要决策什么，不要把选项塞进 question），options 为选项数组，每个选项含 value（机器可读的选项值，如 mock_data、real_api）和 label（中文可读选项描述），可在最推荐选项上加 recommended:true。禁止把 (A)/(B)/(C) 等选项写进 question 文本；选项必须放在 options 数组里，否则前端无法渲染成可点击选项。示例：{\"id\":\"data-source\",\"question\":\"请确认数据获取方式\",\"options\":[{\"value\":\"mock_data\",\"label\":\"使用演示数据\",\"recommended\":true},{\"value\":\"real_api\",\"label\":\"提供真实后端API\"}]}。" +
+			"用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
 	if step.Kind == model.StepCodeGeneration {
