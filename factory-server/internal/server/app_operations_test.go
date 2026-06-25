@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -633,6 +634,59 @@ func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 		t.Fatalf("expected podman rm for running container; calls=%v", fr.calls)
 	}
 	expectEvent(t, ch, "app.deleted")
+}
+
+func TestDeleteGeneratedAppFallsBackWhenTombstoneRenameCrossDevice(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	srv.cfg.ArtifactRoot = filepath.Join(t.TempDir(), "runs")
+	appDir := filepath.Join(root, "generated-apps", "demo-cross-device")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write app file: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-cross-device", Slug: "demo-cross-device", Name: "Demo Cross Device", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-cross-device",
+		ManifestPath: "generated-apps/demo-cross-device/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	origRename := renamePath
+	renamePath = func(oldpath, newpath string) error {
+		if oldpath == appDir && strings.Contains(newpath, filepath.Join("deleted-apps", app.ID+"-"+app.Slug)) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRename(oldpath, newpath)
+	}
+	t.Cleanup(func() { renamePath = origRename })
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-cross-device", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+		t.Fatalf("app dir still exists or stat failed differently: %v", err)
+	}
+	got, err := srv.store.GetApplication(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("app row still exists: %#v", got)
+	}
+	tombstone := filepath.Join(srv.cfg.ArtifactRoot, "deleted-apps", app.ID+"-"+app.Slug)
+	if _, err := os.Stat(tombstone); !os.IsNotExist(err) {
+		t.Fatalf("tombstone should be removed after DB delete, stat err=%v", err)
+	}
 }
 
 // TestDeleteGeneratedAppClearsReferencingDialogue verifies that deleting an app
