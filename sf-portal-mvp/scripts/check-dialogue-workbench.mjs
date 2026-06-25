@@ -81,6 +81,34 @@ assert.deepEqual(
 )
 assert.equal(inquiryTimeline[1].content, 'HTTP 401 表示认证失败。')
 
+// ---- job-step clarification surfaces as a conversation bubble ----------------
+
+// When a pipeline step (solution_design / code_generation) pauses for user
+// input, the backend emits a clarification work trace. buildDialogueTimeline
+// must turn it into a visible agent_message bubble in the conversation flow
+// (not just the folded trace panel) so the user sees WHAT to answer.
+const clarTimeline = buildDialogueTimeline(
+  {
+    session: { id: 'dlg_clar', status: 'active', intent: 'application_generation', route_locked: true },
+    messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '做一个请假审批系统' }],
+    route: {},
+  },
+  null, null, null,
+  [
+    { type: 'assistant_output', sequence: 1, payload: { text: '分析中' }, dialogueId: 'dlg_clar', id: 't1' },
+    {
+      type: 'clarification',
+      sequence: 2,
+      payload: { questions: [{ question: '用演示数据还是真实API？', defaultAnswer: '演示数据' }] },
+      dialogueId: 'dlg_clar',
+      id: 't2',
+    },
+  ],
+)
+const clarBubble = clarTimeline.find(it => it.type === 'agent_message' && String(it.content).includes('用演示数据还是真实API'))
+assert.ok(clarBubble, 'a clarification work trace must surface as an agent_message bubble containing the question text')
+assert.match(clarBubble.content, /需要你澄清/, 'clarification bubble must prompt the user to answer')
+
 // ---- no blueprint text in rendered timeline items ---------------------------
 
 // The requirement summary must not surface BlueprintRefs even if the raw child
