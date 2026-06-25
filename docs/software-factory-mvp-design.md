@@ -648,8 +648,8 @@ Factory 在该阶段固定执行：
 
 启动容器后必须做健康检查：
 
-- 对 `http://127.0.0.1:{hostPort}` 发起 HTTP GET。
-- 10 秒内返回 `200-399` 才能把 deployment 和 application 标记为 `running`。
+- 对容器发布端口发起 HTTP GET。探测地址按以下优先级选择：`FACTORY_HEALTH_HOST` 环境变量 > Podman Machine 网关（macOS/Linux）> WSL VM IP（Windows+WSL2）> `127.0.0.1`。
+- 默认 30 秒内返回 `200-399` 才能把 deployment 和 application 标记为 `running`（可通过环境变量 `FACTORY_HEALTH_TIMEOUT` 覆盖，例如 `10s`、`1m`）。
 - 健康检查失败时，Step 失败并记录 `error_code=health_check_failed`。
 - 健康检查失败后，Factory 默认停止并移除本次新建容器，避免留下半运行实例。
 

@@ -1329,6 +1329,77 @@ func TestFactoryStepStreamingStillRedactsSecretInArtifact(t *testing.T) {
 	}
 }
 
+func TestIsFullNginxConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare server block", "server { listen 80; }\n", false},
+		{"full config with events", "events { worker_connections 1024; }\nhttp { server { listen 80; } }\n", true},
+		{"full config with http only", "http { server { listen 80; } }\n", true},
+		{"comments ignored", "# events {\nserver { listen 80; }\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".conf")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+			if got := isFullNginxConfig(path); got != tc.want {
+				t.Fatalf("isFullNginxConfig(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesFullConfigToMainPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("events { worker_connections 1024; }\nhttp { server { listen 80; } }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/nginx.conf") {
+		t.Fatalf("full nginx config should be copied to /etc/nginx/nginx.conf; got:\n%s", dockerfile)
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesServerBlockToConfD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("server { listen 80; }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/conf.d/default.conf") {
+		t.Fatalf("bare server block should be copied to /etc/nginx/conf.d/default.conf; got:\n%s", dockerfile)
+	}
+}
+
 // TestFactoryImageBuildStreamsPodmanStdout: image_build emits live
 // command_stdout records from podman build (argv stays centralized in
 // deploy.Podman — the executor never copies the podman argv).
