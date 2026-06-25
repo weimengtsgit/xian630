@@ -71,3 +71,6 @@ __debug*
 # Superpowers brainstorming companion artifacts
 .superpowers/
 .playwright-mcp/
+
+# Local isolated worktrees
+.worktrees/
