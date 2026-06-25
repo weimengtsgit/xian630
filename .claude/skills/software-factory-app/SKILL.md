@@ -95,6 +95,12 @@ Name the component `EmptyState` / `DegradedState` / `DataUnavailable` — never
 audit). Data acquisition is runtime (browser-side) only; `npm run build` MUST pass
 fully offline with no build-time fetch dependency, so the page is always produced.
 
+**Fail fast.** The Degraded State must appear within seconds, not minutes: probe a
+real source **once** (a single point / latest year) with a short timeout; if that
+first probe is unreachable or returns no coverage, degrade immediately. Never loop
+over every grid cell / year / port retrying an unreachable source — that makes the
+user stare at a spinner. One probe is enough to decide coverage.
+
 ## Output Checklist
 
 - Buildable with `npm install` or `npm ci`.
