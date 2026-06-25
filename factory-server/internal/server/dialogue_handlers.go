@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -409,7 +410,7 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 	if dlg.ClarificationSessionID != "" {
 		child, err := s.store.GetClarificationSession(ctx, dlg.ClarificationSessionID)
 		if err == nil && child != nil {
-			cv := s.viewFromSession(child)
+			cv := s.viewFromSessionWithMessages(ctx, child)
 			view.Child = &cv
 		}
 	}
@@ -738,11 +739,11 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	// A drafting dialogue may still have a runner appending messages (round in
-	// flight), so it cannot be safely deleted. routing/recommending/resolved/
-	// failed/abandoned are all safe: the synchronous rounds have completed.
-	if dlg.Status == model.DialogueStatusDraftingApplication || dlg.Status == model.DialogueStatusDraftingBusinessAgent {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "in-flight dialogue cannot be deleted", "status": dlg.Status})
+	// A dialogue may now be deleted in any status. If it is still in flight,
+	// cancel any linked active job first so a runner is not left appending to a
+	// dialogue that is about to disappear.
+	if err := s.cancelDialogueJobs(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel in-flight jobs")
 		return
 	}
 	if err := s.store.DeleteDialogueSession(r.Context(), id); err != nil {
@@ -751,6 +752,33 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishDialogueSimple("dialogue.deleted", id, map[string]string{"id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
+// cancelDialogueJobs cancels every still-active job linked to a dialogue. A
+// missing or already-terminal job is skipped. Used before deleting a dialogue,
+// which the user can now remove in any status — without this an in-flight
+// runner would keep appending to a dialogue that no longer exists.
+func (s *Server) cancelDialogueJobs(ctx context.Context, dialogueID string) error {
+	if s.exec == nil {
+		return nil
+	}
+	jobs, err := s.store.ListJobsByDialogue(ctx, dialogueID)
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		switch j.Status {
+		case model.JobStatusQueued, model.JobStatusRunning, model.JobStatusWaitingUser:
+		default:
+			continue
+		}
+		if err := s.exec.Cancel(ctx, j.ID); err != nil {
+			// Best-effort: a job that already finished or is unknown must not
+			// block the delete.
+			log.Printf("delete dialogue %s: cancel job %s: %v", dialogueID, j.ID, err)
+		}
+	}
+	return nil
 }
 
 // archiveDialogue handles POST /api/dialogues/:id/archive. It transitions a
@@ -1114,7 +1142,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		s.runRoundAndPersist(ctx, childID, 1)
+		s.runRoundAndPersistForDialogue(ctx, childID, 1, id)
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
 
 	case dialogue.IntentBusinessProcessingAgent:
@@ -1331,7 +1359,7 @@ func (s *Server) requireDialogueChild(ctx context.Context, id string) (*model.Di
 	if child == nil {
 		return dlg, "", nil, false, nil
 	}
-	cv := s.viewFromSession(child)
+	cv := s.viewFromSessionWithMessages(ctx, child)
 	view, _ := s.composeDialogueView(ctx, id)
 	return dlg, dlg.ClarificationSessionID, &cv, true, view
 }
@@ -1373,7 +1401,7 @@ func (s *Server) answerDialogueClarification(w http.ResponseWriter, r *http.Requ
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurn(ctx, childID, updated)
+	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
 	_ = advanced
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -1425,7 +1453,18 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 		}
 		adjustedBytes, _ := json.Marshal(adjusted)
 		_ = s.store.UpdateClarificationRequirement(ctx, childID, string(adjustedBytes))
-		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusReadyToConfirm, "", "")
+		// D3 / ADR 0006: applying consolidation does NOT clear
+		// openHighImpact. A round can return BOTH a consolidation list AND a
+		// non-empty openHighImpact list (independent RoundOutput fields), so
+		// accepting the recommendations while a high-impact confirmation item
+		// is still open must NOT promote to ready_to_confirm — the same gate
+		// the sibling no-model sites (advanceAfterUserTurn,
+		// normalizeClarificationReadiness) enforce via openHighImpactOpen.
+		status := model.ClarificationStatusReadyToConfirm
+		if s.openHighImpactOpen(sess) {
+			status = model.ClarificationStatusWaitingUser
+		}
+		_ = s.store.SetClarificationStatus(ctx, childID, status, "", "")
 		s.publishDialogueChild(ctx, id, childID, adjusted)
 		_ = dlg
 		_ = cv
@@ -1464,7 +1503,7 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurn(ctx, childID, updated)
+	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
 	_ = advanced
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -1597,7 +1636,7 @@ func (s *Server) retryDialogueClarificationRound(w http.ResponseWriter, r *http.
 	if retryRound < 1 {
 		retryRound = 1
 	}
-	s.runRoundAndPersist(ctx, childID, retryRound)
+	s.runRoundAndPersistForDialogue(ctx, childID, retryRound, id)
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")

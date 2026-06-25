@@ -6,6 +6,29 @@ const isFiniteNumber = (n) => typeof n === "number" && Number.isFinite(n);
 
 const validPoint = (lon, lat) => isFiniteNumber(lon) && isFiniteNumber(lat);
 
+const parseTime = (time) => {
+  const ms = Date.parse(time);
+  return typeof ms === "number" && Number.isFinite(ms) ? ms : null;
+};
+
+/**
+ * Compute the replay time window from event times, ignoring unparseable ones.
+ * A single bad `time` must never inject NaN into min/max/span (it would otherwise
+ * collapse the whole window and blank the map). Returns a safe default window
+ * `{ min: 0, max: 1, span: 1 }` when no event has a valid time.
+ * @returns {{min:number, max:number, span:number}}
+ */
+export function computeTimeWindow(events = []) {
+  const times = (Array.isArray(events) ? events : [])
+    .map((e) => parseTime(e && e.time))
+    .filter((t) => t !== null)
+    .sort((a, b) => a - b);
+  if (times.length === 0) return { min: 0, max: 1, span: 1 };
+  const min = times[0];
+  const max = times[times.length - 1];
+  return { min, max, span: Math.max(1, max - min) };
+}
+
 /**
  * Build four time-windowed GeoJSON FeatureCollections from raw events + carriers.
  *
@@ -45,7 +68,13 @@ export function buildMapData({ events = [], carriers = [], winStart = -Infinity,
     if (event.suspected === true) {
       seaFeatures.push(pointFeature(event));
     }
-    if (event.surfaceType === "land" || event.surfaceType === "unknown") {
+    // Audit = land/unknown events that are NOT suspected sea events. The two
+    // layers must be mutually exclusive so a contradictory record (suspected
+    // + unknown) is never rendered as two clickable features at once.
+    if (
+      (event.surfaceType === "land" || event.surfaceType === "unknown") &&
+      event.suspected !== true
+    ) {
       auditFeatures.push(pointFeature(event));
     }
   }
@@ -96,20 +125,15 @@ const collectCoordinates = (fc, out) => {
     const { type, coordinates } = geom;
     if (!Array.isArray(coordinates)) continue;
 
+    // buildMapData only ever emits Point and LineString geometries, so only
+    // those two are handled here.
     if (type === "Point") {
       const [lon, lat] = coordinates;
       if (validPoint(lon, lat)) out.push([lon, lat]);
-    } else if (type === "LineString" || type === "MultiPoint") {
+    } else if (type === "LineString") {
       for (const c of coordinates) {
         const [lon, lat] = c;
         if (validPoint(lon, lat)) out.push([lon, lat]);
-      }
-    } else if (type === "MultiLineString" || type === "Polygon") {
-      for (const ring of coordinates) {
-        for (const c of ring) {
-          const [lon, lat] = c;
-          if (validPoint(lon, lat)) out.push([lon, lat]);
-        }
       }
     }
   }

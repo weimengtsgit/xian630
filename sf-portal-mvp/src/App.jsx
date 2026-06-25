@@ -83,6 +83,7 @@ function App() {
             workTrace={dialogue.workTrace}
             pendingTurn={dialogue.pendingTurn}
             focusTask={dialogue.focusTask}
+            traceSteps={jobs.steps}
             taskPanel={
               <JobCenter
                 activeJob={dialogue.focusTask || null}
@@ -130,6 +131,8 @@ function App() {
             loading={agents.loading}
             error={agents.error}
             onCreateAgent={agents.createAgent}
+            onDeleteAgent={agents.deleteAgent}
+            deletingAgentId={agents.deletingAgentId}
           />
         </div>
       </div>

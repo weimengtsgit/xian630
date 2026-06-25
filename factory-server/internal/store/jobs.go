@@ -257,6 +257,26 @@ func (s *Store) ListJobs(ctx context.Context, status string) ([]model.Job, error
 	return out, rows.Err()
 }
 
+// ListJobsByDialogue returns every job linked to a dialogue (via dialogue_id),
+// oldest-first. deleteDialogue uses it to cancel any still-in-flight job before
+// removing a dialogue the user can now delete in any status.
+func (s *Store) ListJobsByDialogue(ctx context.Context, dialogueID string) ([]model.Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobSelectCols+` FROM jobs WHERE dialogue_id = ? ORDER BY created_at ASC`, dialogueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.Job, 0)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *j)
+	}
+	return out, rows.Err()
+}
+
 // CancelJob marks a job as canceled (status=canceled, ended_at=now,
 // updated_at=now) and cancels the step currently pointed at by the job's
 // current_step_kind, provided that step is not already in a terminal state

@@ -120,7 +120,10 @@ func (r Runner) RunBusinessDraftRound(ctx context.Context, input BusinessDraftIn
 // It writes input.json + prompt.md, runs claude in plan mode with
 // Read/Grep/Glob only, captures stdout/stderr/stream, extracts the JSON object,
 // and returns the raw JSON string for the caller to decode into its contract.
-// It NEVER surfaces thinking_delta — only text_delta text is streamed.
+// It streams BOTH text_delta (safe output → *.delta) and thinking_delta (the
+// model's raw reasoning → *.thinking); the conversation surface shows the
+// thinking live as a 思考过程 block. (#9 still applies to the executor/trace
+// pipeline, which is a different surface.)
 func (r Runner) runModel(ctx context.Context, dir, dialogueID, op string, input any, promptFn func(string) string, emit func(StreamEvent), startedType string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -177,28 +180,44 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dia
 		Data:       WorkLog{Type: "analysis_work_log", Content: "已连接 Claude Code 流式输出。"},
 	})
 	var assistantText strings.Builder
+	var assistantThinking strings.Builder
 	var resultText string
 	var lastVisible string
+	var lastVisibleThinking string
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
-		delta, result := parseClaudeStreamLine(line)
+		delta, thinking, result := parseClaudeStreamLine(line)
 		if result != "" {
 			resultText = result
 		}
-		if delta == "" {
-			return
+		if delta != "" {
+			assistantText.WriteString(delta)
+			visible := assistantText.String()
+			if visible != "" && visible != lastVisible {
+				lastVisible = visible
+				emit(StreamEvent{
+					Type:       startedType + ".delta",
+					DialogueID: dialogueID,
+					MessageID:  messageID,
+					Delta:      visible,
+				})
+			}
 		}
-		assistantText.WriteString(delta)
-		visible := assistantText.String()
-		if visible == "" || visible == lastVisible {
-			return
+		// Surface the model's raw reasoning (thinking_delta) as a parallel
+		// *.thinking stream so the workbench renders a live 思考过程 block. Set,
+		// not append (full-so-far), mirroring the .delta emit above.
+		if thinking != "" {
+			assistantThinking.WriteString(thinking)
+			visibleThinking := assistantThinking.String()
+			if visibleThinking != "" && visibleThinking != lastVisibleThinking {
+				lastVisibleThinking = visibleThinking
+				emit(StreamEvent{
+					Type:       startedType + ".thinking",
+					DialogueID: dialogueID,
+					MessageID:  messageID,
+					Delta:      visibleThinking,
+				})
+			}
 		}
-		lastVisible = visible
-		emit(StreamEvent{
-			Type:       startedType + ".delta",
-			DialogueID: dialogueID,
-			MessageID:  messageID,
-			Delta:      visible,
-		})
 	},
 		"--print", prompt,
 		"--output-format", "stream-json",
@@ -347,38 +366,49 @@ func writeStream(path string, events []StreamEvent) error {
 	return w.Flush()
 }
 
-// parseClaudeStreamLine is the thinking_delta filter (mirrors clarification):
-// only content_block_delta/text_delta text is surfaced. thinking_delta and all
-// other hidden provider fields are dropped.
-func parseClaudeStreamLine(line string) (textDelta string, result string) {
+// parseClaudeStreamLine surfaces the Claude stream's delta text for the
+// conversation flow. text_delta (the model's output) is returned as textDelta;
+// thinking_delta (the model's raw reasoning, carried under delta.thinking) is
+// returned as thinkingDelta so the workbench can stream it live as a 思考过程
+// block. Other stream data is dropped. (The executor/trace pipeline still
+// hard-drops thinking — security #9 applies THERE, not to this conversation
+// surface.)
+func parseClaudeStreamLine(line string) (textDelta, thinkingDelta, result string) {
 	var top struct {
 		Type   string          `json:"type"`
 		Event  json.RawMessage `json:"event"`
 		Result string          `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(line), &top); err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	if top.Type == "result" {
-		return "", top.Result
+		return "", "", top.Result
 	}
 	if top.Type != "stream_event" || len(top.Event) == 0 {
-		return "", ""
+		return "", "", ""
 	}
 	var ev struct {
 		Type  string `json:"type"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(top.Event, &ev); err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	if ev.Type != "content_block_delta" || ev.Delta.Type != "text_delta" {
-		return "", ""
+	if ev.Type != "content_block_delta" {
+		return "", "", ""
 	}
-	return ev.Delta.Text, ""
+	if ev.Delta.Type == "thinking_delta" {
+		return "", ev.Delta.Thinking, ""
+	}
+	if ev.Delta.Type == "text_delta" {
+		return ev.Delta.Text, "", ""
+	}
+	return "", "", ""
 }
 
 // extractJSONObject mirrors the clarification tolerant JSON extractor.

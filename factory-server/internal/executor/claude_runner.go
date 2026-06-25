@@ -136,18 +136,40 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 }
 
 // emitWorkLog decodes the PUBLIC workLog array from the step's output.json and
-// forwards each entry as a summary record. workLog is the ONLY agent-authored
-// field that becomes a record — thinking/reasoning and every other hidden
-// provider field are deliberately NOT decoded into records (the decoder's struct
-// only models workLog, so unknown fields are dropped by json.Unmarshal). Best
-// effort: a missing/empty workLog is a no-op, never a failure.
+// forwards each entry BOTH as a job-scoped summary record (for the task panel /
+// drawer) AND as a dialogue-attributed trace (so the structured analysis summary
+// reaches the conversation workbench, Task 4). workLog is the ONLY agent-authored
+// field that becomes a record or trace — thinking/reasoning and every other
+// hidden provider field are deliberately NOT decoded into records or traces (the
+// decoder's struct only models workLog, so unknown fields are dropped by
+// json.Unmarshal). Best effort: a missing/empty workLog is a no-op, never a
+// failure.
+//
+// The trace is ADDITIVE to the record: the job-scoped ExecutionRecordSummary
+// emission is unchanged (it stays for the task panel). Each entry's content is
+// also emitted through the SAME trace seam the assistant-text path uses
+// (TraceEmitterFrom(emit) → model.WorkTraceAssistant), so it is redacted/capped
+// identically by the server's recordAndPublishWorkTrace gate and carries the
+// step's DialogueID (dropped for legacy jobs with an empty dialogue id, like every
+// other trace). The decoder already caps each entry's bytes via truncateUTF8
+// (maxWorkLogEntryBytes), and the gate applies its own cap/redaction too, so this
+// path is defense-in-depth safe — and it NEVER emits thinking/thinking_delta
+// (workLog has none; the store allowlist would reject it anyway).
 func (c *ClaudeStepRunner) emitWorkLog(ctx context.Context, emit runner.StepRecordEmitter, outputPath string) {
 	if emit == nil {
 		return
 	}
 	entries := runner.DecodeWorkLog(outputPath)
+	if len(entries) == 0 {
+		return
+	}
+	// Discover the trace capability the same way streamClaudeEvents does: the
+	// real stepEmitter implements TraceEmitter (and stamps DialogueID/TaskID/
+	// StepID/Attempt); NopEmitter and emitters without Trace yield a nop trace.
+	trace := runner.TraceEmitterFrom(emit)
 	for _, e := range entries {
 		_ = emit.Emit(ctx, model.ExecutionRecordSummary, e)
+		_ = trace.Trace(ctx, string(model.WorkTraceAssistant), e)
 	}
 }
 

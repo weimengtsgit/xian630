@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -64,10 +65,26 @@ type confirmClarificationBody struct {
 // round that actually ran. No response-side round override is needed.
 type clarificationView struct {
 	model.ClarificationSession
-	Requirement      clarification.Requirement `json:"requirement"`
-	CreatedJob       *model.Job                `json:"created_job,omitempty"`
-	Application      *model.Application        `json:"application,omitempty"`
-	ApplicationState string                    `json:"application_state,omitempty"`
+	Requirement      clarification.Requirement  `json:"requirement"`
+	Messages         []clarificationMessageView `json:"messages,omitempty"`
+	CreatedJob       *model.Job                 `json:"created_job,omitempty"`
+	Application      *model.Application         `json:"application,omitempty"`
+	ApplicationState string                     `json:"application_state,omitempty"`
+}
+
+// clarificationMessageView is a child clarification thread entry in the response
+// shape the conversation workbench reads. The portal's openChildQuestions scans
+// role/kind/metadata_json to surface the open high-impact question card, and
+// latestConsolidation reads the round-5 consolidation message — without these in
+// the child view the question card can never render (only the requirement
+// summary shows). The standalone clarification surface fetches its thread via
+// GET /clarifications/:id/messages, so it keeps the message-free viewFromSession.
+type clarificationMessageView struct {
+	ID           string `json:"id,omitempty"`
+	Role         string `json:"role"`
+	Kind         string `json:"kind"`
+	Content      string `json:"content"`
+	MetadataJSON string `json:"metadata_json,omitempty"`
 }
 
 func (s *Server) viewFromSession(sess *model.ClarificationSession) clarificationView {
@@ -80,6 +97,32 @@ func (s *Server) viewFromSession(sess *model.ClarificationSession) clarification
 		// frontend always sees {} rather than a zero struct with nil slices.
 		v.Requirement.GenerationProfile = nil
 	}
+	return v
+}
+
+// viewFromSessionWithMessages builds the base view and attaches the persisted
+// child message thread. It is used by the dialogue composition path so the
+// conversation workbench can render the open high-impact question card and the
+// round-5 consolidation table (openChildQuestions/latestConsolidation read
+// child.messages). Errors loading messages are non-fatal: the view degrades to
+// the message-free shape rather than failing the whole composed dialogue view.
+func (s *Server) viewFromSessionWithMessages(ctx context.Context, sess *model.ClarificationSession) clarificationView {
+	v := s.viewFromSession(sess)
+	msgs, err := s.store.ListClarificationMessages(ctx, sess.ID)
+	if err != nil {
+		return v
+	}
+	views := make([]clarificationMessageView, 0, len(msgs))
+	for _, m := range msgs {
+		views = append(views, clarificationMessageView{
+			ID:           m.ID,
+			Role:         m.Role,
+			Kind:         m.Kind,
+			Content:      m.Content,
+			MetadataJSON: m.MetadataJSON,
+		})
+	}
+	v.Messages = views
 	return v
 }
 
@@ -833,7 +876,32 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 // persisted session is the single source of truth. GET /api/clarifications/:id
 // reads it directly, and retryClarificationRound reads the current round from
 // the persisted session without a fallback.
+//
+// D2 (clarification delta reachability): when dialogueID is non-empty the round
+// is being run for the application-generation DIALOGUE flow (a child
+// clarification session linked to a parent dialogue). In that case each child
+// clarification.message.delta (the safe work-log text the runner derives from
+// text_delta) is ALSO republished as a dialogue.clarification.delta, and each
+// clarification.message.thinking (the model's raw reasoning, from
+// thinking_delta) is republished as a dialogue.clarification.thinking — both
+// carrying the parent dialogue_id so the portal dispatcher folds them into the
+// conversation timeline live (analysis → 分析过程, thinking → 思考过程). The
+// conversation surface streams the model's thinking; #9 applies to the
+// executor/trace pipeline, not here. When dialogueID is empty this is the
+// legacy standalone clarification flow, whose own surface consumes the bare
+// clarification.message.* events; that path is unaffected.
 func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round int) (*model.ClarificationSession, int, bool) {
+	return s.runRoundAndPersistForDialogue(ctx, sessID, round, "")
+}
+
+// runRoundAndPersistForDialogue is the dialogue-aware variant. It behaves
+// identically to runRoundAndPersist, except that when dialogueID != "" each
+// child clarification.message.delta is additionally republished as a
+// dialogue.clarification.delta and each clarification.message.thinking as a
+// dialogue.clarification.thinking (set-not-append, full-so-far) carrying the
+// parent dialogue_id. The legacy bare clarification.message.* events are still
+// emitted unchanged so the standalone clarification surface keeps working.
+func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID string, round int, dialogueID string) (*model.ClarificationSession, int, bool) {
 	sess, err := s.store.GetClarificationSession(ctx, sessID)
 	if err != nil || sess == nil {
 		return sess, round, false
@@ -857,7 +925,34 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 
 	cfg := s.loadSceneCatalog(ctx)
 	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
-		s.publishClarificationEvent(s.filterClarificationEvent(cfg, ev))
+		filtered := s.filterClarificationEvent(cfg, ev)
+		s.publishClarificationEvent(filtered)
+		// D2: in the dialogue flow, mirror the live analysis delta AND the raw
+		// thinking stream as dialogue-attributed events so the portal folds them
+		// live (analysis → 分析过程, thinking → 思考过程). Policy: the conversation
+		// surface now streams the model's thinking; #9 applies to the executor/
+		// trace pipeline, NOT this conversation surface.
+		if dialogueID != "" && filtered.Type == "clarification.message.delta" {
+			// Mirror dialogue.draft.delta's wire shape exactly (top-level
+			// dialogue_id/message_id/delta) so applyLiveAnalysisEvent — which
+			// reads ev.dialogue_id, ev.delta and ev.message_id — folds it
+			// identically. Uses the dialogue.StreamEvent shape (dialogue_id
+			// json tag) rather than the clarification one (session_id).
+			s.publishDialogueEvent(dialogue.StreamEvent{
+				Type:       "dialogue.clarification.delta",
+				DialogueID: dialogueID,
+				MessageID:  filtered.MessageID,
+				Delta:      filtered.Delta,
+			})
+		}
+		if dialogueID != "" && filtered.Type == "clarification.message.thinking" {
+			s.publishDialogueEvent(dialogue.StreamEvent{
+				Type:       "dialogue.clarification.thinking",
+				DialogueID: dialogueID,
+				MessageID:  filtered.MessageID,
+				Delta:      filtered.Delta,
+			})
+		}
 	})
 	if err != nil {
 		// Round failed: advance the persisted round to the round we attempted so
@@ -946,10 +1041,29 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 		}
 	}
 
+	// Persist the round's open-high-impact list so the non-model readiness
+	// sites (advanceAfterUserTurn at the round cap, normalizeClarificationReadiness
+	// on read) can re-apply the D3 gate without a fresh model turn. Persist BEFORE
+	// computing status so the gate decision and the persisted snapshot are
+	// consistent even if the status write below succeeds.
+	hiJSON := ""
+	if len(out.OpenHighImpact) > 0 {
+		b, _ := json.Marshal(out.OpenHighImpact)
+		hiJSON = string(b)
+	}
+	if err := s.store.UpdateClarificationOpenHighImpact(ctx, sessID, hiJSON); err != nil {
+		return sess, roundN, false
+	}
+
 	// Map the runner's reported status onto the session status, defaulting to
-	// waiting_user when the runner did not declare readiness.
+	// waiting_user when the runner did not declare readiness. D3 / ADR 0006:
+	// ready_to_confirm requires openHighImpact to be EMPTY in addition to the
+	// model declaring readiness (or a no-question complete requirement). A
+	// blueprint-assumed field is NOT a confirmed high-impact decision, so a
+	// detailed first message does NOT bypass this gate.
 	status := model.ClarificationStatusWaitingUser
-	if clarification.IsReadyToConfirmStatus(out.Status) || (len(out.Questions) == 0 && len(missingRequiredFields(out.Requirement)) == 0) {
+	ready := (clarification.IsReadyToConfirmStatus(out.Status) || (len(out.Questions) == 0 && len(missingRequiredFields(out.Requirement)) == 0)) && len(out.OpenHighImpact) == 0
+	if ready {
 		status = model.ClarificationStatusReadyToConfirm
 	} else if out.Status == string(model.ClarificationStatusActive) {
 		status = model.ClarificationStatusActive
@@ -964,6 +1078,18 @@ func (s *Server) runRoundAndPersist(ctx context.Context, sessID string, round in
 	// round advanced while status/work-log writes above are uncommitted.
 	if err := s.store.UpdateClarificationRound(ctx, sessID, roundN); err != nil {
 		return sess, roundN, false
+	}
+
+	// B1: in the dialogue flow, signal the portal to reload the composed view now
+	// that the round has persisted its question, requirement, and status. A round
+	// only mirrors its analysis delta as dialogue.clarification.delta (above), and
+	// deltas do not trigger a view reload — without this non-delta signal the
+	// dispatcher never sets needsRefresh, the workbench stays on the pre-round
+	// view, and the high-impact question card never renders. publishDialogueChild
+	// emits clarification.summary.updated (standalone surface) + the
+	// dialogue-attributed dialogue.clarification.updated (portal reload trigger).
+	if dialogueID != "" {
+		s.publishDialogueChild(ctx, dialogueID, sessID, out.Requirement)
 	}
 
 	refreshed, err := s.store.GetClarificationSession(ctx, sessID)
@@ -996,11 +1122,26 @@ func clarificationFailureCode(err error) model.ErrorCode {
 // answer and the conversation stalls before ready_to_confirm. Behavior is
 // identical to the prior inline logic, including the MaxRounds cap.
 func (s *Server) advanceAfterUserTurn(ctx context.Context, sessID string, sess *model.ClarificationSession) (*model.ClarificationSession, bool) {
+	return s.advanceAfterUserTurnForDialogue(ctx, sessID, sess, "")
+}
+
+// advanceAfterUserTurnForDialogue is the dialogue-aware variant. When dialogueID
+// is non-empty the next round is run via runRoundAndPersistForDialogue so its
+// streaming deltas are mirrored as dialogue.clarification.delta (D2). The legacy
+// callers (empty dialogueID) are unchanged.
+func (s *Server) advanceAfterUserTurnForDialogue(ctx context.Context, sessID string, sess *model.ClarificationSession, dialogueID string) (*model.ClarificationSession, bool) {
 	nextRound := sess.Round + 1
 	if nextRound > sess.MaxRounds {
-		// Reached the round cap without the clarifier declaring readiness —
-		// transition to ready_to_confirm so the user can confirm.
-		if err := s.store.SetClarificationStatus(ctx, sessID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
+		// Reached the round cap without the clarifier declaring readiness.
+		// D3 / ADR 0006: a session that still has open high-impact confirmation
+		// items must NOT be auto-promoted to ready_to_confirm at the cap — it
+		// stays waiting_user so the user can still answer the blocking question.
+		// Only when openHighImpact is empty do we promote so the user can confirm.
+		status := model.ClarificationStatusReadyToConfirm
+		if s.openHighImpactOpen(sess) {
+			status = model.ClarificationStatusWaitingUser
+		}
+		if err := s.store.SetClarificationStatus(ctx, sessID, status, "", ""); err != nil {
 			return sess, false
 		}
 		updated, err := s.store.GetClarificationSession(ctx, sessID)
@@ -1010,7 +1151,7 @@ func (s *Server) advanceAfterUserTurn(ctx context.Context, sessID string, sess *
 		return updated, true
 	}
 
-	updated, _, ok := s.runRoundAndPersist(ctx, sessID, nextRound)
+	updated, _, ok := s.runRoundAndPersistForDialogue(ctx, sessID, nextRound, dialogueID)
 	return updated, ok
 }
 
@@ -1034,6 +1175,14 @@ func (s *Server) normalizeClarificationReadiness(ctx context.Context, sess *mode
 	}
 	req := s.parseRequirement(sess.RequirementJSON)
 	if len(missingRequiredFields(req)) > 0 {
+		return sess, nil
+	}
+	// D3 / ADR 0006: even when all required fields are filled, a session with
+	// open high-impact confirmation items must NOT be promoted to
+	// ready_to_confirm. Required fields may have been filled from blueprint
+	// assumptions; a confirmed high-impact decision requires an explicit user
+	// answer, so stay waiting_user while openHighImpact is non-empty.
+	if s.openHighImpactOpen(sess) {
 		return sess, nil
 	}
 	if err := s.store.SetClarificationStatus(ctx, sess.ID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
@@ -1184,6 +1333,37 @@ func (s *Server) parseRequirement(raw string) clarification.Requirement {
 	}
 	_ = json.Unmarshal([]byte(raw), &req)
 	return req
+}
+
+// parseOpenHighImpact reads the persisted open-high-impact JSON snapshot back
+// into the validated shape. openHighImpactOpen (below) calls this to re-apply
+// the D3 gate from the persisted state without a model turn. Re-validation is
+// defensive: the list was validated by the runner before persist, but a corrupt
+// row should fail-safe to "open" only when the JSON genuinely decodes to items.
+func (s *Server) parseOpenHighImpact(raw string) []clarification.HighImpactItem {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var items []clarification.HighImpactItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	return items
+}
+
+// openHighImpactOpen is the single D3 / ADR 0006 gate predicate for the
+// non-model readiness sites: a session with open high-impact confirmation
+// items must NOT be promoted to ready_to_confirm regardless of message detail.
+// Every no-model promotion path (advanceAfterUserTurn's cap branch,
+// normalizeClarificationReadiness, and the consolidation-apply path in
+// answerDialogueClarificationBatch) MUST consult this helper so a future site
+// cannot silently bypass the gate. The model-output site runRoundAndPersist is
+// exempt: it inspects the fresh out.OpenHighImpact, not the persisted snapshot.
+func (s *Server) openHighImpactOpen(sess *model.ClarificationSession) bool {
+	if sess == nil {
+		return false
+	}
+	return len(s.parseOpenHighImpact(sess.OpenHighImpactJSON)) > 0
 }
 
 // applyAnswerToRequirement merges a structured answer into the requirement for a

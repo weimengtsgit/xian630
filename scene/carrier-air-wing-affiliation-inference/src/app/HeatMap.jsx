@@ -3,7 +3,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Map as MapIcon, Layers } from "lucide-react";
 import { fmtDateTime } from "./statusHelpers.js";
-import { buildMapData, boundsForMapData } from "../logic/mapData.js";
+import { buildMapData, boundsForMapData, computeTimeWindow } from "../logic/mapData.js";
 import { isSatelliteSourceError, resolveMapClickAction } from "../logic/mapInteraction.js";
 
 // Lower-right panel — 起降热力地图 (MapLibre GL satellite basemap + GeoJSON overlays).
@@ -27,6 +27,12 @@ const mapStyle = {
 };
 
 const SOURCE_NAMES = ["sea-events", "audit-events", "carrier-tracks", "carrier-positions"];
+const COLLECTION_FOR = {
+  "sea-events": "seaEvents",
+  "audit-events": "auditEvents",
+  "carrier-tracks": "carrierTracks",
+  "carrier-positions": "carrierPositions",
+};
 
 const EMPTY_FC = { type: "FeatureCollection", features: [] };
 
@@ -46,6 +52,17 @@ const seaStrokeColor = (sel) => [
 ];
 const seaStrokeWidth = (sel) => ["case", ["==", ["get", "icao"], sel ?? null], 1.2, 0.5];
 
+// Single source of truth for which selection-driven paint properties to re-push
+// when the selection changes. `sel` selects which selection value feeds the expr.
+const SELECTION_PAINT = [
+  { layer: "carrier-tracks", prop: "line-width", sel: "carrier", expr: trackLineWidth },
+  { layer: "carrier-tracks", prop: "line-opacity", sel: "carrier", expr: trackLineOpacity },
+  { layer: "carrier-positions", prop: "circle-radius", sel: "carrier", expr: positionRadius },
+  { layer: "sea-events", prop: "circle-radius", sel: "icao", expr: seaRadius },
+  { layer: "sea-events", prop: "circle-stroke-color", sel: "icao", expr: seaStrokeColor },
+  { layer: "sea-events", prop: "circle-stroke-width", sel: "icao", expr: seaStrokeWidth },
+];
+
 export function HeatMap({
   events,
   carriers,
@@ -58,6 +75,16 @@ export function HeatMap({
   const mapRef = useRef(null);
   const initialFitDone = useRef(false);
 
+  // Refs bridge the latest props into the create-once map handlers, so click/hover
+  // resolve against current data/callbacks even though the mount effect has [] deps
+  // (this keeps the map reusable if events ever arrive async or change identity).
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
+  const onSelectEventRef = useRef(onSelectEvent);
+  onSelectEventRef.current = onSelectEvent;
+  const onSelectCarrierRef = useRef(onSelectCarrier);
+  onSelectCarrierRef.current = onSelectCarrier;
+
   const [mapError, setMapError] = useState(false);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [hover, setHover] = useState(null);
@@ -66,29 +93,24 @@ export function HeatMap({
   const [showAudit, setShowAudit] = useState(true);
 
   // timeline replay: a window [startMs, endMs]; default = full range.
-  const allTimes = useMemo(
-    () => events.map((e) => Date.parse(e.time)).sort((a, b) => a - b),
-    [events]
-  );
-  const minT = allTimes[0] ?? 0;
-  const maxT = allTimes[allTimes.length - 1] ?? 1;
-  const span = Math.max(1, maxT - minT);
+  // computeTimeWindow ignores unparseable times so one bad timestamp can't NaN
+  // the whole window and blank the map.
+  const { min: minT, max: maxT, span } = useMemo(() => computeTimeWindow(events), [events]);
   const [winFrac, setWinFrac] = useState(1); // 0..1, fraction of timeline windowed from the start
   const winStart = minT;
   const winEnd = minT + span * winFrac;
 
-  // Live windowed map data (drives the update effect).
+  // Live windowed map data (drives the data effect).
   const mapData = useMemo(
     () => buildMapData({ events, carriers, winStart, winEnd }),
     [events, carriers, winStart, winEnd]
   );
 
-  // Initial windowed map data used only for the one-time fitBounds.
-  // Computed once with the full range (winFrac defaults to 1).
-  const initialMapData = useRef(null);
-  if (initialMapData.current === null) {
-    initialMapData.current = buildMapData({ events, carriers, winStart: minT, winEnd: maxT });
-  }
+  // Full-range bounds for the one-time initial fit (reactive, so async data still fits).
+  const fullRangeBounds = useMemo(
+    () => boundsForMapData(buildMapData({ events, carriers, winStart: minT, winEnd: maxT })),
+    [events, carriers, minT, maxT]
+  );
 
   // --- Mount effect: create the map ONCE ---
   useEffect(() => {
@@ -193,26 +215,18 @@ export function HeatMap({
       });
 
       // MapLibre returns every rendered feature under the pointer. Resolve that
-      // set once so an event on a track still drills into its aircraft row.
+      // set to a single action so an event on a track still drills into its row.
       map.on("click", (e) => {
         const action = resolveMapClickAction(map.queryRenderedFeatures(e.point));
         if (!action) return;
-
         if (action.kind === "carrier") {
-          if (onSelectCarrier) onSelectCarrier(action.carrierId);
+          onSelectCarrierRef.current?.(action.carrierId);
           return;
         }
-
-        const evt = events.find((ev) => ev.id === action.eventId);
+        const evt = eventsRef.current.find((ev) => ev.id === action.eventId);
         if (!evt) return;
-        if (action.kind === "event") {
-          if (evt) {
-            setHover(evt);
-            if (onSelectEvent) onSelectEvent(evt);
-          }
-          return;
-        }
         setHover(evt);
+        if (action.kind === "event") onSelectEventRef.current?.(evt);
       });
 
       // --- hover handlers ---
@@ -222,18 +236,11 @@ export function HeatMap({
       const leaveCursor = () => {
         map.getCanvas().style.cursor = "";
       };
-      const handleSeaHover = (e) => {
+      const handleEventHover = (e) => {
         enterPointer();
         const f = e.features && e.features[0];
         if (!f || !f.properties) return;
-        const evt = events.find((ev) => ev.id === f.properties.id);
-        if (evt) setHover(evt);
-      };
-      const handleAuditHover = (e) => {
-        enterPointer();
-        const f = e.features && e.features[0];
-        if (!f || !f.properties) return;
-        const evt = events.find((ev) => ev.id === f.properties.id);
+        const evt = eventsRef.current.find((ev) => ev.id === f.properties.id);
         if (evt) setHover(evt);
       };
       const clearHover = () => {
@@ -241,23 +248,14 @@ export function HeatMap({
         setHover(null);
       };
 
-      map.on("mouseenter", "sea-events", handleSeaHover);
-      map.on("mouseenter", "audit-events", handleAuditHover);
+      map.on("mouseenter", "sea-events", handleEventHover);
+      map.on("mouseenter", "audit-events", handleEventHover);
       map.on("mouseenter", "carrier-tracks", enterPointer);
       map.on("mouseenter", "carrier-positions", enterPointer);
       map.on("mouseleave", "sea-events", clearHover);
       map.on("mouseleave", "audit-events", clearHover);
       map.on("mouseleave", "carrier-tracks", leaveCursor);
       map.on("mouseleave", "carrier-positions", leaveCursor);
-
-      // One-time fit to the full data range.
-      if (!initialFitDone.current) {
-        const bounds = boundsForMapData(initialMapData.current);
-        if (bounds) {
-          map.fitBounds(bounds, { padding: 48, maxZoom: 6, duration: 0 });
-        }
-        initialFitDone.current = true;
-      }
 
       setMapLoaded(true);
     });
@@ -276,55 +274,59 @@ export function HeatMap({
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // --- Update effect: push new data + visibility without rebuilding the map ---
+  // --- Data effect: push windowed GeoJSON + one-time, data-aware fit ---
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
-    const update = () => {
-      for (const name of SOURCE_NAMES) {
-        const src = map.getSource(name);
-        if (!src) continue;
-        const collection =
-          name === "sea-events"
-            ? mapData.seaEvents
-            : name === "audit-events"
-            ? mapData.auditEvents
-            : name === "carrier-tracks"
-            ? mapData.carrierTracks
-            : mapData.carrierPositions;
-        src.setData(collection);
+    for (const name of SOURCE_NAMES) {
+      const src = map.getSource(name);
+      if (src) src.setData(mapData[COLLECTION_FOR[name]]);
+    }
+
+    // Fit to the full data range exactly once, but only once bounds exist — so a
+    // later/async data load still gets framed (the flag flips only on a real fit).
+    if (!initialFitDone.current && fullRangeBounds) {
+      map.fitBounds(fullRangeBounds, { padding: 48, maxZoom: 6, duration: 0 });
+      initialFitDone.current = true;
+    }
+  }, [mapData, mapLoaded, fullRangeBounds]);
+
+  // --- Style effect: layer visibility + selection-driven paint (no data push) ---
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    const setVis = (layer, on) => {
+      if (map.getLayer(layer)) {
+        map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
       }
-
-      const setVis = (layer, on) => {
-        if (map.getLayer(layer)) {
-          map.setLayoutProperty(layer, "visibility", on ? "visible" : "none");
-        }
-      };
-      setVis("sea-events", showSea);
-      setVis("carrier-tracks", showTracks);
-      setVis("carrier-positions", showTracks);
-      setVis("audit-events", showAudit);
-
-      // Push live selection highlight paint (recomputed from current selection).
-      const setPaint = (layer, prop, expr) => {
-        if (map.getLayer(layer)) {
-          map.setPaintProperty(layer, prop, expr);
-        }
-      };
-      setPaint("carrier-tracks", "line-width", trackLineWidth(selectedCarrierId));
-      setPaint("carrier-tracks", "line-opacity", trackLineOpacity(selectedCarrierId));
-      setPaint("carrier-positions", "circle-radius", positionRadius(selectedCarrierId));
-      setPaint("sea-events", "circle-radius", seaRadius(selectedIcao));
-      setPaint("sea-events", "circle-stroke-color", seaStrokeColor(selectedIcao));
-      setPaint("sea-events", "circle-stroke-width", seaStrokeWidth(selectedIcao));
     };
+    setVis("sea-events", showSea);
+    setVis("carrier-tracks", showTracks);
+    setVis("carrier-positions", showTracks);
+    setVis("audit-events", showAudit);
 
-    update();
-  }, [mapData, showSea, showTracks, showAudit, mapLoaded, selectedCarrierId, selectedIcao]);
+    for (const { layer, prop, sel, expr } of SELECTION_PAINT) {
+      if (map.getLayer(layer)) {
+        map.setPaintProperty(layer, prop, expr(sel === "carrier" ? selectedCarrierId : selectedIcao));
+      }
+    }
+  }, [selectedCarrierId, selectedIcao, showSea, showTracks, showAudit, mapLoaded]);
 
   // Popover renders at a fixed anchor at the top of the map panel (no pixel projection).
   const pop = hover ? { evt: hover } : null;
+  const altitudeText = pop?.evt?.altitudeTransition
+    ? `${pop.evt.altitudeTransition.from}→${pop.evt.altitudeTransition.to} ft`
+    : "—";
+  const coordText =
+    pop?.evt?.lat != null && pop?.evt?.lon != null
+      ? `${pop.evt.lat.toFixed(2)}, ${pop.evt.lon.toFixed(2)}`
+      : "—";
+  const surfaceText =
+    pop?.evt?.surfaceType != null
+      ? `${pop.evt.surfaceType}（${pop.evt.surfaceConfidence != null ? `${(pop.evt.surfaceConfidence * 100).toFixed(0)}%` : "—"}）`
+      : "—";
 
   return (
     <section className="cai-mapwrap">
@@ -372,12 +374,12 @@ export function HeatMap({
         {pop && (
           <div className="cai-popover" style={{ left: 12, top: 12 }}>
             <h5>{pop.evt.icao} · {pop.evt.eventType === "takeoff" ? "起飞" : "降落"}</h5>
-            <div className="pr"><span className="k">机型</span><span className="v">{pop.evt.aircraftType}</span></div>
+            <div className="pr"><span className="k">机型</span><span className="v">{pop.evt.aircraftType ?? "—"}</span></div>
             <div className="pr"><span className="k">时间</span><span className="v">{fmtDateTime(pop.evt.time)}</span></div>
-            <div className="pr"><span className="k">高度过渡</span><span className="v">{pop.evt.altitudeTransition.from}→{pop.evt.altitudeTransition.to} ft</span></div>
+            <div className="pr"><span className="k">高度过渡</span><span className="v">{altitudeText}</span></div>
             <div className="pr"><span className="k">速度</span><span className="v">{pop.evt.speedKt != null ? `${pop.evt.speedKt} 节` : "—"}</span></div>
-            <div className="pr"><span className="k">坐标</span><span className="v">{pop.evt.lat.toFixed(2)}, {pop.evt.lon.toFixed(2)}</span></div>
-            <div className="pr"><span className="k">海陆分类</span><span className="v">{pop.evt.surfaceType}（{(pop.evt.surfaceConfidence * 100).toFixed(0)}%）</span></div>
+            <div className="pr"><span className="k">坐标</span><span className="v">{coordText}</span></div>
+            <div className="pr"><span className="k">海陆分类</span><span className="v">{surfaceText}</span></div>
             <div className="pr"><span className="k">绑定航母</span><span className="v">{pop.evt.boundCarrierId || "未绑定"}</span></div>
             <div className="pr"><span className="k">距航母</span><span className="v">{pop.evt.distanceNm != null ? `${pop.evt.distanceNm.toFixed(0)} 海里` : "—"}</span></div>
             <div className="pr"><span className="k">航母位置时差</span><span className="v">{pop.evt.carrierPositionTimeDeltaMinutes != null ? `${pop.evt.carrierPositionTimeDeltaMinutes} 分钟` : "—"}</span></div>

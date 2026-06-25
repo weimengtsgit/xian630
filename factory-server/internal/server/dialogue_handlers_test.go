@@ -347,6 +347,187 @@ func eventTypes(events []Event) []string {
 	return out
 }
 
+// TestDialogueClarificationStreamsDeltaWithDialogueID is the D2 regression: in
+// the application-generation dialogue flow, the child clarification round's
+// work-log deltas MUST be mirrored as a dialogue-attributed
+// dialogue.clarification.delta carrying the PARENT dialogue_id (not just the
+// bare clarification.message.delta carrying the child session id). Without this
+// mirroring the portal dispatcher drops the deltas and the bulk of a generation
+// conversation degrades to completion-reload. The test subscribes to the hub
+// BEFORE the route confirm runs child round 1 (which streams the work-log delta)
+// and asserts the dialogue-attributed delta arrives with the parent id.
+func TestDialogueClarificationStreamsDeltaWithDialogueID(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	// Subscribe BEFORE routing so the round-1 streaming deltas are captured.
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	_ = drainClarificationHub(ch)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	childID := ""
+	var routed dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&routed); err == nil {
+		childID = routed.Session.ClarificationSessionID
+	}
+	if childID == "" {
+		// Fall back to the store (some test fakes do not echo the link on the view).
+		d, _ := st.GetDialogueSession(context.Background(), dlgID)
+		if d != nil {
+			childID = d.ClarificationSessionID
+		}
+	}
+	if childID == "" {
+		t.Fatalf("no child clarification linked to dialogue %s", dlgID)
+	}
+
+	events := drainClarificationHub(ch)
+
+	// 1. The dialogue-attributed delta is emitted and carries the PARENT
+	//    dialogue_id (not the child session id).
+	var sawDialogueDelta bool
+	for _, ev := range events {
+		if ev.Type != "dialogue.clarification.delta" {
+			continue
+		}
+		sawDialogueDelta = true
+		// The hub publishes the dialogue.StreamEvent struct directly as Data.
+		se, ok := ev.Data.(dialogue.StreamEvent)
+		if !ok {
+			t.Fatalf("dialogue.clarification.delta data is not a dialogue.StreamEvent: %#v", ev.Data)
+		}
+		if se.DialogueID != dlgID {
+			t.Fatalf("dialogue.clarification.delta must carry the PARENT dialogue_id %s, got %q", dlgID, se.DialogueID)
+		}
+		if strings.TrimSpace(se.Delta) == "" {
+			t.Fatalf("dialogue.clarification.delta must carry non-empty safe work-log delta, got %q", se.Delta)
+		}
+		// Security #9: the mirrored delta carries only the safe `delta` text.
+		// The clarification runner never emits thinking_delta as a
+		// clarification.message.delta, and dialogue.StreamEvent has no
+		// thinking field, so raw reasoning cannot ride along.
+	}
+	if !sawDialogueDelta {
+		t.Fatalf("dialogue child round did not emit dialogue.clarification.delta; events=%#v", eventTypes(events))
+	}
+
+	// 2. The legacy bare clarification.message.delta is STILL emitted (the
+	//    standalone clarification surface depends on it) — regression guard
+	//    against breaking the legacy path.
+	sawBare := false
+	for _, ev := range events {
+		if ev.Type == "clarification.message.delta" {
+			sawBare = true
+			break
+		}
+	}
+	if !sawBare {
+		t.Fatalf("legacy bare clarification.message.delta must still be emitted for the standalone surface; events=%#v", eventTypes(events))
+	}
+}
+
+// TestDialogueClarificationPublishesReloadOnRound verifies B1: when a child
+// clarification round completes in the dialogue flow, the server publishes a
+// non-delta dialogue.clarification.updated carrying the PARENT dialogue_id. The
+// conversation workbench reloads the composed view only on a non-delta dialogue.*
+// event; a round otherwise mirrors just its analysis delta, which does not
+// trigger a reload. Without this signal the high-impact question card never
+// renders even though the question is persisted.
+func TestDialogueClarificationPublishesReloadOnRound(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	_ = drainClarificationHub(ch)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	events := drainClarificationHub(ch)
+	var sawReload bool
+	for _, ev := range events {
+		if ev.Type != "dialogue.clarification.updated" {
+			continue
+		}
+		data, ok := ev.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("dialogue.clarification.updated data is not a map: %#v", ev.Data)
+		}
+		if data["dialogue_id"] != dlgID {
+			t.Fatalf("dialogue.clarification.updated must carry the PARENT dialogue_id %s, got %#v", dlgID, data["dialogue_id"])
+		}
+		sawReload = true
+	}
+	if !sawReload {
+		t.Fatalf("round did not emit dialogue.clarification.updated reload signal; events=%#v", eventTypes(events))
+	}
+}
+
+// TestDialogueViewChildExposesQuestionMessages verifies B2: the composed
+// dialogue view's child carries the persisted clarification message thread,
+// including the open high-impact question. The workbench's openChildQuestions
+// reads child.messages role/kind/metadata_json to render the question card;
+// before this fix child.messages was always empty, so only the requirement
+// summary showed and the user could never answer / reach ready_to_confirm.
+func TestDialogueViewChildExposesQuestionMessages(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	view, err := srv.composeDialogueView(context.Background(), dlgID)
+	if err != nil || view == nil {
+		t.Fatalf("composeDialogueView: err=%v view=%v", err, view != nil)
+	}
+	if view.Child == nil {
+		t.Fatalf("composed view has no child clarification")
+	}
+	var sawQuestion bool
+	for _, m := range view.Child.Messages {
+		if m.Role == "agent" && m.Kind == "question" && strings.Contains(m.MetadataJSON, "appType") {
+			sawQuestion = true
+			break
+		}
+	}
+	if !sawQuestion {
+		t.Fatalf("child view messages do not expose the open question; messages=%#v", view.Child.Messages)
+	}
+}
+
 // TestCreateDialogueRejectsInventedSlug verifies the server validates the
 // router's returned slug against the candidate sets and rejects an invented slug.
 // On rejection the dialogue is marked failed, NO route record is persisted
@@ -1078,6 +1259,119 @@ func TestApplicationClarificationAcceptConsolidation(t *testing.T) {
 	}
 }
 
+// TestApplicationClarificationConsolidationGateHonorsOpenHighImpact is the D3
+// regression: a round-5 output can carry BOTH a consolidation list AND a
+// non-empty openHighImpact list (independent RoundOutput fields). Accepting the
+// recommendations (接受推荐) must NOT promote the child to ready_to_confirm while
+// openHighImpact is still open — the consolidation-apply path (no model turn)
+// must honor the same gate as advanceAfterUserTurn / normalizeClarificationReadiness.
+// With openHighImpact empty, accept-all must still reach ready_to_confirm.
+func TestApplicationClarificationConsolidationGateHonorsOpenHighImpact(t *testing.T) {
+	// round-5: consolidation present AND a non-empty openHighImpact list.
+	round5WithHighImpact := func() string {
+		out := clarification.RoundOutput{
+			Status: "waiting_user", Round: 5,
+			WorkLog: []clarification.WorkLog{{Type: "consolidation", Content: "收敛推荐 + 高影响项"}},
+			Requirement: clarification.Requirement{
+				AppType: "situation_replay", AppName: "航母编队复盘应用",
+				TargetUsers: []string{"作战参谋"}, PrimaryView: "地图 + 时间轴", DataPolicy: "mock_data",
+				GenerationProfile: map[string][]string{"base": {"software-factory-app"}, "domain": {"defense-operations-ui"}, "pattern": {"map-timeline-replay"}},
+			},
+			Consolidation: []clarification.ConsolidationEntry{
+				{Field: "coreScenario", RecommendedValue: json.RawMessage(`"复盘近 1 个月航迹"`), Reason: "推荐", Alternatives: []string{}},
+				{Field: "mainEntities", RecommendedValue: json.RawMessage(`["编队","事件"]`), Reason: "推荐"},
+				{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["轨迹联动"]`), Reason: "推荐"},
+			},
+			OpenHighImpact: []clarification.HighImpactItem{
+				{ID: "data_policy", Label: "数据来源策略", Recommendation: "mock_data", Options: []clarification.Option{{Value: "mock_data", Label: "Mock"}, {Value: "api_first", Label: "接口"}}},
+			},
+		}
+		b, _ := json.Marshal(out)
+		return string(b)
+	}()
+
+	setupChild := func(t *testing.T) (*Server, *Router, *store.Store, string, string) {
+		seq := &clarSequenceRunner{
+			outputs: []string{
+				roundOutputOneQuestion(1, "appType"),
+				roundOutputOneQuestion(2, "primaryView"),
+				roundOutputOneQuestion(3, "dataPolicy"),
+				roundOutputOneQuestion(4, "targetUsers"),
+				round5WithHighImpact,
+			},
+		}
+		srv, r, st := newDialogueTestServer(t, seq)
+		srv.dialogueRouter = dialogue.Runner{
+			Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+		}
+		create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+		var created dialogueView
+		json.NewDecoder(create.Body).Decode(&created)
+		_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+		var routed dialogueView
+		_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+		childID := routed.Session.ClarificationSessionID
+		if childID == "" {
+			t.Fatalf("no child clarification linked")
+		}
+		answerRound := func(questionID, value string) {
+			rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+				"questionId": questionID, "value": value,
+			})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+			}
+		}
+		answerRound("appType", "situation_replay")
+		answerRound("primaryView", "地图 + 时间轴")
+		answerRound("dataPolicy", "mock_data")
+		answerRound("targetUsers", "作战参谋")
+		// round 5 has now run; assert openHighImpact is persisted on the child.
+		child, _ := st.GetClarificationSession(context.Background(), childID)
+		if child == nil || strings.TrimSpace(child.OpenHighImpactJSON) == "" {
+			t.Fatalf("round-5 must persist openHighImpact: %+v", child)
+		}
+		return srv, r, st, created.Session.ID, childID
+	}
+
+	// --- Case A: openHighImpact open → accept-all must NOT promote ---
+	_, r, st, dlgID, childID := setupChild(t)
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	child, _ := st.GetClarificationSession(context.Background(), childID)
+	if child == nil {
+		t.Fatalf("child gone after accept")
+	}
+	if child.Status == model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("child status = ready_to_confirm, want non-ready (openHighImpact still open blocks consolidation-apply promotion)")
+	}
+	// The 确认并生成/confirm path must remain blocked while high-impact is open.
+	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/clarification/confirm", nil)
+	if confirmRec.Code == http.StatusOK {
+		t.Fatalf("confirm must be blocked while consolidation left openHighImpact open, got %d", confirmRec.Code)
+	}
+
+	// --- Case B: openHighImpact cleared → accept-all promotes to ready_to_confirm ---
+	_, r2, st2, dlgID2, childID2 := setupChild(t)
+	if err := st2.UpdateClarificationOpenHighImpact(context.Background(), childID2, ""); err != nil {
+		t.Fatalf("clear openHighImpact: %v", err)
+	}
+	accept2 := doJSON(t, r2, http.MethodPost, "/api/dialogues/"+dlgID2+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if accept2.Code != http.StatusOK {
+		t.Fatalf("accept (cleared) status = %d body=%s", accept2.Code, accept2.Body.String())
+	}
+	child2, _ := st2.GetClarificationSession(context.Background(), childID2)
+	if child2 == nil || child2.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("persisted child status = %+v, want ready_to_confirm once openHighImpact empty", child2)
+	}
+}
+
 // TestDialogueConfirmRollsBackOnMidSeedFailure asserts that when the job-seeding
 // transaction fails part-way through (a step insert errors), the confirm handler
 // leaves NO orphaned job row and moves the child clarification to a diagnosable
@@ -1337,6 +1631,29 @@ func TestListAndDeleteDialogue(t *testing.T) {
 	del := doJSON(t, r, http.MethodDelete, "/api/dialogues/"+created.Session.ID, nil)
 	if del.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+}
+
+// TestDeleteDialogueAllowsDraftingStatus verifies a dialogue in an in-flight
+// drafting status can now be deleted (the old behavior refused with 409). This
+// unblocks "zombie" dialogues stuck in drafting that the user otherwise could
+// never remove.
+func TestDeleteDialogueAllowsDraftingStatus(t *testing.T) {
+	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: "dlg_draft", Status: model.DialogueStatusDraftingApplication, InitialPrompt: "x",
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	del := doJSON(t, r, http.MethodDelete, "/api/dialogues/dlg_draft", nil)
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete drafting status = %d, want 200 (body=%s)", del.Code, del.Body.String())
+	}
+	if got, _ := st.GetDialogueSession(ctx, "dlg_draft"); got != nil {
+		t.Fatalf("drafting dialogue still exists after delete")
 	}
 }
 

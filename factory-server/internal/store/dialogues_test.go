@@ -143,6 +143,47 @@ func TestDeleteDialogueSessionDeletesMessages(t *testing.T) {
 	}
 }
 
+// TestDeleteDialogueSessionClearsClarification verifies deleting a dialogue also
+// removes its source clarification session, so the startup backfill
+// (BackfillClarificationDialogues) cannot resurrect the deleted dialogue on the
+// next restart. Regression for "deleted dialogue reappears after service restart".
+func TestDeleteDialogueSessionClearsClarification(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	if err := st.CreateClarificationSession(ctx, model.ClarificationSession{
+		ID: "clar_a", Status: model.ClarificationStatusConfirmed, InitialPrompt: "做一个看板",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create clarification: %v", err)
+	}
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: "dlg_a", Status: model.DialogueStatusResolved, InitialPrompt: "做一个看板",
+		Intent: model.DialogueIntentApplicationGeneration, ClarificationSessionID: "clar_a",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create dialogue: %v", err)
+	}
+
+	if err := st.DeleteDialogueSession(ctx, "dlg_a"); err != nil {
+		t.Fatalf("DeleteDialogueSession: %v", err)
+	}
+
+	// Source clarification must be gone — otherwise BackfillClarificationDialogues
+	// recreates the dialogue from it on the next startup.
+	if sess, _ := st.GetClarificationSession(ctx, "clar_a"); sess != nil {
+		t.Fatalf("clarification session still exists — backfill will resurrect the deleted dialogue")
+	}
+
+	if err := st.BackfillClarificationDialogues(ctx); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if id, ok := st.FindDialogueByClarificationID(ctx, "clar_a"); ok || id != "" {
+		t.Fatalf("backfill resurrected the deleted dialogue: id=%q ok=%v", id, ok)
+	}
+}
+
 // TestFindDialogueByClarificationID covers the idempotency guard used by the
 // legacy backfill.
 func TestFindDialogueByClarificationID(t *testing.T) {

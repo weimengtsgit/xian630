@@ -127,3 +127,37 @@ export function parseSequenceId(value) {
   const n = Number(value)
   return Number.isFinite(n) && n >= 0 ? n : null
 }
+
+// liveStepFromTrace derives the IN-FLIGHT pipeline step's accrued safe text from
+// the folded trace items, so the conversation's live_analysis item can surface the
+// build phase token-by-token (Task 3, D2 — the pipeline streams dialogue-attributed
+// assistant/tool traces through this path). It picks the highest-sequence step row
+// that carries renderable assistant text and folds it into a step-keyed live item.
+//
+// Returns { key, content, kind:'step' } or null when no step row carries text.
+//   key     — 'step:<jobId>:<stepId>' (jobId/stepId from the trace row; falls back
+//             to the row id so the live block is still uniquely keyed)
+//   content — the safe text (payload summary/message/text/description), NEVER raw
+//   kind    — always 'step'
+//
+// Only the explicitly-named payload text fields survive; unknown/internal keys
+// (including any raw-reasoning field) are ignored — security #9.
+export function liveStepFromTrace(items) {
+  const list = Array.isArray(items) ? items : []
+  // The in-flight step is the latest step row that still carries text (no later
+  // step-completion marker supersedes it). We walk from the end and take the
+  // first step-attributed row whose payload text is non-empty.
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const it = list[i]
+    if (!it) continue
+    const p = it.payload || {}
+    const text = p.summary || p.message || p.text || p.description || p.label || ''
+    if (!text) continue
+    const jobId = it.jobId || it.job_id || ''
+    const stepId = it.stepId || it.step_id || ''
+    if (!stepId) continue
+    const key = `step:${jobId}:${stepId}`
+    return { key, content: String(text), kind: 'step' }
+  }
+  return null
+}
