@@ -40,7 +40,21 @@
   padding: 16px;
 }
 
+/* The .panel-content class collides globally with AgentsPanel.css (which sets
+   overflow: hidden). Scope the apps panel so its content area is a bounded
+   flex column and the .applications-list is the real scroll container —
+   otherwise overflow is clipped and the app list can't scroll. */
+.applications-panel .panel-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .applications-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
