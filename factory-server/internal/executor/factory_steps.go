@@ -613,7 +613,16 @@ func writeStaticHostingDockerfile(appDir string) error {
 	b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString("CMD [\"nginx\", \"-g\", \"daemon off;\"]\n")
-	return os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	// The dist-copy image REQUIRES dist/ in the build context, but the generated
+	// .dockerignore (a leftover from in-container builds) excludes dist — which
+	// makes `COPY dist/` fail with "no items matching glob". Override it so dist/
+	// and nginx.conf are sent to the builder while still trimming node_modules etc.
+	_ = os.WriteFile(filepath.Join(appDir, ".dockerignore"),
+		[]byte("node_modules\n.git\n.vite\n*.log\n"), 0o644)
+	return nil
 }
 
 // wslVMHealthIP returns the host a container health probe should target. On
