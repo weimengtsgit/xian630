@@ -325,6 +325,7 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	// See sanitizeNginxLocationRegexes / sanitizeNginxProxyPassUpstreams.
 	_ = sanitizeNginxLocationRegexes(filepath.Join(buildApp.Path, "nginx.conf"))
 	_ = sanitizeNginxProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
+	_ = sanitizeNginxVariableProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
 	var res deploy.CommandResult
 	var imageRef deploy.ImageRef
 	var err error
@@ -402,11 +403,11 @@ func (f *FactoryRunner) ensureCandidateVersion(ctx context.Context, appID, jobID
 		parentID = priorEff.ID
 	}
 	created, err := f.Store.CreateApplicationVersion(ctx, model.ApplicationVersion{
-		ID:            "ver_" + id.New(),
-		ApplicationID: appID,
+		ID:              "ver_" + id.New(),
+		ApplicationID:   appID,
 		ParentVersionID: parentID,
-		JobID:         jobID,
-		Status:        model.ApplicationVersionBuilding,
+		JobID:           jobID,
+		Status:          model.ApplicationVersionBuilding,
 	})
 	if err != nil {
 		return nil, StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("create version for job %s: %v", jobID, err)}, false
@@ -723,6 +724,8 @@ var nginxProxyPassRe = regexp.MustCompile(`(?m)^(\s*)proxy_pass\s+(https?)://([A
 
 var nginxListenRe = regexp.MustCompile(`(?m)^\s*listen\b[^\n]*;`)
 
+var nginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+
 // sanitizeNginxProxyPassUpstreams converts a LITERAL external-host proxy_pass
 // (e.g. "proxy_pass https://api.open-meteo.com/;") into a variable form plus a
 // public resolver. nginx resolves a literal upstream at config-load time, and in
@@ -774,6 +777,52 @@ func sanitizeNginxProxyPassUpstreams(path string) error {
 		return line + "\n    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;"
 	})
 	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+// sanitizeNginxVariableProxyPassUpstreams collapses generated configs such as:
+//
+//	set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+//	proxy_pass http://$ontology_upstream/;
+//
+// back to a literal host:port proxy_pass. For host:port APIs this is safer than
+// a request-time nginx resolver in the current Podman runtime: Docker's
+// 127.0.0.11 resolver is unavailable, and variable proxy_pass with a URI has
+// surprising path-forwarding semantics. Literal host:port keeps nginx's normal
+// location URI replacement and lets the OS resolver handle startup resolution.
+func sanitizeNginxVariableProxyPassUpstreams(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	out := src
+	matches := nginxVariableUpstreamSetRe.FindAllStringSubmatch(src, -1)
+	for _, m := range matches {
+		indent, variable, upstream := m[1], m[2], m[3]
+		proxyLine := indent + "proxy_pass http://" + variable + "/;"
+		if !strings.Contains(out, proxyLine) {
+			continue
+		}
+		out = strings.Replace(out, m[0]+"\n"+proxyLine, indent+"proxy_pass http://"+upstream+"/;", 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyLine, indent+"proxy_pass http://"+upstream+"/;", 1)
+	}
+	out = removeDockerOnlyNginxResolver(out)
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func removeDockerOnlyNginxResolver(src string) string {
+	lines := strings.SplitAfter(src, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "resolver ") && strings.Contains(line, "127.0.0.11") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
 }
 
 // isIPv4 reports whether s is a dotted-quad IPv4 literal (so it can be left as a

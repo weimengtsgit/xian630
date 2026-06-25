@@ -552,6 +552,44 @@ func TestSanitizeNginxProxyPassUpstreams(t *testing.T) {
 	}
 }
 
+func TestSanitizeNginxVariableProxyPassWithPort(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+        proxy_pass http://$ontology_upstream/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "127.0.0.11") {
+		t.Fatalf("Docker-only resolver should be removed from generated app config;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$ontology_upstream") {
+		t.Fatalf("variable upstream should be collapsed to literal host:port;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081/;") {
+		t.Fatalf("literal upstream proxy_pass missing;\ngot:\n%s", got)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
 // fakeContainerRuntime is a deploy.ContainerRuntime double that records its
 // calls. It stands in for docker/podman so the runtime-selection logic can be
 // tested without a real container engine.
