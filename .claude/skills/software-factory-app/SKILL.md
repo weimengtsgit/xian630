@@ -105,9 +105,9 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
-    # Runtime DNS resolution so nginx doesn't crash at startup
-    # Docker embedded DNS = 127.0.0.11; fallback to public resolvers
-    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    # Runtime DNS resolution so nginx doesn't crash at startup.
+    # Do not use Docker-only 127.0.0.11; production runs under Podman.
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
     resolver_timeout 5s;
 
     # Reverse-proxy external API to avoid browser CORS

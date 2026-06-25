@@ -590,6 +590,75 @@ func TestSanitizeNginxVariableProxyPassWithPort(t *testing.T) {
 	}
 }
 
+func TestSanitizeNginxVariableProxyPassWithPortAndURI(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+        proxy_pass http://$ontology_upstream/daasDMS/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "127.0.0.11") {
+		t.Fatalf("Docker-only resolver should be removed from generated app config;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$ontology_upstream") {
+		t.Fatalf("variable upstream should be collapsed to literal host:port with URI;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081/daasDMS/;") {
+		t.Fatalf("literal upstream proxy_pass with URI missing;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyNginxProxyCredentialsReplacesPlaceholders(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	envFile := filepath.Join(envDir, "ontology.env")
+	if err := os.WriteFile(envFile, []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /api/ontology/ {
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeOntologyNginxProxyCredentials(conf, dir); err != nil {
+		t.Fatalf("sanitize credentials: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	for _, bad := range []string{"<ONTOLOGY_AUTH_TOKEN>", "SPACE_123"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("placeholder %q still present;\ngot:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, `proxy_set_header Authorization "Bearer real-token";`) ||
+		!strings.Contains(got, `proxy_set_header Spaceid "real-space";`) {
+		t.Fatalf("real ontology credentials not injected;\ngot:\n%s", got)
+	}
+}
+
 func TestSanitizeNginxVariableProxyPassKeepsInternalServiceName(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "nginx.conf")

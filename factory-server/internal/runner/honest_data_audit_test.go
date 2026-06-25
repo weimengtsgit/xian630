@@ -133,3 +133,75 @@ func TestAuditHonestDataCleanRealApp(t *testing.T) {
 		t.Fatalf("err = %v, want nil for clean real-data app", err)
 	}
 }
+
+func TestAuditCarrierOntologyContractFlagsInventedFields(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `
+export async function fetchCarrier() {
+  return fetch('/api/ontology/entity/AviationCarrier/list', {
+    method: 'POST',
+    body: JSON.stringify({
+      columns: ['id', 'name', 'curLongitude', 'curLatitude', 'curHeading', 'curSpeed']
+    })
+  })
+}
+`)
+	err := AuditCarrierOntologyContract(dir, "live_api", []string{"carrier-affiliation-data-skill"})
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed for invented carrier fields", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractFlagsInvalidCarrierEntityFields(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `
+async function fetchEntity(entityName, columns, filters) {
+  return fetch('/api/ontology/entity/' + entityName + '/list', {
+    method: 'POST',
+    body: JSON.stringify({ columns, filters })
+  })
+}
+
+export async function load() {
+  await fetchEntity('MaritimeBaseCombatPlatform', ['id', 'name', 'callsign'])
+  await fetchEntity('AircraftCarrierTrackLog', ['id', 'refHMId', 'recordTime', 'speed', 'heading'])
+  await fetchEntity('RawADSData', ['id', 'icao'], [{ column: 'icao', logic: 'is not', condition: null }])
+}
+`)
+	err := AuditCarrierOntologyContract(dir, "live_api", []string{"carrier-affiliation-data-skill"})
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed for invalid carrier entity fields", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractAllowsDocumentedFields(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `
+export async function fetchCarrier() {
+  return fetch('/api/ontology/daasDMS/entity/AviationCarrier/list', {
+    method: 'POST',
+    body: JSON.stringify({
+      columnNames: ['id', 'name', 'longitude', 'latitude', 'curHeading', 'curSpeed', 'homeportStation']
+    })
+  })
+}
+
+export async function fetchDocumentedRelatedEntities() {
+  await fetchEntity('AircraftCarrier', ['id', 'name', 'refHMId', 'typeCode', 'curStatus', 'longitude', 'latitude'])
+  await fetchEntity('MaritimeBaseCombatPlatform', ['id', 'name', 'typeCode', 'mmsi', 'longitude', 'latitude', 'curStatus', 'maxSpeed', 'cruiseRange'])
+  await fetchEntity('AircraftCarrierTrackLog', ['id', 'refAviationCarrier', 'longitude', 'latitude', 'trackInitTime', 'trackStatusCode'])
+  await fetchEntity('RawADSData', ['id', 'icao', 'callsign', 'lat', 'lon', 'altitude', 'groundspeed', 'track', 'heading', 'startTime'], [])
+}
+`)
+	if err := AuditCarrierOntologyContract(dir, "live_api", []string{"carrier-affiliation-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil for documented carrier fields", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractSkipsNonCarrierApps(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/other.ts", "export const fields = ['curLongitude', 'curLatitude'];\n")
+	if err := AuditCarrierOntologyContract(dir, "live_api", []string{"tide-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil when carrier skill is absent", err)
+	}
+}

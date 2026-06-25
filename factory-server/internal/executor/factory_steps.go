@@ -326,6 +326,7 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	_ = sanitizeNginxLocationRegexes(filepath.Join(buildApp.Path, "nginx.conf"))
 	_ = sanitizeNginxProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
 	_ = sanitizeNginxVariableProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
+	_ = sanitizeOntologyNginxProxyCredentials(filepath.Join(buildApp.Path, "nginx.conf"), f.Workspace)
 	var res deploy.CommandResult
 	var imageRef deploy.ImageRef
 	var err error
@@ -805,12 +806,17 @@ func sanitizeNginxVariableProxyPassUpstreams(path string) error {
 		if !strings.Contains(host, ".") && !isIPv4(host) {
 			continue
 		}
-		proxyLine := indent + "proxy_pass http://" + variable + "/;"
-		if !strings.Contains(out, proxyLine) {
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
 			continue
 		}
-		out = strings.Replace(out, m[0]+"\n"+proxyLine, indent+"proxy_pass http://"+upstream+"/;", 1)
-		out = strings.Replace(out, m[0]+"\r\n"+proxyLine, indent+"proxy_pass http://"+upstream+"/;", 1)
+		uri := proxyMatch[1]
+		if uri == "" {
+			uri = "/"
+		}
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
 		converted = true
 	}
 	if converted && !nginxVariableProxyPassRe.MatchString(out) {
@@ -820,6 +826,64 @@ func sanitizeNginxVariableProxyPassUpstreams(path string) error {
 		return nil
 	}
 	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func sanitizeOntologyNginxProxyCredentials(path, workspace string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	if !strings.Contains(src, "/api/ontology/") {
+		return nil
+	}
+	env, err := readOntologyEnv(workspace)
+	if err != nil {
+		return nil
+	}
+	token := strings.TrimSpace(env["ONTOLOGY_AUTH_TOKEN"])
+	spaceID := strings.TrimSpace(env["ONTOLOGY_SPACE_ID"])
+	scopeType := strings.TrimSpace(env["ONTOLOGY_SCOPE_TYPE"])
+	if scopeType == "" {
+		scopeType = "Space"
+	}
+	out := src
+	if token != "" {
+		out = replaceProxySetHeader(out, "Authorization", "Bearer "+token)
+	}
+	if spaceID != "" {
+		out = replaceProxySetHeader(out, "Spaceid", spaceID)
+	}
+	if scopeType != "" {
+		out = replaceProxySetHeader(out, "scopeType", scopeType)
+	}
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func readOntologyEnv(workspace string) (map[string]string, error) {
+	path := filepath.Join(workspace, ".claude", "skills", "carrier-affiliation-data-skill", "config", "ontology.env")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		env[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return env, nil
+}
+
+func replaceProxySetHeader(src, header, value string) string {
+	re := regexp.MustCompile(`(?m)^(\s*proxy_set_header\s+` + regexp.QuoteMeta(header) + `\s+)"[^"]*";\s*$`)
+	return re.ReplaceAllString(src, `${1}"`+value+`";`)
 }
 
 func removeDockerOnlyNginxResolver(src string) string {

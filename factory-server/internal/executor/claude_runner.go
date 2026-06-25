@@ -297,6 +297,9 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 	if err := runner.AuditHonestData(projectDir, parseDataPolicy(confirmedReq), genProfile["data"]); err != nil {
 		return c.failureFromError(err)
 	}
+	if err := runner.AuditCarrierOntologyContract(projectDir, parseDataPolicy(confirmedReq), genProfile["data"]); err != nil {
+		return c.failureFromError(err)
+	}
 
 	if audit := c.AuditRunner; audit != nil {
 		files := normalizeCreatedFiles(raw.ProjectDir, raw.CreatedFiles)

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -421,7 +422,127 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 	if _, err := os.Stat(filepath.Join(appDir, outputDir, "index.html")); err != nil {
 		return fmt.Errorf("build output missing index.html in %s: %w", outputDir, err)
 	}
+	_ = sanitizeGeneratedAppNginx(filepath.Join(appDir, "nginx.conf"), s.cfg.WorkspaceRoot)
 	return writeStaticViteDockerfile(appDir, outputDir)
+}
+
+var serverNginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+var serverNginxVariableProxyPassRe = regexp.MustCompile(`(?m)^\s*proxy_pass\s+https?://\$[A-Za-z_][A-Za-z0-9_]*`)
+
+func sanitizeGeneratedAppNginx(path, workspace string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	out := collapseExternalVariableUpstreams(src)
+	out = injectOntologyProxyHeaders(out, workspace)
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func collapseExternalVariableUpstreams(src string) string {
+	out := src
+	converted := false
+	for _, m := range serverNginxVariableUpstreamSetRe.FindAllStringSubmatch(src, -1) {
+		indent, variable, upstream := m[1], m[2], m[3]
+		host, _, _ := strings.Cut(upstream, ":")
+		if !strings.Contains(host, ".") && !serverIsIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		uri := proxyMatch[1]
+		if uri == "" {
+			uri = "/"
+		}
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		converted = true
+	}
+	if converted && !serverNginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerResolver(out)
+	}
+	return out
+}
+
+func injectOntologyProxyHeaders(src, workspace string) string {
+	if !strings.Contains(src, "/api/ontology/") {
+		return src
+	}
+	env, err := readServerOntologyEnv(workspace)
+	if err != nil {
+		return src
+	}
+	out := src
+	if token := strings.TrimSpace(env["ONTOLOGY_AUTH_TOKEN"]); token != "" {
+		out = replaceServerProxySetHeader(out, "Authorization", "Bearer "+token)
+	}
+	if spaceID := strings.TrimSpace(env["ONTOLOGY_SPACE_ID"]); spaceID != "" {
+		out = replaceServerProxySetHeader(out, "Spaceid", spaceID)
+	}
+	scopeType := strings.TrimSpace(env["ONTOLOGY_SCOPE_TYPE"])
+	if scopeType == "" {
+		scopeType = "Space"
+	}
+	return replaceServerProxySetHeader(out, "scopeType", scopeType)
+}
+
+func readServerOntologyEnv(workspace string) (map[string]string, error) {
+	raw, err := os.ReadFile(filepath.Join(workspace, ".claude", "skills", "carrier-affiliation-data-skill", "config", "ontology.env"))
+	if err != nil {
+		return nil, err
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		env[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return env, nil
+}
+
+func replaceServerProxySetHeader(src, header, value string) string {
+	re := regexp.MustCompile(`(?m)^(\s*proxy_set_header\s+` + regexp.QuoteMeta(header) + `\s+)"[^"]*";\s*$`)
+	return re.ReplaceAllString(src, `${1}"`+value+`";`)
+}
+
+func removeDockerResolver(src string) string {
+	lines := strings.SplitAfter(src, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "resolver ") && strings.Contains(line, "127.0.0.11") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
+}
+
+func serverIsIPv4(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || len(p) > 3 {
+			return false
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func writeStaticViteDockerfile(appDir, outputDir string) error {
