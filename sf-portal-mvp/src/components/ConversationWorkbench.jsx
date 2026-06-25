@@ -132,7 +132,7 @@ export function ConversationWorkbench({
 
   const submitText = async () => {
     const value = input.trim()
-    if (!value || submitting || locked) return
+    if (!value || submitting || (locked && !composerActive)) return
     setInput('')
     await onSend(value)
   }

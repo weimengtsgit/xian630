@@ -134,5 +134,12 @@ assert.match(workTraceFn[0], /list\.length/, 'collapsed WorkTraceList header mus
 assert.match(workbenchJsx, /seededJob/, 'ConversationWorkbench must read view.seededJob for the continuous-loop unlock')
 assert.match(workbenchJsx, /continuousLoop/, 'ConversationWorkbench must derive a continuousLoop flag from the seeded job status')
 assert.match(workbenchJsx, /composerActive/, 'ConversationWorkbench composer gate must use composerActive (versionDeployed || continuousLoop)')
+const submitTextMatch = workbenchJsx.match(/const submitText = async \(\) => \{[\s\S]*?\n  \}/)
+assert.ok(submitTextMatch, 'ConversationWorkbench must define submitText')
+assert.match(
+  submitTextMatch[0],
+  /locked\s*&&\s*!composerActive/,
+  'submitText must allow sending when the continuous-loop composer is visible despite a locked/resolved session',
+)
 
 console.log('check-visible-work-trace: OK')
