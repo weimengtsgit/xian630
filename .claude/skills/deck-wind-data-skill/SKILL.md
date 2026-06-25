@@ -24,8 +24,8 @@ block, non-2xx, or empty). Tag every value with the source that produced it.
    Instant Answer (`https://api.duckduckgo.com/?q=...&format=json`). "百度/Bing 公网
    搜索" is the documented intent, but a browser cannot directly fetch baidu.com etc.
    (CORS-blocked) — use only CORS-enabled endpoints here.
-4. **All public sources failed**: render `SOURCE_ALL_FAILED` listing the sources
-   tried — never substitute synthetic wind.
+4. **All public sources failed**: render the **Degraded State** defined in
+   `software-factory-app`（顶部说明 banner + 结构预览骨架，**不含任何编造数值** + 数据源链接 + 恢复说明），并列出已尝试的源 —— never substitute synthetic wind.
 
 ## Real Data Is MANDATORY in the generated app
 
@@ -33,8 +33,9 @@ When `dataPolicy` is `live_api` or `mock_then_api`, the generated application MU
 issue real HTTP requests to Open-Meteo GFS and populate its data layer from the
 real response. Shipping a deterministic / synthetic / mock wind series in that
 case is a **generation failure**, not a safe default — even if it "makes the
-build pass". If a real fetch fails at runtime, show an explicit error/empty state
-and log it in `output.json` warnings; never silently substitute fake wind.
+build pass". If a real fetch fails at runtime, render the **Degraded State** defined
+in `software-factory-app` (banner + structural preview, **no fabricated values**) and
+log it in `output.json` warnings; never silently substitute fake wind.
 Mock data is permitted ONLY when `dataPolicy=mock_data` or `useMock=true`.
 
 **诚实数据审计约束**：`src/data/`（及 `src/providers/` `src/services/` `src/api/` `src/store/`

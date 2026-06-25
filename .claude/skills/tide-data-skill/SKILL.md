@@ -17,15 +17,15 @@ Fetch in this order; descend only when the higher tier fails (network error, COR
 block, non-2xx, or empty). Tag every value with the source that produced it.
 1. **Primary**: NOAA CO-OPS `api.tidesandcurrents.noaa.gov` (no key, CORS `*`).
 2. **Alternate public sources**: the port's own hydrographic-office CORS endpoint
-   if available; JCG `www1.kaiho.mlit.go.jp` for Yokosuka (server-side / build-time —
-   no browser CORS, so route via a proxy when the app is static).
+   if available; JCG `www1.kaiho.mlit.go.jp` for Yokosuka (no browser CORS —
+   route through the app's nginx reverse proxy at **runtime**, never at build time).
 3. **Public-web last resort**: a CORS-enabled open endpoint that exposes the value
    or a usable summary — Wikipedia REST (`/w/api.php?...&origin=*`), DuckDuckGo
    Instant Answer (`https://api.duckduckgo.com/?q=...&format=json`). "百度/Bing 公网
    搜索" is the documented intent, but a browser cannot directly fetch baidu.com etc.
    (CORS-blocked) — use only CORS-enabled endpoints here.
-4. **All public sources failed**: render `SOURCE_ALL_FAILED` listing the sources
-   tried — never substitute a synthetic tide curve.
+4. **All public sources failed**: render the **Degraded State** defined in
+   `software-factory-app`（顶部说明 banner + 结构预览骨架，**不含任何编造数值** + 数据源链接 + 恢复说明），并列出已尝试的源 —— never substitute a synthetic tide curve.
 
 ## Real Data Is MANDATORY in the generated app
 
@@ -33,8 +33,9 @@ When `dataPolicy` is `live_api` or `mock_then_api`, the generated application MU
 issue real HTTP requests to NOAA CO-OPS (and/or JCG) and populate its data layer
 from the real response. Shipping a deterministic / synthetic / mock tide curve in
 that case is a **generation failure**, not a safe default — even if it "makes the
-build pass". If a real fetch fails at runtime, show an explicit error/empty state
-and log it in `output.json` warnings; never silently substitute fake heights.
+build pass". If a real fetch fails at runtime, render the **Degraded State** defined
+in `software-factory-app` (banner + structural preview, **no fabricated values**) and
+log it in `output.json` warnings; never silently substitute fake heights.
 Mock data is permitted ONLY when `dataPolicy=mock_data` or `useMock=true`.
 
 **诚实数据审计约束**：`src/data/`（及 `src/providers/` `src/services/` `src/api/` `src/store/`
@@ -57,7 +58,7 @@ const STATIONS = {
   // Bremerton's own station 9446486 does NOT publish MLLW predictions; use the
   // Seattle/Puget Sound predictions station as the working nearby source.
   bremerton:{ id: "9447130", nameZh: "布雷默顿(普吉特湾)", tz: "America/Los_Angeles" },
-  // 横须贺用 JCG（见 Source Priority），无 CORS，需服务端/构建期取数。
+  // 横须贺用 JCG（见 Source Priority），无 CORS，运行时经 nginx 反向代理取数（禁止构建期取数）。
 };
 const ymd = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}`;
 export async function fetchTideSeries(portKey, days = 3) {

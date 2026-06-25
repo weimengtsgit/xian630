@@ -133,3 +133,46 @@ func TestAuditHonestDataCleanRealApp(t *testing.T) {
 		t.Fatalf("err = %v, want nil for clean real-data app", err)
 	}
 }
+
+// TestAuditHonestDataDegradedStatePasses proves that when all real sources fail,
+// the honest contract's required outcome — a Degraded State (banner + structural
+// preview + retry + source links, with NO fabricated values, no mock identifiers,
+// no synthetic comments) — passes the live_api / mock_then_api audit. The Degraded
+// State replaces the old bare "数据异常" string; it must not be falsely flagged as
+// mock/synthetic data.
+func TestAuditHonestDataDegradedStatePasses(t *testing.T) {
+	dir := t.TempDir()
+	// Real-first data layer: runtime fetch through the nginx proxy; throws on
+	// failure (never substitutes fake data). Build stays offline — fetch is
+	// client-side only.
+	writeAppFile(t, dir, "src/data/tideProvider.js",
+		"export async function fetchTideSeries(portKey){\n"+
+			"  const res = await fetch('/api/data/tide?port=' + portKey);\n"+
+			"  if (!res.ok) throw new Error('tide source unreachable: ' + res.status);\n"+
+			"  const j = await res.json();\n"+
+			"  return { port: portKey, series: j.predictions || [] };\n"+
+			"}\n")
+	// Degraded State UI: banner + structural preview (column headers) with NO
+	// values, source link, retry button. Empty array / "—" stand in for data.
+	writeAppFile(t, dir, "src/components/EmptyState.jsx",
+		"// 数据源不可用时的降级态：banner + 结构预览（无数值）\n"+
+			"export function EmptyState({ reason, sources, onRetry }) {\n"+
+			"  return (\n"+
+			"    <section className=\"degraded\">\n"+
+			"      <div className=\"banner\">数据源不可用：{reason}</div>\n"+
+			"      <ul>{(sources || []).map((s) => <li key={s}>{s}</li>)}</ul>\n"+
+			"      <table>\n"+
+			"        <thead><tr><th>港口</th><th>潮位</th></tr></thead>\n"+
+			"        <tbody><tr><td>—</td><td>—</td></tr></tbody>\n"+
+			"      </table>\n"+
+			"      <a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a>\n"+
+			"      <button onClick={onRetry}>重试</button>\n"+
+			"    </section>\n"+
+			"  );\n"+
+			"}\n")
+	for _, policy := range []string{"live_api", "mock_then_api"} {
+		if err := AuditHonestData(dir, policy, []string{"tide-data-skill"}); err != nil {
+			t.Fatalf("policy=%s err = %v, want nil for Degraded State app (no fabricated values)", policy, err)
+		}
+	}
+}

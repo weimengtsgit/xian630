@@ -34,8 +34,8 @@ block, non-2xx, or empty). Tag every value with the source that produced it.
    the documented intent, but a browser cannot directly fetch baidu.com etc.
    (CORS-blocked). For zones outside the U.S. EEZ with no CORS source, this tier
    usually cannot supply live counts — descend to tier 4 honestly.
-4. **All public sources failed**: render `SOURCE_ALL_FAILED` listing the sources
-   tried — never fabricate vessel counts.
+4. **All public sources failed**: render the **Degraded State** defined in
+   `software-factory-app`（顶部说明 banner + 结构预览骨架，**不含任何编造数值** + 数据源链接 + 恢复说明），并列出已尝试的源 —— never fabricate vessel counts.
 
 ## Real Data Is MANDATORY — preferred browser-fetchable source for U.S. waters
 
@@ -209,7 +209,8 @@ Requirements:
 ## Failure Rules
 
 - Return `ok=false` when no free source covers the requested zone or every
-  source fails.
+  source fails. In the generated app this terminal MUST render the **Degraded
+  State** from `software-factory-app`（banner + 结构预览，**无数造数值** + 已尝试源 + 重试），而不是一行裸错误串。
 - Include `sourceTried`, `error.code`, and per-source failure details.
 
 Recommended error codes:
