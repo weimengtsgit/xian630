@@ -282,6 +282,7 @@ type JobStep struct {
 	EndedAt           *time.Time `json:"ended_at,omitempty"`
 	NeedsUserInput    bool       `json:"needs_user_input"`
 	UserPrompt        string     `json:"user_prompt,omitempty"`
+	PendingQuestions  string     `json:"pending_questions,omitempty"`
 	ErrorCode         ErrorCode  `json:"error_code,omitempty"`
 	ErrorMessage      string     `json:"error_message,omitempty"`
 	ClaudeSessionID   string     `json:"claude_session_id,omitempty"`

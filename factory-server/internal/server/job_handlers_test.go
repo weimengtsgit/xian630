@@ -324,7 +324,53 @@ func TestGetJob(t *testing.T) {
 // cc-status availability flag.
 type getJobResponse struct {
 	model.Job
-	CCStatusAvailable bool `json:"cc_status_available"`
+	CCStatusAvailable bool        `json:"cc_status_available"`
+	PendingQuestions  []getJobQ   `json:"pending_questions"`
+}
+
+// getJobQ is the minimal shape of a persisted clarifying question.
+type getJobQ struct {
+	ID       string `json:"id"`
+	Question string `json:"question"`
+}
+
+// TestGetJobSurfacesWaitingQuestions verifies that when a job is waiting_user,
+// GET /api/jobs/:id returns the persisted clarifying questions so the UI can
+// show WHAT the user must answer (not just that input is needed).
+func TestGetJobSurfacesWaitingQuestions(t *testing.T) {
+	srv, r, st := newJobsTestServer(t, config.Config{})
+	srv.cc = nil
+
+	create := createJobViaAPI(t, r, "p")
+	var created model.Job
+	_ = json.NewDecoder(create.Body).Decode(&created)
+
+	step, err := st.GetStepByKind(context.Background(), created.ID, model.StepRequirementAnalysis)
+	if err != nil || step == nil {
+		t.Fatalf("get step: %v", err)
+	}
+	qs := `[{"id":"data-source","question":"用演示数据还是真实API？"}]`
+	if err := st.MarkStepWaitingUser(context.Background(), step.ID, qs); err != nil {
+		t.Fatalf("mark step waiting: %v", err)
+	}
+	if err := st.MarkJobWaitingUser(context.Background(), created.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodGet, "/api/jobs/"+created.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d", rec.Code)
+	}
+	var resp getJobResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.PendingQuestions) != 1 {
+		t.Fatalf("pending_questions = %+v, want 1 entry", resp.PendingQuestions)
+	}
+	if resp.PendingQuestions[0].ID != "data-source" {
+		t.Fatalf("question id = %q, want data-source", resp.PendingQuestions[0].ID)
+	}
 }
 
 // TestGetJobCCStatusAvailable verifies that GET /api/jobs/:id reports
@@ -421,7 +467,7 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if err != nil || step == nil {
 		t.Fatalf("get step: %#v %v", step, err)
 	}
-	if err := st.MarkStepWaitingUser(context.Background(), step.ID); err != nil {
+	if err := st.MarkStepWaitingUser(context.Background(), step.ID, ""); err != nil {
 		t.Fatalf("mark step waiting: %v", err)
 	}
 	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {

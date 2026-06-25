@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -34,6 +35,10 @@ type StepResult struct {
 	ErrorCode      model.ErrorCode  // set when failed
 	ErrorMessage   string
 	NeedsUserInput bool
+	// Questions is the clarifying questions a step raised when pausing for user
+	// input (waiting_user). Persisted on the step so the job detail can surface
+	// them; empty for non-waiting results.
+	Questions []runner.Question
 }
 
 // Executor drives the fixed pipeline forward: it runs up to MaxConcurrentJobs
@@ -521,7 +526,13 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 		e.notify(ctx, jobID, stepID)
 		return nil
 	case model.StepStatusWaitingUser:
-		if err := e.store.MarkStepWaitingUser(ctx, stepID); err != nil {
+		questionsJSON := ""
+		if len(res.Questions) > 0 {
+			if b, err := json.Marshal(res.Questions); err == nil {
+				questionsJSON = string(b)
+			}
+		}
+		if err := e.store.MarkStepWaitingUser(ctx, stepID, questionsJSON); err != nil {
 			return err
 		}
 		if err := e.store.MarkJobWaitingUser(ctx, jobID); err != nil {

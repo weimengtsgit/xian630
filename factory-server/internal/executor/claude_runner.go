@@ -257,7 +257,7 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 		// inline. The existing finalize→MarkStepWaitingUser then leaves the turn
 		// waiting. Routed through the gate (persist-before-publish + allowlist).
 		emitClarificationTrace(ctx, trace, out.Questions, raw.Warnings)
-		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
 
 	// Honest-data audit: when the confirmed requirement is a real-data policy
@@ -332,7 +332,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		// Step 3 (high-impact uncertainty): emit clarification.required before
 		// the waiting transition. See finishCodeGeneration for the rationale.
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
-		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
 	return StepResult{Status: model.StepStatusSucceeded}
 }

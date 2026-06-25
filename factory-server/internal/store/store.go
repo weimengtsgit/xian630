@@ -127,6 +127,15 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate clarification_sessions.open_high_impact_json: %w", err)
 	}
+	// job_steps.pending_questions: JSON-encoded clarifying questions a step asked
+	// when it paused for user input (waiting_user). Surfaced via the job detail so
+	// the task card/conversation can show WHAT the user must answer, not just that
+	// input is needed. Empty for steps that never paused.
+	if err := s.ensureColumn(ctx, "job_steps", "pending_questions",
+		`ALTER TABLE job_steps ADD COLUMN pending_questions TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job_steps.pending_questions: %w", err)
+	}
 	return s, nil
 }
 

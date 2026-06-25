@@ -24,11 +24,11 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 // CreateJobStep inserts a new job step row.
 func (s *Store) CreateJobStep(ctx context.Context, step model.JobStep) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
 		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
-		boolToInt(step.NeedsUserInput), step.UserPrompt, string(step.ErrorCode), step.ErrorMessage,
+		boolToInt(step.NeedsUserInput), step.UserPrompt, step.PendingQuestions, string(step.ErrorCode), step.ErrorMessage,
 		step.ClaudeSessionID, step.CCStatusSessionID)
 	return err
 }
@@ -38,11 +38,11 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 // + the clarification link are committed atomically.
 func createJobStepInTx(ctx context.Context, tx *sql.Tx, step model.JobStep) error {
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
 		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
-		boolToInt(step.NeedsUserInput), step.UserPrompt, string(step.ErrorCode), step.ErrorMessage,
+		boolToInt(step.NeedsUserInput), step.UserPrompt, step.PendingQuestions, string(step.ErrorCode), step.ErrorMessage,
 		step.ClaudeSessionID, step.CCStatusSessionID)
 	return err
 }
@@ -148,7 +148,7 @@ func (s *Store) SetJobStepSeedHook(fn func(model.JobStep) error) {
 // ListJobSteps returns the steps for a job ordered by sequence.
 func (s *Store) ListJobSteps(ctx context.Context, jobID string) ([]model.JobStep, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id
 FROM job_steps
 WHERE job_id = ?
 ORDER BY seq`, jobID)
@@ -165,7 +165,7 @@ ORDER BY seq`, jobID)
 		var needsUserInput int
 		if err := rows.Scan(&st.ID, &st.JobID, &kind, &st.Seq, &st.AgentKey,
 			&status, &st.Attempt, &started, &ended, &needsUserInput,
-			&st.UserPrompt, &errorCode, &st.ErrorMessage,
+			&st.UserPrompt, &st.PendingQuestions, &errorCode, &st.ErrorMessage,
 			&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
 			return nil, err
 		}
@@ -582,11 +582,12 @@ UPDATE job_steps SET status = ?, ended_at = ?, error_code = ?, error_message = ?
 }
 
 // MarkStepWaitingUser flips a step to waiting_user, recording whether the
-// runner asked for user input.
-func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID string) error {
+// runner asked for user input and persisting the clarifying questions (JSON)
+// the step raised so the job detail can surface them to the user.
+func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID, questionsJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-UPDATE job_steps SET status = ?, needs_user_input = 1, ended_at = NULL WHERE id = ?`,
-		string(model.StepStatusWaitingUser), stepID)
+UPDATE job_steps SET status = ?, needs_user_input = 1, pending_questions = ?, ended_at = NULL WHERE id = ?`,
+		string(model.StepStatusWaitingUser), questionsJSON, stepID)
 	return err
 }
 
@@ -603,7 +604,7 @@ UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
 // (nil, nil) if there is no such step.
 func (s *Store) GetStepByKind(ctx context.Context, jobID string, kind model.StepKind) (*model.JobStep, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id
 FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 	var st model.JobStep
 	var kstatus, errorCode, kkind string
@@ -611,7 +612,7 @@ FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 	var needsUserInput int
 	if err := row.Scan(&st.ID, &st.JobID, &kkind, &st.Seq, &st.AgentKey,
 		&kstatus, &st.Attempt, &started, &ended, &needsUserInput,
-		&st.UserPrompt, &errorCode, &st.ErrorMessage,
+		&st.UserPrompt, &st.PendingQuestions, &errorCode, &st.ErrorMessage,
 		&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -634,7 +635,7 @@ FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 func (s *Store) ResetStepToPending(ctx context.Context, stepID string) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE job_steps
-SET status = ?, ended_at = NULL, error_code = '', error_message = '', needs_user_input = 0, started_at = NULL
+SET status = ?, ended_at = NULL, error_code = '', error_message = '', needs_user_input = 0, pending_questions = '', started_at = NULL
 WHERE id = ?`,
 		string(model.StepStatusPending), stepID)
 	return err
