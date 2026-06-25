@@ -1,208 +1,167 @@
-import React from 'react';
+import React from "react";
+import { minToClock } from "../data/mock.js";
 
-function TideCurve({ series, threshold, windows, currentTime }) {
-  const width = 800;
-  const height = 160;
-  const padding = { top: 10, right: 20, bottom: 30, left: 50 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
+// 72h inline SVG tide curve with the 12.8m threshold line, open segments
+// highlighted green, closed segments muted, and a "now" marker.
+//
+// Props: port (feed), status (live status at nowOffset), epoch (Date), nowOffset (min).
+export default function TideCurve({ port, status, epoch, nowOffset }) {
+  const W = 100;
+  const H = 100;
+  const PAD_X = 2;
+  const PAD_TOP = 10;
+  const PAD_BOT = 14;
 
-  if (!series || series.length === 0) {
-    return <div style={{ color: '#6b7280', textAlign: 'center', padding: '2rem' }}>暂无数据</div>;
+  const horizon = 72 * 60; // min
+  const series = port.series;
+  const heights = series.map((s) => s.height);
+  const minH = Math.min(...heights) - 0.05;
+  const maxH = Math.max(...heights) + 0.05;
+  // clamp threshold inside range for y mapping
+  const thr = port.threshold;
+
+  const x = (min) => PAD_X + ((min / horizon) * (W - 2 * PAD_X));
+  const y = (h) =>
+    PAD_TOP + (1 - (h - minH) / (maxH - minH)) * (H - PAD_TOP - PAD_BOT);
+
+  // Build path split into open/closed runs so we can color them.
+  const openSegs = []; // { d: "M..L.." }
+  const closedSegs = [];
+  let cur = null;
+  let curOpen = false;
+  for (let i = 0; i < series.length; i++) {
+    const s = series[i];
+    const isOpen = s.height >= thr;
+    if (i === 0) {
+      cur = `M${x(s.t).toFixed(2)} ${y(s.height).toFixed(2)}`;
+      curOpen = isOpen;
+    } else {
+      if (isOpen !== curOpen) {
+        // close current run at this point to make segments contiguous
+        (curOpen ? openSegs : closedSegs).push(cur);
+        cur = `M${x(series[i - 1].t).toFixed(2)} ${y(series[i - 1].height).toFixed(2)} L${x(s.t).toFixed(2)} ${y(s.height).toFixed(2)}`;
+        curOpen = isOpen;
+      } else {
+        cur += ` L${x(s.t).toFixed(2)} ${y(s.height).toFixed(2)}`;
+      }
+    }
   }
+  if (cur) (curOpen ? openSegs : closedSegs).push(cur);
 
-  // 计算范围
-  const minTime = series[0].t;
-  const maxTime = series[series.length - 1].t;
-  const minHeight = Math.min(...series.map(p => p.height));
-  const maxHeight = Math.max(...series.map(p => p.height));
-
-  // 添加垂直方向的边距
-  const heightMargin = (maxHeight - minHeight) * 0.1;
-  const yMin = minHeight - heightMargin;
-  const yMax = maxHeight + heightMargin;
-
-  // 坐标转换
-  const xScale = (t) => padding.left + ((t - minTime) / (maxTime - minTime)) * chartWidth;
-  const yScale = (h) => padding.top + chartHeight - ((h - yMin) / (yMax - yMin)) * chartHeight;
-
-  // 生成路径
-  const pathData = series.map((p, i) => {
-    const x = xScale(p.t);
-    const y = yScale(p.height);
-    return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
-  }).join(' ');
-
-  // 阈值线
-  const thresholdY = yScale(threshold);
-
-  // 时间刻度（每12小时）
-  const timeLabels = [];
-  const step = 12 * 60 * 60 * 1000; // 12 hours
-  for (let t = minTime; t <= maxTime; t += step) {
-    const date = new Date(t);
-    const label = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:00`;
-    timeLabels.push({ t, label });
+  // area under curve for open segments (down to threshold line) for highlight
+  const thrY = y(thr);
+  const openAreas = [];
+  let aRun = null;
+  for (let i = 0; i < series.length; i++) {
+    const s = series[i];
+    const isOpen = s.height >= thr;
+    if (isOpen && !aRun) {
+      aRun = { from: i, pts: [s] };
+    } else if (isOpen && aRun) {
+      aRun.pts.push(s);
+    }
+    if (!isOpen && aRun) {
+      openAreas.push(aRun);
+      aRun = null;
+    }
   }
+  if (aRun) openAreas.push(aRun);
 
-  // 高度刻度
-  const heightLabels = [];
-  const heightStep = Math.ceil((yMax - yMin) / 4);
-  for (let h = Math.ceil(yMin); h <= yMax; h += heightStep) {
-    heightLabels.push(h);
-  }
+  const areaPath = (run) => {
+    const first = run.pts[0];
+    const last = run.pts[run.pts.length - 1];
+    let d = `M${x(first.t).toFixed(2)} ${thrY.toFixed(2)}`;
+    run.pts.forEach((p) => {
+      d += ` L${x(p.t).toFixed(2)} ${y(p.height).toFixed(2)}`;
+    });
+    d += ` L${x(last.t).toFixed(2)} ${thrY.toFixed(2)} Z`;
+    return d;
+  };
+
+  const nowX = x(nowOffset);
+  const curY = y(status.currentHeight);
+
+  // x-axis ticks: now, +24h, +48h, +72h
+  const ticks = [0, 24 * 60, 48 * 60, 72 * 60];
 
   return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox={`0 0 ${width} ${height}`}
-      style={{ background: 'rgba(30, 36, 51, 0.3)', borderRadius: '8px' }}
-    >
-      {/* 网格线 */}
-      {heightLabels.map(h => (
-        <line
-          key={h}
-          x1={padding.left}
-          y1={yScale(h)}
-          x2={width - padding.right}
-          y2={yScale(h)}
-          stroke="#2a3143"
-          strokeWidth="1"
-          strokeDasharray="2,2"
+    <div className="tide-curve-wrap">
+      <svg className="tide-curve" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        {/* horizontal gridlines */}
+        <line className="grid" x1={PAD_X} y1={y(maxH)} x2={W - PAD_X} y2={y(maxH)} />
+        <line className="grid" x1={PAD_X} y1={y(minH)} x2={W - PAD_X} y2={y(minH)} />
+
+        {/* open-area highlight (green, above threshold) */}
+        {openAreas.map((run, i) => (
+          <path key={`a${i}`} className="area-open" d={areaPath(run)} />
+        ))}
+
+        {/* closed-area tint below threshold */}
+        <rect
+          className="area-closed"
+          x={PAD_X}
+          y={thrY}
+          width={W - 2 * PAD_X}
+          height={Math.max(0, y(minH) - thrY)}
         />
-      ))}
 
-      {/* 窗口背景（绿色区域） */}
-      {windows.map((w, i) => {
-        const x1 = Math.max(padding.left, xScale(w.start));
-        const x2 = Math.min(width - padding.right, xScale(w.end));
-        return (
-          <rect
-            key={i}
-            x={x1}
-            y={padding.top}
-            width={x2 - x1}
-            height={chartHeight}
-            fill="rgba(34, 197, 94, 0.08)"
-            stroke="rgba(34, 197, 94, 0.2)"
-            strokeWidth="1"
-          />
-        );
-      })}
+        {/* tide curve: closed (muted) then open (green) on top */}
+        {closedSegs.map((d, i) => (
+          <path key={`c${i}`} className="line-closed" d={d} />
+        ))}
+        {openSegs.map((d, i) => (
+          <path key={`o${i}`} className="line-open" d={d} />
+        ))}
 
-      {/* 阈值线 */}
-      <line
-        x1={padding.left}
-        y1={thresholdY}
-        x2={width - padding.right}
-        y2={thresholdY}
-        stroke="#60a5fa"
-        strokeWidth="2"
-        strokeDasharray="4,4"
-      />
-      <text
-        x={width - padding.right + 5}
-        y={thresholdY + 4}
-        fill="#60a5fa"
-        fontSize="11"
-        fontWeight="600"
-      >
-        {threshold.toFixed(1)}m
-      </text>
-
-      {/* 潮汐曲线 */}
-      <path
-        d={pathData}
-        fill="none"
-        stroke="#10b981"
-        strokeWidth="2.5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-
-      {/* 当前时间标记 */}
-      {currentTime >= minTime && currentTime <= maxTime && (
-        <>
-          <line
-            x1={xScale(currentTime)}
-            y1={padding.top}
-            x2={xScale(currentTime)}
-            y2={height - padding.bottom}
-            stroke="#f59e0b"
-            strokeWidth="2"
-          />
-          <circle
-            cx={xScale(currentTime)}
-            cy={yScale(series.find((p, i) => {
-              const next = series[i + 1];
-              return p.t <= currentTime && (!next || next.t > currentTime);
-            })?.height || series[0].height)}
-            r="4"
-            fill="#f59e0b"
-          />
-        </>
-      )}
-
-      {/* Y轴标签 */}
-      {heightLabels.map(h => (
-        <text
-          key={h}
-          x={padding.left - 8}
-          y={yScale(h) + 4}
-          fill="#6b7280"
-          fontSize="10"
-          textAnchor="end"
-        >
-          {h.toFixed(0)}
+        {/* threshold line (12.8 m) */}
+        <line
+          className="threshold"
+          x1={PAD_X}
+          y1={thrY}
+          x2={W - PAD_X}
+          y2={thrY}
+        />
+        <text className="threshold-label" x={W - PAD_X} y={Math.max(PAD_TOP + 4, thrY - 1.5)} textAnchor="end">
+          阈值 {thr.toFixed(1)} m
         </text>
-      ))}
 
-      {/* X轴标签 */}
-      {timeLabels.map(({ t, label }, i) => (
-        <text
-          key={i}
-          x={xScale(t)}
-          y={height - padding.bottom + 20}
-          fill="#6b7280"
-          fontSize="9"
-          textAnchor="middle"
-        >
-          {label}
-        </text>
-      ))}
+        {/* now marker */}
+        <line className="now-line" x1={nowX} y1={PAD_TOP} x2={nowX} y2={H - PAD_BOT} />
+        <circle className="now-dot" cx={nowX} cy={curY} r={1.6} />
 
-      {/* 坐标轴 */}
-      <line
-        x1={padding.left}
-        y1={padding.top}
-        x2={padding.left}
-        y2={height - padding.bottom}
-        stroke="#4b5563"
-        strokeWidth="1.5"
-      />
-      <line
-        x1={padding.left}
-        y1={height - padding.bottom}
-        x2={width - padding.right}
-        y2={height - padding.bottom}
-        stroke="#4b5563"
-        strokeWidth="1.5"
-      />
+        {/* x ticks */}
+        {ticks.map((tmin, i) => (
+          <g key={i}>
+            <line
+              className="grid"
+              x1={x(tmin)}
+              y1={H - PAD_BOT}
+              x2={x(tmin)}
+              y2={H - PAD_BOT + 1.5}
+            />
+            <text
+              className="axis-label"
+              x={x(tmin)}
+              y={H - PAD_BOT + 6}
+              textAnchor={i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle"}
+            >
+              {i === 0 ? "现在" : `+${tmin / 60}h`}
+            </text>
+          </g>
+        ))}
 
-      {/* 轴标签 */}
-      <text
-        x={padding.left - 35}
-        y={padding.top + chartHeight / 2}
-        fill="#9ca3af"
-        fontSize="11"
-        textAnchor="middle"
-        transform={`rotate(-90, ${padding.left - 35}, ${padding.top + chartHeight / 2})`}
-      >
-        潮高 (米)
-      </text>
-    </svg>
+        {/* next/active window label marker on the curve */}
+        {status.activeWindow && (
+          <text
+            className="win-label"
+            x={x((status.activeWindow.startMin + status.activeWindow.endMin) / 2)}
+            y={Math.max(PAD_TOP + 2, y(status.activeWindow.peakHeight) - 2)}
+            textAnchor="middle"
+          >
+            可出港
+          </text>
+        )}
+      </svg>
+    </div>
   );
 }
-
-export default TideCurve;
