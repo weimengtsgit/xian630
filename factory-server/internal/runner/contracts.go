@@ -37,11 +37,43 @@ type StepOutput struct {
 // the agent offers (e.g. "use-mock-data" vs "provide-real-api"); surfaced via
 // the clarification work trace so the conversation UI can render them as a
 // pickable card rather than a bare text blob.
+//
+// Agents are inconsistent about field names: the prompt's contract uses
+// question/value, but the model sometimes emits text/id. UnmarshalJSON
+// normalizes both shapes so a clarification never silently loses its question
+// text or option values.
 type Question struct {
-	ID            string         `json:"id"`
-	Question      string         `json:"question"`
-	DefaultAnswer string         `json:"defaultAnswer"`
+	ID            string           `json:"id"`
+	Question      string           `json:"question"`
+	DefaultAnswer string           `json:"defaultAnswer"`
 	Options       []QuestionOption `json:"options,omitempty"`
+}
+
+// UnmarshalJSON accepts the contract shape ({question, options:[{value,label}]})
+// and the model's alternate shape ({text, options:[{id,label}]}) — the agent
+// emits both in practice, and a missing question text made the task card print
+// raw JSON. After decode, Question always holds the question text and each
+// option always has a Value (falling back to its id/label).
+func (q *Question) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		ID            string           `json:"id"`
+		Question      string           `json:"question"`
+		Text          string           `json:"text"`
+		DefaultAnswer string           `json:"defaultAnswer"`
+		Options       []QuestionOption `json:"options"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	q.ID = r.ID
+	q.Question = r.Question
+	if q.Question == "" {
+		q.Question = r.Text
+	}
+	q.DefaultAnswer = r.DefaultAnswer
+	q.Options = r.Options
+	return nil
 }
 
 // QuestionOption is one structured choice on a clarification question.
@@ -49,6 +81,31 @@ type QuestionOption struct {
 	Value       string `json:"value"`
 	Label       string `json:"label"`
 	Recommended bool   `json:"recommended,omitempty"`
+}
+
+// UnmarshalJSON accepts {value,label} (contract) and {id,label} (alternate).
+// Value falls back to id, then label, so the option is always pickable.
+func (o *QuestionOption) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		Value       string `json:"value"`
+		ID          string `json:"id"`
+		Label       string `json:"label"`
+		Recommended bool   `json:"recommended"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	o.Value = r.Value
+	if o.Value == "" {
+		o.Value = r.ID
+	}
+	if o.Value == "" {
+		o.Value = r.Label
+	}
+	o.Label = r.Label
+	o.Recommended = r.Recommended
+	return nil
 }
 
 // SkillPaths is a []string that unmarshals usedSkills from EITHER of the two

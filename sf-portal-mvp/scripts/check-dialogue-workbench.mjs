@@ -103,11 +103,13 @@ const clarTimeline = buildDialogueTimeline(
       payload: {
         questions: [{
           id: 'data-source',
-          question: '用演示数据还是真实API？',
+          // Agents emit the prompt under `text` OR `question`; honor both.
+          text: '用演示数据还是真实API？',
           defaultAnswer: '演示数据',
           options: [
-            { value: 'use-mock-data', label: '使用演示数据模式', recommended: true },
-            { value: 'provide-real-api', label: '提供真实后端API' },
+            // Options may use `id` OR `value`; the mapper must fall back.
+            { id: 'use-mock-data', label: '使用演示数据模式', recommended: true },
+            { id: 'provide-real-api', label: '提供真实后端API' },
           ],
         }],
       },

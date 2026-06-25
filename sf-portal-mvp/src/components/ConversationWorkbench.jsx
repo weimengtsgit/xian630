@@ -181,7 +181,17 @@ export function ConversationWorkbench({
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
-            onPickClarification={value => setInput(value)}
+            onPickClarification={value => {
+              if (!value) return
+              setInput(prev => {
+                const trimmed = String(prev).trim()
+                // Append rather than overwrite so multi-question clarifications
+                // (or multiple picks) accumulate in the composer. The answer goes
+                // to answerJob as free text the agent reads, so a combined reply
+                // like "演示数据；两级审批；年假、病假" is exactly what we want.
+                return trimmed ? `${trimmed}；${value}` : value
+              })
+            }}
           />
         ))}
 

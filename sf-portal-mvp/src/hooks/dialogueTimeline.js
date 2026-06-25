@@ -322,14 +322,16 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       const questions = c.payload.questions.map((q, i) => {
         const options = Array.isArray(q.options)
           ? q.options.map(opt => ({
-            value: safeString(opt.value),
-            label: safeString(opt.label || opt.value),
+            value: safeString(opt.value || opt.id || opt.label),
+            label: safeString(opt.label || opt.value || opt.id),
             recommended: !!opt.recommended,
           })).filter(opt => opt.value || opt.label)
           : []
         return {
           id: safeString(q.id) || `clar_q_${seq}_${i}`,
-          question: safeString(q.question),
+          // Agents emit the question text under `question` or `text`; honor both
+          // so the card never shows an empty prompt.
+          question: safeString(q.question || q.text),
           defaultAnswer: safeString(q.defaultAnswer),
           options,
         }

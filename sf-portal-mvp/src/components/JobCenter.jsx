@@ -292,9 +292,41 @@ export function JobCenter({
             <strong>等待用户澄清</strong>
             {Array.isArray(waitingQuestions) && waitingQuestions.length > 0 ? (
               <ul>
-                {waitingQuestions.map((q, i) => (
-                  <li key={i}>{typeof q === 'string' ? q : q.question || q.text || JSON.stringify(q)}</li>
-                ))}
+                {waitingQuestions.map((q, i) => {
+                  if (typeof q === 'string') return <li key={i}>{q}</li>
+                  // A clarification question may carry its prompt in `question`
+                  // or `text`; options may be the actual choices to surface.
+                  // Never dump raw JSON — if no text is available, fall back to
+                  // a generic prompt so the card stays readable.
+                  const text = q.question || q.text || ''
+                  const options = Array.isArray(q.options) ? q.options : []
+                  if (text) {
+                    return (
+                      <li key={i}>
+                        {text}
+                        {options.length > 0 ? (
+                          <ul className="jc-waiting-options">
+                            {options.map((opt, j) => (
+                              <li key={j}>{opt.label || opt.value || opt.id}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    )
+                  }
+                  if (options.length > 0) {
+                    return (
+                      <li key={i}>
+                        <ul className="jc-waiting-options">
+                          {options.map((opt, j) => (
+                            <li key={j}>{opt.label || opt.value || opt.id}</li>
+                          ))}
+                        </ul>
+                      </li>
+                    )
+                  }
+                  return <li key={i}>请在底部对话区查看并回复澄清问题</li>
+                })}
               </ul>
             ) : (
               <p>任务需要你的补充输入，请在底部对话区回复或前往任务详情页回答。</p>
