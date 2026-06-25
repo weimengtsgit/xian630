@@ -413,6 +413,16 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if step != nil {
+			// Persist the user's answer onto the step's user_prompt so the
+			// re-run can read it (the generative-step prompts append
+			// step.UserPrompt as a clarification). Without this the step
+			// re-runs with identical input and re-asks the same question.
+			if strings.TrimSpace(content) != "" {
+				if err := s.store.SetStepUserPrompt(r.Context(), step.ID, content); err != nil {
+					writeError(w, http.StatusInternalServerError, "set step answer")
+					return
+				}
+			}
 			if err := s.store.ResetStepToPending(r.Context(), step.ID); err != nil {
 				writeError(w, http.StatusInternalServerError, "reset step")
 				return
