@@ -431,7 +431,7 @@ func writeStaticViteDockerfile(appDir, outputDir string) error {
 	b.WriteString(strings.Trim(outputDir, "/"))
 	b.WriteString("/ /usr/share/nginx/html/\n")
 	if _, err := os.Stat(filepath.Join(appDir, "nginx.conf")); err == nil {
-		b.WriteString("COPY nginx.conf /etc/nginx/nginx.conf\n")
+		b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
 	}
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString(`CMD ["nginx", "-g", "daemon off;"]`)
