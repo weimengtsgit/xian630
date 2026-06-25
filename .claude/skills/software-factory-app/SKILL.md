@@ -93,15 +93,27 @@ API. This avoids CORS failures (external APIs typically do not return
 
 ### Pattern
 
+**CRITICAL — use nginx variables for every `proxy_pass` with an external hostname.**
+nginx resolves hostnames at **startup** by default; if the container DNS can't reach
+the external host (common in Podman), nginx crashes with `[emerg] host not found in
+upstream`. Using a variable defers resolution to **request time** so nginx starts
+even when DNS is temporarily unreachable.
+
 ```nginx
 server {
     listen 80;
     root /usr/share/nginx/html;
     index index.html;
 
+    # Runtime DNS resolution so nginx doesn't crash at startup
+    # Docker embedded DNS = 127.0.0.11; fallback to public resolvers
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    resolver_timeout 5s;
+
     # Reverse-proxy external API to avoid browser CORS
     location /api/data/ {
-        proxy_pass <EXTERNAL_API_BASE_URL>/;
+        set $upstream <EXTERNAL_HOST>;       # e.g. api.open-meteo.com
+        proxy_pass https://$upstream/<path>; # use $upstream variable, NOT a literal hostname
         proxy_http_version 1.1;
         proxy_set_header Host <external-host>;
         # Inject auth headers server-side (never expose to browser)

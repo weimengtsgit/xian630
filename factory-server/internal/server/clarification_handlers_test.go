@@ -1759,6 +1759,35 @@ func TestPatchRequirementMockDataClearsInheritedDataSkill(t *testing.T) {
 	}
 }
 
+func TestMaritimeBlueprintsAddMaritimeAlertDashboardSkill(t *testing.T) {
+	for _, slug := range []string{
+		"carrier-homeport-tide-window",
+		"carrier-deck-wind-calculator",
+		"merchant-density-grid-alert",
+		"social-sighting-cluster-alert",
+	} {
+		t.Run(slug, func(t *testing.T) {
+			profile := generationProfileForRequirement("command_dashboard", []string{slug})
+			patterns := profile["pattern"]
+			if !hasSkill(patterns, "command-dashboard") {
+				t.Fatalf("profile[pattern] = %v, want base command-dashboard", patterns)
+			}
+			if !hasSkill(patterns, "maritime-alert-dashboard") {
+				t.Fatalf("profile[pattern] = %v, want maritime-alert-dashboard for blueprint %s", patterns, slug)
+			}
+		})
+	}
+}
+
+func hasSkill(skills []string, want string) bool {
+	for _, skill := range skills {
+		if skill == want {
+			return true
+		}
+	}
+	return false
+}
+
 // itoa avoids importing strconv solely for an index label.
 func itoa(i int) string {
 	if i == 0 {

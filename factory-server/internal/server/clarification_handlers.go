@@ -1558,6 +1558,18 @@ func generationProfileForRequirement(appType string, blueprintRefs []string, exi
 }
 
 var blueprintProfileAdditions = map[string]map[string][]string{
+	"carrier-homeport-tide-window": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
+	"carrier-deck-wind-calculator": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
+	"merchant-density-grid-alert": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
+	"social-sighting-cluster-alert": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
 	"carrier-air-wing-affiliation-inference": {
 		"pattern": {"maritime-alert-dashboard", "affiliation-inference-dashboard"},
 	},
