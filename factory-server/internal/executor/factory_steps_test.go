@@ -375,6 +375,183 @@ func TestImageBuildUsesConfiguredRuntimeNotPodman(t *testing.T) {
 	}
 }
 
+// TestImageBuildFailsOnInvalidNginxConfig: a static-vite app whose generated
+// nginx.conf nginx refuses to load (here: a truncated location regex
+// "^/api/marinecadastre/(\d", the real-world glm long-output-truncation failure)
+// must fail image_build with the nginx -t output — not sail through and surface
+// 30s later as a non-repairable deploy health_check_failed.
+func TestImageBuildFailsOnInvalidNginxConfig(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	// Ship a generated nginx.conf with a truncated location regex (missing "+)").
+	// writeStaticHostingDockerfile only synthesizes one when absent, so it keeps
+	// this broken file and bakes it into the nginx:alpine image.
+	appDir := filepath.Join(ws, "generated-apps", "demo")
+	if err := os.WriteFile(filepath.Join(appDir, "nginx.conf"),
+		[]byte("server {\n  listen 80;\n  location ~ ^/api/marinecadastre/(\\d {\n    return 200;\n  }\n}\n"),
+		0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	r, cmds := newFactoryRunner(st, ws, true)
+	// Simulate `nginx -t` rejecting the baked config (the validation runs
+	// `podman run --rm <image> nginx -t`). The fake build step itself succeeds.
+	cmds.setRes("podman run", deploy.CommandResult{
+		ExitCode: 1,
+		Stderr:   `nginx: [emerg] pcre2_compile() failed: missing closing parenthesis in "^/api/marinecadastre/(\d" in /etc/nginx/conf.d/default.conf:13`,
+	})
+
+	job, step := factoryJobStep(model.StepImageBuild)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorImageBuildFailed {
+		t.Fatalf("status = %s/%s (%s), want failed/image_build_failed", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	if !strings.Contains(res.ErrorMessage, "nginx") ||
+		!strings.Contains(res.ErrorMessage, "missing closing parenthesis") {
+		t.Fatalf("error message should include the nginx -t output; got:\n%s", res.ErrorMessage)
+	}
+	// The candidate version must be marked failed.
+	versions, err := st.ListApplicationVersions(context.Background(), "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].Status != model.ApplicationVersionFailed {
+		t.Fatalf("expected one failed version; got %+v", versions)
+	}
+}
+
+// TestSanitizeNginxLocationRegexesQuotesBraceQuantifier: an unquoted location
+// regex with a brace quantifier (the real "\d{4}" failure) gets quoted; regexes
+// without braces, prefix locations, and already-quoted regexes are untouched;
+// and the transform is idempotent.
+func TestSanitizeNginxLocationRegexesQuotesBraceQuantifier(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location ~ ^/api/marinecadastre/(\d{4})/MapServer/(.*)$ {
+        return 200;
+    }
+    location ~* ^/v[0-9]+/items$ {
+        return 200;
+    }
+    location ~ "^/already/(\d{2})/x$" {
+        return 200;
+    }
+    location / {
+        try_files $uri /index.html;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxLocationRegexes(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	wantBrace := `    location ~ "^/api/marinecadastre/(\d{4})/MapServer/(.*)$" {`
+	wantNoBrace := `    location ~* ^/v[0-9]+/items$ {`
+	wantAlready := `    location ~ "^/already/(\d{2})/x$" {`
+	for _, want := range []string{wantBrace, wantNoBrace, wantAlready} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sanitized output missing %q;\ngot:\n%s", want, got)
+		}
+	}
+	// The brace location must be quoted exactly once (no double-quoting).
+	if c := strings.Count(got, "~ \"^/api/marinecadastre"); c != 1 {
+		t.Fatalf("brace location quoted %d times, want 1;\ngot:\n%s", c, got)
+	}
+	// Idempotent: a second run is a no-op.
+	if err := sanitizeNginxLocationRegexes(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd run:\n%s", string(got2Bytes))
+	}
+	// A missing file (non-nginx app) is not an error.
+	if err := sanitizeNginxLocationRegexes(filepath.Join(dir, "nope.conf")); err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+}
+
+// TestSanitizeNginxProxyPassUpstreams: a literal external-host proxy_pass is
+// converted to a variable + server-level resolver; container names, IPs,
+// localhost, and already-variable upstreams are left literal. Idempotent.
+func TestSanitizeNginxProxyPassUpstreams(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    root /usr/share/nginx/html;
+    location /api/wind/ {
+        proxy_pass https://api.open-meteo.com/;
+    }
+    location /api/internal/ {
+        proxy_pass http://factory:8787/;
+    }
+    location /api/local/ {
+        proxy_pass http://127.0.0.1:3000/;
+    }
+    location /api/var/ {
+        set $backend "api.example.com";
+        proxy_pass https://$backend/path;
+    }
+    location / { try_files $uri /index.html; }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+
+	wantConv := "        set $sf_upstream \"api.open-meteo.com\";\n        proxy_pass https://$sf_upstream/;"
+	if !strings.Contains(got, wantConv) {
+		t.Fatalf("external host not converted to variable;\ngot:\n%s", got)
+	}
+	// Container name, IP, and localhost literals left as-is.
+	for _, want := range []string{
+		"proxy_pass http://factory:8787/;",
+		"proxy_pass http://127.0.0.1:3000/;",
+		"proxy_pass https://$backend/path;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected literal left untouched %q;\ngot:\n%s", want, got)
+		}
+	}
+	// Server-level resolver injected exactly once, after the (single) listen.
+	if c := strings.Count(got, "resolver 8.8.8.8"); c != 1 {
+		t.Fatalf("resolver injected %d times, want 1;\ngot:\n%s", c, got)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(strings.Split(got, "resolver 8.8.8.8")[0]), "listen 80;") {
+		// sanity: resolver comes right after the listen line (allow for the
+		// trailing newline + indent we injected)
+	}
+	listenIdx := strings.Index(got, "listen 80;")
+	resolverIdx := strings.Index(got, "resolver 8.8.8.8")
+	if listenIdx < 0 || resolverIdx < 0 || resolverIdx < listenIdx {
+		t.Fatalf("resolver should come after listen;\ngot:\n%s", got)
+	}
+	// Idempotent.
+	if err := sanitizeNginxProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2, _ := os.ReadFile(conf)
+	if string(got2) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2))
+	}
+	// Missing file is not an error.
+	if err := sanitizeNginxProxyPassUpstreams(filepath.Join(dir, "nope.conf")); err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+}
+
 // fakeContainerRuntime is a deploy.ContainerRuntime double that records its
 // calls. It stands in for docker/podman so the runtime-selection logic can be
 // tested without a real container engine.

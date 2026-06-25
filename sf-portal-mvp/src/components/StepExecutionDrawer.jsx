@@ -321,8 +321,13 @@ export function StepExecutionDrawer({
       ? selectedAttempt === Math.max(...attempts)
       : true
   const canRetry = status === 'failed' && isLatestAttempt
+  // deployment is included so a health_check_failed deploy can be repaired
+  // (regenerated with the failure context). The backend enforces that ONLY
+  // health_check_failed deploy failures are actually repairable; other deploy
+  // failures (port/run infra errors) are rejected server-side with a message.
   const canRepairFromFailure =
-    canRetry && ['test_verification', 'image_build'].includes(step?.kind)
+    canRetry &&
+    ['test_verification', 'image_build', 'deployment'].includes(step?.kind)
 
   // Artifact content load: only AFTER the user selects one (never eagerly).
   const selectArtifact = async id => {

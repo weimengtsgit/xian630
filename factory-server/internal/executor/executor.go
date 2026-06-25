@@ -651,10 +651,11 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	return *updated, nil
 }
 
-// RepairFromFailure rewinds a failed test_verification or image_build step to
-// code_generation with a tightly-scoped repair prompt. It is intentionally
-// separate from RetryCurrentStep: retry re-runs the failed command, repair asks
-// code_generation to change only the generated code needed for the failure.
+// RepairFromFailure rewinds a failed test_verification, image_build, or
+// health-check-failed deployment step to code_generation with a tightly-scoped
+// repair prompt. It is intentionally separate from RetryCurrentStep: retry
+// re-runs the failed command, repair asks code_generation to change only the
+// generated code needed for the failure.
 func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.Job, error) {
 	job, err := e.store.GetJob(ctx, jobID)
 	if err != nil {
@@ -676,8 +677,8 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 	if failedStep.Status != model.StepStatusFailed {
 		return model.Job{}, fmt.Errorf("current step is %s, only failed steps can be repaired", failedStep.Status)
 	}
-	if !repairableFailureKind(failedStep.Kind) {
-		return model.Job{}, fmt.Errorf("step %s cannot be repaired by code_generation", failedStep.Kind)
+	if !repairableFailureKind(failedStep.Kind, failedStep.ErrorCode) {
+		return model.Job{}, fmt.Errorf("step %s (%s) cannot be repaired by code_generation", failedStep.Kind, failedStep.ErrorCode)
 	}
 
 	repairPrompt := e.buildRepairPrompt(ctx, *job, *failedStep)
@@ -731,8 +732,21 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 	return *updated, nil
 }
 
-func repairableFailureKind(kind model.StepKind) bool {
-	return kind == model.StepTestVerification || kind == model.StepImageBuild
+func repairableFailureKind(kind model.StepKind, code model.ErrorCode) bool {
+	if kind == model.StepTestVerification || kind == model.StepImageBuild {
+		return true
+	}
+	// A deployment health-check failure usually means the generated code/config
+	// makes the container start but not serve (e.g. a runtime startup error that
+	// image_build's nginx -t did not catch). That is fixable by regenerating, so
+	// let the user repair it instead of getting stuck retrying a doomed deploy.
+	// Port/run infrastructure errors (ErrorPortUnavailable, ErrorPodmanRunFailed)
+	// are NOT repairable — regenerating won't free a port or fix a runtime outage
+	// — so they are excluded to avoid retry loops.
+	if kind == model.StepDeployment && code == model.ErrorHealthCheckFailed {
+		return true
+	}
+	return false
 }
 
 func (e *Executor) buildRepairPrompt(ctx context.Context, job model.Job, failedStep model.JobStep) string {

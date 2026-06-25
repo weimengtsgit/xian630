@@ -448,6 +448,60 @@ func TestExecutorRepairFromFailureRejectsNonRepairableFailure(t *testing.T) {
 	}
 }
 
+// TestExecutorRepairFromFailureAllowsDeploymentHealthCheck: a deployment that
+// fails with health_check_failed is repairable — the container started but did
+// not serve (e.g. a runtime startup error image_build's nginx -t did not catch),
+// which regenerating can fix. RepairFromFailure rewinds to code_generation.
+func TestExecutorRepairFromFailureAllowsDeploymentHealthCheck(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepDeployment: {
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorHealthCheckFailed,
+			ErrorMessage: "health check timeout\nnginx: [emerg] pcre2_compile() failed",
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	drain(t, context.Background(), e)
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusFailed || job.CurrentStepKind != model.StepDeployment {
+		t.Fatalf("pre-repair job = %s/%s, want failed/deployment", job.Status, job.CurrentStepKind)
+	}
+
+	updated, err := e.RepairFromFailure(context.Background(), id)
+	if err != nil {
+		t.Fatalf("RepairFromFailure should allow health_check_failed deploy: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued || updated.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("updated = %s/%s, want queued/code_generation", updated.Status, updated.CurrentStepKind)
+	}
+}
+
+// TestExecutorRepairFromFailureRejectsDeploymentPortError: a deployment that
+// fails with a port/run infrastructure error is NOT repairable — regenerating
+// code will not free a port, so allowing it would loop.
+func TestExecutorRepairFromFailureRejectsDeploymentPortError(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepDeployment: {
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorPortUnavailable,
+			ErrorMessage: "no free port in pool",
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	drain(t, context.Background(), e)
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusFailed || job.CurrentStepKind != model.StepDeployment {
+		t.Fatalf("pre-repair job = %s/%s, want failed/deployment", job.Status, job.CurrentStepKind)
+	}
+	if _, err := e.RepairFromFailure(context.Background(), id); err == nil {
+		t.Fatalf("RepairFromFailure should reject port_unavailable deploy failures")
+	}
+}
+
 // seedJobWithSlug creates a queued job bound to a specific app_slug (the per-app
 // serialization key) with all six FixedSteps seeded as pending and returns its id.
 func seedJobWithSlug(t *testing.T, st *store.Store, appSlug string) string {

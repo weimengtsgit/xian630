@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -311,15 +312,29 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	if manifest.Entry == "static-vite" {
 		_ = writeStaticHostingDockerfile(buildApp.Path)
 	}
+	// Deterministically fix the most common generated-nginx.conf pitfalls BEFORE
+	// building, so the image's nginx can actually start:
+	//   1. An unquoted location regex with a brace quantifier (e.g. "^/x/(\d{4})")
+	//      makes nginx's lexer end the regex token at the "{" → misleading
+	//      "missing closing parenthesis". Quoting fixes it.
+	//   2. A LITERAL external-host proxy_pass (e.g. "https://api.open-meteo.com/")
+	//      is resolved at config load; podman's aardvark resolver SERVFAILs the
+	//      external AAAA lookup, so nginx dies with "host not found in upstream".
+	//      Converting to a variable + a public resolver defers resolution to
+	//      request time (and lets the container start).
+	// See sanitizeNginxLocationRegexes / sanitizeNginxProxyPassUpstreams.
+	_ = sanitizeNginxLocationRegexes(filepath.Join(buildApp.Path, "nginx.conf"))
+	_ = sanitizeNginxProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
 	var res deploy.CommandResult
+	var imageRef deploy.ImageRef
 	var err error
 	if f.StreamCmds != nil {
 		b := newCommandStreamBatcher(ctx, emit)
 		b.start()
-		_, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, version.ID, b.addStdout, b.addStderr)
+		imageRef, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, version.ID, b.addStdout, b.addStderr)
 		b.close()
 	} else {
-		_, res, err = rt.BuildImage(ctx, buildApp, version.ID)
+		imageRef, res, err = rt.BuildImage(ctx, buildApp, version.ID)
 	}
 	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
@@ -329,7 +344,47 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	// manifest is used to confirm the build context is valid for this app; the
 	// actual output verification is the deploy step's health check.
 	_ = manifest
+	// Validate the nginx config baked into the image (static-vite only). The
+	// sanitizers above fix the common pitfalls (brace regexes, literal external
+	// upstreams); this catches anything ELSE that would make the container exit
+	// at startup — an unbalanced brace, an undefined variable, a malformed
+	// directive. Such a failure would otherwise surface 30s later as a deploy
+	// health_check_failed (NOT a repairable step), leaving the user stuck
+	// retrying a doomed deploy. image_build IS repairable: failing here feeds
+	// the `nginx -t` error back to code_generation via RepairFromFailure. See
+	// validateStaticNginxConfig.
+	if manifest.Entry == "static-vite" {
+		if vres, vok := f.validateStaticNginxConfig(ctx, job, step, emit, imageRef.FullName); !vok {
+			_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
+			return vres, nil
+		}
+	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+// validateStaticNginxConfig runs `nginx -t` inside the freshly built image to
+// catch a generated nginx.conf that nginx will refuse to load (truncated regex,
+// unbalanced braces, an undefined variable, a bad proxy_pass, etc.). The config
+// is already COPY'd into the nginx:alpine-based image, so this validates exactly
+// what deploy will run, with no host volume mount or SELinux concern. Failing
+// here is preferable to the deploy step's 30s health-check timeout: image_build
+// is a repairable step, so RepairFromFailure forwards this error (plus the
+// captured nginx -t output) to code_generation for a targeted fix.
+func (f *FactoryRunner) validateStaticNginxConfig(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter, imageRef string) (StepResult, bool) {
+	rt := f.runtime()
+	res, ok := f.runCmd(ctx, job, step, emit, "", rt.Name(), "run", "--rm", imageRef, "nginx", "-t")
+	if ok {
+		return StepResult{}, true
+	}
+	detail := strings.TrimSpace(strings.TrimRight(res.Stdout, "\n") + "\n" + res.Stderr)
+	return StepResult{
+		Status:    model.StepStatusFailed,
+		ErrorCode: model.ErrorImageBuildFailed,
+		ErrorMessage: fmt.Sprintf(
+			"nginx.conf 语法校验失败：镜像内的 nginx 拒绝加载该配置（nginx -t 退出码 %d）。\n%s\n"+
+				"请只修复 nginx.conf 中导致语法错误的指令（例如 location 正则括号未闭合、大括号不匹配、proxy_pass 目标写错、引用了未定义的 nginx 变量），使 `nginx -t` 通过；不要改动其它文件，不要改变业务逻辑或页面结构。",
+			res.ExitCode, detail),
+	}, false
 }
 
 // ensureCandidateVersion returns the application_versions row for this job,
@@ -615,6 +670,130 @@ func isFullNginxConfig(path string) bool {
 		}
 	}
 	return false
+}
+
+// nginxLocationRegexRe matches a "location ~<*> <regex> {" line and captures
+// the prefix ("    location ~ ") and the unquoted regex token. Multiline mode
+// keeps ^/$ on line boundaries and "." off newlines. The non-greedy regex +
+// the trailing "\s*\{\s*$" anchor capture the regex up to the line's final "{"
+// (the block opener), so an interior brace like the "{4}" in "\d{4}" stays in
+// the captured regex rather than being mistaken for the block opener.
+var nginxLocationRegexRe = regexp.MustCompile(`(?m)^(\s*location\s+~\*?\s+)(.+?)\s*\{\s*$`)
+
+// sanitizeNginxLocationRegexes quotes any unquoted location regex that contains
+// a brace. nginx's config lexer treats an UNQUOTED "{" as a block-opening
+// delimiter, so it truncates a location regex like "^/x/(\d{4})$" at the "{",
+// hands PCRE "^/x/(\d", and fails with a misleading "missing closing
+// parenthesis". Quoting the regex makes the lexer read it as one string token
+// and pass it to PCRE intact. This is a deterministic fix for a pitfall the
+// code-gen model keeps hitting and cannot diagnose from nginx's error. It is a
+// no-op for regexes without braces and for already-quoted regexes. Missing file
+// (non-nginx app) is not an error.
+func sanitizeNginxLocationRegexes(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil // nothing to sanitize (non-nginx app or absent config)
+	}
+	src := string(raw)
+	out := nginxLocationRegexRe.ReplaceAllStringFunc(src, func(line string) string {
+		m := nginxLocationRegexRe.FindStringSubmatch(line)
+		if m == nil {
+			return line
+		}
+		prefix, rx := m[1], m[2]
+		if strings.HasPrefix(rx, `"`) {
+			return line // already quoted
+		}
+		if !strings.ContainsAny(rx, "{}") {
+			return line // no brace → nginx parses it fine unquoted
+		}
+		// Escape any embedded double-quotes (rare in a regex) and wrap.
+		return prefix + `"` + strings.ReplaceAll(rx, `"`, `\"`) + `" {`
+	})
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+// nginxProxyPassRe matches a "proxy_pass <scheme>://<host><rest>;" line and
+// captures indent, scheme, host (FQDN chars only — so "$var" upstreams do not
+// match), and the trailing rest (path, and ":port" if present).
+var nginxProxyPassRe = regexp.MustCompile(`(?m)^(\s*)proxy_pass\s+(https?)://([A-Za-z0-9.\-]+)([^\s;]*);\s*$`)
+
+var nginxListenRe = regexp.MustCompile(`(?m)^\s*listen\b[^\n]*;`)
+
+// sanitizeNginxProxyPassUpstreams converts a LITERAL external-host proxy_pass
+// (e.g. "proxy_pass https://api.open-meteo.com/;") into a variable form plus a
+// public resolver. nginx resolves a literal upstream at config-load time, and in
+// this podman environment aardvark-dns SERVFAILs the external AAAA query, so
+// nginx dies with "host not found in upstream" and the container never starts.
+// With a variable upstream ("set $sf_upstream ...; proxy_pass https://$sf_upstream/;")
+// nginx defers resolution to request time, and a server-level "resolver 8.8.8.8"
+// (which resolves cleanly, unlike aardvark) makes those lookups work at runtime.
+//
+// Skipped (left literal): variable upstreams ($var), localhost, bare container
+// names (no dot — resolved by aardvark at load, fine), IPv4 literals, and hosts
+// with an explicit :port (variable+port is awkward; rare for external APIs).
+// Missing file (non-nginx app) is not an error.
+func sanitizeNginxProxyPassUpstreams(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	converted := false
+	out := nginxProxyPassRe.ReplaceAllStringFunc(src, func(line string) string {
+		m := nginxProxyPassRe.FindStringSubmatch(line)
+		if m == nil {
+			return line
+		}
+		indent, scheme, host, rest := m[1], m[2], m[3], m[4]
+		switch {
+		case host == "localhost", !strings.Contains(host, "."), isIPv4(host):
+			return line // resolves at load fine; leave literal
+		case strings.HasPrefix(rest, ":"):
+			return line // explicit :port — skip (rare)
+		}
+		converted = true
+		return indent + "set $sf_upstream \"" + host + "\";\n" +
+			indent + "proxy_pass " + scheme + "://$sf_upstream" + rest + ";"
+	})
+	if !converted {
+		return nil
+	}
+	// One server-level resolver after the first `listen` so the variable
+	// upstreams can resolve at request time. Injected at most once; valid in
+	// server scope alongside any per-location resolver the model may have set.
+	done := false
+	out = nginxListenRe.ReplaceAllStringFunc(out, func(line string) string {
+		if done {
+			return line
+		}
+		done = true
+		return line + "\n    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;"
+	})
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+// isIPv4 reports whether s is a dotted-quad IPv4 literal (so it can be left as a
+// literal proxy_pass upstream — it resolves at load without DNS).
+func isIPv4(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || len(p) > 3 {
+			return false
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // writeStaticHostingDockerfile overwrites the app's Dockerfile with a dist-copy

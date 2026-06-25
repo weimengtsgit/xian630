@@ -102,9 +102,15 @@ export function JobCenter({
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
   const canCancelHeader = activeJob && !isTerminal
+  // deployment is included so a health_check_failed deploy can be repaired
+  // (regenerated with the failure context). The backend enforces that ONLY
+  // health_check_failed deploy failures are actually repairable; other deploy
+  // failures (port/run infra errors) are rejected server-side with a message.
   const canRepairFromFailure =
     jobStatus === 'failed' &&
-    ['test_verification', 'image_build'].includes(activeJob?.current_step_kind)
+    ['test_verification', 'image_build', 'deployment'].includes(
+      activeJob?.current_step_kind,
+    )
 
   // --- Drawer wiring ------------------------------------------------------
   // Opening a card resolves the REAL stepId (from stepByKind / cardView) and
