@@ -15,7 +15,7 @@ RESOLVERS="${RESOLVERS}8.8.8.8 114.114.114.114"
 
 # Replace the placeholder resolver line in the nginx config
 if [ -n "$RESOLVERS" ]; then
-    sed -i "s/resolver .*/resolver ${RESOLVERS}valid=30s ipv6=off;/" /etc/nginx/conf.d/default.conf
+    sed -i "s|resolver .*|resolver ${RESOLVERS} valid=30s ipv6=off;|" /etc/nginx/conf.d/default.conf
     echo "entrypoint: nginx resolver set to ${RESOLVERS}"
 fi
 
