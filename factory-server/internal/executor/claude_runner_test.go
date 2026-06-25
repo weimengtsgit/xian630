@@ -699,10 +699,9 @@ func (f fakeStreamCodegenCommand) run(dir string, name string, args ...string) (
 }
 
 // TestClaudeStepRunnerEmitsSafeTracesFromStream asserts the claude step runner
-// converts assistant text + a safe tool_use from the stream-json stdout into
-// safe trace events (assistant_output + tool), while hidden thinking in the
-// stream NEVER reaches a trace. This is the executor-side proof of the Task 4
-// producer contract.
+// converts assistant text + a safe tool_use + thinking_delta from the stream-json
+// stdout into safe trace events (assistant_output + tool + thinking), per ADR 0007.
+// This is the executor-side proof of the Task 4 producer contract.
 func TestClaudeStepRunnerEmitsSafeTracesFromStream(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
@@ -720,7 +719,9 @@ func TestClaudeStepRunnerEmitsSafeTracesFromStream(t *testing.T) {
 		stdout: strings.Join([]string{
 			`{"type":"assistant","message":{"content":[{"type":"text","text":"生成中"}]}}`,
 			`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/rules.ts"}}]}}`,
-			`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"SECRET_REASONING"}]}}`,
+			`{"type":"thinking","thinking_delta":"THINKING_DELTA_CONTENT"}`,
+			`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"THINKING_FULL_CONTENT"}]}}`,
+			`{"type":"thinking_delta","thinking_delta":"THINKING_DELTA_ONLY"}`,
 			`{"type":"result","subtype":"success","is_error":false,"result":"{}"}`,
 		}, "\n"),
 	}
@@ -745,18 +746,25 @@ func TestClaudeStepRunnerEmitsSafeTracesFromStream(t *testing.T) {
 		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
 	}
 
-	// Assistant text + tool_use → safe trace events.
+	// Assistant text + tool_use + thinking → safe trace events.
 	if !trace.hasType(string(model.WorkTraceAssistant)) {
 		t.Errorf("no assistant_output trace; events=%#v", trace.events)
 	}
 	if !trace.hasType(string(model.WorkTraceTool)) {
 		t.Errorf("no tool trace; events=%#v", trace.events)
 	}
-	// src/rules.ts may appear (sanitized) in the tool trace — fine; the assertion
-	// below is that SECRET_REASONING never appears.
-	// HARD SECURITY: hidden thinking never reaches a trace.
-	if trace.payloadContaining("SECRET_REASONING") {
-		t.Errorf("hidden reasoning leaked into a trace: %#v", trace.events)
+	// ADR 0007: thinking IS emitted as WorkTraceThinking
+	if !trace.hasType(string(model.WorkTraceThinking)) {
+		t.Errorf("no thinking trace; events=%#v", trace.events)
+	}
+	if !trace.payloadContaining("THINKING_DELTA_CONTENT") {
+		t.Errorf("thinking_delta_content not found in trace: %#v", trace.events)
+	}
+	if !trace.payloadContaining("THINKING_FULL_CONTENT") {
+		t.Errorf("thinking_full_content not found in trace: %#v", trace.events)
+	}
+	if !trace.payloadContaining("THINKING_DELTA_ONLY") {
+		t.Errorf("thinking_delta_only not found in trace: %#v", trace.events)
 	}
 }
 

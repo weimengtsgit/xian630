@@ -5,6 +5,7 @@ import {
   applyDialogueEvent,
   buildDialogueTimeline,
   foldTraceIntoLiveAnalysis,
+  foldTraceIntoLiveThinking,
   initialDialogueState,
   lockedFromView,
   openQuestionsForView,
@@ -13,6 +14,7 @@ import {
   applyTraceEvent,
   applyTraceEvents,
   initialWorkTraceState,
+  liveThinkingFromTrace,
   liveStepFromTrace,
   resetWorkTraceState,
 } from './workTraceState'
@@ -325,13 +327,23 @@ export function useDialogueSessions() {
     if (!state.view || submitting) return null
     setSubmitting(true)
     setError(null)
+    const recs = Array.isArray(state.view.recommendations) ? state.view.recommendations : []
+    const primary = recs.find(card => card && card.primary) || recs[0]
+    const routeEcho = intent === 'existing_application'
+      ? `我选择：复用「${(primary && primary.name) || '已有智能体'}」`
+      : '我选择：新建智能体'
+    const optimisticId = `opt_route_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    if (mountedRef.current) setOptimisticUserMessage({ id: optimisticId, content: routeEcho })
     try {
       const view = await factoryApi.selectDialogueRoute(state.view.session.id, { intent, ...extra })
-      await refreshSessions()
+      if (mountedRef.current) refreshSessions().catch(() => {})
       await loadView(view.session.id)
       return view
     } catch (err) {
-      if (mountedRef.current) setError(err.message || String(err))
+      if (mountedRef.current) {
+        setOptimisticUserMessage(null)
+        setError(err.message || String(err))
+      }
       throw err
     } finally {
       if (mountedRef.current) setSubmitting(false)
@@ -344,13 +356,22 @@ export function useDialogueSessions() {
     if (!state.view || !applicationId || submitting) return null
     setSubmitting(true)
     setError(null)
+    const recs = Array.isArray(state.view.recommendations) ? state.view.recommendations : []
+    const card = recs.find(item => item && item.applicationId === applicationId)
+    const appName = (card && card.name) || '智能体'
+    const openEcho = card && card.status !== 'running' ? `我启动并打开：${appName}` : `我打开：${appName}`
+    const optimisticId = `opt_open_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    if (mountedRef.current) setOptimisticUserMessage({ id: optimisticId, content: openEcho })
     try {
       const view = await factoryApi.openDialogueApplication(state.view.session.id, applicationId)
-      await refreshSessions()
+      if (mountedRef.current) refreshSessions().catch(() => {})
       await loadView(view.session.id)
       return view
     } catch (err) {
-      if (mountedRef.current) setError(err.message || String(err))
+      if (mountedRef.current) {
+        setOptimisticUserMessage(null)
+        setError(err.message || String(err))
+      }
       throw err
     } finally {
       if (mountedRef.current) setSubmitting(false)
@@ -652,8 +673,9 @@ export function useDialogueSessions() {
   useEffect(() => {
     if (!state.selectedDialogueId) return
     const stepLive = liveStepFromTrace(workTrace.items)
-    if (!stepLive) return
-    setState(prev => foldTraceIntoLiveAnalysis(prev, stepLive))
+    const thinkingLive = liveThinkingFromTrace(workTrace.items)
+    if (!stepLive && !thinkingLive) return
+    setState(prev => foldTraceIntoLiveThinking(foldTraceIntoLiveAnalysis(prev, stepLive), thinkingLive))
   }, [workTrace, state.selectedDialogueId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mount: hydrate the list and auto-select the most recent dialogue. Subscribe to

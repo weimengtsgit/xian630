@@ -116,7 +116,7 @@ type MessageView struct {
 }
 
 // ConsolidationEntry is one field recommendation emitted at round 5 when the
-// requirement is still incomplete after the one-decision rounds 1–4. Factory
+// requirement is still incomplete after the batch-clarification rounds 1–4. Factory
 // persists these as a recommendation_consolidation message and lets the user
 // adjust a single field at round 6 (see ApplyConsolidationAdjustment). The
 // RecommendedValue is a typed JSON value (string or array).
@@ -151,10 +151,11 @@ type RoundOutput struct {
 	Consolidation          []ConsolidationEntry `json:"consolidation,omitempty"`
 	// OpenHighImpact lists the currently-unresolved high-impact confirmation
 	// items. While non-empty, the session may NOT reach ready_to_confirm,
-	// regardless of how complete the requirement is. Each round surfaces exactly
-	// one of these as questions[0] (reused through the existing question
-	// pipeline); this list carries the full remaining set so the gate and
-	// history can re-check without a model turn.
+	// regardless of how complete the requirement is. Each round surfaces the
+	// open items as a questions[] batch (reused through the existing question
+	// pipeline) so the user can answer them together; this list carries the
+	// full remaining set so the gate and history can re-check without a model
+	// turn.
 	OpenHighImpact []HighImpactItem `json:"openHighImpact,omitempty"`
 }
 

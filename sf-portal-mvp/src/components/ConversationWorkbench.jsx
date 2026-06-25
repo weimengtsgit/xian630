@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
+import { displayRequirementValue } from '../displayLabels'
 import './ConversationWorkbench.css'
 
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
@@ -93,7 +94,6 @@ export function ConversationWorkbench({
     view.agentDraft.name &&
     view.agentDraft.description &&
     view.agentDraft.prompt
-  const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
 
@@ -180,6 +180,8 @@ export function ConversationWorkbench({
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
+            canConfirm={canConfirmClarification && !submitting}
+            onConfirm={onConfirm}
             onSend={onSend}
             onPickClarification={value => {
               if (!value) return
@@ -253,10 +255,10 @@ export function ConversationWorkbench({
         </div>
       ) : null}
 
-      {canConfirm ? (
+      {canConfirmBusiness ? (
         <div className="cw-answer-bar">
           <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>
-            {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
+            {submitting ? '处理中' : '确认创建'}
           </button>
         </div>
       ) : null}
@@ -314,7 +316,7 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, canConfirm, onConfirm, onSend, onPickClarification }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
   if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
   if (item.type === 'clarification_prompt') {
@@ -378,7 +380,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
+  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} canConfirm={canConfirm} onConfirm={onConfirm} submitting={submitting} />
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
@@ -683,18 +685,23 @@ function CustomAnswer({ onSubmit }) {
   )
 }
 
-function RequirementSummary({ requirement }) {
+function RequirementSummary({ requirement, canConfirm, onConfirm, submitting }) {
   const rows = [
-    ['智能体类型', requirement.appType],
+    ['智能体类型', displayRequirementValue('appType', requirement.appType)],
     ['智能体名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
-    ['数据策略', requirement.dataPolicy],
+    ['数据策略', displayRequirementValue('dataPolicy', requirement.dataPolicy)],
   ].filter(([, value]) => value)
   return (
     <div className="cw-summary">
       <strong>确认需求摘要</strong>
       {rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+      {canConfirm ? (
+        <button type="button" className="primary cw-summary-confirm" onClick={onConfirm} disabled={submitting}>
+          {submitting ? '处理中' : '确认并生成智能体'}
+        </button>
+      ) : null}
     </div>
   )
 }

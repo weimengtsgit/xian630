@@ -57,8 +57,9 @@ In scope:
 Out of scope:
 
 - Running a business-processing agent in this phase.
-- Exposing internal blueprint names, support boundaries, or raw
-  chain-of-thought to users.
+- Exposing internal blueprint names or support boundaries to users. Raw Claude
+  Code CLI thinking is no longer out of scope for the conversation workbench:
+  ADR 0007 allows it as a dedicated, attributed 思考过程 channel.
 - Changing the fixed six-step application generation pipeline.
 - Changing the right-side agent Tab layout owned by the collaborating branch.
 
@@ -135,6 +136,11 @@ confirming a generation requirement, or creating a business-processing agent
 then transitions the locked dialogue to `resolved`. A clearly expressed new
 requirement creates a new dialogue session.
 
+When the user selects a route, the workbench appends one 路由选择回显 message
+such as `我选择：新建智能体` or `我选择：复用「员工请假助手」`. Any subsequent
+thinking, analysis, reuse recommendation, or clarification appears beneath that
+message so the transcript preserves the user's explicit choice.
+
 ## Intent Routing
 
 The Factory constructs a bounded routing input from:
@@ -175,11 +181,16 @@ The workbench renders one primary application recommendation and at most two
 expandable similar alternatives. Each card contains the application name,
 concise match rationale, status, and a direct action.
 
-- A running application exposes **打开应用**.
-- A stopped application exposes **启动并打开**. It starts through the existing
+- A running 智能体 exposes **打开智能体**.
+- A stopped 智能体 exposes **启动并打开**. It starts through the existing
   application operation first; after successful startup the card presents the
   normal open action. This avoids an asynchronous popup being blocked and
   makes startup errors visible.
+
+Clicking either open action appends one 智能体打开回显 message, such as
+`我打开：东海态势应用` or `我启动并打开：东海态势应用`, before the resolved/open
+result is appended. Opening is therefore part of the chronological transcript,
+not a silent state transition.
 
 Opening an application records its ID as the dialogue result and transitions
 the dialogue to `resolved`.
@@ -197,10 +208,18 @@ generation capability profile.
 
 The skill applies adaptive brainstorming behavior:
 
-1. Restate user intent in product terms and identify the single highest-value
-   missing decision, and separately identify every open **高影响确认事项** — any
-   unresolved decision that can change business meaning, data source, external
-   interface, permission, deployment, or user-visible behavior.
+The six-round shape is an upper bound, not a minimum. The skill may converge
+earlier when all high-impact confirmation items are explicitly resolved and the
+requirement is complete, but it must not jump directly to `ready_to_confirm`
+from blueprint assumptions in the first round.
+
+1. Restate user intent in product terms and identify every currently open
+   high-impact / must-confirm decision for the next clarification batch. A
+   **高影响确认事项** is any unresolved decision that can change business
+   meaning, data source, external interface, permission, deployment, or
+   user-visible behavior. Low-impact details that can be reasonably inferred are
+   documented as assumptions in the analysis log and reviewed in the final
+   requirement summary, not asked as required questions.
 2. In rounds 1 through 4, return either a complete requirement or **ALL** open
    high-impact questions at once — each a blocking question with two or three
    recommended options — so the user confirms them in a single batch rather than
@@ -220,10 +239,11 @@ The skill applies adaptive brainstorming behavior:
    validates completeness, and enters `ready_to_confirm` without a seventh
    model turn.
 
-`ready_to_confirm` remains separate from generation. The user may review the
-summary, then **确认并生成** creates a job. The job uses the existing fixed
-pipeline: requirement analysis, solution design, code generation, test
-verification, image build, and deployment.
+`ready_to_confirm` remains separate from generation. The user reviews the
+确认需求摘要 message in the conversation and uses its attached **确认并生成智能体**
+action to create a job. The job uses the existing fixed pipeline: requirement
+analysis, solution design, code generation, test verification, image build, and
+deployment.
 
 The runner output includes a dedicated `consolidation` object. It is persisted
 as a `recommendation_consolidation` message with JSON metadata and emitted as
@@ -237,9 +257,9 @@ but it is not exposed by current intent routing or the workbench route-choice UI
 
 After the user confirms the positive business-processing recommendation,
 Factory invokes a new project-local `business-agent-drafting` skill. It uses
-the same one-decision-at-a-time and recommendation-convergence behavior as
-application clarification, but emits an `agentDraft` rather than an
-application requirement.
+the same high-impact gate and recommendation-convergence behavior as
+application clarification, may batch related questions in one round, and emits
+an `agentDraft` rather than an application requirement.
 
 The draft contains:
 
@@ -300,14 +320,28 @@ The workbench maps both event families to user-facing timeline items. It does
 not render internal blueprint names or identifiers.
 
 The conversation workbench is the primary live surface for the whole agent
-experience. It streams the 分析工作日志 token-by-token as each intent-routing
-round, clarification round, and pipeline step runs — the user's own message
-appears optimistically on send, the analysis work log grows beneath it, and the
-round's conclusion (route card, question, requirement summary, or step result)
-follows; the streamed analysis then folds above the conclusion and remains
-replayable from persisted events. The step matrix and execution drawer stay as
-secondary detail/overview. Only the safe analysis work log is streamed; hidden
-chain-of-thought and `thinking_delta` are never forwarded.
+experience. It streams Claude Code CLI 思考过程 and the 分析工作日志
+token-by-token as each intent-routing round, clarification round, and pipeline
+step runs — the user's own message appears optimistically on send, the thinking
+and analysis work log grow beneath it, and the round's conclusion (route card,
+question, requirement summary, or step result) follows; the streamed thinking
+and analysis then fold above the conclusion and remain replayable from
+persisted events. The step matrix and execution drawer stay as secondary
+detail/overview. Raw `thinking_delta` is forwarded only through the dedicated
+思考过程 channel and must not be mixed into analysis logs, tool summaries,
+stdout/stderr, or attachments.
+
+When the user submits a batch of clarification answers, the workbench appends
+one user-visible 澄清答案回显 message with Chinese question labels and selected
+option labels joined by `；`. The next clarification round's 思考过程 and
+分析工作日志 are anchored under that answer summary so the conversation remains a
+chronological transcript.
+
+When clarification reaches `ready_to_confirm`, the 确认需求摘要 is appended as
+the next agent message in that same transcript after the final analysis block.
+The `确认并生成智能体` action is attached to the summary message rather than a
+fixed global footer, so replayed history preserves the exact order: user answer
+→ thinking/analysis → requirement summary → confirm action.
 
 ## Validation and Failure Behavior
 
@@ -316,17 +350,18 @@ chain-of-thought and `thinking_delta` are never forwarded.
 - Factory validates routing output against the precise candidates it supplied.
 - Factory owns application serials, agent keys, recommendation defaults, and
   resource links. The browser does not submit trusted values for them.
-- Clarification (application-generation) rounds return ALL open high-impact
-  questions in one round (batch); business-draft rounds still allow at most one
-  question. Round-5 consolidation and round-6 adjustment invariants are
-  server-enforced.
+- Clarification (application-generation) rounds return open high-impact
+  questions as a business-specific batch in one round; business-draft rounds
+  may also batch related questions when needed. Round-5 consolidation and
+  round-6 adjustment invariants are server-enforced.
 - A requirement cannot enter `ready_to_confirm` (and the 确认并生成 action cannot
   appear) while any 高影响确认事项 remains open, regardless of how detailed the
   user's message is. This is server-enforced (see ADR 0006).
 - Invalid model output records a failure with audit data and creates no job or
   business-processing agent.
-- All model analysis shown to users is structured, user-facing explanation;
-  hidden reasoning and internal directory details are never forwarded.
+- Model analysis shown to users is structured, user-facing explanation; Claude
+  Code CLI raw thinking is shown separately as 思考过程. Internal directory
+  details are never forwarded.
 
 ## Migration and Verification
 

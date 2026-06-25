@@ -145,8 +145,13 @@ a route locks it; a new request needs a new dialogue.
 2. The model infers the `existing_application_reuse` intent and emits a
    structured recommendation (`dialogue.application.recommended`) pointing at a
    configured preset application.
-3. Confirm the route. The dialogue resolves and the recommended application can
-   be opened or started directly — no generation job is created.
+3. Confirm the route. The conversation appends a route-choice bubble such as
+   `我选择：复用「东海态势应用」`; any follow-up analysis/recommendation appears
+   beneath it. The dialogue resolves and the recommended 智能体 can be opened or
+   started directly — no generation job is created.
+4. Click `打开智能体` or `启动并打开`. The conversation appends
+   `我打开：东海态势应用` or `我启动并打开：东海态势应用`, then appends the open
+   result.
 
 ### Manual flow 2 — application generation (6-round adaptive clarification)
 
@@ -156,17 +161,27 @@ a route locks it; a new request needs a new dialogue.
    生成一个航母编队近一个月航行轨迹和事件的东海地图复盘应用
    ```
 
-2. The model infers the `application_generation` intent. Confirm the route; a
-   child **clarification session** is created. The center panel **streams
+2. The model infers the `application_generation` intent. Confirm the route; the
+   conversation appends `我选择：新建智能体`, then a child **clarification
+   session** is created. The center panel **streams
    analysis work-logs and structured option cards** — this is *not* an
    immediate job.
-3. The clarification is **adaptive and limited to 6 rounds**:
-   - Rounds 1–4: at most **one** question per round, each with 2–3 options.
+3. The clarification is **adaptive and limited to 6 rounds**; 6 is a maximum,
+   not a quota, so the flow may converge earlier after all high-impact items are
+   explicitly confirmed:
+   - Rounds 1–4: one business-specific batch per round containing all currently
+     identified high-impact / must-confirm items, with option questions
+     carrying 2–3 options and recommendations. Low-impact inferred details are
+     shown as assumptions in analysis/summary rather than required questions.
+     After the user submits the batch, the conversation appends one Chinese
+     answer-summary bubble such as `审批层级：直属主管 + HR；假期余额来源：真实接口`;
+     the next round's 思考过程 and 分析过程 appear beneath that bubble.
    - Round 5: **recommendation consolidation** — remaining decisions are listed
      with their recommended values for one-shot accept or targeted adjustment.
    - Round 6: a single-field adjustment, then the session reaches
      `ready_to_confirm`. There is **no seventh round**.
-4. Click `确认并生成`.
+4. Review the `确认需求摘要` that appears as the next agent message in the
+   conversation flow, then click its attached `确认并生成智能体` action.
 5. A **Job appears only after confirmation**. It runs the fixed six-step
    pipeline:
    `requirement_analysis` → `solution_design` → `code_generation` →
@@ -226,11 +241,12 @@ artifacts.
 
 The real clarification runner invokes Claude Code with
 `--output-format stream-json --include-partial-messages --verbose`. Factory
-consumes those token-level events internally, filters out hook/system events and
-hidden `thinking_delta` content, then emits only safe `clarification.*` SSE
-events to the portal. During the stream, Factory incrementally extracts
-`workLog[].content` from the structured JSON being produced, so the UI can show
-the auditable analysis text as it grows. It never forwards raw chain-of-thought.
+consumes those token-level events internally, filters out hook/system events,
+and emits both the dedicated 思考过程 stream (`thinking` / `thinking_delta`) and
+the safe `clarification.*` analysis stream to the portal. During the stream,
+Factory incrementally extracts `workLog[].content` from the structured JSON
+being produced, so the UI can show the auditable analysis text as it grows
+separately from raw Claude Code thinking.
 
 ### Known MVP limitation (reload)
 
@@ -278,8 +294,9 @@ The continuing-session trace events (`dialogue.work_trace`) are carried on the
 **dialogue-scoped** `/api/dialogues/:id/work-trace/stream` (see the Workbench
 section), not the global stream. `clarification.*` is retained as a
 legacy/backfill family.
-Internal blueprint slugs, raw Claude `stdout`/`stderr`, and `thinking_delta`
-content are **never** forwarded to the browser.
+Internal blueprint slugs and raw Claude `stdout`/`stderr` are **never**
+forwarded to the browser. Claude Code CLI `thinking_delta` is forwarded only
+through the dedicated dialogue 思考过程 channel.
 
 ## Environment variables
 
@@ -405,8 +422,9 @@ Record `kind` values: `system`, `activity`, `summary`, `command_stdout`,
 The portal subscribes to the job's SSE stream. The execution-record event type
 is `step.record.appended`; its `data` is one persisted record. The envelope
 carries a monotonic `seq` the frontend uses for **gap detection** — on a missed
-`seq` it re-hydrates from REST (see Recovery below). SSE never carries file
-content or hidden reasoning.
+`seq` it re-hydrates from REST (see Recovery below). This job-record SSE never
+carries file content or hidden reasoning; Claude Code CLI thinking is exposed
+only through the dedicated dialogue 思考过程 channel.
 
 ### Redaction
 
@@ -508,11 +526,12 @@ both the REST query and the SSE live forwarder, which also store-validates every
 live event (an event not present in `work_trace_events` is dropped, so a
 misbehaving producer cannot inject un-persisted data).
 
-### Attachment caps and redaction (Constraint #9)
+### Attachment caps and thinking-channel separation (Constraint #9 revised)
 
-Raw chain-of-thought (`thinking` / `thinking_delta`), raw request/response
-bodies, and credentials **never reach** the trace, the SSE stream, or stored
-attachments:
+Raw request/response bodies and credentials **never reach** the trace, the SSE
+stream, or stored attachments. Claude Code CLI `thinking` / `thinking_delta` is
+the exception introduced by ADR 0007: it reaches only the dedicated 思考过程
+channel and must not be mixed into generic trace/tool/stdout/stderr channels:
 
 - The trace store is a single trust boundary: `AppendDialogueTrace` rejects any
   type outside the allowlist (`intent`, `approach`, `assumption`,
@@ -526,7 +545,8 @@ attachments:
 - Per-payload size is capped and oversized payloads are truncated with a marker
   rather than stored whole. Text artifacts are tailed at **10 MiB** (see the
   generation-observability section above). Thinking emitted by the real CLI is
-  dropped at the source in the trace-emission pipeline.
+  excluded from the generic trace-emission pipeline and forwarded through the
+  dedicated 思考过程 channel instead.
 
 ### Retention and explicit deletion
 

@@ -1,20 +1,25 @@
 ---
 name: requirement-clarification
-description: Guide a user from an initial software factory request to a structured confirmed application requirement, one decision at a time, over an adaptive 6-round flow.
+description: Guide a user from an initial software factory request to a structured confirmed application requirement through adaptive multi-question batch clarification rounds.
 ---
 
 # Requirement Clarification
 
 Use this skill when Factory asks you to run a clarification round for a software
 factory user request. Clarification is now **application-only** and follows an
-**adaptive, one-decision-at-a-time, 6-round** flow.
+**adaptive, multi-question batch, up-to-6-round** flow. Six rounds is a maximum,
+not a quota: converge earlier when all high-impact items and required fields are
+explicitly resolved.
 
 ## Adaptive Method (6 rounds)
 
-1. **Rounds 1–4 — one decision at a time.** Each round you may emit ZERO
-   questions or EXACTLY ONE required question, with 2–3 options and a
-   recommendation. Never emit more than one question in a round — Factory
-   rejects a round with multiple questions.
+1. **Rounds 1–4 — business-specific question batches.** Each round you may emit
+   ZERO questions or a batch containing ALL currently identified high-impact /
+   must-confirm questions. Each option question should have 2–3 options and a
+   recommendation. Do not turn low-impact fields that can be reasonably assumed
+   into questions merely to fill a count; state those assumptions in `workLog`
+   and include them in the final requirement summary. Do not skip straight to
+   `ready_to_confirm` in round 1 if any high-impact item is still only assumed.
 2. **Round 5 — consolidation (only if still incomplete after round 4).** Emit a
    `consolidation` list: one entry per remaining missing field, each with a
    recommended typed value, a reason, and alternatives. This is a model round.
@@ -23,7 +28,8 @@ factory user request. Clarification is now **application-only** and follows an
    you again, then marks `ready_to_confirm`.
 
 When enough information is present, stop asking and return `ready_to_confirm`
-with a complete `requirement` and a `normalizedScenarioName`.
+with a complete `requirement` and a `normalizedScenarioName`; do not continue
+asking just to use all six rounds.
 
 ## High-Impact Confirmation Gate (高影响确认事项)
 
@@ -124,7 +130,7 @@ Output ONLY this JSON object (no prose, no ```json fences):
 }
 ```
 
-- `status` is `waiting_user` (more clarification needed, at most one question)
+- `status` is `waiting_user` (more clarification needed, one batch of questions)
   or `ready_to_confirm` (complete, no questions).
 - `normalizedScenarioName` — a concise scenario name the model supplies. Factory
   appends a trusted Base36 serial in a later step; do NOT include any serial or

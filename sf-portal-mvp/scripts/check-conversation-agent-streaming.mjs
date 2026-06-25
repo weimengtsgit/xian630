@@ -19,8 +19,9 @@ import {
   applyLiveAnalysisEvent,
   applyLiveThinkingEvent,
   foldTraceIntoLiveAnalysis,
+  foldTraceIntoLiveThinking,
 } from '../src/hooks/dialogueTimeline.js'
-import { liveStepFromTrace } from '../src/hooks/workTraceState.js'
+import { liveStepFromTrace, liveThinkingFromTrace } from '../src/hooks/workTraceState.js'
 
 // ---- 0. D5: optimistic user message renders before the first view lands -----
 //
@@ -193,11 +194,10 @@ assert.equal(mrAnalysis[1].content, 'R2第一句\n\nR2第二句', 'round-2 entri
 // Each answer resolves against its OWN question (via metadata.questionId), so a
 // batch labels every answer correctly — not all against the last question.
 const mrAnswers = mrTimeline.filter(it => it.type === 'user_message')
-assert.equal(mrAnswers.length, 2, 'both batched answers render as user replies')
-assert.equal(mrAnswers[0].content, 'Q1：选项乙', 'answer 1 resolves value v2 → 选项乙 via its own question mr_q1')
-assert.equal(mrAnswers[1].content, 'Q2：选项丁', 'answer 2 resolves value y → 选项丁 via its own question mr_q2 (not mr_q1)')
+assert.equal(mrAnswers.length, 1, 'batched answers render as ONE user reply')
+assert.equal(mrAnswers[0].content, 'Q1：选项乙；Q2：选项丁', 'batched answer echo joins each 问题：选项 segment with ；')
 assert.ok(mrTimeline.indexOf(mrAnalysis[0]) < mrTimeline.indexOf(mrAnswers[0]), 'round-1 analysis sits above the answers')
-assert.ok(mrTimeline.indexOf(mrAnswers[1]) < mrTimeline.indexOf(mrAnalysis[1]), 'round-2 analysis sits below the answers')
+assert.ok(mrTimeline.indexOf(mrAnswers[0]) < mrTimeline.indexOf(mrAnalysis[1]), 'round-2 analysis sits below the batched answer echo')
 
 
 // ---- 3. No confirm button leaks while high-impact items are open -------------
@@ -273,6 +273,22 @@ assert.ok(String(stepLive.content).includes('正在生成前端组件'), 'step t
 const stepState = foldTraceIntoLiveAnalysis(baseState, stepLive)
 assert.ok(stepState.liveAnalysis, 'foldTraceIntoLiveAnalysis sets a liveAnalysis item')
 assert.equal(stepState.liveAnalysis.kind, 'step', 'folded step live item has kind step')
+
+const thinkingTraceItems = [
+  {
+    id: 'think_1', sequence: 2, type: 'thinking', dialogueId: 'dlg_live',
+    stepId: 'step_1', jobId: 'job_1',
+    payload: { text: '正在推理生成方案' },
+  },
+]
+const stepThinking = liveThinkingFromTrace(thinkingTraceItems)
+assert.ok(stepThinking, 'liveThinkingFromTrace derives an in-flight step thinking item')
+assert.ok(stepThinking.key && String(stepThinking.key).indexOf('step_1') >= 0, 'step thinking key identifies the step')
+assert.equal(stepThinking.kind, 'step', 'step-derived thinking item has kind step')
+assert.equal(stepThinking.content, '正在推理生成方案', 'step thinking text is folded from the payload text')
+const stepThinkingState = foldTraceIntoLiveThinking(baseState, stepThinking)
+assert.ok(stepThinkingState.liveThinking, 'foldTraceIntoLiveThinking sets a liveThinking item')
+assert.equal(stepThinkingState.liveThinking.kind, 'step', 'folded step thinking item has kind step')
 
 // ---- 3c. On round/step completion the live item is replaced by the persisted
 // analysis item rendered FOLDED above the conclusion --------------------------
@@ -384,6 +400,12 @@ assert.ok(
   eventsSrc.includes("'dialogue.clarification.delta'"),
   'events.js must register dialogue.clarification.delta on the global SSE bus',
 )
+assert.ok(
+  eventsSrc.includes("'dialogue.route.thinking'") &&
+    eventsSrc.includes("'dialogue.draft.thinking'") &&
+    eventsSrc.includes("'dialogue.clarification.thinking'"),
+  'events.js must register all dialogue *.thinking events on the global SSE bus',
+)
 // Legacy bare clarification.message.delta must STILL be registered so the
 // standalone clarification surface (useClarification / ClarificationPanel) keeps
 // streaming — we must not break it.
@@ -488,3 +510,161 @@ for (const phrase of forbiddenUserFacing) {
 }
 
 console.log('check-conversation-agent-streaming: user-facing 智能体 label OK')
+
+// ============================================================================
+// Task 5 (continued): Enum display mapping (D7)
+//
+// Create displayLabels.js with pure functions that map backend enum values to
+// user-facing Chinese labels, use it in both ConversationWorkbench and
+// ClarificationPanel requirement summaries.
+// ============================================================================
+
+// ---- 5a. displayLabels.js must exist and export the expected API -----------
+const displayLabelsSrc = readFileSync(new URL('../src/displayLabels.js', import.meta.url), 'utf8')
+assert.ok(
+  displayLabelsSrc.includes('export function displayRequirementValue'),
+  'displayLabels.js must export displayRequirementValue function',
+)
+assert.ok(
+  displayLabelsSrc.includes('APP_TYPE_LABELS'),
+  'displayLabels.js must define APP_TYPE_LABELS mapping',
+)
+assert.ok(
+  displayLabelsSrc.includes('DATA_POLICY_LABELS'),
+  'displayLabels.js must define DATA_POLICY_LABELS mapping',
+)
+
+// Import the module to verify it works.
+const { displayRequirementValue } = await import('../src/displayLabels.js')
+
+// ---- 5b. Basic enum mapping works correctly --------------------------------
+assert.equal(
+  displayRequirementValue('appType', 'operations_management'),
+  '业务管理类智能体',
+  'operations_management maps to 业务管理类智能体',
+)
+assert.equal(
+  displayRequirementValue('appType', 'command_dashboard'),
+  '指挥看板类智能体',
+  'command_dashboard maps to 指挥看板类智能体',
+)
+assert.equal(
+  displayRequirementValue('appType', 'timeline_replay'),
+  '态势复盘类智能体',
+  'timeline_replay maps to 态势复盘类智能体',
+)
+assert.equal(
+  displayRequirementValue('appType', 'affiliation_assessment'),
+  '归属研判类智能体',
+  'affiliation_assessment maps to 归属研判类智能体',
+)
+assert.equal(
+  displayRequirementValue('dataPolicy', 'live_api'),
+  '真实接口优先',
+  'live_api maps to 真实接口优先',
+)
+assert.equal(
+  displayRequirementValue('dataPolicy', 'mock_data'),
+  '演示 / Mock 数据',
+  'mock_data maps to 演示 / Mock 数据',
+)
+assert.equal(
+  displayRequirementValue('dataPolicy', 'mock_then_api'),
+  '真实接口优先（失败时明确提示，不回退 Mock）',
+  'mock_then_api maps to the explicit honest label',
+)
+
+// ---- 5c. Edge cases handled -------------------------------------------------
+assert.equal(
+  displayRequirementValue('appType', 'unknown_type'),
+  '未识别值：unknown_type',
+  'unknown enum values get the 未识别值: prefix',
+)
+assert.equal(
+  displayRequirementValue('appType', null),
+  '',
+  'null yields empty string',
+)
+assert.equal(
+  displayRequirementValue('appType', undefined),
+  '',
+  'undefined yields empty string',
+)
+assert.equal(
+  displayRequirementValue('appType', ''),
+  '',
+  'empty string yields empty string',
+)
+assert.equal(
+  displayRequirementValue('coreScenario', '图书借阅'),
+  '图书借阅',
+  'fields without a mapping pass through unchanged',
+)
+assert.equal(
+  displayRequirementValue('appType', ['operations_management', 'command_dashboard']),
+  '业务管理类智能体、指挥看板类智能体',
+  'arrays are mapped item-wise and joined with 、',
+)
+
+// ---- 5d. Both panels import and use displayRequirementValue ----------------
+assert.ok(
+  workbenchSrc.includes('displayRequirementValue'),
+  'ConversationWorkbench must import displayRequirementValue',
+)
+assert.ok(
+  workbenchSrc.includes("displayRequirementValue('appType'"),
+  'ConversationWorkbench must map appType in requirement summary',
+)
+assert.ok(
+  workbenchSrc.includes("displayRequirementValue('dataPolicy'"),
+  'ConversationWorkbench must map dataPolicy in requirement summary',
+)
+
+const clarPanelSrc = readFileSync(new URL('../src/components/ClarificationPanel.jsx', import.meta.url), 'utf8')
+assert.ok(
+  clarPanelSrc.includes('displayRequirementValue'),
+  'ClarificationPanel must import displayRequirementValue',
+)
+assert.ok(
+  clarPanelSrc.includes("displayRequirementValue('appType'"),
+  'ClarificationPanel must map appType in requirement summary',
+)
+assert.ok(
+  clarPanelSrc.includes("displayRequirementValue('dataPolicy'"),
+  'ClarificationPanel must map dataPolicy in requirement summary',
+)
+
+// ---- 5e. Raw enum strings must NOT appear in user-facing summaries ---------
+// In the requirement summary rows, we must NOT render the raw backend enum
+// strings. The display mapper must always be used for appType and dataPolicy.
+const clarRendered = clarPanelSrc
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/[^\n]*/g, '')
+
+// Verify the old raw enum display is gone and the mapper is used instead.
+assert.ok(
+  clarRendered.includes('智能体类型') && !clarRendered.includes('应用类型'),
+  'ClarificationPanel requirement summary must use 智能体类型, not 应用类型',
+)
+
+// Verify "确认并生成" becomes "确认并生成智能体" in both panels.
+assert.ok(
+  workbenchSrc.includes('确认并生成智能体'),
+  'ConversationWorkbench confirm button must say 确认并生成智能体',
+)
+assert.ok(
+  workbenchSrc.includes('function RequirementSummary({ requirement, canConfirm, onConfirm, submitting })') &&
+    workbenchSrc.includes('cw-summary-confirm'),
+  'ConversationWorkbench must attach 确认并生成智能体 to the RequirementSummary item',
+)
+assert.equal(
+  /canConfirm \? \(\s*<div className="cw-answer-bar">/.test(workbenchSrc),
+  false,
+  'ConversationWorkbench must not render application confirm in a fixed cw-answer-bar',
+)
+assert.ok(
+  clarPanelSrc.includes('确认并生成智能体'),
+  'ClarificationPanel confirm button must say 确认并生成智能体',
+)
+
+console.log('check-conversation-agent-streaming: enum display mapping OK')

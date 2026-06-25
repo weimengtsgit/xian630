@@ -161,3 +161,19 @@ export function liveStepFromTrace(items) {
   }
   return null
 }
+
+export function liveThinkingFromTrace(items) {
+  const list = Array.isArray(items) ? items : []
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const it = list[i]
+    if (!it || it.type !== 'thinking') continue
+    const p = it.payload || {}
+    const text = p.text || p.thinking || p.message || p.summary || ''
+    if (!text) continue
+    const jobId = it.jobId || it.job_id || ''
+    const stepId = it.stepId || it.step_id || ''
+    if (!stepId) continue
+    return { key: `step-thinking:${jobId}:${stepId}`, content: String(text), kind: 'step' }
+  }
+  return null
+}

@@ -382,12 +382,11 @@ func TestWorkTraceStoreGateRejectsDisallowedTypes(t *testing.T) {
 	ctx := context.Background()
 
 	disallowed := []string{
-		"thinking",        // raw chain-of-thought — never persisted
-		"thinking_delta",  // streaming thinking prefix
-		"raw_request",     // raw upstream request body
-		"raw_response",    // raw upstream response body
-		"credentials",     // credential-ish type
-		"",                // empty type
+		"thinking_delta", // streaming thinking prefix (use "thinking" type instead)
+		"raw_request",    // raw upstream request body
+		"raw_response",   // raw upstream response body
+		"credentials",    // credential-ish type
+		"",               // empty type
 		"assistant_thinking",
 	}
 	for _, bad := range disallowed {
@@ -399,13 +398,28 @@ func TestWorkTraceStoreGateRejectsDisallowedTypes(t *testing.T) {
 		}
 	}
 
-	// Nothing was persisted: the dialogue's trace is empty.
+	// ADR 0007: "thinking" IS allowed now as WorkTraceThinking
+	allowedThinking := model.WorkTraceThinking
+	ev, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
+		DialogueID: "dlg_gate", Type: string(allowedThinking), PayloadJSON: `{"thinking":"analysis step"}`,
+	})
+	if err != nil {
+		t.Fatalf("type %q (allowed by ADR 0007): unexpected rejection error: %v", allowedThinking, err)
+	}
+	if ev.Type != string(allowedThinking) {
+		t.Fatalf("type mismatch: got %q, want %q", ev.Type, allowedThinking)
+	}
+
+	// Now only the allowed thinking event should be persisted:
 	got, err := srv.store.ListDialogueTrace(ctx, "dlg_gate", 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("disallowed types were persisted (security violation): %+v", got)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly 1 thinking event to be persisted, got %d: %+v", len(got), got)
+	}
+	if got[0].Type != string(allowedThinking) {
+		t.Fatalf("persisted event type mismatch: got %q, want %q", got[0].Type, allowedThinking)
 	}
 
 	// A credential-bearing payload on an ALLOWED type is accepted but redacted

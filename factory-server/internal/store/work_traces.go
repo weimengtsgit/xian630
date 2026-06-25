@@ -35,11 +35,12 @@ const workTraceMaxPageSize = 500
 
 // allowedWorkTraceTypes is the allowlist of trace categories that may persist or
 // stream. It is the SECURITY gate (Constraint #9): only surfaced, user-visible
-// activity categories are permitted. Provider thinking / thinking_delta, raw
-// request/response bodies, headers, credentials, and uncapped command output are
-// deliberately NOT in this set and are rejected by AppendDialogueTrace. Task 4
-// is responsible for producing safe payloads from the agent stream; this gate
-// rejects anything disallowed regardless of producer.
+// activity categories are permitted. Raw request/response bodies, headers,
+// credentials, and uncapped command output are deliberately NOT in this set and
+// are rejected by AppendDialogueTrace. Task 4 is responsible for producing safe
+// payloads from the agent stream; this gate rejects anything disallowed regardless
+// of producer. NOTE: WorkTraceThinking is ALLOWED per ADR 0007 to surface Claude
+// Code CLI thinking_delta in the conversation workbench.
 var allowedWorkTraceTypes = map[string]struct{}{
 	string(model.WorkTraceIntent):        {},
 	string(model.WorkTraceApproach):      {},
@@ -55,6 +56,7 @@ var allowedWorkTraceTypes = map[string]struct{}{
 	string(model.WorkTraceWarning):       {},
 	string(model.WorkTraceError):         {},
 	string(model.WorkTraceAssistant):     {},
+	string(model.WorkTraceThinking):      {},
 }
 
 // AllowedWorkTraceTypes reports whether a trace type is in the allowlist.
@@ -96,9 +98,11 @@ var sensitivePayloadKeys = map[string]struct{}{
 // sequence and the gate-normalized payload.
 //
 // SECURITY GATE (Constraint #9), enforced here before any row is written:
-//   - Type must be in allowedWorkTraceTypes; "thinking", "thinking_delta", "",
-//     "raw_request", "raw_response", headers/credential-ish types, etc. are
-//     rejected (returns an error; nothing is persisted).
+//   - Type must be in allowedWorkTraceTypes; "", "raw_request", "raw_response",
+//     headers/credential-ish types, etc. are rejected (returns an error; nothing
+//     is persisted). NOTE: "thinking" is allowed via model.WorkTraceThinking per
+//     ADR 0007 to surface Claude Code CLI thinking_delta in the conversation
+//     workbench.
 //   - PayloadJSON is parsed (when valid JSON) and walked: any key matching a
 //     sensitivePayloadKey (at any depth) has its VALUE zeroed. If the payload
 //     is not valid JSON it is kept as-is (a producer may legitimately send a
@@ -242,10 +246,10 @@ var sensitivePayloadSubstrings = []string{
 	"cookie:",
 	// common key/material prefixes for cloud + provider secrets.
 	"sk-",
-	"akia",   // AWS access key id prefix
-	"ghp_",   // GitHub PAT prefix
-	"gho_",   // GitHub OAuth token prefix
-	"xox",    // Slack token prefix
+	"akia", // AWS access key id prefix
+	"ghp_", // GitHub PAT prefix
+	"gho_", // GitHub OAuth token prefix
+	"xox",  // Slack token prefix
 }
 
 // sanitizePayload applies the defense-in-depth payload gate: it parses the

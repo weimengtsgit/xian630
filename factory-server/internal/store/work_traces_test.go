@@ -52,13 +52,13 @@ func TestAppendDialogueTraceIndependentSequencesPerDialogue(t *testing.T) {
 
 // TestAppendDialogueTraceRejectsDisallowedType verifies the allowlist gate: an
 // event whose Type is not in the allowlist is rejected and never persisted.
-// "thinking" is the canonical disallowed type (provider hidden reasoning) — it
-// must never reach the store (Constraint #9).
+// ADR 0007 permits the normalized WorkTraceThinking type ("thinking"), while
+// raw provider event names such as "thinking_delta" remain disallowed.
 func TestAppendDialogueTraceRejectsDisallowedType(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
 
-	for _, bad := range []string{"thinking", "thinking_delta", "", "secret", "raw_request"} {
+	for _, bad := range []string{"thinking_delta", "", "secret", "raw_request"} {
 		_, err := st.AppendDialogueTrace(ctx, model.WorkTraceEvent{
 			ID: "bad", DialogueID: "dlg_1", Type: bad, PayloadJSON: "{}",
 		})
@@ -66,12 +66,21 @@ func TestAppendDialogueTraceRejectsDisallowedType(t *testing.T) {
 			t.Fatalf("type %q was accepted but should be rejected", bad)
 		}
 	}
+	allowed, err := st.AppendDialogueTrace(ctx, model.WorkTraceEvent{
+		ID: "thinking", DialogueID: "dlg_1", Type: string(model.WorkTraceThinking), PayloadJSON: `{"text":"思考过程"}`,
+	})
+	if err != nil {
+		t.Fatalf("WorkTraceThinking should be accepted: %v", err)
+	}
+	if allowed.Type != string(model.WorkTraceThinking) {
+		t.Fatalf("allowed type = %q, want %q", allowed.Type, model.WorkTraceThinking)
+	}
 	rows, err := st.ListDialogueTrace(ctx, "dlg_1", 0, 500)
 	if err != nil {
 		t.Fatalf("ListDialogueTrace: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("disallowed event leaked to store: %#v", rows)
+	if len(rows) != 1 || rows[0].Type != string(model.WorkTraceThinking) {
+		t.Fatalf("expected only normalized thinking event in store: %#v", rows)
 	}
 }
 

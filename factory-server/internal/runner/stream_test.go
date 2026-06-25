@@ -77,21 +77,20 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 	return false
 }
 
-// TestStreamClaudeEventsDropsThinkingAndCapturesFileDeltas feeds the parser a REAL
+// TestStreamClaudeEventsCapturesThinkingAndFileDeltas feeds the parser a REAL
 // CLI stream-json shape (verified against a live code_generation capture: each
 // event is a top-level NDJSON object; content blocks are NESTED inside
-// assistant.message.content[]) and asserts the hidden-reasoning security
-// boundary (Constraint #9):
-//   - thinking blocks are DROPPED ENTIRELY (never become a record or trace);
+// assistant.message.content[]) and asserts the ADR 0007 thinking-channel boundary:
+//   - thinking blocks become dedicated thinking traces, never records;
 //   - Write/Edit tool_use blocks become file_delta records (+N / +A -B);
 //   - Read/Grep/Glob become activity records with a redacted RELATIVE path;
 //   - non-allowlisted tools (WebSearch) and system events are ignored.
-func TestStreamClaudeEventsDropsThinkingAndCapturesFileDeltas(t *testing.T) {
+func TestStreamClaudeEventsCapturesThinkingAndFileDeltas(t *testing.T) {
 	emit := &recordEmitter{}
 	stream := strings.Join([]string{
 		// 1. system init — ignored (not an assistant turn).
 		`{"type":"system","subtype":"init","session_id":"abc"}`,
-		// 2. assistant turn with a thinking block (must be DROPPED entirely).
+		// 2. assistant turn with a thinking block (dedicated thinking trace only).
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"THINKING_CANARY"}]}}`,
 		// 3. assistant turn with a Read tool_use on an ABSOLUTE path → activity,
 		//    path redacted to a RELATIVE form (no leading /, no home dir).
@@ -108,18 +107,20 @@ func TestStreamClaudeEventsDropsThinkingAndCapturesFileDeltas(t *testing.T) {
 	}, "\n")
 	streamClaudeEvents(context.Background(), emit, stream)
 
-	// Thinking records must NEVER be produced (Constraint #9 security boundary).
+	// Thinking records must NEVER be produced; ADR 0007 routes it through the
+	// dedicated trace type instead of execution records.
 	if emit.hasKind(model.ExecutionRecordThinking) {
 		t.Errorf("thinking record leaked; records=%#v", emit.records)
 	}
 	if emit.contentContaining("THINKING_CANARY") {
 		t.Errorf("thinking text leaked into a record; records=%#v", emit.records)
 	}
-	// Thinking must not reach the trace path either.
-	for _, e := range emit.traces {
-		if strings.Contains(e.payload, "THINKING_CANARY") {
-			t.Errorf("thinking leaked into a trace payload: %+v", e)
-		}
+	thinking, ok := emit.traceOfType(string(model.WorkTraceThinking))
+	if !ok {
+		t.Fatalf("no thinking trace produced; traces=%#v", emit.traces)
+	}
+	if !strings.Contains(thinking.payload, "THINKING_CANARY") {
+		t.Errorf("thinking trace missing canary: %+v", thinking)
 	}
 
 	// Write → file_delta with +N, no " -" minus marker.
@@ -176,10 +177,10 @@ func findFileDelta(emit *recordEmitter, prefix string) string {
 }
 
 // TestStreamClaudeEventsProducesSafeTraces is the Task 4 Step 1 fixture: a
-// stream carrying assistant text, a safe tool_use, AND hidden thinking must
-// produce a redacted observation trace (assistant_output) + a path-sanitized
-// tool trace (tool.started), while NO thinking text ever reaches records or
-// traces. This locks the producer side of the work-trace gate.
+// stream carrying assistant text, a safe tool_use, AND thinking must produce a
+// redacted observation trace (assistant_output), a path-sanitized tool trace,
+// and a dedicated thinking trace. Thinking must not become records or tool/
+// analysis traces. This locks the producer side of the work-trace gate.
 func TestStreamClaudeEventsProducesSafeTraces(t *testing.T) {
 	emit := &recordEmitter{}
 	stream := strings.Join([]string{
@@ -210,12 +211,21 @@ func TestStreamClaudeEventsProducesSafeTraces(t *testing.T) {
 		t.Errorf("tool trace missing redacted relative path: %q", tool.payload)
 	}
 
-	// HARD SECURITY: thinking must NEVER reach a record or a trace.
+	// ADR 0007: thinking must NEVER reach records or non-thinking traces.
 	if emit.contentContaining("private chain of thought") {
 		t.Errorf("thinking leaked into a record; records=%#v", emit.records)
 	}
-	if emit.tracePayloadContaining("private chain of thought") {
-		t.Errorf("thinking leaked into a trace payload; traces=%#v", emit.traces)
+	thinking, ok := emit.traceOfType(string(model.WorkTraceThinking))
+	if !ok {
+		t.Fatalf("no thinking trace produced; traces=%#v", emit.traces)
+	}
+	if !strings.Contains(thinking.payload, "private chain of thought") {
+		t.Errorf("thinking trace missing content: %q", thinking.payload)
+	}
+	for _, tr := range emit.traces {
+		if tr.traceType != string(model.WorkTraceThinking) && strings.Contains(tr.payload, "private chain of thought") {
+			t.Errorf("thinking leaked into non-thinking trace: %+v", tr)
+		}
 	}
 }
 

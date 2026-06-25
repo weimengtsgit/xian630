@@ -594,4 +594,5 @@ const (
 	WorkTraceWarning       WorkTraceType = "warning"             // non-fatal warning surfaced
 	WorkTraceError         WorkTraceType = "error"               // error surfaced
 	WorkTraceAssistant     WorkTraceType = "assistant_output"    // assistant text output
+	WorkTraceThinking      WorkTraceType = "thinking"            // Claude Code CLI thinking_delta (ADR 0007)
 )

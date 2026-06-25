@@ -430,7 +430,7 @@ function appendChildItems(items, child, parentSession) {
   // round.
   let round = 1
   let bucket = null // { round, entries: [] }
-  let prevWasUser = false // true while inside a batch of consecutive user answers
+  let userBatch = null // { round, ids: [], labels: [] }
   // questionsById accumulates EVERY question seen (id -> parsed metadata). A
   // round can ask several high-impact questions at once, and the user answers
   // them in one batch; each answer is resolved against the question its OWN
@@ -450,39 +450,47 @@ function appendChildItems(items, child, parentSession) {
     }
     bucket = null
   }
+  const flushUserBatch = () => {
+    if (userBatch && userBatch.labels.length > 0) {
+      items.push({
+        id: userBatch.ids[0] || `${parentSession.id || 'dlg'}_answer_${userBatch.round}`,
+        type: 'user_message',
+        content: userBatch.labels.join('；'),
+      })
+    }
+    userBatch = null
+  }
   for (const msg of childMessages) {
     if (msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
+      flushUserBatch()
       if (msg.content) {
         if (!bucket) bucket = { round, entries: [] }
         bucket.entries.push(safeString(msg.content))
       }
-      prevWasUser = false
       continue
     }
     if (msg && msg.role === 'agent' && msg.kind === 'question') {
+      flushUserBatch()
       flushAnalysis()
       const q = parseJSON(msg.metadata_json)
       if (q && q.id) questionsById[q.id] = q
-      prevWasUser = false
       continue
     }
     if (msg && msg.role === 'user' && msg.kind !== 'prompt') {
       // A user turn may carry MULTIPLE answers (one batched question group);
       // only the FIRST answer of the batch flushes the round's analysis and
       // advances the round counter, so N batched answers inflate it by 1, not N.
-      if (!prevWasUser) {
+      if (!userBatch) {
         flushAnalysis()
         round += 1
+        userBatch = { round, ids: [], labels: [] }
       }
-      items.push({
-        id: msg.id || `${parentSession.id || 'dlg'}_answer_${round}`,
-        type: 'user_message',
-        content: clarifyAnswerLabel(msg, questionsById),
-      })
-      prevWasUser = true
+      userBatch.ids.push(msg.id || `${parentSession.id || 'dlg'}_answer_${round}_${userBatch.ids.length}`)
+      userBatch.labels.push(clarifyAnswerLabel(msg, questionsById))
       continue
     }
   }
+  flushUserBatch()
   flushAnalysis()
   // Question groups: the latest unanswered question set after the last user
   // answer. One group with all open questions.
@@ -772,6 +780,16 @@ export function foldTraceIntoLiveAnalysis(state, stepLive) {
   return {
     ...state,
     liveAnalysis: { key: stepLive.key, content: stepLive.content, kind: 'step' },
+  }
+}
+
+export function foldTraceIntoLiveThinking(state, stepLive) {
+  if (!stepLive || !stepLive.content) return state
+  const existing = state.liveThinking
+  if (existing && existing.kind === 'round') return state
+  return {
+    ...state,
+    liveThinking: { key: stepLive.key, content: stepLive.content, kind: 'step' },
   }
 }
 

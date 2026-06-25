@@ -24,6 +24,14 @@ _Avoid_: 并行澄清轮次, 无序模型调用, 生成任务
 The initial route inferred for a dialogue session: existing-application reuse or application generation. It establishes the first conversation context; business-processing agent drafting is a dormant future route, and any model suggestion of that route is treated as application generation in the current phase.
 _Avoid_: 生成任务状态, 智能体角色, 轮次意图
 
+**路由选择回显**:
+A user-visible conversation message that records the user's explicit route choice, such as choosing to reuse an existing 智能体 or create a new 智能体. It anchors any following 思考过程, 分析过程, recommendation, or clarification.
+_Avoid_: 隐藏按钮状态, 仅内部 route_locked 标记, 固定选择面板
+
+**智能体打开回显**:
+A user-visible conversation message that records the user's explicit action to open or start-and-open a recommended 智能体. It appears before the resolved/open result so the transcript preserves the user's final reuse action.
+_Avoid_: 隐藏启动动作, 仅 resolved_outcome, 自动打开记录
+
 **轮次意图**:
 The user need inferred from one new message in a continuing dialogue session: application modification, new application, application inquiry, task control, or general dialogue. It determines the next interaction without reclassifying the session's initial route.
 _Avoid_: 会话路由, 生成任务状态, 固定标签
@@ -102,15 +110,18 @@ _Avoid_: 分析工作日志, 原始思考过程
 
 **分析工作日志**:
 A user-facing record of an agent's recognized user goal, identified facts, proposed approach, assumptions, clarification needs, recommendations, tool activity summaries, data-source decisions, and validation results. It is a part of the visible work trace and never contains hidden model reasoning.
-_Avoid_: 原始思考过程, 思维链, 系统状态日志
+_Avoid_: 模型思考过程, 思维链, 系统状态日志
 
 **模型分析过程**:
 The analysis portion of the visible work trace shown inside a clarification conversation, composed from structured analysis work logs and model output summaries.
-**模型思考过程 (思考过程)**: The model's raw reasoning (`thinking_delta`), streamed live on the conversation surface as a 思考过程 block (distinct from 分析过程). Shown to the user token-by-token; the conversation flow surfaces it (the executor/trace pipeline is a separate surface).
+
+**模型思考过程 (思考过程)**:
+The Claude Code CLI raw reasoning stream (`thinking` / `thinking_delta`) shown token-by-token in the conversation workbench as a distinct 思考过程 block. It is separate from 分析工作日志 and must remain explicitly attributed to the dialogue turn, clarification round, or generation step that produced it.
+_Avoid_: 分析工作日志, 系统状态日志, 无归属原始输出
 
 **可见工作轨迹**:
-An ordered, persistent, user-facing record of analysis, tool activity, data-source decisions, validation, output, and state changes for a dialogue or generation task. It is pushed in real time and can be replayed after a reconnect; every event is attributed to its dialogue and, where applicable, its task; hidden model reasoning is excluded.
-_Avoid_: 原始思维链, 仅最终回复, 无归属的原始输出
+An ordered, persistent, user-facing record of analysis, model thinking, tool activity, data-source decisions, validation, output, and state changes for a dialogue or generation task. It is pushed in real time and can be replayed after a reconnect; every event is attributed to its dialogue and, where applicable, its task.
+_Avoid_: 仅最终回复, 无归属的原始输出
 
 **工作轨迹事件**:
 One ordered fact in a visible work trace, carrying its identity, dialogue-level sequence, occurrence time, dialogue attribution, and any applicable task, application, version, step, or attempt attribution. Task and step local sequences additionally verify the completeness of their own execution stream.
@@ -122,11 +133,15 @@ _Avoid_: 未受限原始日志, 聊天流正文, 临时浏览器数据
 
 **步骤执行记录**:
 The auditable record for one generation-task pipeline step, combining system status logs, user-facing analysis work logs where applicable, execution output, and linked artifacts without treating raw model reasoning as product content.
-_Avoid_: 智能体思维链, 原始推理, 单纯运行日志
+_Avoid_: 单纯运行日志, 无归属原始输出
 
 **确认需求摘要**:
-The structured requirement record confirmed by the user after clarification and used as the input for creating a generation task.
-_Avoid_: 初始需求, 聊天记录, 分析工作日志
+The structured requirement record shown as an agent message in the conversation after clarification and used as the input for creating a generation task after the user confirms it. Its confirm action belongs to this message in the dialogue flow.
+_Avoid_: 初始需求, 固定底部面板, 分析工作日志
+
+**澄清答案回显**:
+A user-visible conversation message that summarizes one submitted batch of clarification answers using the question labels and selected option labels. It is appended as the user's next dialogue turn and anchors the following 思考过程 and 分析过程.
+_Avoid_: 原始选项值, 多条零散答案, 隐藏表单状态
 
 **推荐收敛确认**:
 A late-stage clarification interaction that presents the remaining decisions with their recommended values, so the user can accept the recommended set or make a targeted adjustment before confirming the requirement summary.

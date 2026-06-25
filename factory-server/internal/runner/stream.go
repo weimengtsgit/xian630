@@ -28,10 +28,9 @@ var safeToolNames = map[string]bool{
 // contain zero, one, or several newline-delimited JSON objects, or a partial
 // trailing line) and emits the SAFE records/traces the drawer renders:
 //
-//   - thinking / thinking_delta → DROPPED ENTIRELY (Constraint #9 HARD SECURITY
-//     boundary). The model's hidden reasoning never becomes a record or a trace.
-//     This closes the leak at the source: no thinking record is produced, so it
-//     can never be persisted, published over SSE, or surfaced to the frontend.
+//   - thinking_delta → EMITTED as WorkTraceThinking TRACE (ADR 0007). Claude Code
+//     CLI's reasoning is surfaced in the conversation workbench as a dedicated
+//     thinking channel, separate from analysis work logs.
 //   - assistant text block → an assistant_output TRACE (WorkTraceAssistant)
 //     carrying a redacted, capped observation of the prose. Routed through the
 //     TraceEmitter seam → executor → server recordAndPublishWorkTrace gate, so
@@ -78,10 +77,13 @@ func streamClaudeEvents(ctx context.Context, emit StepRecordEmitter, chunk strin
 // agent works turn by turn. Any field absent from these structs is dropped by
 // json.Unmarshal.
 type claudeStreamEvent struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`  // top-level tool_use shape
-	Input   map[string]any `json:"input"` // top-level tool_use shape
-	Message struct {
+	Type          string         `json:"type"`
+	Subtype       string         `json:"subtype"`        // stream_event subtype
+	Name          string         `json:"name"`           // top-level tool_use shape
+	Input         map[string]any `json:"input"`          // top-level tool_use shape
+	Thinking      string         `json:"thinking"`       // type: thinking full thinking
+	ThinkingDelta string         `json:"thinking_delta"` // type: thinking delta (streaming)
+	Message       struct {
 		Content []contentBlock `json:"content"`
 	} `json:"message"`
 }
@@ -89,11 +91,12 @@ type claudeStreamEvent struct {
 // contentBlock is one block inside an assistant turn's message.content[]. Only
 // the fields the drawer consumes are modeled.
 type contentBlock struct {
-	Type     string         `json:"type"`     // thinking | text | tool_use
-	Thinking string         `json:"thinking"` // type=thinking (方案 B)
-	Text     string         `json:"text"`     // type=text
-	Name     string         `json:"name"`     // type=tool_use
-	Input    map[string]any `json:"input"`    // type=tool_use
+	Type          string         `json:"type"`           // thinking | text | tool_use
+	Thinking      string         `json:"thinking"`       // type=thinking full thinking
+	ThinkingDelta string         `json:"thinking_delta"` // type=thinking delta (streaming)
+	Text          string         `json:"text"`           // type=text
+	Name          string         `json:"name"`           // type=tool_use
+	Input         map[string]any `json:"input"`          // type=tool_use
 }
 
 // toolUseActivityRedacter rewrites an absolute or workspace-rooted path in a
@@ -172,17 +175,16 @@ func cleanRelPath(p string) string {
 }
 
 // emitStreamLine decodes one real CLI stream-json line and emits the SAFE
-// records + traces the drawer renders. Only "assistant" turns are decoded
-// further — their message.content[] blocks become records (verified against a
-// live capture):
+// records + traces the drawer renders:
 //
-//   - thinking block → DROPPED (Constraint #9). The hidden reasoning is never
-//     surfaced as a record or a trace. There is intentionally NO case for it.
-//   - text block → an assistant_output TRACE (WorkTraceAssistant) carrying a
-//     redacted, capped observation of the prose.
-//   - tool_use Write/Edit → file_delta record + a tool TRACE with line counts.
-//   - tool_use Read/Grep/Glob → activity record + a tool TRACE with the path.
-//     Non-allowlisted tools and Bash are ignored.
+//   - top-level thinking_delta → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - top-level thinking → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - top-level tool_use → tool trace/record
+//   - assistant turn blocks:
+//   - thinking_delta block → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - thinking block → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - text block → an assistant_output TRACE (WorkTraceAssistant)
+//   - tool_use → file_delta/activity record + tool trace
 //
 // It swallows decode errors: a malformed line is a transport hiccup, not a step
 // failure.
@@ -191,11 +193,24 @@ func emitStreamLine(ctx context.Context, emit StepRecordEmitter, trace TraceEmit
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		return
 	}
+
+	// Handle top-level thinking_delta first (ADR 0007: surface thinking)
+	if ev.Type == "thinking_delta" || (ev.Type == "thinking" && ev.ThinkingDelta != "") {
+		if strings.TrimSpace(ev.ThinkingDelta) != "" {
+			emitThinkingTrace(ctx, trace, ev.ThinkingDelta)
+		}
+		return
+	}
+	if ev.Type == "thinking" && ev.Thinking != "" {
+		if strings.TrimSpace(ev.Thinking) != "" {
+			emitThinkingTrace(ctx, trace, ev.Thinking)
+		}
+		return
+	}
+
 	// A top-level tool_use event (some CLI/stream shapes emit tool_use directly
 	// rather than nested in an assistant turn) is handled here so a tool trace is
-	// produced regardless of nesting. thinking/thinking_delta/system/result/user
-	// top-level events are ignored — only assistant turns and top-level tool_use
-	// carry the safe activity we surface.
+	// produced regardless of nesting.
 	if ev.Type == "tool_use" && ev.Name != "" {
 		emitToolUse(ctx, emit, trace, ev.Name, ev.Input)
 		return
@@ -206,10 +221,12 @@ func emitStreamLine(ctx context.Context, emit StepRecordEmitter, trace TraceEmit
 	for _, b := range ev.Message.Content {
 		switch b.Type {
 		case "thinking":
-			// Constraint #9 HARD SECURITY: hidden reasoning is dropped at the
-			// source. No record, no trace, no routing — it can never reach the
-			// store, SSE, or frontend. Intentionally a no-op.
-			continue
+			// ADR 0007: surface thinking_delta in conversation workbench
+			if strings.TrimSpace(b.ThinkingDelta) != "" {
+				emitThinkingTrace(ctx, trace, b.ThinkingDelta)
+			} else if strings.TrimSpace(b.Thinking) != "" {
+				emitThinkingTrace(ctx, trace, b.Thinking)
+			}
 		case "text":
 			// Assistant prose → a redacted, capped observation trace. The gate
 			// (recordAndPublishWorkTrace) applies its own redaction/cap too, so
@@ -221,6 +238,14 @@ func emitStreamLine(ctx context.Context, emit StepRecordEmitter, trace TraceEmit
 			emitToolUse(ctx, emit, trace, b.Name, b.Input)
 		}
 	}
+}
+
+func emitThinkingTrace(ctx context.Context, trace TraceEmitter, text string) {
+	payload, err := json.Marshal(map[string]string{"text": truncateUTF8(text, maxObservationBytes)})
+	if err != nil {
+		return
+	}
+	_ = trace.Trace(ctx, string(model.WorkTraceThinking), string(payload))
 }
 
 // emitToolUse emits the safe records + trace for one tool_use block: a

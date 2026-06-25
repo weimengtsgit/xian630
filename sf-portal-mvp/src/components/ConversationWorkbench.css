@@ -78,6 +78,7 @@
 .cw-summary div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
 .cw-summary span { color: rgba(215, 238, 248, 0.55); }
 .cw-summary b { color: #edfaff; font-weight: 500; }
+.cw-summary-confirm { justify-self: end; margin-top: 4px; }
 .cw-apps, .cw-business, .cw-consolidation, .cw-route-choice { display: flex; flex-direction: column; gap: 8px; }
 .cw-apps strong, .cw-business strong, .cw-consolidation strong { color: #edfaff; font-size: 12px; }
 .cw-app-list { display: flex; flex-direction: column; gap: 8px; }

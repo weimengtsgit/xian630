@@ -514,6 +514,38 @@ assert.equal(distinctUserMsgs[0].id, 'opt_2', 'distinct optimistic message prepe
 const nullOptTimeline = buildDialogueTimeline(reloadedView, null)
 assert.equal(nullOptTimeline.filter(item => item.type === 'user_message').length, 1, 'null optimistic message must not add a phantom item')
 
+// Route choice and reusable-agent open actions must also be chronological user
+// replies. Persisted history should replay the echo before the following result.
+const routeEchoView = {
+  session: { id: 'dlg_route_echo', status: 'drafting_application', intent: 'application_generation', route_locked: true, initial_prompt: '我要新建一个助手' },
+  messages: [
+    { id: 'u1', role: 'user', kind: 'prompt', content: '我要新建一个助手' },
+    { id: 'u_route', role: 'user', kind: 'message', content: '我选择：新建智能体' },
+    { id: 'a_route', role: 'agent', kind: 'analysis_work_log', content: '开始需求澄清。' },
+  ],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+}
+const routeEchoTimeline = buildDialogueTimeline(routeEchoView)
+const routeEchoIndex = routeEchoTimeline.findIndex(item => item.type === 'user_message' && item.content === '我选择：新建智能体')
+const routeAnalysisIndex = routeEchoTimeline.findIndex(item => item.type === 'analysis_stream' && item.content === '开始需求澄清。')
+assert.ok(routeEchoIndex >= 0, 'route selection must replay as a user_message echo')
+assert.ok(routeEchoIndex < routeAnalysisIndex, 'route-confirmed follow-up content must appear below the route choice')
+
+const openEchoView = {
+  session: { id: 'dlg_open_echo', status: 'resolved', intent: 'existing_application', route_locked: true, initial_prompt: '打开请假助手' },
+  messages: [
+    { id: 'u1', role: 'user', kind: 'prompt', content: '打开请假助手' },
+    { id: 'u_open', role: 'user', kind: 'message', content: '我启动并打开：员工请假助手' },
+  ],
+  route: { intent: 'existing_application', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  resolvedApplication: { id: 'app_leave', slug: 'leave-helper', name: '员工请假助手', status: 'running' },
+}
+const openEchoTimeline = buildDialogueTimeline(openEchoView)
+const openEchoIndex = openEchoTimeline.findIndex(item => item.type === 'user_message' && item.content === '我启动并打开：员工请假助手')
+const resolvedOpenIndex = openEchoTimeline.findIndex(item => item.type === 'resolved_outcome')
+assert.ok(openEchoIndex >= 0, 'open action must replay as a user_message echo')
+assert.ok(openEchoIndex < resolvedOpenIndex, 'open result must appear after the open-action message')
+
 // ---- Static checks on the send path in useDialogueSessions.js ----------------
 
 // The send path must set the optimistic message SYNCHRONOUSLY before the first

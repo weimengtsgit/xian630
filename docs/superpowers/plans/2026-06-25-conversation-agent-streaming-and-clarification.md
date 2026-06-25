@@ -1,42 +1,58 @@
 # Conversation Agent Streaming and Clarification Implementation Plan
 
-> **For implementation agents:** Execute with
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` (recommended) or
-> `superpowers:executing-plans`. Keep existing worktree changes intact; inspect
-> a shared file before editing and never `reset`/`checkout` unrelated work.
-> Decisions D1–D6 are locked in ADR 0006, CONTEXT.md, and the adaptive
-> clarification spec; do not re-litigate them.
+> `superpowers:executing-plans` to implement this plan task-by-task. Steps use
+> checkbox (`- [ ]`) syntax for tracking. Keep existing worktree changes intact;
+> inspect a shared file before editing and never `reset`/`checkout` unrelated
+> work.
+>
+> **Execution preference:** Execute with
+> `superpowers:subagent-driven-development` (recommended) or
+> `superpowers:executing-plans`.
+>
+> Decisions D1–D7 are locked in ADR 0006, ADR 0007, CONTEXT.md, and the
+> adaptive clarification spec; do not re-litigate them.
 
 **Goal:** Make the conversation workbench behave like a live general-purpose
-agent (Codex / Claude Code): a user message appears instantly, the agent's
-analysis work log streams token-by-token beneath it, the round's conclusion
-follows, and the streamed analysis folds above the conclusion. Requirement
-clarification no longer jumps straight to a generate button — high-impact
-decisions are surfaced one per round and must be confirmed before the
-confirm-and-generate action appears. The produced product is labelled 智能体 in
-every user-facing surface while the internal entity stays 应用.
+agent (Codex / Claude Code): a user message appears instantly, Claude Code
+CLI's raw 思考过程 streams token-by-token beneath it, the safe analysis work log
+and the round's conclusion follow, and the streamed thinking/analysis folds
+above the conclusion. Requirement
+clarification no longer jumps straight to a generate button - high-impact
+decisions are surfaced as business-specific question batches and must be
+confirmed before the confirm-and-generate action appears. The produced product
+is labelled 智能体 in every user-facing surface while the internal entity stays
+应用, and internal enum values such as `operations_management` / `live_api` are
+translated to Chinese labels before they reach the user.
 
 **Architecture:** The backend streaming plumbing for pipeline steps already
 exists (dialogue-attributed work-trace events stream token-by-token through
 `dialogue.work_trace`). The frontend must (a) fold `*.delta` (routing /
 clarification / business-draft rounds) and `dialogue.work_trace` (pipeline
-steps) incrementally into a live analysis item in the conversation timeline,
-and (b) render them folded above each conclusion. A new server-side gate makes
+steps) incrementally into live thinking and live analysis items in the
+conversation timeline, and (b) render them folded above each conclusion. A new
+server-side gate makes
 `ready_to_confirm` impossible while any high-impact confirmation item remains
 open. A new contract field carries open high-impact items; the
-`requirement-clarification` skill surfaces them one per round. Raw hidden
-reasoning / `thinking_delta` remains hard-dropped at every layer (security
-constraint #9, unchanged).
+`requirement-clarification` skill surfaces them as one batch per round so the
+user can answer multiple related clarification items together. The previous
+security constraint #9 is relaxed for the conversation workbench: Claude Code
+CLI `thinking` / `thinking_delta` is forwarded, displayed, and retained as a
+dedicated 思考过程 channel, separate from analysis logs, work-trace audit rows,
+tool output, raw stdout/stderr, and attachments. User-facing requirement
+summaries use a small frontend display-label mapper so internal contract enums
+remain stable while the UI shows Chinese business terms.
 
 **Tech stack:** Go, SQLite, `net/http`, Server-Sent Events, local Claude Code
 CLI, React 18, Vite, project-local Claude skills.
 
 ## Accepted Product Decisions (locked)
 
-- **D1 — "思考过程" = 分析工作日志, streamed live, not raw chain-of-thought.**
-  Hidden reasoning / `thinking_delta` is never forwarded (CONTEXT.md glossary
-  + security constraint #9 unchanged). The live "thinking" feel is achieved by
-  streaming the safe analysis work log.
+- **D1 — "思考过程" = Claude Code CLI raw thinking stream, displayed live.**
+  `thinking` / `thinking_delta` is forwarded through a dedicated conversation
+  channel and rendered separately from 分析过程. 分析过程 remains the safe
+  analysis work log; 思考过程 is the raw Claude Code CLI thinking block.
 - **D2 — Live stream covers intent routing + clarification + all six pipeline
   steps.** The conversation workbench is the primary live surface; the step
   matrix and execution drawer stay as secondary detail/overview.
@@ -46,18 +62,31 @@ CLI, React 18, Vite, project-local Claude skills.
   permission, deployment, or user-visible behavior) remains open, regardless of
   how detailed the first message is. Non-high-impact details may still be
   assumed adaptively; a field filled from a blueprint assumption is not a
-  confirmed high-impact decision.
+  confirmed high-impact decision. Open clarification items are shown as a
+  multi-question batch in a round and submitted together. The six-round flow is
+  an upper bound, not a minimum: the model may converge earlier once every
+  high-impact item is explicitly confirmed, but round 1 must not jump directly
+  to confirm from assumptions. "All clarification items" means all currently
+  identified high-impact / must-confirm decisions; low-impact inferred details
+  are recorded as assumptions in the analysis log and reviewed in the final
+  requirement summary rather than rendered as extra questions.
 - **D4 — User-facing noun is 智能体; internal entity stays 应用.** (CONTEXT.md
   updated.)
 - **D5 — Optimistic user-message insert + failure rollback**, and drop the
   redundant serial `refreshSessions()` before `loadView()`.
-- **D6 — The streamed analysis folds above each conclusion** (Claude Code
-  thinking-block style) and remains replayable from persisted events.
+- **D6 — Streamed thinking and analysis fold above each conclusion** (Claude
+  Code thinking-block style) and remain replayable from persisted events.
+- **D7 — User-facing summaries translate internal enums to Chinese.**
+  `operations_management`, `live_api`, `mock_data`, `mock_then_api`, and other
+  known contract enum values stay unchanged in backend contracts but are never
+  shown raw in conversation summaries or clarification summaries.
 
 ## Source References
 
 - Locked decisions: `docs/adr/0006-high-impact-confirmation-non-skippable.md`,
+  `docs/adr/0007-show-claude-code-thinking-in-conversation.md`,
   `CONTEXT.md` (`应用`, `高影响确认事项`, `模型分析过程`, `分析工作日志`,
+  `模型思考过程`, `路由选择回显`, `智能体打开回显`, `澄清答案回显`,
   `可见工作轨迹`), adaptive spec
   `docs/superpowers/specs/2026-06-23-adaptive-requirement-clarification-design.md`.
 - Send path: `sf-portal-mvp/src/hooks/useDialogueSessions.js` (`send` ~175-218,
@@ -71,7 +100,10 @@ CLI, React 18, Vite, project-local Claude skills.
   + clarification.* types; `subscribeDialogueTrace` work-trace hydrate→live→gap).
 - Workbench render: `sf-portal-mvp/src/components/ConversationWorkbench.jsx`
   (composer `submitText` ~108-113; `pendingTurn` banner ~199-202;
-  `analysis_stream` branch ~283-290; route card ~327-345; confirm gate ~73-83).
+  `analysis_stream` branch ~283-290; route card ~327-345; confirm gate ~73-83;
+  `RequirementSummary` currently renders raw `appType` / `dataPolicy` values).
+- Legacy clarification render: `sf-portal-mvp/src/components/ClarificationPanel.jsx`
+  (`SummaryRow` currently renders raw `appType` / `dataPolicy` values).
 - Clarification contract: `factory-server/internal/clarification/contracts.go`
   (`RoundOutput` ~130-138; `Question` ~51-60; `Requirement` ~73-84).
 - Ready-to-confirm convergence: `factory-server/internal/server/clarification_handlers.go`
@@ -79,11 +111,13 @@ CLI, React 18, Vite, project-local Claude skills.
   `normalizeClarificationReadiness` ~1039; confirm gates ~674-682.
 - Dialogue confirm gate: `factory-server/internal/server/dialogue_handlers.go`
   ~1628-1631.
-- Pipeline step streaming (already dialogue-attributed):
+- Pipeline step streaming (already dialogue-attributed for safe analysis/tool
+  traces; must be extended with a dedicated thinking channel):
   `factory-server/internal/executor/executor.go` (`newStepEmitter` ~440,
   `stepEmitter.Trace` ~229-249 drops when `dialogueID==""`), `claude_runner.go`
-  `emitWorkLog` ~144-152, `internal/runner/stream.go` ~35-240 (drops
-  `thinking_delta` at source), `internal/server/events.go`
+  `emitWorkLog` ~144-152, `internal/runner/stream.go` ~35-240 (currently drops
+  `thinking_delta` at source and must be changed for dialogue-attributed CLI
+  runs), `internal/server/events.go`
   `recordAndPublishWorkTrace` ~190-199.
 - Skill: `.claude/skills/requirement-clarification/SKILL.md` (no high-impact
   concept today).
@@ -93,12 +127,15 @@ CLI, React 18, Vite, project-local Claude skills.
 Create:
 
 ```text
+docs/adr/0007-show-claude-code-thinking-in-conversation.md
+sf-portal-mvp/src/displayLabels.js
 sf-portal-mvp/scripts/check-conversation-agent-streaming.mjs
 ```
 
 Modify:
 
 ```text
+CONTEXT.md
 .claude/skills/requirement-clarification/SKILL.md
 factory-server/internal/clarification/contracts.go
 factory-server/internal/clarification/runner.go
@@ -113,6 +150,7 @@ factory-server/internal/executor/executor_test.go
 sf-portal-mvp/src/hooks/useDialogueSessions.js
 sf-portal-mvp/src/hooks/dialogueTimeline.js
 sf-portal-mvp/src/hooks/workTraceState.js
+sf-portal-mvp/src/components/ClarificationPanel.jsx
 sf-portal-mvp/src/components/ConversationWorkbench.jsx
 sf-portal-mvp/src/components/ConversationWorkbench.css
 sf-portal-mvp/scripts/check-dialogue-workbench.mjs
@@ -124,14 +162,46 @@ high-impact + rename assertions so the old check keeps its scope.
 
 ## Global Constraints
 
-- Raw hidden reasoning / `thinking_delta` / chain-of-thought is NEVER forwarded
-  to the frontend, SSE, or DB attachments (security constraint #9). Streaming
-  only ever carries the safe analysis work log (`text_delta` content).
-- Persist event-equivalent records BEFORE publishing any SSE event.
+- Claude Code CLI `thinking` / `thinking_delta` MUST be forwarded to the
+  conversation workbench when it is produced by a dialogue-attributed routing,
+  clarification, business-draft, or generation-step run. It is shown as
+  思考过程, not as 分析过程.
+- 思考过程 MUST use a dedicated event/message path (`*.thinking` or equivalent)
+  and MUST NOT be merged into analysis work logs, tool summaries, stdout/stderr,
+  audit attachments, or generic work-trace event types. The boundary is
+  separation and attribution, not suppression.
+- 思考过程 MUST be attributed to the triggering dialogue turn, clarification
+  answer, route selection, or generation step so the conversation timeline can
+  append it under the user action that caused it.
+- A route selection MUST append one user-visible 路由选择回显 message, such as
+  `我选择：新建智能体` or `我选择：复用「员工请假助手」`. Any following 思考过程,
+  分析过程, reuse recommendation, or clarification session must appear beneath
+  that choice in chronological order.
+- Opening a recommended reusable 智能体 MUST append one user-visible
+  智能体打开回显 message, such as `我打开：员工请假助手` or
+  `我启动并打开：员工请假助手`, before the resolved/open result appears.
+- A submitted clarification batch MUST append one user-visible 澄清答案回显
+  message using Chinese question labels and selected option labels (for example
+  `审批层级：直属主管 + HR；假期余额来源：真实接口`). The following 思考过程 and
+  分析过程 must be anchored under that reply, not under the original prompt.
+- User-facing summaries and confirmation views MUST NOT render known internal
+  enum values raw. Examples: `operations_management` -> `业务管理类智能体`,
+  `command_dashboard` -> `指挥看板类智能体`, `situation_replay` ->
+  `态势复盘类智能体`, `affiliation_assessment` -> `归属研判类智能体`,
+  `live_api` -> `真实接口优先`, `mock_data` -> `演示 / Mock 数据`,
+  `mock_then_api` -> `真实接口优先（失败时明确提示，不回退 Mock）`.
+- 确认需求摘要 MUST be appended as an agent message in the chronological
+  conversation flow after the final clarification analysis. The
+  确认并生成智能体 action belongs to that summary message, not to a fixed global
+  footer or floating bottom bar.
+- Persist event-equivalent records BEFORE publishing any SSE event, including
+  thinking events that are retained for replay.
 - Preserve existing user changes and unrelated files (the carrier-affiliation
   scene work, the AgentsPanel/协作智能体 tab owned by the collaborating branch).
   No `git reset` / `checkout --hard`.
 - Tool I/O / API / command logs remain allowlisted, redacted, length-capped.
+  Raw Claude stdout/stderr is still not exposed as an attachment merely to
+  obtain thinking; parse and publish the thinking stream explicitly.
 - A new version of an application becomes effective only after build + deploy +
   health succeed; rollback is explicit-confirm (unchanged by this plan).
 
@@ -171,7 +241,26 @@ high-impact + rename assertions so the old check keeps its scope.
   202-ack continuation path optimistic too — the message shows immediately and
   the live stream (Task 3) fills in beneath it.
 
-- [ ] **Step 4: Run the portal check.**
+- [ ] **Step 4: Append route selections as user replies.**
+
+  In `useDialogueSessions.selectRoute` / `dialogueTimeline.js`, add an
+  optimistic and persisted 路由选择回显 so clicking `复用已有智能体` or
+  `生成新智能体` appends one `user_message` such as `我选择：新建智能体` or
+  `我选择：复用「<智能体名>」`. The next route-confirmation analysis,
+  recommendation, or clarification stream must anchor below this message. Add a
+  logic check that route-confirmed follow-up content is ordered after the route
+  choice, not after the original prompt.
+
+- [ ] **Step 5: Append reusable-agent open actions as user replies.**
+
+  In `useDialogueSessions.openApp` / `dialogueTimeline.js`, add an optimistic
+  and persisted 智能体打开回显 so clicking `打开智能体` appends
+  `我打开：<智能体名>` and clicking `启动并打开` appends
+  `我启动并打开：<智能体名>`. The `resolved_outcome` / open result must appear
+  after this user action, not as a silent state jump. Add a logic check that the
+  open result follows the open-action message in replayed history.
+
+- [ ] **Step 6: Run the portal check.**
 
   `node scripts/check-dialogue-workbench.mjs` from `sf-portal-mvp`.
 
@@ -226,30 +315,57 @@ high-impact + rename assertions so the old check keeps its scope.
   high-impact items stays question/active even at the MaxRounds cap. Persist the
   open high-impact items with the round so history replays the same gate.
 
-- [ ] **Step 5: Teach the skill to surface high-impact items one per round.**
+- [ ] **Step 5: Teach the skill to surface high-impact items as a batch.**
 
   Update `.claude/skills/requirement-clarification/SKILL.md`: identify open
-  高影响确认事项 each round; while any remain, round output returns exactly one
-  of them as the blocking question (with recommendation) AND lists the rest in
-  `openHighImpact`; only when `openHighImpact` is empty may it return
-  `ready_to_confirm`. A blueprint-assumed field is explicitly NOT a confirmed
-  high-impact decision. Output-contract example updated with `openHighImpact`.
+  高影响确认事项 each round; while any remain, round output returns all
+  currently open, business-relevant blocking questions in `questions[]` (each
+  with recommendation) AND lists the same set in `openHighImpact`; only when
+  `openHighImpact` is empty may it return `ready_to_confirm`. A
+  blueprint-assumed field is explicitly NOT a confirmed high-impact decision.
+  Output-contract example updated with `openHighImpact`. The skill must avoid
+  generic fixed triplets and instead derive the batch from the user's business
+  description. Six rounds is a maximum, not a quota; the flow may enter
+  `ready_to_confirm` earlier once no high-impact item remains open. Low-impact
+  fields that can be inferred should be documented as assumptions in `workLog`
+  and the confirmation summary instead of being asked as questions.
 
 - [ ] **Step 6: Render open high-impact items in the workbench.**
 
-  In `dialogueTimeline.js`, map each round's blocking high-impact question to
+  In `dialogueTimeline.js`, map each round's blocking high-impact questions to
   the existing `question_group`/`QuestionCard` path (it already supports
-  recommendation badges and options), so the user answers one per round. In
-  `ConversationWorkbench.jsx`, keep the 确认并生成 button gated on
-  `ready_to_confirm` (already the case) — it now cannot appear while
-  high-impact items are open. No new component is required.
+  multiple cards, recommendation badges, and options), so the user answers a
+  batch and submits it once. In `ConversationWorkbench.jsx`, keep the
+  confirm action gated on `ready_to_confirm` (already the case) — it now cannot
+  appear while high-impact items are open. Step 8 moves that action into the
+  summary timeline item.
 
-- [ ] **Step 7: Run focused tests.**
+- [ ] **Step 7: Append submitted clarification answers as one user reply.**
+
+  Update `dialogueTimeline.js` so a batch of persisted clarification answer
+  messages is rendered as a SINGLE `user_message` containing Chinese
+  `问题标签：选项标签` segments joined by `；`, not as one bubble per answer and
+  not as raw option values. The next round's live `live_thinking` and
+  `live_analysis` items must anchor immediately after this 澄清答案回显. Add a
+  check in `check-conversation-agent-streaming.mjs` that round 2 analysis
+  appears below the submitted answer summary, not below the original prompt.
+
+- [ ] **Step 8: Render the requirement summary as the final agent message.**
+
+  Keep `requirement_summary` in the ordered timeline immediately after the last
+  persisted 思考过程 / 分析过程 for the clarification flow. Move the
+  `确认并生成智能体` affordance into the `RequirementSummary` timeline item
+  (or render it directly adjacent to that item) so the action is visually tied
+  to the summary, not a fixed answer bar at the bottom of the workbench. Add a
+  check that the summary and its confirm action remain in order after history
+  reload.
+
+- [ ] **Step 9: Run focused tests.**
 
   `go test ./internal/clarification ./internal/server` from `factory-server`;
   `node scripts/check-conversation-agent-streaming.mjs` from `sf-portal-mvp`.
 
-## Task 3: Live analysis-process streaming in the conversation (D1, D2, D6)
+## Task 3: Live thinking + analysis streaming in the conversation (D1, D2, D6)
 
 **Files:**
 - Modify: `sf-portal-mvp/src/hooks/useDialogueSessions.js`
@@ -263,20 +379,21 @@ high-impact + rename assertions so the old check keeps its scope.
 
   Assert: (a) a `*.delta` event for the selected dialogue folds incrementally
   into a live analysis item (does NOT only set `needsRefresh`); (b) a
-  `dialogue.work_trace` event for a pipeline step folds into the same live
-  surface; (c) on the round/step completion event the live item is replaced by
-  the persisted analysis item rendered FOLDED above the conclusion; (d) the
-  folded analysis is replayable from persisted state after a reload; (e) no
-  `thinking_delta` / raw-reasoning field is ever read into the timeline.
+  `*.thinking` event for the selected dialogue folds incrementally into a live
+  thinking item; (c) a dialogue-attributed generation-step thinking event
+  appears in the same conversation surface for pipeline steps; (d) on the
+  round/step completion event the live items are replaced by persisted thinking
+  and analysis items rendered FOLDED above the conclusion; (e) folded thinking
+  and analysis are replayable from persisted state after a reload.
 
-- [ ] **Step 2: Add a transient live-analysis item to the timeline state.**
+- [ ] **Step 2: Add transient live-thinking and live-analysis items to the timeline state.**
 
-  In `dialogueTimeline.js` add a reducer that, for the selected dialogue, folds
-  `*.delta` (route / clarification / business-draft) and `dialogue.work_trace`
-  into a single transient `live_analysis` item keyed by the running turn / step.
-  Delta payloads carry the full-so-far text (mirror `clarificationLogic.js:67`,
-  set-not-append). The item sits in the timeline right after the optimistic /
-  persisted user message. Unknown or internal metadata keys are still dropped.
+  In `dialogueTimeline.js` add reducers that, for the selected dialogue, fold
+  `*.thinking` into `live_thinking` and `*.delta` / `dialogue.work_trace` into
+  `live_analysis`, keyed by the triggering user action / turn / step. Payloads
+  carry the full-so-far text (set-not-append). The items sit directly after the
+  optimistic / persisted user message, 路由选择回显, or 澄清答案回显 that caused
+  the model call.
 
 - [ ] **Step 3: Stop using needsRefresh for live deltas.**
 
@@ -287,23 +404,27 @@ high-impact + rename assertions so the old check keeps its scope.
   confirmation, ready_to_confirm) so the authoritative persisted view still
   reconciles. This removes the per-token full reload.
 
-- [ ] **Step 4: Render the live item and fold on completion.**
+- [ ] **Step 4: Render the live items and fold on completion.**
 
-  In `ConversationWorkbench.jsx`, render `live_analysis` as a streaming
-  "分析过程" block (monospace, plaintext `<pre>`-safe, never
-  `dangerouslySetInnerHTML`). When the persisted analysis item lands
-  (post-completion reload), replace the transient block with the persisted
-  analysis rendered COLLAPSED above its conclusion, with an expand control
-  (D6). The step matrix and execution drawer remain as secondary detail.
+  In `ConversationWorkbench.jsx`, render `live_thinking` as a streaming
+  "思考过程" block and `live_analysis` as a streaming "分析过程" block
+  (monospace, plaintext `<pre>`-safe, never `dangerouslySetInnerHTML`). When
+  persisted items land (post-completion reload), replace transient blocks with
+  persisted folded thinking + analysis above the conclusion, with expand
+  controls (D6). The step matrix and execution drawer remain as secondary
+  detail.
 
-- [ ] **Step 5: Inline pipeline work-trace into the conversation.**
+- [ ] **Step 5: Inline pipeline thinking and work-trace into the conversation.**
 
   The pipeline already streams dialogue-attributed `dialogue.work_trace`
   (assistant text, tool use). Ensure `workTraceState` exposes the in-flight
-  traces for the selected dialogue's current job/step so the conversation's live
-  item shows the build phase token-by-token. On step completion, the step's
-  analysis summary folds above the step result (D6). In fake mode the step is
-  batch (no token stream) — it lands as a completed block; acceptable per D2.
+  traces for the selected dialogue's current job/step so the conversation's
+  live analysis item shows the build phase token-by-token. Add a dedicated
+  dialogue-attributed thinking stream for real Claude Code CLI pipeline steps,
+  so `thinking_delta` appears in the same turn/step as 思考过程. On step
+  completion, the step's thinking and analysis summary fold above the step
+  result (D6). In fake mode the step is batch (no token stream) — it lands as a
+  completed block; acceptable per D2.
 
 - [ ] **Step 6: Run the portal checks and build.**
 
@@ -318,29 +439,32 @@ high-impact + rename assertions so the old check keeps its scope.
 - Modify: `factory-server/internal/executor/executor.go`
 - Modify: `factory-server/internal/executor/executor_test.go`
 
-- [ ] **Step 1: Write a failing executor test.**
+- [ ] **Step 1: Write failing executor tests.**
 
   Assert that a structured workLog summary entry decoded from `output.json` is
   emitted as a dialogue-attributed trace (so it reaches the conversation), not
-  only as a job-scoped `step_execution_records` row. Assert the trace is
-  redacted/capped like every other trace, and that `thinking_delta` is still
-  never emitted.
+  only as a job-scoped `step_execution_records` row. Assert real CLI
+  `thinking_delta` from a dialogue-attributed pipeline step is emitted through
+  the dedicated thinking channel and never through tool/stdout/work-log fields.
 
 - [ ] **Step 2: Emit the workLog summary as a trace.**
 
   In `claude_runner.go` `emitWorkLog` (~144-152), in addition to emitting
   `ExecutionRecordSummary` records, emit the safe summary text through the
   dialogue-scoped trace emitter (the same path `stepEmitter.Trace` uses, which
-  stamps `DialogueID` and drops when empty). Keep redaction/cap identical to
-  `recordAndPublishWorkTrace`. Do not change job-scoped record persistence.
+  stamps `DialogueID` and drops when empty). Separately parse and forward
+  `thinking_delta` through a dialogue-attributed thinking emitter. Do not store
+  thinking as a `step_execution_records` summary and do not expose raw stdout.
 
 - [ ] **Step 3: Run focused tests.**
 
   `go test ./internal/executor ./internal/server` from `factory-server`.
 
-## Task 5: User-facing 智能体 label (D4)
+## Task 5: User-facing 智能体 label and Chinese enum display (D4, D7)
 
 **Files:**
+- Create: `sf-portal-mvp/src/displayLabels.js`
+- Modify: `sf-portal-mvp/src/components/ClarificationPanel.jsx`
 - Modify: `sf-portal-mvp/src/components/ConversationWorkbench.jsx`
 - Modify: `sf-portal-mvp/scripts/check-conversation-agent-streaming.mjs`
 
@@ -353,12 +477,76 @@ high-impact + rename assertions so the old check keeps its scope.
   API paths, and the collaborating-branch-owned `AgentsPanel` / 协作智能体 tab
   untouched. (The left 应用列表 → 业务智能体 rename is already done.)
 
-- [ ] **Step 2: Assert the rename in the logic check.**
+- [ ] **Step 2: Add a centralized enum display mapper.**
+
+  Create `sf-portal-mvp/src/displayLabels.js` with pure functions used by both
+  `ConversationWorkbench.jsx` and `ClarificationPanel.jsx`. Keep backend enum
+  values unchanged; only the UI display layer translates them.
+
+  ```js
+  const APP_TYPE_LABELS = {
+    operations_management: '业务管理类智能体',
+    command_dashboard: '指挥看板类智能体',
+    situation_replay: '态势复盘类智能体',
+    timeline_replay: '态势复盘类智能体',
+    'timeline-replay': '态势复盘类智能体',
+    affiliation_assessment: '归属研判类智能体',
+    assistant: '助手智能体',
+  }
+
+  const DATA_POLICY_LABELS = {
+    live_api: '真实接口优先',
+    mock_data: '演示 / Mock 数据',
+    mock_then_api: '真实接口优先（失败时明确提示，不回退 Mock）',
+  }
+
+  const FIELD_LABEL_MAPS = {
+    appType: APP_TYPE_LABELS,
+    dataPolicy: DATA_POLICY_LABELS,
+  }
+
+  export function displayRequirementValue(field, value) {
+    if (Array.isArray(value)) {
+      return value.map(item => displayRequirementValue(field, item)).join('、')
+    }
+    if (value == null || value === '') return ''
+    const raw = String(value)
+    const map = FIELD_LABEL_MAPS[field]
+    if (map && map[raw]) return map[raw]
+    if (map) return `未识别值：${raw}`
+    return raw
+  }
+  ```
+
+- [ ] **Step 3: Use the mapper in requirement summaries.**
+
+  In `ConversationWorkbench.jsx`, import `displayRequirementValue` and render:
+
+  ```js
+  const rows = [
+    ['智能体类型', displayRequirementValue('appType', requirement.appType)],
+    ['智能体名称', requirement.appName],
+    ['核心场景', requirement.coreScenario],
+    ['主视图', requirement.primaryView],
+    ['数据策略', displayRequirementValue('dataPolicy', requirement.dataPolicy)],
+  ].filter(([, value]) => value)
+  ```
+
+  In `ClarificationPanel.jsx`, apply the same mapper to `SummaryRow` values for
+  `appType` and `dataPolicy` so older clarification surfaces do not leak raw
+  enums while the conversation workbench migration is in progress.
+
+- [ ] **Step 4: Assert rename and enum localization in the logic check.**
 
   The check must fail if a user-facing product string still says 应用 where it
-  should say 智能体, while still allowing internal entity names in code.
+  should say 智能体, while still allowing internal entity names in code. Add
+  fixture assertions that a requirement summary with
+  `appType: "operations_management"` and `dataPolicy: "live_api"` renders
+  `业务管理类智能体` and `真实接口优先`, and does not render the raw enum strings.
+  Add a second fixture for `mock_then_api` to verify the honest-data label
+  remains explicit.
 
-- [ ] **Step 3: Run the portal check and build.**
+- [ ] **Step 5: Run the portal check and build.**
 
   `node scripts/check-conversation-agent-streaming.mjs` and `npm run build`.
 
@@ -379,38 +567,53 @@ high-impact + rename assertions so the old check keeps its scope.
 
   With fake dialogue/clarification runners and `FACTORY_FAKE_CLAUDE=1`, drive:
   a concrete first message that previously produced 确认并生成 immediately now
-  yields at least one high-impact question round before ready_to_confirm; a live
-  analysis stream folds above each conclusion; the user message appears
-  optimistically. Confirm no `thinking_delta` / internal blueprint name appears
-  in any SSE payload.
+  yields at least one high-impact question round before ready_to_confirm; live
+  thinking and analysis streams fold above each conclusion; the user message
+  appears optimistically. Confirm `thinking_delta` appears only in the dedicated
+  thinking channel and internal blueprint names do not appear in user-facing
+  payloads.
 
 - [ ] **Step 3: Real-CLI manual acceptance.**
 
   Start `factory-server` with `FACTORY_FAKE_CLAUDE` unset, then the portal.
   Drive one application-generation conversation: confirm high-impact items are
-  asked one per round, the analysis work log streams live and folds above the
-  conclusion, and only after all high-impact items are resolved does
-  确认并生成（智能体） appear. Confirm the CLI never forwards hidden reasoning.
+  asked as one multi-question batch per round, Claude Code CLI 思考过程 and the
+  analysis work log stream live and fold above the conclusion, and only after
+  all high-impact items are resolved does 确认并生成（智能体） appear. Confirm raw
+  thinking is not mixed into analysis, tool, stdout/stderr, or attachment
+  channels.
 
 - [ ] **Step 4: Final diff review.**
 
   `git status`, `git diff --check`. Verify no collaborator-owned agent-tab UI
-  changed, no unrelated scene work reverted, raw reasoning never reaches the
-  frontend/SSE/DB, and every external resource (job, agent) is created only
-  after explicit user action.
+  changed, no unrelated scene work reverted, raw reasoning reaches only the
+  dedicated 思考过程 channel, and every external resource (job, agent) is created
+  only after explicit user action.
 
 ## Completion Criteria
 
 - A sent user message appears in the conversation instantly (optimistic) and
   rolls back on failure; the history refresh no longer blocks the view load.
-- The analysis work log streams token-by-token beneath the user message for
-  routing, clarification, and every pipeline step, then folds above each
-  conclusion; it is replayable after reconnect.
+- A route choice appends one Chinese 路由选择回显 message, and subsequent
+  recommendation / clarification / 思考过程 / 分析过程 appears beneath that choice.
+- Opening a recommended reusable 智能体 appends one Chinese 智能体打开回显
+  message before the resolved/open result.
+- Claude Code CLI thinking and the analysis work log stream token-by-token
+  beneath the triggering user action for routing, clarification, and every
+  pipeline step, then fold above each conclusion; both are replayable after
+  reconnect.
 - A concrete first message no longer jumps to 确认并生成: high-impact decisions
-  are asked one per round and the confirm action cannot appear while any remains
-  open (server-enforced).
+  are all shown as one business-specific batch per round and the confirm action
+  cannot appear while any remains open (server-enforced). Low-impact inferred
+  details appear as assumptions for final review, not as required questions.
+- When the user submits a clarification batch, the conversation appends one
+  Chinese 澄清答案回显 message and the next round's 思考过程 / 分析过程 appears
+  beneath that message in chronological order.
+- 确认需求摘要 appears as the final agent message in the conversation timeline,
+  and `确认并生成智能体` is attached to that message rather than a fixed bottom
+  area.
 - The produced product is labelled 智能体 in every user-facing surface; the
   internal entity and API stay 应用.
-- Raw hidden reasoning / `thinking_delta` is never forwarded at any layer;
-  existing user changes and unrelated files are preserved; all backend and
-  portal gates pass.
+- Claude Code CLI `thinking` / `thinking_delta` is forwarded, displayed, and
+  replayable through the dedicated 思考过程 channel only; existing user changes
+  and unrelated files are preserved; all backend and portal gates pass.

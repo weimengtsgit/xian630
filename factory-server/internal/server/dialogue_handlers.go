@@ -1104,6 +1104,11 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
 	}
 
+	if err := s.appendDialogueUserEcho(ctx, id, routeSelectionEcho(ctx, s, route, intent)); err != nil {
+		writeError(w, http.StatusInternalServerError, "persist route selection")
+		return
+	}
+
 	switch intent {
 	case dialogue.IntentExistingApplication:
 		// Enter recommending with the candidate cards derived from the route.
@@ -1294,8 +1299,16 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 	defer s.appLock(appID).Unlock()
 
 	ctx := r.Context()
+	openEcho := "我打开：" + app.Name
+	if strings.TrimSpace(app.Name) == "" {
+		openEcho = "我打开：" + app.Slug
+	}
 	// If the app is stopped (no usable URL), start it via the shared operation.
 	if app.RuntimeURL == "" {
+		openEcho = "我启动并打开：" + app.Name
+		if strings.TrimSpace(app.Name) == "" {
+			openEcho = "我启动并打开：" + app.Slug
+		}
 		if _, refreshed, serr := s.startAppInternal(ctx, appID); serr != nil {
 			if er, ok := serr.(errResponse); ok {
 				er.write(w)
@@ -1306,6 +1319,10 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 		} else if refreshed != nil {
 			app = refreshed
 		}
+	}
+	if err := s.appendDialogueUserEcho(ctx, id, openEcho); err != nil {
+		writeError(w, http.StatusInternalServerError, "persist open action")
+		return
 	}
 	// Re-read to get the usable runtime URL.
 	app, err = s.store.GetApplication(ctx, appID)
@@ -1332,6 +1349,33 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+func routeSelectionEcho(ctx context.Context, s *Server, route persistedRoute, intent dialogue.Intent) string {
+	if intent == dialogue.IntentExistingApplication {
+		cards := s.cardsFromRoute(ctx, route)
+		name := "已有智能体"
+		if len(cards) > 0 && strings.TrimSpace(cards[0].Name) != "" {
+			name = strings.TrimSpace(cards[0].Name)
+		}
+		return "我选择：复用「" + name + "」"
+	}
+	return "我选择：新建智能体"
+}
+
+func (s *Server) appendDialogueUserEcho(ctx context.Context, dialogueID, content string) error {
+	content = strings.TrimSpace(content)
+	if dialogueID == "" || content == "" {
+		return nil
+	}
+	return s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+		ID:         "dmsg_" + idpkg.New(),
+		DialogueID: dialogueID,
+		Role:       "user",
+		Kind:       "message",
+		Content:    content,
+		CreatedAt:  time.Now(),
+	})
 }
 
 func slugInRecommendation(route persistedRoute, slug string) bool {
