@@ -64,6 +64,23 @@ for (const card of appItem.cards) {
   assert.equal(card.blueprint, undefined, 'card must not leak blueprint field')
 }
 
+// Continuing-session inquiry replies are persisted as ordinary agent replies and
+// must remain visible in the dialogue thread, not be dropped as unknown metadata.
+const inquiryTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_inquiry', status: 'active', intent: 'application_generation', route_locked: true },
+  messages: [
+    { id: 'u_q', role: 'user', kind: 'message', content: '为什么 AviationCarrier 401？' },
+    { id: 'a_reply', role: 'agent', kind: 'reply', content: 'HTTP 401 表示认证失败。' },
+  ],
+  route: {},
+})
+assert.deepEqual(
+  inquiryTimeline.map(item => item.type),
+  ['user_message', 'agent_message'],
+  'continuing-session agent replies must render as visible agent_message items',
+)
+assert.equal(inquiryTimeline[1].content, 'HTTP 401 表示认证失败。')
+
 // ---- no blueprint text in rendered timeline items ---------------------------
 
 // The requirement summary must not surface BlueprintRefs even if the raw child

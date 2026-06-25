@@ -2405,6 +2405,23 @@ func TestInquiryDoesNotCreateJob(t *testing.T) {
 	if turn.Intent != model.TurnIntentApplicationInquiry {
 		t.Fatalf("turn intent = %q, want application_inquiry", turn.Intent)
 	}
+	msgs, err := st.LatestDialogueMessages(context.Background(), "dlg_1", 100)
+	if err != nil {
+		t.Fatalf("list dialogue messages: %v", err)
+	}
+	var reply *model.DialogueMessage
+	for i := range msgs {
+		if msgs[i].Role == "agent" && msgs[i].Kind == "reply" {
+			reply = &msgs[i]
+			break
+		}
+	}
+	if reply == nil {
+		t.Fatalf("inquiry reply was not persisted as an agent message: %#v", msgs)
+	}
+	if reply.Content != "这个应用支持 200 海里阈值。" {
+		t.Fatalf("reply content = %q", reply.Content)
+	}
 }
 
 // TestCancelRunningTurnEndToEnd verifies the end-to-end cancel contract (review

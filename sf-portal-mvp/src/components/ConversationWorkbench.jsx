@@ -305,6 +305,7 @@ export function ConversationWorkbench({
 
 function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
+  if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
   if (item.type === 'analysis_stream') {
     // D6: the persisted analysis lands after the round completes and renders
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals

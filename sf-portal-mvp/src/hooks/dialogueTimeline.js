@@ -197,6 +197,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         folded: true,
         expanded: true,
       })
+      continue
+    }
+    if (msg.role === 'agent' && (msg.kind === 'reply' || msg.kind === 'message')) {
+      items.push({
+        id: msg.id,
+        type: 'agent_message',
+        content: safeString(msg.content),
+      })
     }
     // Other parent agent kinds (business_draft handled below) are dropped here.
   }

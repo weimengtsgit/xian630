@@ -47,9 +47,22 @@ const DIALOGUE_TYPES = new Set([
   'dialogue.resolved',
   'dialogue.abandoned',
   'dialogue.deleted',
+  'dialogue.message.accepted',
+  'dialogue.turn.started',
+  'dialogue.turn.completed',
+  'dialogue.turn.failed',
+  'dialogue.turn.canceled',
+  'dialogue.change.proposed',
+  'dialogue.forked',
   // Wrapped child clarification events arrive via publishDialogueChild; they carry
   // a parent dialogue_id so the portal updates one state source.
   'clarification.summary.updated',
+])
+
+const TERMINAL_TURN_TYPES = new Set([
+  'dialogue.turn.completed',
+  'dialogue.turn.failed',
+  'dialogue.turn.canceled',
 ])
 
 const terminal = status => status === 'resolved' || status === 'abandoned' || status === 'failed'
@@ -656,6 +669,10 @@ export function useDialogueSessions() {
       if (!isDialogue && type !== 'clarification.summary.updated') return
       const ev = raw && typeof raw === 'object' && 'seq' in raw ? raw.data : raw
       if (!ev) return
+      if (TERMINAL_TURN_TYPES.has(type) && pendingTurnRef.current) {
+        const turnId = ev.turn_id || ev.turnId || (ev.data && (ev.data.turn_id || ev.data.turnId))
+        if (!turnId || pendingTurnRef.current.turnId === turnId) setPendingTurn(null)
+      }
       // A brand-new dialogue's createDialogue publishes dialogue.created BEFORE
       // its routing/clarification stream. If a send is pending, select it now so
       // the streaming analysis + thinking fold live beneath the user's input

@@ -141,5 +141,13 @@ assert.match(
   /locked\s*&&\s*!composerActive/,
   'submitText must allow sending when the continuous-loop composer is visible despite a locked/resolved session',
 )
+assert.match(useDialogueJs, /dialogue\.turn\.completed/, 'useDialogueSessions must route completed turn events from global SSE')
+assert.match(useDialogueJs, /dialogue\.turn\.failed/, 'useDialogueSessions must route failed turn events from global SSE')
+assert.match(useDialogueJs, /dialogue\.turn\.canceled/, 'useDialogueSessions must route canceled turn events from global SSE')
+assert.match(
+  useDialogueJs,
+  /TERMINAL_TURN_TYPES[\s\S]*setPendingTurn\(null\)/,
+  'terminal turn events must clear the pending-turn indicator; inquiry turns do not emit work-trace rows',
+)
 
 console.log('check-visible-work-trace: OK')
