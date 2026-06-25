@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
@@ -23,6 +27,8 @@ import (
 const defaultContainerPort = 80
 
 const activeDeploymentProbeTimeout = 1500 * time.Millisecond
+
+var renamePath = os.Rename
 
 // containerHealthURL builds the health-check URL for a container's host port.
 // On Windows+WSL2, port forwarding through wslrelay is unreliable (IPv6-only
@@ -703,7 +709,8 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "prepare tombstone")
 			return
 		}
-		if err := os.Rename(appDir, tombstone); err != nil {
+		if err := moveDirectory(appDir, tombstone); err != nil {
+			log.Printf("delete app %s: move app directory %q -> %q: %v", appID, appDir, tombstone, err)
 			writeError(w, http.StatusInternalServerError, "move app directory")
 			return
 		}
@@ -777,5 +784,78 @@ func restoreTombstone(tombstone, appDir string) {
 	if tombstone == "" || appDir == "" {
 		return
 	}
-	_ = os.Rename(tombstone, appDir)
+	_ = moveDirectory(tombstone, appDir)
+}
+
+func moveDirectory(src, dst string) error {
+	if err := renamePath(src, dst); err != nil {
+		if !errors.Is(err, syscall.EXDEV) {
+			return err
+		}
+		if err := copyDirectory(src, dst); err != nil {
+			_ = os.RemoveAll(dst)
+			return err
+		}
+		if err := os.RemoveAll(src); err != nil {
+			_ = os.RemoveAll(dst)
+			return err
+		}
+	}
+	return nil
+}
+
+func copyDirectory(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("%s is not a directory", src)
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode()
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, mode.Perm())
+		case mode&os.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case mode.IsRegular():
+			return copyFile(path, target, mode.Perm())
+		default:
+			return nil
+		}
+	})
+}
+
+func copyFile(src, dst string, mode fs.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

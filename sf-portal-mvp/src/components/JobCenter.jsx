@@ -6,6 +6,7 @@ import {
   ExternalLink,
   RotateCcw,
   Ban,
+  Wrench,
 } from 'lucide-react'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
@@ -56,6 +57,7 @@ export function JobCenter({
   steps,
   onCancel,
   onRetry,
+  onRepairFromFailure,
   loading,
   // Task 6 state surface from useJobs:
   summary,
@@ -100,6 +102,9 @@ export function JobCenter({
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
   const canCancelHeader = activeJob && !isTerminal
+  const canRepairFromFailure =
+    jobStatus === 'failed' &&
+    ['test_verification', 'image_build'].includes(activeJob?.current_step_kind)
 
   // --- Drawer wiring ------------------------------------------------------
   // Opening a card resolves the REAL stepId (from stepByKind / cardView) and
@@ -266,6 +271,15 @@ export function JobCenter({
           >
             <RotateCcw size={14} /> 重试当前阶段
           </button>
+          {canRepairFromFailure ? (
+            <button
+              type="button"
+              className="jc-action jc-retry"
+              onClick={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
+            >
+              <Wrench size={14} /> 发送错误给代码修复
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -302,6 +316,7 @@ export function JobCenter({
         loadingOlder={false}
         onCancel={() => onCancel && onCancel(activeJob.id)}
         onRetry={() => onRetry && onRetry(activeJob.id)}
+        onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
         artifacts={artifacts || []}
         getArtifactContent={getArtifactContent}
       />

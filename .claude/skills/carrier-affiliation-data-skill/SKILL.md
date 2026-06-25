@@ -94,63 +94,172 @@ skills:
 
 Read `references/ontology-api.md` before implementing the DaaS adapter.
 
-**Required request headers — the Space-scope selector is MANDATORY.** Without
-`scopeType: Space` the API silently defaults to `个人范围` (personal scope) and
-returns `resultCode 10001 "未找到实体"` for EVERY entity, even though the token is
-valid and has access. Verified 2026-06-24: adding `scopeType: Space` turns 10001
-into real data (11 carriers, 501 platforms, 11.4M ADS-B rows, 48 carrier track logs).
+### Data Flow (three entities, not two)
 
-- `Authorization: Bearer <ONTOLOGY_AUTH_TOKEN>`
-- `Spaceid: <ONTOLOGY_SPACE_ID>`
-- `scopeType: Space` ← value must be exactly `Space` (capital S); case-sensitive.
-  Without it every entity query returns `10001`, which looks like "no data / wrong
-  token" but is really just the missing scope selector.
-- `Content-Type: application/json`
-
-A generated nginx reverse proxy (or server-side proxy) must inject all four
-headers so the browser never sees the token. Example nginx location:
-
-```nginx
-location /api/ontology/ {
-    proxy_pass http://<ontology-host-or-static-ip>:8081/;
-    proxy_set_header Host <ontology-host>;
-    proxy_set_header Authorization "Bearer <token>";
-    proxy_set_header Spaceid "<space-id>";
-    proxy_set_header scopeType "Space";
-    proxy_set_header Content-Type "application/json";
-}
+```
+Step 1: AviationCarrier     Step 2: AircraftCarrier       Step 3: MaritimeBaseCombatPlatform
+ (航母 master, 11 rows)       (CSG 打击群, 11 rows)         (海基作战平台, 655 rows total)
+        │                            │                              │
+        │ refHMId = carrier.id        │ filter: AircraftCarrier.id   │
+        └────────────────────────────┘──────────────────────────────┘
+                 Carrier→CSG                    CSG→Platforms
 ```
 
-All list endpoints use the same request shape:
+**Correct data fetch sequence:**
+
+1. Fetch `AviationCarrier` → get 11 carriers (id, name, lat, lon, airWing, ...)
+2. Fetch `AircraftCarrier` → get 11 CSGs with `refHMId` linking to carrier.id
+3. For EACH CSG, fetch `MaritimeBaseCombatPlatform` filtered by `AircraftCarrier.id = CSG-XX`
+   → get all aircraft/ships/platforms of that strike group (the ONLY correct
+   aircraft path; carrier-direct queries are incomplete)
+4. Fetch `AircraftCarrierTrackLog` → carrier track points (48 rows)
+5. Fetch `RawAISData` per ship `mmsi` (from MaritimeBaseCombatPlatform.mmsi) → ship AIS tracks (joinable!)
+6. Fetch `RawADSData` filtered by `icao is not null` → ADS-B aircraft tracks (191 rows, mostly unusable — see Modes)
+
+**Critical entity name corrections (verified 2026-06-25):**
+
+| Correct (use these) | Wrong (do NOT use) | Why |
+|---|---|---|
+| `AircraftCarrier` | — | CSG entity (打击群) |
+| `MaritimeBaseCombatPlatform` | `CarrierAviationPlatform` | Platform has CSG link via `AircraftCarrier.id`; CAP carrier-direct is incomplete |
+| — | `platform-BT`, `ads_b_track-BT`, `carrier_track_log-BT` | Do not exist |
+
+**Association rule (provider-confirmed):** carrier → aircraft is NEVER direct.
+Always go carrier → CSG (`AircraftCarrier.refHMId`) → platforms
+(`MaritimeBaseCombatPlatform` filtered by `AircraftCarrier.id`).
+
+**CSG→Platform filter pattern:**
 
 ```json
 {
-  "columns": ["id", "name"],
-  "pageParam": {"pageIndex": 1, "limit": 200},
-  "rowType": "map",
-  "filters": [{"column": "id", "logic": "=", "condition": "value"}]
+  "filters": [
+    { "column": "AircraftCarrier.id", "logic": "=", "condition": "CSG-10" }
+  ]
 }
 ```
 
-All list responses normalize from:
+This is the ONLY reliable way to associate platforms to carriers.
+Do NOT parse carrier codes from platform IDs.
 
-```text
-details.columnNames + details.rows
+### Required request headers
+
+**scopeType is MANDATORY.** Without `scopeType: Space` the API returns `resultCode 10001`.
+
+```http
+Authorization: Bearer ${ONTOLOGY_AUTH_TOKEN}
+Spaceid: ${ONTOLOGY_SPACE_ID}
+scopeType: Space
+Content-Type: application/json
 ```
 
-into object arrays keyed by `columnNames`.
+### resultCode
+
+Success is `200`, NOT `10000`. Check `data.resultCode !== 200`.
+
+### nginx CORS proxy
+
+The ontology API has no CORS headers (OPTIONS → 500). All requests MUST go
+through the app's nginx reverse proxy. See `references/ontology-api.md` for
+the exact nginx config block.
+
+## Affiliation Inference Modes (归属推断模式)
+
+The ideal affiliation inference (detect ADS-B sea takeoff/landing → bind to
+nearest carrier → count associations → judge) REQUIRES a join between
+ADS-B tracks and the aircraft master list on `icao`. **That join is currently
+broken** because `MaritimeBaseCombatPlatform` has NO `icao` field and
+`RawADSData` has very few usable rows (191 non-null icao, altitude mostly 0).
+
+Therefore the adapter MUST support TWO modes and pick based on data
+availability:
+
+### Mode A — Event-based inference (理想模式, matches the three-step rule)
+
+Use ONLY when `MaritimeBaseCombatPlatform.icao` is populated AND `RawADSData`
+has enough altitude-bearing rows to detect takeoff/landing.
+
+1. Detect sea takeoff/landing events from ADS-B altitude transitions.
+2. Bind each event to the nearest-in-time carrier position within 200 NM.
+3. Count per-aircraft (`icao`) carrier associations; judge by the 60% threshold.
+
+### Mode B — Establishment-based affiliation (实际可用模式, the CURRENT fallback)
+
+When ADS-B data is insufficient (the verified case as of 2026-06-25), fall
+back to the **structured CSG association**: each platform in
+`MaritimeBaseCombatPlatform` is already linked to a CSG (and thus a carrier)
+via the `AircraftCarrier.id` filter. Treat that as the affiliation directly.
+
+- `confidence` = 1.0 (structured, not inferred)
+- `status` = `high_confidence` for platforms with a CSG link
+- `sourceNote` = "CSG establishment-linked (ADS-B event inference unavailable)"
+- Do NOT fabricate takeoff/landing events or ICAO counts that the data does not support.
+
+### Mode selection in the adapter
+
+```js
+// Detect capability: does any platform have an icao, and are ADS-B altitudes usable?
+const hasPlatformIcao = aircraft.some(a => a.icao);
+const adsbAltitudeUsable = adsbTracks.filter(t => t.alt_ft > 0).length > 10;
+
+if (hasPlatformIcao && adsbAltitudeUsable) {
+  // Mode A: event-based three-step inference
+} else {
+  // Mode B: establishment-based affiliation (current reality)
+}
+```
+
+### Data gaps to report to the ontology provider (as warnings)
+
+- `CarrierAviationPlatform` and `MaritimeBaseCombatPlatform` lack populated
+  `icao` → cannot join to `RawADSData` for aircraft event inference.
+- `RawADSData.altitude` is mostly `0.0`/null → takeoff/landing detection yields near-zero events.
+- `RawADSData.icao` is null for ~99.99% of 21.8M rows.
+
+When the provider populates `icao` on platforms and/or backfills ADS-B
+altitude, the adapter switches to Mode A automatically.
+
+### Working join: ship tracks via AIS (use this for ships)
+
+While aircraft event inference is blocked, **ship track inference works**:
+
+```
+MaritimeBaseCombatPlatform.mmsi  →  RawAISData.mmsi  →  ship AIS track
+```
+
+4.69M AIS rows, `mmsi` populated, ship names present (e.g. "普林斯顿", "钟云号").
+Use this to show CSG escort ships (DDG/CG/supply) with real tracks, joined
+through the platform `mmsi` field. Aircraft remain on establishment-based
+affiliation (Mode B) until `icao` is populated.
 
 ## Output Contract
 
 Read `references/output-contract.md` before wiring generated UI data providers.
 The normalized output must provide:
 
-- `adsb_tracks`: `{ icao, aircraft_type, time, lat, lon, alt_ft, speed_kt, callsign }`
-- `carrier_positions`: `{ carrier_id, name, track: [{ time, lat, lon }] }`
-- `aircraft`: `{ icao, name, aircraft_type, callsign, mmsi }`
+- `strikeGroups`: `{ id, name, carrierId, typeCode, status, lat, lon }` — from AircraftCarrier
+- `carriers`: `{ id, name, lat, lon, status, heading, speed, airWing, aircraftCarried, homeport, csgId, csgName, track: [{ time, lat, lon }] }` — from AviationCarrier + track enrichment
+- `aircraft`: `{ id, name, icao, typeCode, mmsi, status, lat, lon, maxSpeed, cruiseRange, carrierId, csgId, csgName, callsign }` — from MaritimeBaseCombatPlatform per CSG
+- `adsbTracks`: `{ icao, callsign, lat, lon, alt_ft, speed_kt, track_deg, heading_deg, time }` — from RawADSData (icao is not null)
 - `surface_classifier`: callable or declared source for `sea | land | unknown`
-- `judgement_parameters`: association distance, confidence threshold, departed
-  days, near-ground altitude, and minimum bound associations.
+- `judgement_parameters`: association distance, confidence threshold, departed days, near-ground altitude, and minimum bound associations.
+
+### MaritimeBaseCombatPlatform per-CSG fetch pattern (REQUIRED)
+
+```js
+// For EACH CSG, fetch its platforms
+for (const csg of strikeGroups) {
+  const platforms = await fetchEntity('MaritimeBaseCombatPlatform',
+    ['id', 'name', 'typeCode', 'mmsi', 'longitude', 'latitude', 'curStatus', 'maxSpeed'],
+    [{ column: 'AircraftCarrier.id', logic: '=', condition: csg.id }]
+  );
+  // Each platform gets carrierId = csg.carrierId, csgId = csg.id
+  allAircraft.push(...platforms.map(p => ({ ...p, carrierId: csg.carrierId, csgId: csg.id })));
+}
+```
+
+Do NOT fetch all platforms without the CSG filter and then try to match by
+parsing carrier codes from platform IDs — many platforms lack an embedded
+carrier code.
 
 ## Generated App Requirements
 
@@ -194,3 +303,6 @@ approximate and marked low confidence.
 - Do not omit `scopeType: Space` from ontology requests — without it the API
   returns `10001` for every entity and the app will look data-less despite valid
   credentials.
+- Do not call the ontology API directly from browser JS — the API has no CORS
+  headers and returns HTTP 500 on OPTIONS preflight. Always route through the
+  app's nginx reverse proxy (`/api/ontology/` → ontology server).

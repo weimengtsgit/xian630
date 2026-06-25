@@ -641,6 +641,17 @@ WHERE id = ?`,
 	return err
 }
 
+// SetStepUserPrompt stores per-step operator context. The executor uses this
+// for repair-from-failure runs so the next code_generation attempt receives the
+// failed test/image-build output without changing the job's original prompt.
+func (s *Store) SetStepUserPrompt(ctx context.Context, stepID, prompt string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps
+SET user_prompt = ?
+WHERE id = ?`, prompt, stepID)
+	return err
+}
+
 // AddConversation inserts a conversation message row.
 func (s *Store) AddConversation(ctx context.Context, msg model.ConversationMessage) error {
 	var jobID any

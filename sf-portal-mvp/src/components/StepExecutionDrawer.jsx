@@ -9,6 +9,7 @@ import {
   Ban,
   Clock,
   RotateCcw,
+  Wrench,
   Ban as CancelIcon,
   FileText,
   ChevronDown,
@@ -218,6 +219,7 @@ export function StepExecutionDrawer({
   // Action handlers (gated by status — see canCancel / canRetry below)
   onCancel,
   onRetry,
+  onRepairFromFailure,
   // Artifacts
   artifacts,
   getArtifactContent,
@@ -319,6 +321,8 @@ export function StepExecutionDrawer({
       ? selectedAttempt === Math.max(...attempts)
       : true
   const canRetry = status === 'failed' && isLatestAttempt
+  const canRepairFromFailure =
+    canRetry && ['test_verification', 'image_build'].includes(step?.kind)
 
   // Artifact content load: only AFTER the user selects one (never eagerly).
   const selectArtifact = async id => {
@@ -479,7 +483,16 @@ export function StepExecutionDrawer({
                     <RotateCcw size={14} /> 重试当前阶段
                   </button>
                 ) : null}
-                {!canCancel && !canRetry ? (
+                {canRepairFromFailure ? (
+                  <button
+                    type="button"
+                    className="sed-action sed-retry"
+                    onClick={() => onRepairFromFailure && onRepairFromFailure()}
+                  >
+                    <Wrench size={14} /> 发送错误给代码修复
+                  </button>
+                ) : null}
+                {!canCancel && !canRetry && !canRepairFromFailure ? (
                   <p className="sed-readonly-hint">当前阶段为只读（已完成或非最新尝试）。</p>
                 ) : null}
               </div>
