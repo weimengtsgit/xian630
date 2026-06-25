@@ -420,16 +420,28 @@ export function useDialogueSessions() {
     setSubmitting(true)
     setError(null)
     try {
-      const view = await factoryApi.retryDialogueRound(state.view.session.id)
+      const sess = state.view.session
+      const child = state.view.child
+      let view
+      if (child && child.status === 'failed') {
+        view = await factoryApi.retryDialogueRound(sess.id)
+      } else {
+        const prompt = String(sess.initial_prompt || '').trim()
+        if (!prompt) throw new Error('无法重试：会话没有可重新提交的原始需求')
+        pendingNewDialogueRef.current = true
+        view = await factoryApi.createDialogue({ initialPrompt: prompt })
+        if (mountedRef.current) refreshSessions().catch(() => {})
+      }
       await loadView(view.session.id)
       return view
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
+      pendingNewDialogueRef.current = false
       throw err
     } finally {
       if (mountedRef.current) setSubmitting(false)
     }
-  }, [loadView, state.view, submitting])
+  }, [loadView, refreshSessions, state.view, submitting])
 
   const abandon = useCallback(async () => {
     if (!state.view || submitting) return null

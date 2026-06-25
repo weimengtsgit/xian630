@@ -488,4 +488,15 @@ assert.match(
   'send must clear the optimistic message (rollback) — on error and once the persisted view loads',
 )
 
+// A failed parent dialogue may have NO child clarification (for example a route
+// runner failure). In that case "重试本轮" must not call the child clarification
+// retry endpoint, because the backend correctly 409s with "dialogue has no active
+// clarification child". The hook falls back to creating a fresh dialogue from the
+// original prompt; child clarification failures still use retryDialogueRound.
+const retryFnMatch = dialogueHookJs.match(/const retry = useCallback\(async \(\) => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static checks')
+const retryBody = retryFnMatch[0]
+assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
+assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
+
 console.log('check-dialogue-workbench: OK')
