@@ -194,3 +194,6 @@ approximate and marked low confidence.
 - Do not omit `scopeType: Space` from ontology requests — without it the API
   returns `10001` for every entity and the app will look data-less despite valid
   credentials.
+- Do not call the ontology API directly from browser JS — the API has no CORS
+  headers and returns HTTP 500 on OPTIONS preflight. Always route through the
+  app's nginx reverse proxy (`/api/ontology/` → ontology server).

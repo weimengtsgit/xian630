@@ -13,19 +13,66 @@ ONTOLOGY_SCOPE_TYPE=
 
 Do not ask the final user to provide these values.
 
+## CORS & Browser Access — CRITICAL
+
+**The ontology API does NOT support CORS** (OPTIONS preflight returns 500).
+A browser app MUST NOT call the ontology API directly from client-side JS.
+Instead, inject an nginx reverse-proxy location so the browser calls a
+same-origin path and nginx forwards the request to the ontology server.
+
+### Required nginx reverse proxy (in app's nginx.conf)
+
+```nginx
+location /api/ontology/ {
+    proxy_pass http://<ONTOLOGY_API_BASE_URL_WITHOUT_HTTP_PREFIX>/;
+    proxy_http_version 1.1;
+    proxy_set_header Host <ontology-host>;
+    proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+    proxy_set_header Spaceid "<ONTOLOGY_SPACE_ID>";
+    proxy_set_header scopeType "Space";
+    proxy_set_header Content-Type "application/json";
+    proxy_buffering off;
+    proxy_read_timeout 120s;
+}
+```
+
+The three ontology auth headers (Authorization, Spaceid, scopeType) are
+injected by nginx, so the token NEVER reaches the browser and CORS is
+automatically avoided.
+
+### Required JS adapter pattern
+
+```js
+// CORRECT: same-origin through nginx proxy
+const url = `/api/ontology/daasDMS/entity/${entityName}/list`;
+fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: ... })
+
+// WRONG: direct external URL — will fail with CORS
+const url = `http://ceshi.projects.bingosoft.net:8081/daasDMS/entity/${entityName}/list`;
+```
+
+**MUST NOT** put `ONTOLOGY_API_BASE_URL` as an external URL in JS that runs
+in a browser. Always route through the app's nginx reverse proxy.
+
 ## Headers
 
-Use these headers on ontology/DaaS requests:
+The ontology API requires these headers. When using the nginx reverse proxy,
+nginx injects Authorization, Spaceid, and scopeType — the browser JS only
+sends Content-Type:
 
 ```http
 Authorization: Bearer ${ONTOLOGY_AUTH_TOKEN}
 Spaceid: ${ONTOLOGY_SPACE_ID}
-scopeType: ${ONTOLOGY_SCOPE_TYPE}
+scopeType: Space
 Content-Type: application/json
 ```
 
 If the backend expects the raw JWT without `Bearer`, retry once with
 `Authorization: ${ONTOLOGY_AUTH_TOKEN}` and record the fallback in provenance.
+
+**scopeType is MANDATORY.** Without `scopeType: Space` the API defaults to
+personal scope and returns `resultCode 10001` for every entity even with a
+valid token. Value must be exactly `Space` (capital S, case-sensitive).
 
 ## Endpoint Base
 
@@ -62,7 +109,39 @@ The entity endpoints are relative to the ontology service base URL.
 > is **currently unavailable**. Do not call it. If a job needs wind/weather, route to
 > `deck-wind-data-skill` (Open-Meteo GFS) instead and record that in provenance.
 
-## Request Shape
+## Response Shape & resultCode
+
+**Success resultCode is `200`, NOT `10000`.** Every list response wraps its
+payload in `details` and signals success with `resultCode: 200`:
+
+```json
+{
+  "resultCode": 200,
+  "resultDesc": "OK",
+  "details": {
+    "pageParam": { "pageIndex": 1, "limit": 200, "pageTotal": N, "recordTotal": M },
+    "columnNames": ["id", "name", ...],
+    "rows": [ [...], [...] ]
+  }
+}
+```
+
+Error responses carry `resultCode` values like `10001` ("entity not found in
+scope"), not HTTP status codes. The JS adapter MUST check `data.resultCode !== 200`,
+NOT `!== 10000`.
+
+### rowType must be "map"
+
+Always pass `"rowType": "map"` in the request body. Responses with `rowType: "map"`
+return `details.rows` as an array of objects (keyed by columnNames). If you omit
+`rowType` or use another value, rows may come back as positional arrays and the
+consumer must normalize them with `details.columnNames`.
+
+### Do not check HTTP status alone
+
+A "200 OK" HTTP response can carry `resultCode: 10001` (entity not found).
+Always check `resultCode` inside the JSON body — do not rely on HTTP status
+alone to decide success vs. failure.
 
 Use `rowType: "map"` unless the caller explicitly needs another shape.
 
