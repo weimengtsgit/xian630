@@ -264,13 +264,19 @@ type requirementAnalysisOutput struct {
 	// thinking/reasoning and every other hidden provider field are NOT in this
 	// struct, so the lenient decoder drops them (boundary locked by contract
 	// tests that include both a workLog and a thinking field).
-	WorkLog    []workLogEntry `json:"workLog"`
-	Validation struct {
-		Complete            bool     `json:"complete"`
-		Supported           bool     `json:"supported"`
-		MissingFields       []string `json:"missingFields"`
-		UnsupportedRequests []string `json:"unsupportedRequests"`
-	} `json:"validation"`
+	WorkLog    []workLogEntry      `json:"workLog"`
+	Validation requirementValidation `json:"validation"`
+}
+
+// requirementValidation is the freeze/audit verdict the requirement_analysis
+// step emits. A frozen requirement that is incomplete or unsupported hard-fails
+// the pipeline (see ValidateRequirementAnalysis); the MissingFields and
+// UnsupportedRequests are surfaced in the error so the user knows why.
+type requirementValidation struct {
+	Complete            bool     `json:"complete"`
+	Supported           bool     `json:"supported"`
+	MissingFields       []string `json:"missingFields"`
+	UnsupportedRequests []string `json:"unsupportedRequests"`
 }
 
 // ValidateRequirementAnalysis decodes and validates the output.json the
@@ -286,12 +292,52 @@ func ValidateRequirementAnalysis(path string) (StepOutput, error) {
 		return StepOutput{}, err
 	}
 	if !raw.Validation.Complete || !raw.Validation.Supported {
-		return StepOutput{}, fmt.Errorf("confirmed requirement rejected: %w", ErrSchemaValidationFailed)
+		return StepOutput{}, fmt.Errorf("confirmed requirement rejected: %w%s",
+			ErrSchemaValidationFailed, requirementRejectionDetail(raw.Validation))
 	}
 	if raw.AppType == "" || raw.AppName == "" || len(raw.GenerationProfile) == 0 {
 		return StepOutput{}, fmt.Errorf("missing required requirement fields: %w", ErrSchemaValidationFailed)
 	}
 	return StepOutput{}, nil
+}
+
+// requirementRejectionDetail formats the agent's missingFields and
+// unsupportedRequests into a human-readable suffix for the rejection error, so
+// the card surfaces WHY the requirement was rejected (not just the code). Each
+// reason is capped; the whole suffix is bounded so it fits on a card.
+func requirementRejectionDetail(v requirementValidation) string {
+	var reasons []string
+	if !v.Complete {
+		for _, m := range v.MissingFields {
+			reasons = append(reasons, "缺少字段: "+m)
+		}
+	}
+	if !v.Supported {
+		for _, u := range v.UnsupportedRequests {
+			reasons = append(reasons, "不支持: "+truncateReason(u))
+		}
+	}
+	if len(reasons) == 0 {
+		if !v.Complete {
+			return " (需求不完整)"
+		}
+		return " (超出支持能力)"
+	}
+	combined := strings.Join(reasons, "; ")
+	if len([]rune(combined)) > 500 {
+		combined = string([]rune(combined)[:497]) + "..."
+	}
+	return " — " + combined
+}
+
+// truncateReason caps a single rejection reason so one verbose entry cannot
+// dominate the error message.
+func truncateReason(s string) string {
+	const max = 160
+	if len([]rune(s)) <= max {
+		return s
+	}
+	return string([]rune(s)[:max-3]) + "..."
 }
 
 // solutionDesignOutput mirrors design §5.2. The schema is large; the validator

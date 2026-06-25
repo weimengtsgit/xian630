@@ -22,9 +22,6 @@ import (
 // (design §5.6). Manifest wiring of a custom port is a later task.
 const defaultContainerPort = 80
 
-// healthCheckTimeout caps the post-start readiness probe (design §5.6: 10s).
-const healthCheckTimeout = 10 * time.Second
-
 const activeDeploymentProbeTimeout = 1500 * time.Millisecond
 
 // containerHealthURL builds the health-check URL for a container's host port.
@@ -51,12 +48,15 @@ func appURLHost() string {
 	return wslVMIP()
 }
 
-// wslVMIP returns the host a container health probe should target. On
-// Windows+WSL2 it is the WSL VM IP; in a containerized deploy set
-// FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
+// wslVMIP returns the host a container health probe should target. The lookup
+// order is: FACTORY_HEALTH_HOST env var, podman machine gateway (macOS/Linux),
+// WSL VM IP (Windows+WSL2), and finally 127.0.0.1.
 func wslVMIP() string {
 	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
 		return v
+	}
+	if ip := deploy.PodmanMachineGateway(); ip != "" {
+		return ip
 	}
 	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
 		"ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\\s)\\d+\\.\\d+\\.\\d+\\.\\d+'").Output()
@@ -189,7 +189,12 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
-	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
+	if err := s.healthCheck(ctx, healthURL, deploy.HealthCheckTimeout()); err != nil {
+		logsRes, _ := s.runner.Run(ctx, "", rt.Name(), "logs", cr.Name)
+		errMsg := err.Error()
+		if logs := strings.TrimSpace(logsRes.Stdout + logsRes.Stderr); logs != "" {
+			errMsg += "\ncontainer logs:\n" + deploy.Truncate(logs, 2000)
+		}
 		_, _ = rt.StopContainer(ctx, cr.Name)
 		_, _ = rt.RemoveContainer(ctx, cr.Name)
 		now := time.Now()
@@ -208,7 +213,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 		_ = s.store.CreateDeployment(ctx, failedDep)
 		s.publishDeploymentUpdated(ctx, failedDep.ID)
 		s.markAppError(ctx, appID)
-		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "health check failed"}
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, errMsg}
 	}
 
 	// 5. Success: persist the running deployment and flip the app to running.
@@ -516,12 +521,17 @@ func (s *Server) rollbackApp(w http.ResponseWriter, r *http.Request) {
 	}
 	healthURL := containerHealthURL(hostPort)
 	url := containerAppURL(hostPort)
-	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
+	if err := s.healthCheck(ctx, healthURL, deploy.HealthCheckTimeout()); err != nil {
+		logsRes, _ := s.runner.Run(ctx, "", rt.Name(), "logs", cr.Name)
+		errMsg := err.Error()
+		if logs := strings.TrimSpace(logsRes.Stdout + logsRes.Stderr); logs != "" {
+			errMsg += "\ncontainer logs:\n" + deploy.Truncate(logs, 2000)
+		}
 		// Rollback health failure: do NOT flip the app; leave the current
 		// effective running. Clean up the rollback candidate container only.
 		_, _ = rt.StopContainer(ctx, cr.Name)
 		_, _ = rt.RemoveContainer(ctx, cr.Name)
-		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "rollback health check failed; current version left running"}.write(w)
+		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "rollback health check failed; current version left running: " + errMsg}.write(w)
 		return
 	}
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -212,7 +213,8 @@ func TestReadAndDecodeRepairsUnescapedQuotesInsideStringValues(t *testing.T) {
 // TestValidateRequirementAnalysisRejectedRequirement proves the hard-fail rule:
 // a structurally-valid frozen output whose validation reports complete=false or
 // supported=false is rejected with ErrSchemaValidationFailed (the step must NOT
-// pause for clarification — it fails the pipeline).
+// pause for clarification — it fails the pipeline). The rejection reason must
+// be surfaced in the error so the user knows why.
 func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 	  "confirmedRequirementId":"clar_2",
@@ -226,6 +228,9 @@ func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("err = %v, want ErrSchemaValidationFailed for validation.complete=false", err)
 	}
+	if !strings.Contains(err.Error(), "coreScenario") {
+		t.Fatalf("rejection error should surface missing field coreScenario; got: %v", err)
+	}
 
 	p2 := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 	  "confirmedRequirementId":"clar_3",
@@ -238,6 +243,9 @@ func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	_, err = ValidateRequirementAnalysis(p2)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("err = %v, want ErrSchemaValidationFailed for validation.supported=false", err)
+	}
+	if !strings.Contains(err.Error(), "real-time satellite feed") {
+		t.Fatalf("rejection error should surface unsupported request; got: %v", err)
 	}
 }
 

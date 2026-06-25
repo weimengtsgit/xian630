@@ -455,7 +455,16 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	if health == nil {
 		health = deploy.CheckHTTP
 	}
-	if herr := health(ctx, healthURL, 10*time.Second); herr != nil {
+	if herr := health(ctx, healthURL, deploy.HealthCheckTimeout()); herr != nil {
+		// Capture container logs before cleanup so connection-refused/timeouts can
+		// be distinguished from an actual container crash (nginx config error,
+		// missing dist, etc.).
+		logsRes, _ := f.Cmds.Run(ctx, "", rt.Name(), "logs", container.Name)
+		errMsg := herr.Error()
+		if logs := strings.TrimSpace(logsRes.Stdout + logsRes.Stderr); logs != "" {
+			errMsg += "\ncontainer logs:\n" + deploy.Truncate(logs, 2000)
+		}
+
 		_, _ = rt.StopContainer(ctx, container.Name)
 		_, _ = rt.RemoveContainer(ctx, container.Name)
 		now := time.Now()
@@ -480,7 +489,7 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		}
 		// When a prior effective version exists it is RETAINED: the app keeps
 		// serving on it and its container is NOT stopped.
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorHealthCheckFailed, ErrorMessage: herr.Error()}, nil
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorHealthCheckFailed, ErrorMessage: errMsg}, nil
 	}
 
 	// Success: record the running deployment, then transactionally promote the
@@ -585,6 +594,29 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, rt deploy.C
 	}
 }
 
+// isFullNginxConfig reports whether path contains a top-level nginx config with
+// events{} and/or http{} blocks. Such files must become /etc/nginx/nginx.conf;
+// bare server{} blocks must go to /etc/nginx/conf.d/default.conf.
+func isFullNginxConfig(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Match "events {" or "http {" at the top level. Server blocks live
+		// inside http{}, so they do not trigger this.
+		if strings.HasPrefix(line, "events ") || strings.HasPrefix(line, "events{") ||
+			strings.HasPrefix(line, "http ") || strings.HasPrefix(line, "http{") {
+			return true
+		}
+	}
+	return false
+}
+
 // writeStaticHostingDockerfile overwrites the app's Dockerfile with a dist-copy
 // nginx image when the host has already built dist/index.html (i.e. a static-vite
 // app whose test_verification step produced a bundle in the candidate dir). It
@@ -610,7 +642,15 @@ func writeStaticHostingDockerfile(appDir string) error {
 	if _, err := os.Stat(nginxConf); err != nil {
 		_ = os.WriteFile(nginxConf, []byte("server {\n  listen 80;\n  server_name localhost;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri /index.html; }\n}\n"), 0o644)
 	}
-	b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
+	// Some generated apps ship a full nginx config (top-level events{} + http{}),
+	// while others ship only a server{} block. A full config must be the main
+	// /etc/nginx/nginx.conf; a bare server{} block belongs in conf.d/default.conf.
+	// Putting a full config into conf.d causes "events directive is not allowed".
+	nginxConfDest := "/etc/nginx/conf.d/default.conf"
+	if isFullNginxConfig(nginxConf) {
+		nginxConfDest = "/etc/nginx/nginx.conf"
+	}
+	b.WriteString("COPY nginx.conf " + nginxConfDest + "\n")
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString("CMD [\"nginx\", \"-g\", \"daemon off;\"]\n")
 	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644); err != nil {
@@ -625,12 +665,15 @@ func writeStaticHostingDockerfile(appDir string) error {
 	return nil
 }
 
-// wslVMHealthIP returns the host a container health probe should target. On
-// Windows+WSL2 it is the WSL VM IP (wslrelay forwarding is unreliable); in a
-// containerized deploy set FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
+// wslVMHealthIP returns the host a container health probe should target. The
+// lookup order is: FACTORY_HEALTH_HOST env var, podman machine gateway
+// (macOS/Linux), WSL VM IP (Windows+WSL2), and finally 127.0.0.1.
 func wslVMHealthIP() string {
 	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
 		return v
+	}
+	if ip := deploy.PodmanMachineGateway(); ip != "" {
+		return ip
 	}
 	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
 		`ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+'`).Output()
