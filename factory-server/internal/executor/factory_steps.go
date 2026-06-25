@@ -725,6 +725,7 @@ var nginxProxyPassRe = regexp.MustCompile(`(?m)^(\s*)proxy_pass\s+(https?)://([A
 var nginxListenRe = regexp.MustCompile(`(?m)^\s*listen\b[^\n]*;`)
 
 var nginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+var nginxVariableProxyPassRe = regexp.MustCompile(`(?m)^\s*proxy_pass\s+https?://\$[A-Za-z_][A-Za-z0-9_]*`)
 
 // sanitizeNginxProxyPassUpstreams converts a LITERAL external-host proxy_pass
 // (e.g. "proxy_pass https://api.open-meteo.com/;") into a variable form plus a
@@ -796,17 +797,25 @@ func sanitizeNginxVariableProxyPassUpstreams(path string) error {
 	}
 	src := string(raw)
 	out := src
+	converted := false
 	matches := nginxVariableUpstreamSetRe.FindAllStringSubmatch(src, -1)
 	for _, m := range matches {
 		indent, variable, upstream := m[1], m[2], m[3]
+		host, _, _ := strings.Cut(upstream, ":")
+		if !strings.Contains(host, ".") && !isIPv4(host) {
+			continue
+		}
 		proxyLine := indent + "proxy_pass http://" + variable + "/;"
 		if !strings.Contains(out, proxyLine) {
 			continue
 		}
 		out = strings.Replace(out, m[0]+"\n"+proxyLine, indent+"proxy_pass http://"+upstream+"/;", 1)
 		out = strings.Replace(out, m[0]+"\r\n"+proxyLine, indent+"proxy_pass http://"+upstream+"/;", 1)
+		converted = true
 	}
-	out = removeDockerOnlyNginxResolver(out)
+	if converted && !nginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerOnlyNginxResolver(out)
+	}
 	if out == src {
 		return nil
 	}

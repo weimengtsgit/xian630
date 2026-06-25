@@ -590,6 +590,38 @@ func TestSanitizeNginxVariableProxyPassWithPort(t *testing.T) {
 	}
 }
 
+func TestSanitizeNginxVariableProxyPassKeepsInternalServiceName(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ontology-server:8081;
+        proxy_pass http://$ontology_upstream/;
+        proxy_set_header Host $host;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "proxy_pass http://ontology-server:8081/;") {
+		t.Fatalf("internal service name should not be collapsed to a static upstream;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "set $ontology_upstream ontology-server:8081;") ||
+		!strings.Contains(got, "proxy_pass http://$ontology_upstream/;") {
+		t.Fatalf("internal service variable upstream should be preserved;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "resolver 127.0.0.11") {
+		t.Fatalf("resolver line should be preserved when no collapse is performed;\ngot:\n%s", got)
+	}
+}
+
 // fakeContainerRuntime is a deploy.ContainerRuntime double that records its
 // calls. It stands in for docker/podman so the runtime-selection logic can be
 // tested without a real container engine.
