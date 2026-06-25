@@ -424,6 +424,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)
 	r.Handle("POST", "/api/jobs/:id/retry-current-step", s.retryCurrentStep)
+	r.Handle("POST", "/api/jobs/:id/repair-from-failure", s.repairFromFailure)
 
 	// Clarification session lifecycle (Task 4). A portal chat message creates a
 	// clarification session (NOT a job) until the user confirms.

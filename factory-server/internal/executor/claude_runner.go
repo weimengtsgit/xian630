@@ -95,6 +95,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		"blueprintRefs":        blueprintRefs,
 		"skills":               skillPaths,
 		"blueprintDocs":        blueprintPaths,
+		"repairContext":        step.UserPrompt,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -107,7 +108,11 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// every code_generation run. Captured for all steps but consumed only by
 	// code_generation's audit.
 	baseline := c.Claude.BaselineStatus(ctx, c.AuditRunner)
-	if err := c.Claude.Run(ctx, ws, c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy), input, step.Kind == model.StepCodeGeneration, emit); err != nil {
+	prompt := c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy)
+	if step.Kind == model.StepCodeGeneration && strings.TrimSpace(step.UserPrompt) != "" {
+		prompt += "\n\n[repair_from_failure]\n" + step.UserPrompt + "\n"
+	}
+	if err := c.Claude.Run(ctx, ws, prompt, input, step.Kind == model.StepCodeGeneration, emit); err != nil {
 		// Even on failure, capture sanitized audit copies of whatever operational
 		// files exist (input/prompt are always written by ClaudeRunner.Run before
 		// the agent runs; output may or may not exist). Best-effort: a capture

@@ -91,6 +91,7 @@ function App() {
                 loading={jobs.loading}
                 onCancel={jobs.cancelJob}
                 onRetry={jobs.retryCurrentStep}
+                onRepairFromFailure={jobs.repairFromFailure}
                 summary={jobs.summary}
                 artifacts={jobs.artifacts}
                 selectedStepId={jobs.selectedStepId}

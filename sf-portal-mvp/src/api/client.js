@@ -98,6 +98,7 @@ export const factoryApi = {
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
+  repairFromFailure: id => request(`/api/jobs/${id}/repair-from-failure`, { method: 'POST' }),
   // Execution observability (Task 4 backend contract):
   //   - summary: per-step snapshot of latest attempt + latest record
   //   - records: paginated (newest-first via before_sequence=0) for ONE step+attempt

@@ -358,6 +358,96 @@ func TestExecutorRetryRejectsNonFailed(t *testing.T) {
 	}
 }
 
+func TestExecutorRepairFromFailureRewindsTestFailureToCodeGeneration(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepTestVerification: {
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorBuildFailed,
+			ErrorMessage: "build command failed",
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	drain(t, context.Background(), e)
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusFailed || job.CurrentStepKind != model.StepTestVerification {
+		t.Fatalf("pre-repair job = %s/%s, want failed/test_verification", job.Status, job.CurrentStepKind)
+	}
+	failedStep := stepByKind(t, mustSteps(t, st, id), model.StepTestVerification)
+	if err := st.AppendStepExecutionRecord(context.Background(), model.StepExecutionRecord{
+		ID:        "rec_repair_test",
+		JobID:     id,
+		StepID:    failedStep.ID,
+		Attempt:   failedStep.Attempt,
+		Sequence:  99,
+		Kind:      model.ExecutionRecordCommandStderr,
+		Content:   "src/App.tsx(1,8): error TS6133: React is declared but never used",
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("append failed record: %v", err)
+	}
+
+	updated, err := e.RepairFromFailure(context.Background(), id)
+	if err != nil {
+		t.Fatalf("RepairFromFailure: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued {
+		t.Fatalf("updated status = %s, want queued", updated.Status)
+	}
+	if updated.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("current step = %s, want code_generation", updated.CurrentStepKind)
+	}
+	steps := mustSteps(t, st, id)
+	code := stepByKind(t, steps, model.StepCodeGeneration)
+	if code.Status != model.StepStatusPending {
+		t.Fatalf("code_generation status = %s, want pending", code.Status)
+	}
+	for _, want := range []string{
+		"repair_from_failure",
+		"test_verification",
+		"build command failed",
+		"TS6133",
+		"只修复导致当前失败的问题",
+	} {
+		if !strings.Contains(code.UserPrompt, want) {
+			t.Fatalf("repair prompt missing %q:\n%s", want, code.UserPrompt)
+		}
+	}
+	records, err := st.ListStepExecutionRecordPage(context.Background(), id, failedStep.ID, failedStep.Attempt, 0, 200)
+	if err != nil {
+		t.Fatalf("list failed-step records: %v", err)
+	}
+	foundRepairRecord := false
+	for _, rec := range records {
+		if rec.Kind == model.ExecutionRecordSystem && strings.Contains(rec.Content, "repair_from_failure") {
+			foundRepairRecord = true
+			if rec.Sequence <= 99 {
+				t.Fatalf("repair record sequence = %d, want appended after existing records", rec.Sequence)
+			}
+		}
+	}
+	if !foundRepairRecord {
+		t.Fatalf("missing repair_from_failure system record in failed-step attempt records: %+v", records)
+	}
+}
+
+func TestExecutorRepairFromFailureRejectsNonRepairableFailure(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepSolutionDesign: {Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "bad design"},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	_ = e.RunOnce(context.Background())
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce step2: %v", err)
+	}
+	if _, err := e.RepairFromFailure(context.Background(), id); err == nil {
+		t.Fatalf("RepairFromFailure should reject solution_design failures")
+	}
+}
+
 // seedJobWithSlug creates a queued job bound to a specific app_slug (the per-app
 // serialization key) with all six FixedSteps seeded as pending and returns its id.
 func seedJobWithSlug(t *testing.T, st *store.Store, appSlug string) string {
@@ -491,7 +581,7 @@ type blockingRunner struct {
 	mu       sync.Mutex
 	releases map[string]chan struct{}
 	bindings map[string]string // jobID -> label
-	started   chan string
+	started  chan string
 }
 
 func (b *blockingRunner) bindJob(jobID, label string) {
@@ -528,7 +618,6 @@ func (b *blockingRunner) Run(ctx context.Context, job model.Job, _ model.JobStep
 	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
-
 
 // cancels the job concurrently and asserts both step and job reach canceled and
 // the runner's ctx was cancelled.
