@@ -13,6 +13,12 @@ description: Generate a deployable React/Vite static application for the softwar
 - Keep the app static and self-contained, but obey the **Honest Data** rule below
   for what populates the data layer — do not default to mock data.
 - Ensure `npm run build` creates `dist/index.html`.
+- **Build script MUST be `"build": "vite build"`** — NEVER `"tsc && vite build"`.
+  Vite uses esbuild to transpile TypeScript without type-checking, so unused
+  imports/locals never fail the build. `tsc` in the build chain rejects generated
+  code on `noUnusedLocals`/`TS6133` and breaks `image_build`. If the project
+  uses TypeScript, also set `"noUnusedLocals": false` and
+  `"noUnusedParameters": false` in `tsconfig.json` as a safety net.
 - Use `source: "generated"` in `.factory/app.json`.
 - Use this exact manifest shape, replacing `<slug>`, `<name>`, `<type>`, and descriptive values only:
 
