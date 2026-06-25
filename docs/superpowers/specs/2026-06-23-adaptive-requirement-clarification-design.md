@@ -276,7 +276,7 @@ their current role-specific responsibilities. Business-processing agents use
 `role=business_processing`.
 
 This work owns the data contract, creation flow, and events. It does not
-modify the collaborating branch's right-side **软件开发 / 业务处理** Tab layout.
+modify the collaborating branch's right-side **协作智能体 / 业务处理** Tab layout.
 That branch can list each category with a simple filter once integrated.
 
 ## Events, Persistence, and Workbench

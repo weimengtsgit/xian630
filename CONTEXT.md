@@ -85,7 +85,7 @@ A user-requested change to an application already linked to the dialogue session
 _Avoid_: 新建重复应用, 覆盖历史版本, 独立会话
 
 **应用**:
-A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. The pipeline agents (软件开发智能体) appear only on non-workbench surfaces such as the 软件开发 tab, so they do not collide with the user-facing 智能体 label.
+A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. The pipeline agents (协作智能体智能体) appear only on non-workbench surfaces such as the 协作智能体 tab, so they do not collide with the user-facing 智能体 label.
 _Avoid_: 任务, 会话, 模板
 
 **应用删除**:
@@ -248,13 +248,13 @@ _Avoid_: 全局个人技能, 普通模板文件
 The selected set of generation skill keys derived from a confirmed requirement and passed into the generation task.
 _Avoid_: 用户手选技能, 随机 agent 偏好
 
-**软件开发智能体**:
+**协作智能体智能体**:
 A Factory-owned agent that performs one fixed responsibility in the application-generation pipeline, such as requirement analysis, solution design, code generation, testing, image build, or deployment.
 _Avoid_: 业务处理智能体, 用户自定义智能体, 场景蓝本
 
 **业务处理智能体**:
 A user-confirmed definition of a business-handling role, containing a name, description, and prompt. In this phase it is cataloged and displayed but not directly executed.
-_Avoid_: 软件开发智能体, 已运行任务, 生成应用
+_Avoid_: 协作智能体智能体, 已运行任务, 生成应用
 
 **业务处理智能体建议**:
 A dormant future route that would recommend creating a business-processing agent and ask for the user's confirmation. It is not exposed as a current user-visible dialogue outcome while intelligent-agent requests are routed to assistant-application generation.

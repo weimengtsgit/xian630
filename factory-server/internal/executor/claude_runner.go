@@ -201,16 +201,29 @@ func emitClarificationTrace(ctx context.Context, trace runner.TraceEmitter, ques
 }
 
 // clarificationPayload builds a JSON payload for a clarification.required trace
-// carrying ONLY the question text and the agent's suggested default answer — the
-// public clarification the user must resolve. No tool I/O or reasoning.
+// carrying the question text, the agent's suggested default answer, AND the
+// structured options the agent offered — the public clarification the user must
+// resolve. No tool I/O or reasoning. Options let the conversation UI render a
+// pickable card instead of a bare text blob.
 func clarificationPayload(questions []runner.Question) string {
+	type opt struct {
+		Value       string `json:"value,omitempty"`
+		Label       string `json:"label,omitempty"`
+		Recommended bool   `json:"recommended,omitempty"`
+	}
 	type q struct {
+		ID            string `json:"id,omitempty"`
 		Question      string `json:"question"`
 		DefaultAnswer string `json:"defaultAnswer,omitempty"`
+		Options       []opt  `json:"options,omitempty"`
 	}
 	out := make([]q, 0, len(questions))
 	for _, qq := range questions {
-		out = append(out, q{Question: qq.Question, DefaultAnswer: qq.DefaultAnswer})
+		opts := make([]opt, 0, len(qq.Options))
+		for _, o := range qq.Options {
+			opts = append(opts, opt{Value: o.Value, Label: o.Label, Recommended: o.Recommended})
+		}
+		out = append(out, q{ID: qq.ID, Question: qq.Question, DefaultAnswer: qq.DefaultAnswer, Options: opts})
 	}
 	b, err := json.Marshal(struct {
 		Questions []q `json:"questions"`

@@ -49,7 +49,7 @@ export function ApplicationsPanel({
   return (
     <div className="applications-panel">
       <div className="panel-header">
-        <h2>智能体列表</h2>
+        <h2>业务智能体</h2>
         <div className="panel-header-right">
           <span className="panel-count">{list.length} 个智能体</span>
           <button

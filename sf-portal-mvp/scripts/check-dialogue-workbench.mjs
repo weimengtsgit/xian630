@@ -81,12 +81,13 @@ assert.deepEqual(
 )
 assert.equal(inquiryTimeline[1].content, 'HTTP 401 表示认证失败。')
 
-// ---- job-step clarification surfaces as a conversation bubble ----------------
+// ---- job-step clarification surfaces as a structured conversation card -------
 
 // When a pipeline step (solution_design / code_generation) pauses for user
 // input, the backend emits a clarification work trace. buildDialogueTimeline
-// must turn it into a visible agent_message bubble in the conversation flow
-// (not just the folded trace panel) so the user sees WHAT to answer.
+// must turn it into a visible clarification_prompt card in the conversation
+// flow (not just the folded trace panel), carrying the question text AND the
+// structured options so the UI can render pickable choices.
 const clarTimeline = buildDialogueTimeline(
   {
     session: { id: 'dlg_clar', status: 'active', intent: 'application_generation', route_locked: true },
@@ -99,15 +100,29 @@ const clarTimeline = buildDialogueTimeline(
     {
       type: 'clarification',
       sequence: 2,
-      payload: { questions: [{ question: '用演示数据还是真实API？', defaultAnswer: '演示数据' }] },
+      payload: {
+        questions: [{
+          id: 'data-source',
+          question: '用演示数据还是真实API？',
+          defaultAnswer: '演示数据',
+          options: [
+            { value: 'use-mock-data', label: '使用演示数据模式', recommended: true },
+            { value: 'provide-real-api', label: '提供真实后端API' },
+          ],
+        }],
+      },
       dialogueId: 'dlg_clar',
       id: 't2',
     },
   ],
 )
-const clarBubble = clarTimeline.find(it => it.type === 'agent_message' && String(it.content).includes('用演示数据还是真实API'))
-assert.ok(clarBubble, 'a clarification work trace must surface as an agent_message bubble containing the question text')
-assert.match(clarBubble.content, /需要你澄清/, 'clarification bubble must prompt the user to answer')
+const clarCard = clarTimeline.find(it => it.type === 'clarification_prompt')
+assert.ok(clarCard, 'a clarification work trace must surface as a clarification_prompt card')
+assert.equal(clarCard.questions.length, 1, 'card carries one question')
+assert.equal(clarCard.questions[0].question, '用演示数据还是真实API？')
+assert.equal(clarCard.questions[0].options.length, 2, 'card carries the structured options')
+assert.equal(clarCard.questions[0].options[0].value, 'use-mock-data')
+assert.equal(clarCard.questions[0].options[0].recommended, true, 'recommended flag is preserved')
 
 // ---- no blueprint text in rendered timeline items ---------------------------
 

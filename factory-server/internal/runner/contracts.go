@@ -33,11 +33,22 @@ type StepOutput struct {
 }
 
 // Question is a single clarification the agent wants the user to answer before
-// the step can complete (design §5.1).
+// the step can complete (design §5.1). Options carries the structured choices
+// the agent offers (e.g. "use-mock-data" vs "provide-real-api"); surfaced via
+// the clarification work trace so the conversation UI can render them as a
+// pickable card rather than a bare text blob.
 type Question struct {
-	ID            string `json:"id"`
-	Question      string `json:"question"`
-	DefaultAnswer string `json:"defaultAnswer"`
+	ID            string         `json:"id"`
+	Question      string         `json:"question"`
+	DefaultAnswer string         `json:"defaultAnswer"`
+	Options       []QuestionOption `json:"options,omitempty"`
+}
+
+// QuestionOption is one structured choice on a clarification question.
+type QuestionOption struct {
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Recommended bool   `json:"recommended,omitempty"`
 }
 
 // SkillPaths is a []string that unmarshals usedSkills from EITHER of the two

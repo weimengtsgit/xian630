@@ -307,30 +307,37 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
 
   // 5b. Job-step clarifications: when a pipeline step (solution_design /
   // code_generation) pauses for user input, the backend emits a clarification
-  // work trace carrying the question(s). Surface them as assistant bubbles IN
-  // the conversation flow (not just the folded trace panel) so the user sees
-  // WHAT to answer. The trace payload is {questions:[{question,defaultAnswer}]};
-  // rendered as plain text since the trace carries no structured options. Order
-  // by sequence (ascending) so multiple clarifications appear in emit order.
+  // work trace carrying the question(s) AND their structured options. Surface
+  // them as a dedicated clarification_prompt card IN the conversation flow (not
+  // just the folded trace panel) so the user sees WHAT to answer and can pick
+  // an option. The trace payload is
+  // {questions:[{id,question,defaultAnswer,options:[{value,label,recommended}]}]}.
+  // Order by sequence (ascending) so multiple clarifications appear in emit order.
   if (Array.isArray(workTraceItems)) {
     const clarifications = workTraceItems
       .filter(it => it && it.type === 'clarification' && it.payload && Array.isArray(it.payload.questions) && it.payload.questions.length > 0)
       .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
     for (const c of clarifications) {
       const seq = c.sequence || 0
-      const lines = c.payload.questions.map(q => safeString(q.question))
-      const defaultAnswers = c.payload.questions
-        .map(q => safeString(q.defaultAnswer))
-        .filter(t => t)
-      let content = '需要你澄清以下问题：\n' + lines.map((l, i) => `${i + 1}. ${l}`).join('\n')
-      if (defaultAnswers.length > 0) {
-        content += `\n（参考建议：${defaultAnswers.join('；')}）`
-      }
-      content += '\n请在下方对话区回复。'
+      const questions = c.payload.questions.map((q, i) => {
+        const options = Array.isArray(q.options)
+          ? q.options.map(opt => ({
+            value: safeString(opt.value),
+            label: safeString(opt.label || opt.value),
+            recommended: !!opt.recommended,
+          })).filter(opt => opt.value || opt.label)
+          : []
+        return {
+          id: safeString(q.id) || `clar_q_${seq}_${i}`,
+          question: safeString(q.question),
+          defaultAnswer: safeString(q.defaultAnswer),
+          options,
+        }
+      })
       items.push({
         id: `clarify_${c.dialogueId || ''}_${seq}_${c.id || ''}`,
-        type: 'agent_message',
-        content,
+        type: 'clarification_prompt',
+        questions,
       })
     }
   }

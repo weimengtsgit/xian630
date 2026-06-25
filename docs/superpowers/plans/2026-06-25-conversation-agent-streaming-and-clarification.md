@@ -129,7 +129,7 @@ high-impact + rename assertions so the old check keeps its scope.
   only ever carries the safe analysis work log (`text_delta` content).
 - Persist event-equivalent records BEFORE publishing any SSE event.
 - Preserve existing user changes and unrelated files (the carrier-affiliation
-  scene work, the AgentsPanel/软件开发 tab owned by the collaborating branch).
+  scene work, the AgentsPanel/协作智能体 tab owned by the collaborating branch).
   No `git reset` / `checkout --hard`.
 - Tool I/O / API / command logs remain allowlisted, redacted, length-capped.
 - A new version of an application becomes effective only after build + deploy +
@@ -350,8 +350,8 @@ high-impact + rename assertions so the old check keeps its scope.
   product nouns to 智能体: `生成新应用` → `生成新智能体`; the route card
   subtitle `通过需求澄清生成助手应用或业务应用` → `…生成助手智能体或业务智能体`;
   frame the `确认并生成` action in 智能体 terms. Leave internal identifiers,
-  API paths, and the collaborating-branch-owned `AgentsPanel` / 软件开发 tab
-  untouched. (The left 应用列表 → 智能体列表 rename is already done.)
+  API paths, and the collaborating-branch-owned `AgentsPanel` / 协作智能体 tab
+  untouched. (The left 应用列表 → 业务智能体 rename is already done.)
 
 - [ ] **Step 2: Assert the rename in the logic check.**
 

@@ -126,7 +126,7 @@ type DialogueStatus =
 
 ### 4.2 需求澄清会话（应用生成路由的子流）
 
-应用生成路由确定后，Factory 在对话会话下创建一个需求澄清会话。需求澄清会话是软件开发子流，不占用生成任务队列，用于在创建任何生成任务之前精炼应用需求。
+应用生成路由确定后，Factory 在对话会话下创建一个需求澄清会话。需求澄清会话是协作智能体子流，不占用生成任务队列，用于在创建任何生成任务之前精炼应用需求。
 
 ```ts
 type ClarificationStatus =
@@ -334,7 +334,7 @@ Step 与执行方映射：
 | `image_build` | `image-builder` | Factory 命令 | Factory 执行固定 Podman build 命令 |
 | `deployment` | `deployer` | Factory 命令 | Factory 分配端口、启动容器、做健康检查 |
 
-这六个 `agent_key` 对应六个**软件开发智能体**：需求分析、方案设计、代码生成、测试、镜像构建、部署。历史上镜像构建与部署曾合并为单个“构建部署” agent，现拆分为独立的 `image-builder`（镜像构建，`image_build`）与 `deployer`（部署，`deployment`）。`agent_key` 用于 UI 展示和审计归属，不代表每个 Step 都会启动 Claude CLI。`test_verification`、`image_build`、`deployment` 的关键命令由 Factory 固定执行，不能由 Claude 自由拼接命令。
+这六个 `agent_key` 对应六个**协作智能体智能体**：需求分析、方案设计、代码生成、测试、镜像构建、部署。历史上镜像构建与部署曾合并为单个“构建部署” agent，现拆分为独立的 `image-builder`（镜像构建，`image_build`）与 `deployer`（部署，`deployment`）。`agent_key` 用于 UI 展示和审计归属，不代表每个 Step 都会启动 Claude CLI。`test_verification`、`image_build`、`deployment` 的关键命令由 Factory 固定执行，不能由 Claude 自由拼接命令。
 
 状态转移规则：
 

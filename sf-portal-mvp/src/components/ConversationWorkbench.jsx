@@ -181,6 +181,7 @@ export function ConversationWorkbench({
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
+            onPickClarification={value => setInput(value)}
           />
         ))}
 
@@ -303,9 +304,18 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
   if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
+  if (item.type === 'clarification_prompt') {
+    // A pipeline step (solution_design / code_generation) paused for user input.
+    // Render the question(s) + structured options as a card; picking an option
+    // fills the composer (the reply goes through the normal send → answerJob
+    // path, which resets the step so the agent reads the user's answer).
+    return (
+      <ClarificationPromptCard item={item} onPick={onPickClarification} submitting={submitting} />
+    )
+  }
   if (item.type === 'analysis_stream') {
     // D6: the persisted analysis lands after the round completes and renders
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
@@ -586,6 +596,50 @@ function QuestionCard({ q, value, setValue }) {
       </div>
       {q.allowCustom ? <CustomAnswer onSubmit={v => q.multiSelect ? setValue([...selected, v]) : setValue(v)} /> : null}
       {customSelected.length > 0 ? <div className="cw-custom-selected">{customSelected.join('、')}</div> : null}
+    </div>
+  )
+}
+
+// ClarificationPromptCard renders a job-step clarification (solution_design /
+// code_generation pausing for user input) as a distinct, attention-grabbing card
+// in the conversation flow. Unlike the pre-job QuestionCard (which has its own
+// submit + draftAnswers state), a job-step clarification is answered via the
+// normal composer: picking an option (or typing) fills the composer, and sending
+// goes through answerJob → the step resets and the agent reads the reply.
+function ClarificationPromptCard({ item, onPick, submitting }) {
+  const questions = Array.isArray(item.questions) ? item.questions : []
+  const pick = value => {
+    if (submitting || typeof onPick !== 'function') return
+    onPick(value)
+  }
+  return (
+    <div className="cw-item cw-agent cw-clarification">
+      <span className="cw-item-label">需要你澄清</span>
+      {questions.map((q, qi) => (
+        <div key={q.id || qi} className="cw-clarification-q">
+          <p className="cw-clarification-text">{q.question}</p>
+          {q.options && q.options.length > 0 ? (
+            <div className="cw-options">
+              {q.options.map(opt => (
+                <button
+                  key={opt.value || opt.label}
+                  type="button"
+                  className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
+                  onClick={() => pick(opt.label || opt.value)}
+                  disabled={submitting}
+                >
+                  <span className="cw-option-head">
+                    <b>{opt.label || opt.value}</b>
+                    {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
+        </div>
+      ))}
+      <small className="cw-clarification-hint">点击上方选项，或在下方输入框回复</small>
     </div>
   )
 }
