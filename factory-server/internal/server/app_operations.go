@@ -436,7 +436,15 @@ func writeStaticViteDockerfile(appDir, outputDir string) error {
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString(`CMD ["nginx", "-g", "daemon off;"]`)
 	b.WriteString("\n")
-	return os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	// Overwrite .dockerignore so podman build doesn't skip the prebuilt dist/.
+	// Generated apps ship a .dockerignore that excludes dist + node_modules
+	// (correct for the ORIGINAL multi-stage Dockerfile), but after we replace the
+	// Dockerfile with the offline nginx one, dist/ MUST be included.
+	ignoreContent := "node_modules\n"
+	return os.WriteFile(filepath.Join(appDir, ".dockerignore"), []byte(ignoreContent), 0o644)
 }
 
 // rollbackRequestBody is the explicit-confirm body for POST /api/apps/:id/rollback.
