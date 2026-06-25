@@ -162,6 +162,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
 	if err := s.prepareGeneratedStaticViteBuild(ctx, *app, buildApp.Path); err != nil {
+		log.Printf("startAppInternal prepareGeneratedStaticViteBuild failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
 	}
@@ -169,6 +170,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	// 1. Build image.
 	img, _, err := rt.BuildImage(ctx, buildApp, tag)
 	if err != nil {
+		log.Printf("startAppInternal BuildImage failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
 	}
@@ -346,12 +348,14 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
 	if err := s.prepareGeneratedStaticViteBuild(ctx, *app, buildApp.Path); err != nil {
+		log.Printf("rebuildApp prepareGeneratedStaticViteBuild failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
 		return
 	}
 	img, _, err := s.containerRuntime().BuildImage(ctx, buildApp, tag)
 	if err != nil {
+		log.Printf("rebuildApp BuildImage failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
 		return
@@ -390,7 +394,9 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 	if _, err := os.Stat(filepath.Join(appDir, "package-lock.json")); err == nil {
 		installArgs = []string{"ci"}
 	}
+	log.Printf("prepareGeneratedStaticViteBuild: running %s %s in %s", installName, strings.Join(installArgs, " "), appDir)
 	if res, err := s.runner.Run(ctx, appDir, installName, installArgs...); err != nil || res.ExitCode != 0 {
+		log.Printf("prepareGeneratedStaticViteBuild: %s %s FAILED exit=%d err=%v", installName, strings.Join(installArgs, " "), res.ExitCode, err)
 		return fmt.Errorf("%s %s failed: %w", installName, strings.Join(installArgs, " "), err)
 	}
 
@@ -402,7 +408,9 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 	if len(buildArgs) == 0 {
 		buildArgs = []string{"npm", "run", "build"}
 	}
+	log.Printf("prepareGeneratedStaticViteBuild: running %s in %s", buildCmd, appDir)
 	if res, err := s.runner.Run(ctx, appDir, buildArgs[0], buildArgs[1:]...); err != nil || res.ExitCode != 0 {
+		log.Printf("prepareGeneratedStaticViteBuild: %s FAILED exit=%d err=%v", buildCmd, res.ExitCode, err)
 		return fmt.Errorf("%s failed: %w", buildCmd, err)
 	}
 
