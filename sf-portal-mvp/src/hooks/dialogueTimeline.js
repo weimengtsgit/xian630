@@ -159,6 +159,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         id: `livethink_${safeString(liveThinking.key)}`,
         type: 'live_thinking',
         content: safeString(liveThinking.content),
+        summary: safeString(la && liveAnalysis && liveAnalysis.content ? liveAnalysis.content : ''),
         kind: liveThinking.kind === 'step' ? 'step' : 'round',
       })
     }
@@ -217,6 +218,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       id: `livethink_${safeString(liveThinking.key)}`,
       type: 'live_thinking',
       content: safeString(liveThinking.content),
+      summary: liveAnalysis && liveAnalysis.content ? safeString(liveAnalysis.content) : '',
       kind: liveThinking.kind === 'step' ? 'step' : 'round',
     })
   }
@@ -431,6 +433,7 @@ function appendChildItems(items, child, parentSession) {
   let round = 1
   let bucket = null // { round, entries: [] }
   let userBatch = null // { round, ids: [], labels: [] }
+  let pendingThinking = null // { id, content } raw thinking waiting for following Chinese analysis summary
   // questionsById accumulates EVERY question seen (id -> parsed metadata). A
   // round can ask several high-impact questions at once, and the user answers
   // them in one batch; each answer is resolved against the question its OWN
@@ -460,9 +463,32 @@ function appendChildItems(items, child, parentSession) {
     }
     userBatch = null
   }
+  const flushThinking = summary => {
+    if (pendingThinking && pendingThinking.content) {
+      items.push({
+        id: pendingThinking.id,
+        type: 'thinking_summary',
+        content: pendingThinking.content,
+        summary: safeString(summary),
+        folded: true,
+      })
+    }
+    pendingThinking = null
+  }
   for (const msg of childMessages) {
+    if (msg && msg.role === 'agent' && msg.kind === 'thinking') {
+      flushUserBatch()
+      const raw = safeString(msg.content)
+      if (raw) {
+        pendingThinking = pendingThinking && pendingThinking.content
+          ? { id: pendingThinking.id, content: `${pendingThinking.content}\n\n${raw}` }
+          : { id: msg.id || `${parentSession.id || 'dlg'}_thinking_${round}`, content: raw }
+      }
+      continue
+    }
     if (msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
       flushUserBatch()
+      if (pendingThinking) flushThinking(msg.content)
       if (msg.content) {
         if (!bucket) bucket = { round, entries: [] }
         bucket.entries.push(safeString(msg.content))
@@ -471,6 +497,7 @@ function appendChildItems(items, child, parentSession) {
     }
     if (msg && msg.role === 'agent' && msg.kind === 'question') {
       flushUserBatch()
+      flushThinking('')
       flushAnalysis()
       const q = parseJSON(msg.metadata_json)
       if (q && q.id) questionsById[q.id] = q
@@ -491,6 +518,7 @@ function appendChildItems(items, child, parentSession) {
     }
   }
   flushUserBatch()
+  flushThinking('')
   flushAnalysis()
   // Question groups: the latest unanswered question set after the last user
   // answer. One group with all open questions.
@@ -783,15 +811,6 @@ export function foldTraceIntoLiveAnalysis(state, stepLive) {
   }
 }
 
-export function foldTraceIntoLiveThinking(state, stepLive) {
-  if (!stepLive || !stepLive.content) return state
-  const existing = state.liveThinking
-  if (existing && existing.kind === 'round') return state
-  return {
-    ...state,
-    liveThinking: { key: stepLive.key, content: stepLive.content, kind: 'step' },
-  }
-}
 
 // Events that only nudge the history list (no need to interrupt the current view
 // beyond a refresh if it happens to be the selected one). Used to distinguish a

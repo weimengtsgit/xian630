@@ -351,17 +351,8 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
       </CopyableMessage>
     )
   }
-  if (item.type === 'live_thinking') {
-    // The model's raw reasoning (thinking_delta), streamed live as a "思考过程"
-    // block above the analysis. Plaintext `<pre>`, never dangerouslySetInnerHTML.
-    // Policy: the conversation surface streams the model's thinking (#9 applies
-    // to the executor/trace pipeline, not here).
-    return (
-      <CopyableMessage className="cw-item cw-agent cw-live-thinking" copyText={item.content}>
-        <span className="cw-item-label"><Loader2 size={12} className="cw-spin" />思考过程</span>
-        <pre className="cw-live-text">{item.content}</pre>
-      </CopyableMessage>
-    )
+  if (item.type === 'live_thinking' || item.type === 'thinking_summary') {
+    return <ThinkingSummary item={item} />
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
@@ -418,6 +409,28 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
         <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
       </button>
       {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+    </CopyableMessage>
+  )
+}
+
+function ThinkingSummary({ item }) {
+  const summary = String(item.summary || '').trim()
+  const raw = String(item.content || '').trim()
+  const copyText = summary || raw
+  return (
+    <CopyableMessage className="cw-item cw-agent cw-live-thinking cw-thinking-summary" copyText={copyText}>
+      <span className="cw-item-label"><Loader2 size={12} className="cw-spin" />思考摘要</span>
+      {summary ? (
+        <pre className="cw-live-text cw-thinking-summary-text">{summary}</pre>
+      ) : (
+        <p className="cw-thinking-summary-empty">中文摘要将在分析过程生成后显示。</p>
+      )}
+      {raw ? (
+        <details className="cw-raw-thinking">
+          <summary>原始思考过程</summary>
+          <pre className="cw-live-text">{raw}</pre>
+        </details>
+      ) : null}
     </CopyableMessage>
   )
 }

@@ -5,7 +5,6 @@ import {
   applyDialogueEvent,
   buildDialogueTimeline,
   foldTraceIntoLiveAnalysis,
-  foldTraceIntoLiveThinking,
   initialDialogueState,
   lockedFromView,
   openQuestionsForView,
@@ -14,7 +13,6 @@ import {
   applyTraceEvent,
   applyTraceEvents,
   initialWorkTraceState,
-  liveThinkingFromTrace,
   liveStepFromTrace,
   resetWorkTraceState,
 } from './workTraceState'
@@ -673,9 +671,8 @@ export function useDialogueSessions() {
   useEffect(() => {
     if (!state.selectedDialogueId) return
     const stepLive = liveStepFromTrace(workTrace.items)
-    const thinkingLive = liveThinkingFromTrace(workTrace.items)
-    if (!stepLive && !thinkingLive) return
-    setState(prev => foldTraceIntoLiveThinking(foldTraceIntoLiveAnalysis(prev, stepLive), thinkingLive))
+    if (!stepLive) return
+    setState(prev => foldTraceIntoLiveAnalysis(prev, stepLive))
   }, [workTrace, state.selectedDialogueId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mount: hydrate the list and auto-select the most recent dialogue. Subscribe to

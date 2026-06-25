@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,8 +28,10 @@ import (
 // RouteOutput or BusinessDraftOutput as JSON stdout. The server injects it into
 // srv.dialogueRouter so the real claude CLI is never invoked.
 type fakeDialogueRunner struct {
-	routeStdout string // JSON RouteOutput
-	draftStdout string // JSON BusinessDraftOutput
+	routeStdout string   // JSON RouteOutput
+	draftStdout string   // JSON BusinessDraftOutput
+	routeLines  []string // optional stream-json route stdout lines
+	draftLines  []string // optional stream-json draft stdout lines
 	routeCalls  int
 	draftCalls  int
 	routeErr    bool
@@ -60,6 +63,53 @@ func (f *fakeDialogueRunner) Run(ctx context.Context, dir, name string, args ...
 		out = routeExistingAppHighConfidenceOutput
 	}
 	return runner.CommandResult{ExitCode: 0, Stdout: out}, nil
+}
+
+func (f *fakeDialogueRunner) RunStream(ctx context.Context, dir string, name string, onStdoutLine func(string), args ...string) (runner.CommandResult, error) {
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "business-agent-drafting") {
+		f.draftCalls++
+		if f.draftErr {
+			return runner.CommandResult{ExitCode: 2, Stderr: "draft boom"}, nil
+		}
+		lines := f.draftLines
+		if len(lines) == 0 {
+			out := f.draftStdout
+			if out == "" {
+				out = businessDraftReadyOutput
+			}
+			lines = dialogueStreamLines(out, "")
+		}
+		for _, line := range lines {
+			onStdoutLine(line)
+		}
+		return runner.CommandResult{ExitCode: 0, Stdout: strings.Join(lines, "\n")}, nil
+	}
+	f.routeCalls++
+	if f.routeErr {
+		return runner.CommandResult{ExitCode: 2, Stderr: "route boom"}, nil
+	}
+	lines := f.routeLines
+	if len(lines) == 0 {
+		out := f.routeStdout
+		if out == "" {
+			out = routeExistingAppHighConfidenceOutput
+		}
+		lines = dialogueStreamLines(out, "")
+	}
+	for _, line := range lines {
+		onStdoutLine(line)
+	}
+	return runner.CommandResult{ExitCode: 0, Stdout: strings.Join(lines, "\n")}, nil
+}
+
+func dialogueStreamLines(finalJSON string, thinking string) []string {
+	lines := []string{`{"type":"system","subtype":"init"}`}
+	if thinking != "" {
+		lines = append(lines, `{"type":"stream_event","event":{"delta":{"thinking":`+strconv.Quote(thinking)+`,"type":"thinking_delta"},"index":1,"type":"content_block_delta"}}`)
+	}
+	lines = append(lines, `{"type":"result","subtype":"success","result":`+strconv.Quote(finalJSON)+`}`)
+	return lines
 }
 
 // canned route outputs ---------------------------------------------------
@@ -267,6 +317,32 @@ func mustWriteCatalog(t *testing.T, root string) {
 // TestCreateDialoguePersistsMessageAndRoutes verifies POST /api/dialogues
 // persists the first user message, emits dialogue.created + dialogue.intent.updated,
 // and returns a view whose route payload is redacted (no internalBlueprintSlug).
+func TestCreateDialoguePersistsRouteThinkingForHistoryReplay(t *testing.T) {
+	thinking := "route reasoning in English"
+	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{
+		routeLines: dialogueStreamLines(routeAmbiguousOutput, thinking),
+	})
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "我想做一个航母编队复盘"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	msgs, err := st.LatestDialogueMessages(context.Background(), view.Session.ID, 10)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(msgs) < 2 || msgs[0].Role != "user" || msgs[1].Kind != "thinking" {
+		t.Fatalf("thinking must be persisted immediately after the user prompt; got %#v", msgs)
+	}
+	if msgs[1].Content != thinking {
+		t.Fatalf("thinking content = %q, want %q", msgs[1].Content, thinking)
+	}
+}
+
 func TestCreateDialoguePersistsMessageAndRoutes(t *testing.T) {
 	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
 
@@ -910,6 +986,62 @@ func seedBusinessDrafting(t *testing.T, srv *Server, dlgID string) {
 	dlg, _ = srv.store.GetDialogueSession(ctx, dlgID)
 	if err := srv.runBusinessDraftRound(ctx, dlgID, dlg, 1); err != nil {
 		t.Fatalf("seedBusinessDrafting: round 1: %v", err)
+	}
+}
+
+func TestBusinessDraftReturnsErrorWhenThinkingPersistenceFails(t *testing.T) {
+	thinking := "draft reasoning in English"
+	srv, _, st := newDialogueTestServer(t, &fakeDialogueRunner{
+		draftLines: dialogueStreamLines(businessDraftQuestionOutput, thinking),
+	})
+	if err := st.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	err := srv.runBusinessDraftRound(context.Background(), "dlg_closed", &model.DialogueSession{ID: "dlg_closed", InitialPrompt: "业务助手"}, 1)
+	if err == nil {
+		t.Fatalf("runBusinessDraftRound should return the thinking persistence error")
+	}
+}
+
+func TestBusinessDraftPersistsThinkingForHistoryReplay(t *testing.T) {
+	thinking := "draft reasoning in English"
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{
+		routeStdout: routeBusinessAgentOutput,
+		draftLines:  dialogueStreamLines(businessDraftQuestionOutput, thinking),
+	})
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "业务助手"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", create.Code, create.Body.String())
+	}
+	var created dialogueView
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	seedBusinessDrafting(t, srv, created.Session.ID)
+	msgs, err := st.LatestDialogueMessages(context.Background(), created.Session.ID, 20)
+	if err != nil {
+		t.Fatalf("messages: %v", err)
+	}
+	userIndex := -1
+	thinkingIndex := -1
+	analysisIndex := -1
+	for i, m := range msgs {
+		if m.Role == "user" && userIndex < 0 {
+			userIndex = i
+		}
+		if m.Kind == "thinking" && m.Content == thinking {
+			thinkingIndex = i
+		}
+		if m.Kind == "analysis_work_log" && strings.Contains(m.Content, "需要确认分诊范围") {
+			analysisIndex = i
+		}
+	}
+	if !(userIndex >= 0 && thinkingIndex > userIndex) {
+		t.Fatalf("business thinking must persist after user message; messages=%#v", msgs)
+	}
+	if !(analysisIndex > thinkingIndex) {
+		t.Fatalf("business thinking must persist before following analysis for summary replay; messages=%#v", msgs)
 	}
 }
 

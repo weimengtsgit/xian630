@@ -213,7 +213,11 @@
 @keyframes cw-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @keyframes cw-spin { to { transform: rotate(360deg); } }
 
-/* 思考过程: the model's raw reasoning streamed live (muted, distinct from 分析过程). */
+/* 思考摘要: default Chinese summary with collapsed raw original thinking. */
 .cw-live-thinking { opacity: 0.92; }
-.cw-live-thinking .cw-item-label { color: rgba(180, 200, 214, 0.78); }
-.cw-live-thinking .cw-live-text { color: rgba(170, 196, 214, 0.7); font-style: italic; }
+.cw-thinking-summary .cw-item-label { color: rgba(180, 220, 255, 0.88); }
+.cw-thinking-summary-text { color: rgba(215, 238, 248, 0.82); font-style: normal; }
+.cw-thinking-summary-empty { margin: 0; color: rgba(215, 238, 248, 0.58); font-size: 12px; }
+.cw-raw-thinking { margin-top: 6px; border-top: 1px solid rgba(111, 218, 255, 0.12); padding-top: 6px; }
+.cw-raw-thinking summary { cursor: pointer; color: rgba(180, 200, 214, 0.72); font-size: 11px; }
+.cw-raw-thinking .cw-live-text { margin-top: 6px; color: rgba(170, 196, 214, 0.68); font-style: italic; }

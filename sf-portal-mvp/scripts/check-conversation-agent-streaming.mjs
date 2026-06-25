@@ -19,9 +19,8 @@ import {
   applyLiveAnalysisEvent,
   applyLiveThinkingEvent,
   foldTraceIntoLiveAnalysis,
-  foldTraceIntoLiveThinking,
 } from '../src/hooks/dialogueTimeline.js'
-import { liveStepFromTrace, liveThinkingFromTrace } from '../src/hooks/workTraceState.js'
+import { liveStepFromTrace } from '../src/hooks/workTraceState.js'
 
 // ---- 0. D5: optimistic user message renders before the first view lands -----
 //
@@ -136,6 +135,33 @@ assert.equal(byId.data_policy.options[0].recommended, true, 'recommendation badg
 // live block is cleared on every reload and the thinking process vanishes. The
 // child analysis_work_log must render as a FOLDED analysis_stream item above the
 // question/conclusion (D6 retention), one collapsed block per entry.
+const replayedThinkingView = {
+  session: { id: 'dlg_thinking_replay', status: 'drafting_application', intent: 'application_generation', route_locked: true, initial_prompt: '做一个员工请假审批流程' },
+  messages: [],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  child: {
+    id: 'clar_thinking_replay', status: 'waiting_user', round: 1, max_rounds: 6,
+    requirement: { appType: 'operations_management', appName: '员工请假审批', coreScenario: '请假申请与审批' },
+    messages: [
+      { id: 'rt_u1', role: 'user', kind: 'prompt', content: '做一个员工请假审批流程' },
+      { id: 'rt_t1', role: 'agent', kind: 'thinking', content: 'The model is reasoning in English about leave approval.' },
+      { id: 'rt_a1', role: 'agent', kind: 'analysis_work_log', content: '已识别为员工请假审批流程，需要确认审批层级。' },
+      { id: 'rt_q1', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
+        id: 'approval_level', label: '审批层级', options: [{ value: 'manager', label: '直属主管' }], recommendation: ['manager'],
+      }) },
+    ],
+  },
+}
+const replayedThinkingTimeline = buildDialogueTimeline(replayedThinkingView)
+const replayedUserIndex = replayedThinkingTimeline.findIndex(it => it.type === 'user_message' && it.content === '做一个员工请假审批流程')
+const replayedThinkingIndex = replayedThinkingTimeline.findIndex(it => it.type === 'thinking_summary')
+const replayedAnalysisIndex = replayedThinkingTimeline.findIndex(it => it.type === 'analysis_stream' && it.content === '已识别为员工请假审批流程，需要确认审批层级。')
+assert.ok(replayedThinkingIndex > replayedUserIndex, 'persisted thinking must append after the latest related user message')
+assert.ok(replayedThinkingIndex < replayedAnalysisIndex, 'persisted thinking summary must remain in chronological flow before the following analysis')
+const replayedThinkingItem = replayedThinkingTimeline[replayedThinkingIndex]
+assert.equal(replayedThinkingItem.content, 'The model is reasoning in English about leave approval.', 'persisted raw thinking is preserved for the original view')
+assert.equal(replayedThinkingItem.summary, '已识别为员工请假审批流程，需要确认审批层级。', 'persisted thinking summary uses the following safe Chinese analysis')
+
 const retainedChildAnalysis = openTimeline.find(
   it => it.type === 'analysis_stream' && it.content === '需求已收敛，但仍有高影响确认项',
 )
@@ -281,14 +307,17 @@ const thinkingTraceItems = [
     payload: { text: '正在推理生成方案' },
   },
 ]
-const stepThinking = liveThinkingFromTrace(thinkingTraceItems)
-assert.ok(stepThinking, 'liveThinkingFromTrace derives an in-flight step thinking item')
-assert.ok(stepThinking.key && String(stepThinking.key).indexOf('step_1') >= 0, 'step thinking key identifies the step')
-assert.equal(stepThinking.kind, 'step', 'step-derived thinking item has kind step')
-assert.equal(stepThinking.content, '正在推理生成方案', 'step thinking text is folded from the payload text')
-const stepThinkingState = foldTraceIntoLiveThinking(baseState, stepThinking)
-assert.ok(stepThinkingState.liveThinking, 'foldTraceIntoLiveThinking sets a liveThinking item')
-assert.equal(stepThinkingState.liveThinking.kind, 'step', 'folded step thinking item has kind step')
+assert.equal(
+  liveStepFromTrace(thinkingTraceItems),
+  null,
+  'pipeline step thinking must not be treated as step analysis in the conversation',
+)
+const dialogueHookSrc = readFileSync(new URL('../src/hooks/useDialogueSessions.js', import.meta.url), 'utf8')
+assert.equal(
+  /liveThinkingFromTrace\(|foldTraceIntoLiveThinking\(/.test(dialogueHookSrc),
+  false,
+  'task/pipeline step thinking must not be bridged into the conversation liveThinking surface',
+)
 
 // ---- 3c. On round/step completion the live item is replaced by the persisted
 // analysis item rendered FOLDED above the conclusion --------------------------
@@ -363,10 +392,28 @@ assert.equal(guardedSt.liveThinking, null, 'a .delta event must NOT populate liv
 
 // buildDialogueTimeline renders a live_thinking 思考过程 block when liveThinking
 // is present (above the analysis), parallel to the live_analysis block.
-const liveThinkTimeline = buildDialogueTimeline(null, { id: 'opt_t', content: 'hi' }, null, { key: 'thinking:t1', content: '思考中…', kind: 'round' })
+const liveThinkTimeline = buildDialogueTimeline(
+  null,
+  { id: 'opt_t', content: 'hi' },
+  { key: 'turn:t1', content: '已识别为员工请假审批流程，需要确认审批层级和假期余额来源。', kind: 'round' },
+  { key: 'thinking:t1', content: 'The model is reasoning in English...', kind: 'round' },
+)
 const liveThinkItem = liveThinkTimeline.find(it => it.type === 'live_thinking')
 assert.ok(liveThinkItem, 'liveThinking renders a live_thinking item')
-assert.equal(liveThinkItem.content, '思考中…', 'live_thinking content preserved')
+assert.equal(liveThinkItem.content, 'The model is reasoning in English...', 'raw thinking content is preserved for original view')
+assert.equal(
+  liveThinkItem.summary,
+  '已识别为员工请假审批流程，需要确认审批层级和假期余额来源。',
+  'live_thinking exposes a Chinese summary from the safe live analysis text',
+)
+const noSummaryTimeline = buildDialogueTimeline(
+  null,
+  { id: 'opt_t2', content: 'hi' },
+  null,
+  { key: 'thinking:t2', content: 'Still thinking in English...', kind: 'round' },
+)
+const noSummaryThinking = noSummaryTimeline.find(it => it.type === 'live_thinking')
+assert.equal(noSummaryThinking.summary, '', 'no analysis means no fabricated Chinese summary')
 
 // Static guard: the live item is rendered as plaintext, never dangerouslySetInnerHTML.
 // Strip comments so a doc comment mentioning the forbidden API does not trip it.
@@ -376,6 +423,10 @@ assert.equal(
   false,
   'ConversationWorkbench must never use dangerouslySetInnerHTML',
 )
+assert.match(workbenchSrc3, /ThinkingSummary/, 'ConversationWorkbench must render live_thinking through ThinkingSummary')
+assert.match(workbenchSrc3, /思考摘要/, 'thinking summary UI must use the 思考摘要 label')
+assert.match(workbenchSrc3, /原始思考过程/, 'raw thinking must be behind an 原始思考过程 disclosure')
+assert.match(workbenchSrc3, /<details[\s\S]*<summary[\s\S]*原始思考过程/, 'raw thinking should be collapsed by default in a details disclosure')
 
 console.log('check-conversation-agent-streaming: live analysis streaming + fold OK')
 

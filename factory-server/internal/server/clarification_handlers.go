@@ -924,6 +924,7 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	}
 
 	cfg := s.loadSceneCatalog(ctx)
+	roundThinking := ""
 	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
 		filtered := s.filterClarificationEvent(cfg, ev)
 		s.publishClarificationEvent(filtered)
@@ -946,6 +947,7 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			})
 		}
 		if dialogueID != "" && filtered.Type == "clarification.message.thinking" {
+			roundThinking = filtered.Delta
 			s.publishDialogueEvent(dialogue.StreamEvent{
 				Type:       "dialogue.clarification.thinking",
 				DialogueID: dialogueID,
@@ -999,6 +1001,22 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
 		return sess, roundN, false
 	}
+	if strings.TrimSpace(roundThinking) != "" {
+		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
+			ID:        "cmsg_" + idpkg.New(),
+			SessionID: sessID,
+			Role:      "agent",
+			Kind:      "thinking",
+			Content:   roundThinking,
+			CreatedAt: now,
+		}); err != nil {
+			return sess, roundN, false
+		}
+	}
+	analysisAt := now
+	if strings.TrimSpace(roundThinking) != "" {
+		analysisAt = now.Add(time.Millisecond)
+	}
 	for _, wl := range out.WorkLog {
 		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
 			ID:        "cmsg_" + idpkg.New(),
@@ -1006,11 +1024,12 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			Role:      "agent",
 			Kind:      "analysis_work_log",
 			Content:   wl.Content,
-			CreatedAt: now,
+			CreatedAt: analysisAt,
 		}); err != nil {
 			return sess, round, false
 		}
 	}
+	questionAt := analysisAt.Add(time.Millisecond)
 	for _, q := range out.Questions {
 		qBytes, _ := json.Marshal(q)
 		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
@@ -1019,7 +1038,7 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			Role:         "agent",
 			Kind:         "question",
 			MetadataJSON: string(qBytes),
-			CreatedAt:    now,
+			CreatedAt:    questionAt,
 		}); err != nil {
 			return sess, roundN, false
 		}
