@@ -618,6 +618,11 @@ function QuestionCard({ q, value, setValue }) {
 // goes through answerJob → the step resets and the agent reads the reply.
 function ClarificationPromptCard({ item, onPick, submitting }) {
   const questions = Array.isArray(item.questions) ? item.questions : []
+  // Whether ANY question offers structured options. The agent does not always
+  // emit an options array (sometimes it writes (A)/(B)/(C) into the question
+  // text instead). When there are no pickable options, the hint must NOT say
+  // "点击上方选项" — it would mislead the user.
+  const hasAnyOptions = questions.some(q => Array.isArray(q.options) && q.options.length > 0)
   const pick = value => {
     if (submitting || typeof onPick !== 'function') return
     onPick(value)
@@ -649,7 +654,9 @@ function ClarificationPromptCard({ item, onPick, submitting }) {
           {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
         </div>
       ))}
-      <small className="cw-clarification-hint">点击上方选项，或在下方输入框回复</small>
+      <small className="cw-clarification-hint">
+        {hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'}
+      </small>
     </div>
   )
 }

@@ -492,6 +492,12 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if updatedStep.Status != model.StepStatusPending || updatedStep.NeedsUserInput {
 		t.Fatalf("step after answer = %#v, want pending without needs_user_input", updatedStep)
 	}
+	// The user's answer MUST be persisted on step.UserPrompt so the re-run can
+	// read it (generative-step prompts append it as [user_input]). Without this
+	// the step re-runs blind and re-asks the same clarification.
+	if updatedStep.UserPrompt != "确认按近一个月" {
+		t.Fatalf("step.UserPrompt after answer = %q, want the user's answer", updatedStep.UserPrompt)
+	}
 }
 
 // TestListJobsStatusFilter verifies the optional status filter narrows results.
