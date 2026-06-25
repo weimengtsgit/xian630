@@ -331,6 +331,31 @@ fails as of 2026-06-24 — use REST.
 
 ---
 
+## Known Data Gaps (verified 2026-06-25) — design UI for graceful degradation
+
+The ontology is sparsely populated. Generated apps MUST tolerate empty fields
+and must NOT assume a field is always present:
+
+| Entity | Field | Fill rate | Impact |
+|--------|-------|-----------|--------|
+| `AviationCarrier` | longitude/latitude/curStatus | ✅ full | carrier positions render |
+| `AviationCarrier` | airWing/aircraftCarried | ⚠️ partial, text-only | descriptive only |
+| `AircraftCarrierTrackLog` | longitude/latitude | ❌ mostly null | carrier track lines CANNOT render |
+| `AircraftCarrierTrackLog` | trackInitTime/refAviationCarrier | ✅ present | time + carrier link ok |
+| `MaritimeBaseCombatPlatform` | longitude/latitude/mmsi | ❌ mostly null | platform positions & AIS join broken |
+| `MaritimeBaseCombatPlatform` | name/typeCode | ✅ full | list/cards work |
+| `RawADSData` | altitude | ❌ ~all 0.0 or negative | takeoff/landing detection impossible |
+| `RawADSData` | icao | ❌ 191 of 21.8M | almost no joinable aircraft tracks |
+
+**Implication for affiliation inference:**
+- ADS-B event-based inference (the ideal three-step flow) CANNOT run: no
+  altitude transitions + no platform `icao` to join. Show `mode: establishment_based`
+  and `takeoffLandingCount: 0` honestly — do not fabricate events.
+- Carrier track lines and platform positions will be largely empty on the map.
+  Render carrier current-position markers (from AviationCarrier) instead of
+  track polylines when track coordinates are null.
+- Report these gaps to the provider; when backfilled, Mode A activates.
+
 ## Request Shape
 
 ```json
@@ -344,7 +369,8 @@ fails as of 2026-06-24 — use REST.
 }
 ```
 
-Supported logics: `=`, `is not null`, `like`.
+Supported logics: `=`, `is not null`, `like`. NOTE: the value is `is not null`
+as a SINGLE string logic with `condition: null` — NOT `is not` + `'null'`.
 
 ## Row Normalization
 
@@ -360,6 +386,54 @@ export function normalizeRows(details) {
   });
 }
 ```
+
+## Reference Adapter (copy this — do NOT guess field names or response shape)
+
+Generated adapters MUST follow this exact shape. The API response is
+`{ resultCode, details: { columnNames, rows } }` (NOT `data.resultCode` /
+`data.data`), and the request body MUST use `pageParam` + `rowType: "map"`
+(NOT `pageNo`/`pageSize`). Field names below are VERIFIED — guessing causes
+HTTP 400 "Unknown column".
+
+```ts
+const API_BASE = '/api/ontology'; // same-origin via nginx proxy
+
+async function fetchEntity(entity: string, columns: string[], filters: any[] = []) {
+  const res = await fetch(`${API_BASE}/daasDMS/entity/${entity}/list`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ columns, pageParam: { pageIndex: 1, limit: 500 }, rowType: 'map', filters }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json: any = await res.json();
+  if (json.resultCode !== 200) throw new Error(`API ${json.resultCode}: ${json.message}`);
+  const names: string[] = json.details?.columnNames || [];
+  const rows: any[] = json.details?.rows || [];
+  return rows.map((r) => Array.isArray(r)
+    ? Object.fromEntries(names.map((n, i) => [n, r[i]]))
+    : r || {});
+}
+
+// VERIFIED column names per entity — use EXACTLY these:
+// AviationCarrier:      id, name, longitude, latitude, curStatus, curHeading, curSpeed, mmsi, airWing, aircraftCarried, homeportStation
+// AircraftCarrier:      id, name, refHMId, typeCode, curStatus, longitude, latitude
+// MaritimeBaseCombatPlatform: id, name, typeCode, mmsi, longitude, latitude, curStatus, maxSpeed, cruiseRange
+//   (filter by { column: 'AircraftCarrier.id', logic: '=', condition: '<CSG-XX>' })
+// AircraftCarrierTrackLog: refAviationCarrier, trackInitTime, longitude, latitude, trackStatusCode
+// RawADSData:           icao, callsign, lat, lon, altitude, groundspeed, track, heading, startTime
+//   (filter by { column: 'icao', logic: 'is not null', condition: null })
+// RawAISData:           mmsi, latitude, longitude, sog, shipName, startTime
+//   (filter by { column: 'mmsi', logic: '=', condition: '<mmsi>' })
+```
+
+**Common mistakes to avoid** (all observed in generated code):
+- `heading`/`speed`/`homeport` on AviationCarrier → use `curHeading`/`curSpeed`/`homeportStation`.
+- `longitude`/`latitude` on RawADSData → use `lon`/`lat`.
+- `speed` on RawADSData → use `groundspeed`.
+- `createTime` → use `trackInitTime` (track log) or `startTime` (ADS-B/AIS).
+- `carrierId` on AircraftCarrierTrackLog → use `refAviationCarrier`.
+- Response `data.resultCode` / `data.data` → use `resultCode` / `details.rows`.
+- Request `pageNo`/`pageSize` → use `pageParam: { pageIndex, limit }`.
 
 ## Token Handling
 
