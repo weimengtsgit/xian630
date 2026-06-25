@@ -5,6 +5,7 @@ import {
   Ban,
   Check,
   CheckCircle2,
+  Copy,
   ChevronDown,
   ChevronRight,
   Edit3,
@@ -317,8 +318,8 @@ export function ConversationWorkbench({
 }
 
 function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, canConfirm, onConfirm, onSend, onPickClarification }) {
-  if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
-  if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
+  if (item.type === 'user_message') return <CopyableMessage className="cw-item cw-user" copyText={item.content}>{item.content}</CopyableMessage>
+  if (item.type === 'agent_message') return <CopyableMessage className="cw-item cw-agent" copyText={item.content}>{item.content}</CopyableMessage>
   if (item.type === 'clarification_prompt') {
     // A pipeline step (solution_design / code_generation) paused for user input.
     // Render the question(s) + structured options as a card; picking an option
@@ -341,13 +342,13 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     // (no view yet, send just accepted) a spinner marks it as actively working
     // so the workbench does not look frozen during the routing wait.
     return (
-      <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`}>
+      <CopyableMessage className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`} copyText={item.content}>
         <span className="cw-item-label">
           {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
           {item.kind === 'step' ? '生成过程' : '分析过程'}
         </span>
         <pre className="cw-live-text">{item.content}</pre>
-      </div>
+      </CopyableMessage>
     )
   }
   if (item.type === 'live_thinking') {
@@ -356,10 +357,10 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     // Policy: the conversation surface streams the model's thinking (#9 applies
     // to the executor/trace pipeline, not here).
     return (
-      <div className="cw-item cw-agent cw-live-thinking">
+      <CopyableMessage className="cw-item cw-agent cw-live-thinking" copyText={item.content}>
         <span className="cw-item-label"><Loader2 size={12} className="cw-spin" />思考过程</span>
         <pre className="cw-live-text">{item.content}</pre>
-      </div>
+      </CopyableMessage>
     )
   }
   if (item.type === 'route_recommendation') {
@@ -386,10 +387,10 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   }
   if (item.type === 'resolved_outcome') {
     return (
-      <div className="cw-item cw-resolved">
+      <CopyableMessage className="cw-item cw-resolved" copyText={item.label}>
         <Check size={14} />
         <span>{item.label}</span>
-      </div>
+      </CopyableMessage>
     )
   }
   if (item.type === 'system_status') {
@@ -406,7 +407,7 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
   const text = String(content || '')
   return (
-    <div className="cw-item cw-agent cw-folded-analysis">
+    <CopyableMessage className="cw-item cw-agent cw-folded-analysis" copyText={expanded ? text : (label || '分析过程')}>
       <button
         type="button"
         className="cw-fold-toggle"
@@ -417,8 +418,46 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
         <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
       </button>
       {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+    </CopyableMessage>
+  )
+}
+
+function CopyableMessage({ className, copyText, children }) {
+  const [copied, setCopied] = useState(false)
+  const text = String(copyText || '').trim()
+  const copy = async event => {
+    event.stopPropagation()
+    if (!text) return
+    await copyDialogueText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <div className={`${className || ''} cw-copyable`}>
+      {children}
+      {text ? (
+        <button type="button" className="cw-copy-btn" onClick={copy} title={copied ? '已复制' : '复制内容'} aria-label={copied ? '已复制' : '复制内容'}>
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      ) : null}
     </div>
   )
+}
+
+async function copyDialogueText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const el = document.createElement('textarea')
+  el.value = text
+  el.setAttribute('readonly', '')
+  el.style.position = 'fixed'
+  el.style.opacity = '0'
+  document.body.appendChild(el)
+  el.select()
+  document.execCommand('copy')
+  document.body.removeChild(el)
 }
 
 function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, submitting }) {

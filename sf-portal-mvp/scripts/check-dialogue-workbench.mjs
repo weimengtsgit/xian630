@@ -471,6 +471,23 @@ assert.match(workbenchJsx, /onSend=\{onSend\}/, 'TimelineItem must receive onSen
 // Resolved state non-editable with a clear 新建会话 action (already present, re-assert).
 assert.match(workbenchJsx, /新建会话/, 'resolved state must keep a clear 新建会话 action')
 
+// Copy affordance: conversation user inputs and returned text blocks must expose
+// a copy icon that copies the visible dialogue text without touching card actions.
+assert.match(workbenchJsx, /Copy(?:Icon)?|Clipboard/, 'workbench must import a copy icon')
+assert.match(workbenchJsx, /CopyableMessage/, 'timeline text blocks must use a reusable copyable wrapper')
+assert.match(workbenchJsx, /navigator\.clipboard\.writeText/, 'copy action must use the Clipboard API when available')
+assert.match(workbenchJsx, /execCommand\('copy'\)/, 'copy action must include a fallback for browsers without clipboard API')
+assert.match(workbenchJsx, /item\.type === 'user_message'[\s\S]*CopyableMessage/, 'user messages must render with copy controls')
+assert.match(workbenchJsx, /item\.type === 'agent_message'[\s\S]*CopyableMessage/, 'agent messages must render with copy controls')
+assert.match(workbenchJsx, /cw-copy-btn/, 'copy button class must be present in workbench source')
+assert.match(workbenchJsx, /copyText=\{expanded \? text : \(label \|\| '分析过程'\)\}/, 'folded analysis copy text must match the currently visible collapsed/expanded text')
+assert.match(workbenchJsx, /event\.stopPropagation\(\)/, 'copy button must stop propagation so fold/card actions are not triggered')
+assert.match(workbenchJsx, /aria-label=\{copied \? '已复制' : '复制内容'\}/, 'copy button must expose an accessible aria-label')
+assert.match(workbenchJsx, /title=\{copied \? '已复制' : '复制内容'\}/, 'copy button must expose copy state in its title')
+assert.match(workbenchJsx, /\{text \? \([\s\S]*cw-copy-btn[\s\S]*\) : null\}/, 'copy button must not render for empty copy text')
+assert.match(workbenchCss, /\.cw-copyable/, 'copyable message styles must be defined')
+assert.match(workbenchCss, /\.cw-copy-btn/, 'copy button styles must be defined')
+
 // ---- Task 1 (D5): optimistic user-message insert + faster send ---------------
 
 // buildDialogueTimeline must accept an optional optimistic user message and
