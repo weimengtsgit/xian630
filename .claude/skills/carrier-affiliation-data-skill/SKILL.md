@@ -93,6 +93,29 @@ skills:
 ## Ontology API
 
 Read `references/ontology-api.md` before implementing the DaaS adapter.
+The original catalog is available at
+`http://ceshi.projects.bingosoft.net:8081/ontology_docs/?doc=catalog`; use the
+linked Swagger/Markdown entity docs as the source of truth for request columns.
+
+### Hard DaaS Field Contract
+
+Request columns MUST be raw DaaS entity fields from the Swagger/Markdown docs.
+Do NOT request UI-normalized field names. Normalize only after records are
+returned.
+
+For `AviationCarrier`, request `curHeading`, `curSpeed`, and
+`homeportStation`; map them after fetch to UI fields `heading`, `speed`, and
+`homeport`. Never request `heading`, `speed`, or `homeport` from
+`AviationCarrier` because those columns do not exist and the API returns HTTP
+400 `Unknown column`.
+
+For `RawADSData`, request `lat`, `lon`, `groundspeed`, and `startTime`; map
+them after fetch to `lat`, `lon`, `speed_kt`, and `time`. Never request
+`longitude`, `latitude`, `speed`, or `recordTime` from `RawADSData`.
+
+Generated adapters MUST use `pageParam: { pageIndex, limit }`,
+`rowType: "map"`, `resultCode === 200`, and `details.rows`. Do not use
+`pageNum`, `pageSize`, `result.data.records`, or `data.resultCode`.
 
 ### Data Flow (three entities, not two)
 

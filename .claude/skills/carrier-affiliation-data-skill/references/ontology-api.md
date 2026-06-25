@@ -372,6 +372,29 @@ and must NOT assume a field is always present:
 Supported logics: `=`, `is not null`, `like`. NOTE: the value is `is not null`
 as a SINGLE string logic with `condition: null` — NOT `is not` + `'null'`.
 
+## Raw Field Names vs UI Field Names
+
+The Swagger/Markdown docs under
+`http://ceshi.projects.bingosoft.net:8081/ontology_docs/?doc=catalog` are the
+source of truth for request columns. The adapter may expose normalized UI names
+after fetch, but those normalized names MUST NOT be sent in `columns`.
+
+| Entity | Request these raw columns | Do NOT request these normalized/nonexistent columns |
+|---|---|---|
+| `AviationCarrier` | `curHeading`, `curSpeed`, `homeportStation` | `heading`, `speed`, `homeport` |
+| `RawADSData` | `lat`, `lon`, `groundspeed`, `startTime` | `latitude`, `longitude`, `speed`, `recordTime` |
+| `AircraftCarrierTrackLog` | `refAviationCarrier`, `trackInitTime` | `carrierId`, `recordTime` |
+
+Mapping is done after fetch, for example:
+
+```js
+const carrier = {
+  heading: Number(row.curHeading) || 0,
+  speed: Number(row.curSpeed) || 0,
+  homeport: row.homeportStation || '',
+};
+```
+
 ## Row Normalization
 
 When `rowType: "map"`, rows are objects keyed by `columnNames`. Still handle
