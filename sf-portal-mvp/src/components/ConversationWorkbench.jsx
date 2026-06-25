@@ -16,6 +16,8 @@ import {
   MessageSquare,
   MessageSquarePlus,
   History,
+  Mic,
+  MicOff,
   PlayCircle,
   RefreshCw,
   RotateCcw,
@@ -67,7 +69,10 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const [listening, setListening] = useState(false)
+  const [voiceError, setVoiceError] = useState('')
   const textareaRef = useRef(null)
+  const recognitionRef = useRef(null)
   // Auto-grow the composer textarea with its content (capped by the CSS
   // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
   const resizeTextarea = () => {
@@ -124,11 +129,81 @@ export function ConversationWorkbench({
   const changeProposal = traceItems.find(
     it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
   )
+  const SpeechRecognition = typeof window === 'undefined'
+    ? null
+    : window.SpeechRecognition || window.webkitSpeechRecognition || null
+  const supportsVoiceInput = !!SpeechRecognition
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
   }, [activeQuestions.map(q => q.id).join('|')])
+
+  useEffect(() => () => {
+    const recognition = recognitionRef.current
+    if (!recognition) return
+    recognition.onresult = null
+    recognition.onerror = null
+    recognition.onend = null
+    recognitionRef.current = null
+    try {
+      recognition.stop()
+    } catch (_) {
+      // Browser implementations may throw if recognition already ended.
+    }
+  }, [])
+
+  const appendVoiceText = text => {
+    const cleaned = String(text || '').trim()
+    if (!cleaned) return
+    setInput(prev => {
+      const existing = String(prev || '').trim()
+      return existing ? `${existing}；${cleaned}` : cleaned
+    })
+  }
+
+  const toggleVoiceInput = () => {
+    setVoiceError('')
+    if (listening) {
+      if (recognitionRef.current) recognitionRef.current.stop()
+      setListening(false)
+      return
+    }
+    if (!SpeechRecognition) {
+      setVoiceError('当前浏览器不支持语音输入。')
+      return
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'zh-CN'
+    recognition.continuous = false
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    recognition.onresult = event => {
+      const transcript = Array.from(event.results || [])
+        .slice(event.resultIndex || 0)
+        .map(result => result && result[0] ? result[0].transcript : '')
+        .join('')
+      appendVoiceText(transcript)
+    }
+    recognition.onerror = event => {
+      setVoiceError(event && event.error === 'not-allowed' ? '无法访问麦克风，请检查浏览器权限。' : '语音输入失败，请重试。')
+    }
+    recognition.onend = () => {
+      recognitionRef.current = null
+      setListening(false)
+    }
+
+    try {
+      recognitionRef.current = recognition
+      recognition.start()
+      setListening(true)
+    } catch (_) {
+      recognitionRef.current = null
+      setListening(false)
+      setVoiceError('语音输入启动失败，请重试。')
+    }
+  }
 
   const submitText = async () => {
     const value = input.trim()
@@ -262,6 +337,7 @@ export function ConversationWorkbench({
       ) : null}
 
       {error ? <div className="cw-error">{error}</div> : null}
+      {voiceError ? <div className="cw-error">{voiceError}</div> : null}
 
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
@@ -293,6 +369,18 @@ export function ConversationWorkbench({
               disabled={submitting}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
             />
+            {supportsVoiceInput ? (
+              <button
+                type="button"
+                className={`cw-voice${listening ? ' cw-voice-listening' : ''}`}
+                onClick={toggleVoiceInput}
+                disabled={submitting}
+                title={listening ? '停止语音输入' : '语音输入'}
+                aria-label={listening ? '停止语音输入' : '语音输入'}
+              >
+                {listening ? <MicOff size={16} /> : <Mic size={16} />}
+              </button>
+            ) : null}
             <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
               {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
             </button>
