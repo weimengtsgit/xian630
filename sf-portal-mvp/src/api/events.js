@@ -53,6 +53,7 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'dialogue.clarification.updated',
     'dialogue.clarification.delta',
     'dialogue.resolved',
+    'dialogue.failed',
     'dialogue.abandoned',
     'dialogue.deleted',
   ]

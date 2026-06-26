@@ -155,6 +155,7 @@ export const factoryApi = {
       { method: 'POST', body: JSON.stringify({ content }) },
     )
     if (status === 202) {
+      if (body && body.view) return body.view
       // Async ack: surface {dialogueId, turnId, acceptedAt}. Body may be null
       // for an empty 202; synthesize a minimal ack so the caller's branch is
       // uniform. Never throw on a missing body for the 202 path.
