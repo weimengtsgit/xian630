@@ -59,6 +59,7 @@ export function ConversationWorkbench({
   pendingTurn,
   focusTask,
   traceSteps,
+  composerStageLocked,
   taskPanel,
   onCancelTurn,
   onConfirmChange,
@@ -132,7 +133,7 @@ export function ConversationWorkbench({
 
   const submitText = async () => {
     const value = input.trim()
-    if (!value || submitting || (locked && !composerActive)) return
+    if (!value || submitting || composerStageLocked || (locked && !composerActive)) return
     setInput('')
     await onSend(value)
   }
@@ -279,7 +280,7 @@ export function ConversationWorkbench({
             resolved. Only true terminal-without-deployment states lock it. */}
         {status === 'resolved' && !composerActive ? (
           <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
-        ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
+        ) : status === 'failed' || status === 'archived' ? (
           <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
         ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
@@ -289,11 +290,11 @@ export function ConversationWorkbench({
               ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder={composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
-              disabled={submitting}
+              placeholder={composerStageLocked ? '任务执行中，进入部署阶段后可继续输入' : composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
+              disabled={submitting || composerStageLocked}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
             />
-            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
+            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting || composerStageLocked} title="发送" aria-label="发送">
               {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
             </button>
           </>
