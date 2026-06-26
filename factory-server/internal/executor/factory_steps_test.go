@@ -621,6 +621,75 @@ func TestSanitizeNginxVariableProxyPassWithPortAndURI(t *testing.T) {
 	}
 }
 
+func TestSanitizeOntologyVariableProxyPassWithPortInProxyPass(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+    location /api/ontology/ {
+        set $upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if !strings.Contains(got, "rewrite ^/api/ontology/(.*)$ /$1 break;") {
+		t.Fatalf("ontology proxy should rewrite the app proxy prefix before forwarding;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081;") {
+		t.Fatalf("ontology upstream should collapse to literal host:port without trailing URI;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$upstream") {
+		t.Fatalf("external variable upstream should be collapsed;\ngot:\n%s", got)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
+func TestSanitizeOntologyVariableProxyPassDoesNotRewriteOtherLocations(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /api/weather/ {
+        set $upstream api.open-meteo.com;
+        proxy_pass http://$upstream:8080/;
+    }
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$ontology_upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if !strings.Contains(got, "proxy_pass http://$upstream:8080/;") {
+		t.Fatalf("non-ontology proxy should not be rewritten;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081;") {
+		t.Fatalf("ontology proxy should be rewritten;\ngot:\n%s", got)
+	}
+}
+
 func TestSanitizeOntologyNginxProxyCredentialsReplacesPlaceholders(t *testing.T) {
 	dir := t.TempDir()
 	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")

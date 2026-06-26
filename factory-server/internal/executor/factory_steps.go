@@ -726,7 +726,9 @@ var nginxProxyPassRe = regexp.MustCompile(`(?m)^(\s*)proxy_pass\s+(https?)://([A
 var nginxListenRe = regexp.MustCompile(`(?m)^\s*listen\b[^\n]*;`)
 
 var nginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+var nginxVariableHostSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+);\s*$`)
 var nginxVariableProxyPassRe = regexp.MustCompile(`(?m)^\s*proxy_pass\s+https?://\$[A-Za-z_][A-Za-z0-9_]*`)
+var nginxOntologyLocationBlockRe = regexp.MustCompile(`(?ms)location\s+/api/ontology/\s*\{.*?\n\s*\}`)
 
 // sanitizeNginxProxyPassUpstreams converts a LITERAL external-host proxy_pass
 // (e.g. "proxy_pass https://api.open-meteo.com/;") into a variable form plus a
@@ -797,9 +799,9 @@ func sanitizeNginxVariableProxyPassUpstreams(path string) error {
 		return nil
 	}
 	src := string(raw)
-	out := src
+	out := rewriteOntologyVariablePortProxyPasses(src)
 	converted := false
-	matches := nginxVariableUpstreamSetRe.FindAllStringSubmatch(src, -1)
+	matches := nginxVariableUpstreamSetRe.FindAllStringSubmatch(out, -1)
 	for _, m := range matches {
 		indent, variable, upstream := m[1], m[2], m[3]
 		host, _, _ := strings.Cut(upstream, ":")
@@ -826,6 +828,41 @@ func sanitizeNginxVariableProxyPassUpstreams(path string) error {
 		return nil
 	}
 	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func rewriteOntologyVariablePortProxyPasses(src string) string {
+	if !strings.Contains(src, "/api/ontology/") {
+		return src
+	}
+	out := nginxOntologyLocationBlockRe.ReplaceAllStringFunc(src, rewriteOntologyVariablePortProxyPassBlock)
+	if out != src && !nginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerOnlyNginxResolver(out)
+	}
+	return out
+}
+
+func rewriteOntologyVariablePortProxyPassBlock(block string) string {
+	out := block
+	for _, m := range nginxVariableHostSetRe.FindAllStringSubmatch(block, -1) {
+		indent, variable, host := m[1], m[2], m[3]
+		if !strings.Contains(host, ".") && !isIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `:(\d+)([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		port, uri := proxyMatch[1], proxyMatch[2]
+		if uri != "" && uri != "/" {
+			continue
+		}
+		replacement := indent + "rewrite ^/api/ontology/(.*)$ /$1 break;\n" +
+			indent + "proxy_pass http://" + host + ":" + port + ";"
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], replacement, 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], replacement, 1)
+	}
+	return out
 }
 
 func sanitizeOntologyNginxProxyCredentials(path, workspace string) error {
