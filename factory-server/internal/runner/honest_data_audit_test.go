@@ -20,6 +20,11 @@ func writeAppFile(t *testing.T, dir, rel, content string) {
 	}
 }
 
+func writeDegradedStateFixture(t *testing.T, dir string) {
+	t.Helper()
+	writeAppFile(t, dir, "src/components/DataUnavailable.jsx", "export function DataUnavailable({onRetry}){ return <section className=\"degraded\"><div>数据源不可用</div><button onClick={onRetry}>重试</button><a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a><table><thead><tr><th>时间</th><th>潮位</th></tr></thead><tbody><tr><td>—</td><td>—</td></tr></tbody></table><p>数据恢复后此处将显示潮汐序列。</p></section>; }\n")
+}
+
 // TestAuditHonestDataSkipsNonRealPolicies proves the audit is a no-op for
 // mock_data and unset policy: mock is explicitly allowed there, so even an app
 // that ships a mock source file must pass.
@@ -74,6 +79,7 @@ func TestAuditHonestDataFlagsMockIdentifier(t *testing.T) {
 func TestAuditHonestDataMathSinPasses(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export function series(h){ return Math.sin(h/12*Math.PI); }\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (Math.sin is not a reliable synthetic signal)", err)
 	}
@@ -97,6 +103,7 @@ func TestAuditHonestDataMathRandomWithoutDataSkillPasses(t *testing.T) {
 func TestAuditHonestDataUIRandomPasses(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/components/Spark.jsx", "export const particles = () => Math.random();\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (UI Math.random not data-layer)", err)
 	}
@@ -107,6 +114,7 @@ func TestAuditHonestDataSkipsTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.test.js", "const mockData = [1];\ntest('x', () => {});\n")
 	writeAppFile(t, dir, "src/data/__tests__/helper.spec.ts", "const isMock = true;\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (test files skipped)", err)
 	}
@@ -118,6 +126,7 @@ func TestAuditHonestDataSkipsNodeModulesAndDeps(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "node_modules/lib/mock.js", "export const mockData = [1];\n")
 	writeAppFile(t, dir, "dist/assets/mock.js", "const isMock = true;\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (node_modules/dist skipped)", err)
 	}
@@ -128,9 +137,24 @@ func TestAuditHonestDataSkipsNodeModulesAndDeps(t *testing.T) {
 func TestAuditHonestDataCleanRealApp(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export async function fetchTide(){ const r = await fetch(url); return r.json(); }\n")
+	writeDegradedStateFixture(t, dir)
 	writeAppFile(t, dir, "src/components/Card.jsx", "export const Card = ({h}) => <div>{Math.round(h)}</div>;\n")
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill", "deck-wind-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil for clean real-data app", err)
+	}
+}
+
+// TestAuditHonestDataRejectsBareDataErrorState proves a real-data generated app
+// cannot pass by rendering only a bare "数据异常" style message. It must include a
+// shippable degraded state so data acquisition failure does not look like page
+// generation failure.
+func TestAuditHonestDataRejectsBareDataErrorState(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/tideProvider.js", "export async function fetchTideSeries(){ const res = await fetch('/api/data/tide'); if (!res.ok) throw new Error('source failed'); return res.json(); }\n")
+	writeAppFile(t, dir, "src/App.jsx", "export default function App(){ return <main><h1>潮汐态势</h1><div>数据异常</div></main>; }\n")
+	err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"})
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed for bare data error state", err)
 	}
 }
 
@@ -166,6 +190,7 @@ func TestAuditHonestDataDegradedStatePasses(t *testing.T) {
 			"        <tbody><tr><td>—</td><td>—</td></tr></tbody>\n"+
 			"      </table>\n"+
 			"      <a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a>\n"+
+			"      <p>数据恢复后此处将显示潮汐序列。</p>\n"+
 			"      <button onClick={onRetry}>重试</button>\n"+
 			"    </section>\n"+
 			"  );\n"+

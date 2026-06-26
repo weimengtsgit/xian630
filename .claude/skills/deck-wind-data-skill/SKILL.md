@@ -52,10 +52,22 @@ Open-Meteo serves the GFS model's 10 m wind as hourly arrays in **knots** and
 
 ```js
 // src/data/windProvider.js
-export async function fetchDeckWind(lat, lon, { deckWindMinKt = 20, days = 3 } = {}) {
-  const url = `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}` +
+async function fetchWithTimeout(url, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchDeckWind(lat, lon, { deckWindMinKt = 20, days = 3, timeoutMs = 5000 } = {}) {
+  const upstreamPath = `/v1/gfs?latitude=${lat}&longitude=${lon}` +
     `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=kn&forecast_days=${days}&time_zone=auto`;
-  const res = await fetch(url);
+  const url = `/api/data/wind${upstreamPath}`;
+  const res = await fetchWithTimeout(url, timeoutMs);
+  if (!res.ok) throw new Error("Open-Meteo HTTP error: " + res.status);
   const j = await res.json();
   const h = j.hourly;
   if (!h || !h.time) throw new Error("Open-Meteo error: " + JSON.stringify(j).slice(0, 200));

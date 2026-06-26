@@ -61,13 +61,26 @@ const STATIONS = {
   // 横须贺用 JCG（见 Source Priority），无 CORS，运行时经 nginx 反向代理取数（禁止构建期取数）。
 };
 const ymd = (d) => `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}`;
-export async function fetchTideSeries(portKey, days = 3) {
+
+async function fetchWithTimeout(url, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchTideSeries(portKey, days = 3, { timeoutMs = 5000 } = {}) {
   const st = STATIONS[portKey];
   if (!st) throw new Error("unknown port: " + portKey);
   const start = new Date();
   const end = new Date(Date.now() + days * 86400000);
-  const url = `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?station=${st.id}&product=predictions&datum=MLLW&units=metric&format=json&interval=h&begin_date=${ymd(start)}&end_date=${ymd(end)}&time_zone=lst_ldt`;
-  const res = await fetch(url);
+  const upstreamPath = `/api/prod/datagetter?station=${st.id}&product=predictions&datum=MLLW&units=metric&format=json&interval=h&begin_date=${ymd(start)}&end_date=${ymd(end)}&time_zone=lst_ldt`;
+  const url = `/api/data/tide${upstreamPath}`;
+  const res = await fetchWithTimeout(url, timeoutMs);
+  if (!res.ok) throw new Error("NOAA HTTP error: " + res.status);
   const j = await res.json();
   if (!j.predictions) throw new Error("NOAA error: " + JSON.stringify(j).slice(0, 200));
   return {
