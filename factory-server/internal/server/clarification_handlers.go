@@ -593,6 +593,7 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
+	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	// Always (re)compute the profile from the application type and internal
 	// blueprint refs — never trust the client-supplied skill list — while
@@ -752,6 +753,7 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		// profile from appType so a client can never inject one at confirm time,
 		// plus internal blueprint refs, while preserving the persisted `data`
 		// skill group across the recompute.
+		incoming.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, req.JudgementBoundary)
 		incoming.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 		incoming.GenerationProfile = recomputeGenerationProfile(incoming, req.GenerationProfile)
 		req = incoming
@@ -1306,6 +1308,7 @@ func mergeRequirementDefaults(next, current clarification.Requirement) clarifica
 	if len(next.AcceptanceFocus) == 0 {
 		next.AcceptanceFocus = append([]string(nil), current.AcceptanceFocus...)
 	}
+	next.JudgementBoundary = mergeJudgementBoundaryDefaults(next.JudgementBoundary, current.JudgementBoundary)
 	if len(next.GenerationProfile) == 0 {
 		next.GenerationProfile = cloneStringListMap(current.GenerationProfile)
 	}
@@ -1322,6 +1325,24 @@ func cloneStringListMap(in map[string][]string) map[string][]string {
 	out := make(map[string][]string, len(in))
 	for key, values := range in {
 		out[key] = append([]string(nil), values...)
+	}
+	return out
+}
+
+func cloneJudgementBoundary(in clarification.JudgementBoundary) clarification.JudgementBoundary {
+	return clarification.JudgementBoundary{
+		DataSources: append([]string(nil), in.DataSources...),
+		Summary:     in.Summary,
+	}
+}
+
+func mergeJudgementBoundaryDefaults(next, current clarification.JudgementBoundary) clarification.JudgementBoundary {
+	out := cloneJudgementBoundary(next)
+	if len(out.DataSources) == 0 {
+		out.DataSources = append([]string(nil), current.DataSources...)
+	}
+	if strings.TrimSpace(out.Summary) == "" {
+		out.Summary = current.Summary
 	}
 	return out
 }
@@ -1400,12 +1421,33 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 		req.MainEntities = mergeAnswerList(req.MainEntities, value)
 	case "acceptanceFocus", "acceptance_focus":
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
+	case "judgementBoundary.dataSources", "judgement_boundary.data_sources", "judgementDataSources", "judgement_data_sources", "dataSources", "data_sources":
+		req.JudgementBoundary.DataSources = mergeAnswerList(req.JudgementBoundary.DataSources, value)
+	case "judgementBoundary.summary", "judgement_boundary.summary", "judgementBoundarySummary", "judgement_boundary_summary":
+		if value != "" {
+			req.JudgementBoundary.Summary = value
+		}
+	case "judgementBoundary", "judgement_boundary":
+		mergeJudgementBoundaryAnswer(req, value)
 	case "blueprintRefs", "blueprint_refs":
 		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
 		req.GenerationProfile = recomputeGenerationProfile(*req)
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
+}
+
+func mergeJudgementBoundaryAnswer(req *clarification.Requirement, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	var boundary clarification.JudgementBoundary
+	if err := json.Unmarshal([]byte(value), &boundary); err == nil {
+		req.JudgementBoundary = boundary
+		return
+	}
+	req.JudgementBoundary.Summary = value
 }
 
 func mergeAnswerList(existing []string, value string) []string {

@@ -790,6 +790,77 @@ func TestAnswerClarificationRunsNextRound(t *testing.T) {
 	}
 }
 
+func TestJudgementBoundaryAnswersPersistAndEventsStayRedacted(t *testing.T) {
+	const readyOmittingBoundaryOutput = `{
+  "status": "ready_to_confirm",
+  "round": 2,
+  "workLog": [{"type":"analysis","content":"研判边界已确认"}],
+  "questions": [],
+  "requirement": {
+    "appType": "situation_replay",
+    "appName": "航母研判应用",
+    "targetUsers": ["作战参谋"],
+    "coreScenario": "研判航母活动",
+    "primaryView": "地图 + 时间轴",
+    "mainEntities": ["航母","海域"],
+    "dataPolicy": "live_api",
+    "acceptanceFocus": ["边界清晰"],
+    "blueprintRefs": ["carrier-formation-replay"],
+    "generationProfile": {"base":["software-factory-app"]}
+  }
+}`
+	fake := &sequenceClarRunner{outputs: []string{waitingUserOutput, readyOmittingBoundaryOutput}}
+	srv, r, _ := newClarTestServer(t, fake)
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母活动研判应用"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	batch := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/answers/batch", map[string]any{
+		"answers": []map[string]string{
+			{"questionId": "judgement_data_sources", "value": `["ontology","public_web_search"]`},
+			{"questionId": "judgement_boundary_summary", "value": "基于「本体与公开搜索」数据，按照「时空关联」规则，判断「航母活动风险」。每「10 分钟」更新一次，以「地图 + 告警」形式输出。"},
+		},
+	})
+	if batch.Code != http.StatusOK {
+		t.Fatalf("batch status = %d body=%s", batch.Code, batch.Body.String())
+	}
+	var view clarificationView
+	if err := json.NewDecoder(batch.Body).Decode(&view); err != nil {
+		t.Fatalf("decode batch view: %v", err)
+	}
+	if got := view.Requirement.JudgementBoundary.DataSources; len(got) != 2 || got[0] != "ontology" || got[1] != "public_web_search" {
+		t.Fatalf("judgement data sources = %#v", got)
+	}
+	if view.Requirement.JudgementBoundary.Summary == "" || !strings.Contains(view.Requirement.JudgementBoundary.Summary, "基于「本体与公开搜索」数据") {
+		t.Fatalf("judgement summary not persisted: %#v", view.Requirement.JudgementBoundary)
+	}
+
+	var sawRedactedSummary bool
+	for _, ev := range drainClarificationHub(ch) {
+		if ev.Type != "clarification.summary.updated" && ev.Type != "clarification.ready_to_confirm" {
+			continue
+		}
+		b, _ := json.Marshal(ev.Data)
+		if strings.Contains(string(b), "blueprintRefs") || strings.Contains(string(b), "carrier-formation-replay") {
+			t.Fatalf("user-facing event leaked blueprint refs: %s", string(b))
+		}
+		if strings.Contains(string(b), "judgementBoundary") {
+			sawRedactedSummary = true
+		}
+	}
+	if !sawRedactedSummary {
+		t.Fatalf("expected user-facing summary/ready event to preserve judgementBoundary")
+	}
+}
+
 func TestBatchAnswersRunsNextRoundOnce(t *testing.T) {
 	const readyOmittingAnsweredFieldsOutput = `{
   "status": "ready_to_confirm",
@@ -868,6 +939,32 @@ func TestBatchAnswersRunsNextRoundOnce(t *testing.T) {
 	}
 	if strings.Join(req.AcceptanceFocus, ",") != "轨迹联动,倒计时准确" {
 		t.Fatalf("acceptanceFocus = %#v, want preserved batch answers", req.AcceptanceFocus)
+	}
+}
+
+func TestApplyAnswerToRequirementMergesJudgementBoundary(t *testing.T) {
+	req := clarification.Requirement{}
+
+	applyAnswerToRequirement(&req, "judgementBoundary.dataSources", `["ontology","public_web_search"]`)
+	if got := strings.Join(req.JudgementBoundary.DataSources, ","); got != "ontology,public_web_search" {
+		t.Fatalf("judgementBoundary.dataSources = %q, want ontology,public_web_search", got)
+	}
+
+	applyAnswerToRequirement(&req, "judgementBoundary.summary", "基于 AIS 与 ADS-B 数据判断舰载机归属")
+	if req.JudgementBoundary.Summary != "基于 AIS 与 ADS-B 数据判断舰载机归属" {
+		t.Fatalf("judgementBoundary.summary = %q", req.JudgementBoundary.Summary)
+	}
+}
+
+func TestApplyAnswerToRequirementMergesJudgementBoundaryObject(t *testing.T) {
+	req := clarification.Requirement{}
+
+	applyAnswerToRequirement(&req, "judgementBoundary", `{"dataSources":["ontology"],"summary":"基于潮汐数据判断出港窗口"}`)
+	if req.JudgementBoundary.Summary != "基于潮汐数据判断出港窗口" {
+		t.Fatalf("judgementBoundary.summary = %q", req.JudgementBoundary.Summary)
+	}
+	if got := strings.Join(req.JudgementBoundary.DataSources, ","); got != "ontology" {
+		t.Fatalf("judgementBoundary.dataSources = %q, want ontology", got)
 	}
 }
 
@@ -992,6 +1089,102 @@ func TestAnswerClarificationPreservesMappedRequirementWhenNextRoundOmitsField(t 
 	}
 	if got, want := strings.Join(req.TargetUsers, ","), "作战参谋"; got != want {
 		t.Fatalf("targetUsers after next round = %q, want preserved %q", got, want)
+	}
+}
+
+func TestAnswerClarificationPreservesJudgementBoundaryDataSourcesWhenNextRoundAddsSummary(t *testing.T) {
+	const nextRoundSummaryOnlyOutput = `{
+  "status": "ready_to_confirm",
+  "round": 2,
+  "workLog": [{"type":"analysis","content":"研判边界摘要已生成"}],
+  "questions": [],
+  "requirement": {
+    "appType": "command_dashboard",
+    "appName": "航母母港潮汐窗口计算器",
+    "targetUsers": ["作战参谋"],
+    "coreScenario": "计算出港窗口",
+    "primaryView": "四格仪表盘",
+    "mainEntities": ["港口","潮汐"],
+    "dataPolicy": "live_api",
+    "acceptanceFocus": ["窗口计算"],
+    "judgementBoundary": {
+      "summary": "基于「潮汐预测」数据，按照「12.8 米阈值」规则，判断「可出港窗口」。每「10 分钟」更新一次，以「四格仪表盘」形式输出。"
+    },
+    "generationProfile": {"base":["software-factory-app"]}
+  }
+}`
+	fake := &sequenceClarRunner{outputs: []string{waitingUserOutput, nextRoundSummaryOnlyOutput}}
+	_, r, st := newClarTestServer(t, fake)
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母母港潮汐窗口计算器"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	ans := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/answers/batch", map[string]any{
+		"answers": []map[string]string{
+			{"questionId": "judgementBoundary.dataSources", "value": `["ontology","public_web_search"]`},
+		},
+	})
+	if ans.Code != http.StatusOK {
+		t.Fatalf("answer status = %d body=%s", ans.Code, ans.Body.String())
+	}
+
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	var req clarification.Requirement
+	if err := json.Unmarshal([]byte(got.RequirementJSON), &req); err != nil {
+		t.Fatalf("decode persisted requirement: %v", err)
+	}
+	if sources := strings.Join(req.JudgementBoundary.DataSources, ","); sources != "ontology,public_web_search" {
+		t.Fatalf("judgementBoundary.dataSources after next round = %q, want preserved ontology,public_web_search", sources)
+	}
+	if req.JudgementBoundary.Summary == "" {
+		t.Fatalf("judgementBoundary.summary should be taken from next round")
+	}
+}
+
+func TestPatchRequirementPreservesJudgementBoundaryWhenOmitted(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: waitingUserOutput})
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成航母母港潮汐窗口计算器"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	seed := `{"appType":"command_dashboard","appName":"航母母港潮汐窗口计算器","targetUsers":["作战参谋"],"coreScenario":"计算出港窗口","primaryView":"四格仪表盘","mainEntities":["港口","潮汐"],"dataPolicy":"live_api","acceptanceFocus":["窗口计算"],"judgementBoundary":{"dataSources":["ontology"],"summary":"基于潮汐数据判断出港窗口"},"generationProfile":{"base":["software-factory-app"]}}`
+	if err := st.UpdateClarificationRequirement(context.Background(), sess.ID, seed); err != nil {
+		t.Fatalf("seed requirement: %v", err)
+	}
+
+	patchReq := `{"appType":"command_dashboard","appName":"航母母港潮汐窗口计算器","targetUsers":["作战参谋"],"coreScenario":"计算出港窗口","primaryView":"四格仪表盘","mainEntities":["港口","潮汐"],"dataPolicy":"live_api","acceptanceFocus":["窗口计算"]}`
+	patch := doPost(t, r, http.MethodPatch, "/api/clarifications/"+sess.ID+"/requirement", map[string]any{"requirement": json.RawMessage(patchReq)})
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch status = %d body=%s", patch.Code, patch.Body.String())
+	}
+
+	got, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || got == nil {
+		t.Fatalf("re-get session: %#v %v", got, err)
+	}
+	var req clarification.Requirement
+	if err := json.Unmarshal([]byte(got.RequirementJSON), &req); err != nil {
+		t.Fatalf("decode persisted requirement: %v", err)
+	}
+	if sources := strings.Join(req.JudgementBoundary.DataSources, ","); sources != "ontology" {
+		t.Fatalf("judgementBoundary.dataSources after patch = %q, want preserved ontology", sources)
+	}
+	if req.JudgementBoundary.Summary != "基于潮汐数据判断出港窗口" {
+		t.Fatalf("judgementBoundary.summary after patch = %q, want preserved", req.JudgementBoundary.Summary)
 	}
 }
 

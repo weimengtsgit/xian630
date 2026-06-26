@@ -11,10 +11,9 @@ factory user request. Clarification is now **application-only** and follows an
 
 ## Adaptive Method (6 rounds)
 
-1. **Rounds 1–4 — one decision at a time.** Each round you may emit ZERO
-   questions or EXACTLY ONE required question, with 2–3 options and a
-   recommendation. Never emit more than one question in a round — Factory
-   rejects a round with multiple questions.
+1. **Rounds 1–4 — high-impact decisions first.** Each round may emit ZERO
+   questions, one ordinary required question, or ALL currently open high-impact
+   questions in one batch. Each question has 2–3 options and a recommendation.
 2. **Round 5 — consolidation (only if still incomplete after round 4).** Emit a
    `consolidation` list: one entry per remaining missing field, each with a
    recommended typed value, a reason, and alternatives. This is a model round.
@@ -32,7 +31,7 @@ generated application and must be explicitly confirmed by the user, not assumed.
 A field you fill from a blueprint assumption is **NOT** a confirmed high-impact
 decision — the user must actually answer.
 
-Each round, identify the open 高影响确认事项 (e.g. data source/policy, scope of
+Each round, identify the open 高影响确认事项 (e.g. data source boundary, scope of
 coverage, primary user role). While ANY remain open:
 
 1. **Surface ALL of them at once** as the round's `questions[]` (each with 2–3
@@ -58,6 +57,53 @@ Each `openHighImpact` entry is **user-facing only**:
 Factory validates structure: an entry with an empty id/label, more than 3
 options, or a value that looks like an internal slug (`software-factory-app`,
 `carrier-formation-replay`) is dropped.
+
+## Naval / Maritime Judgement Boundary（海军研判边界）
+
+When the user asks for a military/naval/maritime judgement app, first show that
+you recognized the domain intent, then include the data-source boundary as the
+highest-impact question needed for generation.
+
+Trigger this rule for requests involving 航母、舰载机、军舰、舰船、海域、港口潮汐、
+甲板风、AIS、ADS-B、OSINT、公开搜索、目击聚合、商船密度、异常告警、归属推断、
+态势复盘、事件关联、海上起降, or similar naval operational analysis.
+
+For these requests:
+
+1. In `workLog`, explicitly state the app subtype and extracted facts, e.g.
+   "识别到这是航母母港潮汐窗口计算器，关键约束包括 72 小时、12.8 米阈值、10 分钟刷新、四格仪表盘。"
+2. Set `requirement.dataPolicy` to `live_api`. Do NOT ask the user to choose
+   real vs mock/demo data for naval judgement requests.
+3. Set `requirement.judgementBoundary.summary` using this concise shape:
+   `基于「...」数据，按照「...」规则，判断「...」。每「...」更新一次，以「...」形式输出。`
+   If a part is not specified, write the known part and leave the missing part
+   as a short neutral phrase such as `待确认的时间范围`.
+4. Ask a required multi-select question with id
+   `judgementBoundary.dataSources` unless the user already explicitly selected
+   these source families:
+   - `ontology` — `本体数据源`
+   - `public_web_search` — `网络公开搜索`
+   The question MUST set `"multiSelect": true`. Recommended default:
+   `["ontology"]`; if the user mentions social posts, webpage crawling, public
+   search, Twitter/X, Instagram, 微博, or OSINT sightings, recommend
+   `["ontology","public_web_search"]`.
+   Contract detail: `questions[].recommendation` may be an array for this
+   multi-select question, but `openHighImpact[].recommendation` MUST remain the
+   string `"ontology"` because the high-impact snapshot uses a string field.
+5. Keep this version simple. Do NOT add follow-up gates for ontology entity
+   names, endpoint URLs, crawler scope, Baidu, Twitter/X, Instagram, 微博,
+   credentials, search keywords, or source-specific connector availability.
+   Additional source access will be provided later by data-source skills.
+6. Selecting `public_web_search` means a runtime-accessible public-search
+   source family, not Claude Code tools. Do not claim the generated app can call
+   Claude Code's search tools at runtime.
+7. Do NOT invent or name concrete external data providers, APIs, products, or
+   websites unless the user already named them. In option reasons, say
+   "客户已接入的真实本体数据" or "公开网页/公开搜索线索" rather than examples such
+   as a specific tide, weather, AIS, ADS-B, or social-media API.
+
+`judgementBoundary` is conditional: include it for military/naval/maritime
+judgement apps, but it is not required for ordinary CRUD/management apps.
 
 ## Output Contract
 
@@ -95,13 +141,14 @@ Output ONLY this JSON object (no prose, no ```json fences):
   ],
   "openHighImpact": [
     {
-      "id": "data_policy",
-      "label": "数据来源策略",
-      "recommendation": "mock_data",
+      "id": "judgementBoundary.dataSources",
+      "label": "数据来源边界",
+      "recommendation": "ontology",
       "options": [
-        { "value": "mock_data", "label": "Mock 数据优先", "reason": "便于快速验证" },
-        { "value": "api_first", "label": "接口数据优先", "reason": "对接真实系统" }
-      ]
+        { "value": "ontology", "label": "本体数据源", "reason": "优先使用客户已接入的真实本体数据" },
+        { "value": "public_web_search", "label": "网络公开搜索", "reason": "用于补充公开网页、公开搜索或公开社媒线索" }
+      ],
+      "multiSelect": true
     }
   ],
   "requirement": {
@@ -114,6 +161,10 @@ Output ONLY this JSON object (no prose, no ```json fences):
     "blueprintRefs": ["carrier-formation-replay"],
     "dataPolicy": "live_api",
     "acceptanceFocus": [],
+    "judgementBoundary": {
+      "dataSources": [],
+      "summary": "基于「航母轨迹与事件」数据，按照「时间空间关联」规则，判断「活动历史与事件关系」。每「按需」更新一次，以「地图 + 时间轴 + 关系图」形式输出。"
+    },
     "generationProfile": {
       "base": ["software-factory-app"],
       "domain": ["defense-operations-ui"],
@@ -144,6 +195,10 @@ Output ONLY this JSON object (no prose, no ```json fences):
   internal Factory reference; populate `blueprintRefs` when the intent matches;
   otherwise use an empty array. NEVER surface blueprints in any user-facing
   output and never describe a blueprint as a template, sample, or copy source.
+- `requirement.judgementBoundary` — conditional user-facing naval judgement
+  boundary. Use it for military/naval/maritime judgement, alerting, OSINT,
+  affiliation inference, and situation replay requests. It is safe to show in
+  confirmation summaries.
 
 ## Rules
 

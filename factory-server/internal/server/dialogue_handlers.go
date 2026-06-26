@@ -1688,6 +1688,7 @@ func (s *Server) patchDialogueRequirement(w http.ResponseWriter, r *http.Request
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
+	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	current.GenerationProfile = recomputeGenerationProfile(current)
 	reqBytes, _ := json.Marshal(current)

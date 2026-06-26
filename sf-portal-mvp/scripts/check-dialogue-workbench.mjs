@@ -139,6 +139,10 @@ const draftView = {
     requirement: {
       appType: 'situation_replay', appName: '航母编队复盘', coreScenario: '复盘航迹',
       primaryView: '时间轴', dataPolicy: '本地',
+      judgementBoundary: {
+        dataSources: ['ontology', 'public_web_search'],
+        summary: '基于航母轨迹数据判断事件关联',
+      },
       // Legacy/internal field that must NEVER surface in the UI.
       blueprintRefs: ['carrier-formation-replay'],
     },
@@ -152,6 +156,38 @@ assert.equal(draftSerialized.includes('模板'), false, 'timeline must not conta
 assert.equal(draftSerialized.includes('carrier-formation-replay'), false, 'timeline must not leak internal blueprint slug')
 // requirement summary must be present for a ready_to_confirm child.
 assert.equal(draftTimeline.some(item => item.type === 'requirement_summary'), true, 'ready_to_confirm child must yield a requirement summary')
+const draftRequirementSummary = draftTimeline.find(item => item.type === 'requirement_summary')
+assert.equal(draftRequirementSummary.requirement.judgementBoundary.summary, '基于航母轨迹数据判断事件关联', 'requirement summary must retain judgement boundary summary')
+assert.deepEqual(draftRequirementSummary.requirement.judgementBoundary.dataSources, ['ontology', 'public_web_search'], 'requirement summary must retain safe data-source families')
+
+// Batched multi-select answers must render selected option labels, not the raw
+// JSON array value, so data-source answers read like business language.
+const multiAnswerTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_multi_answer', status: 'drafting_application', intent: 'application_generation', route_locked: true },
+  messages: [],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  child: {
+    id: 'clar_multi_answer', status: 'active', round: 2, max_rounds: 6,
+    requirement: {},
+    messages: [
+      { id: 'qds', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
+        id: 'judgementBoundary.dataSources',
+        label: '数据来源边界',
+        multiSelect: true,
+        options: [
+          { value: 'ontology', label: '本体数据源' },
+          { value: 'public_web_search', label: '网络公开搜索' },
+        ],
+      }) },
+      { id: 'ads', role: 'user', kind: 'answer', metadata_json: JSON.stringify({
+        questionId: 'judgementBoundary.dataSources',
+        value: JSON.stringify(['ontology', 'public_web_search']),
+      }) },
+    ],
+  },
+})
+const multiAnswerMessage = multiAnswerTimeline.find(item => item.id === 'ads')
+assert.equal(multiAnswerMessage.content, '数据来源边界：本体数据源、网络公开搜索')
 
 // ---- locked-route composer behavior ----------------------------------------
 
