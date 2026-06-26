@@ -125,6 +125,7 @@ export function ConversationWorkbench({
   const changeProposal = traceItems.find(
     it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
   )
+  const currentDeployment = deploymentStatusInfo({ view, focusTask, steps: traceSteps, traceItems })
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -228,6 +229,15 @@ export function ConversationWorkbench({
             <button type="button" className="primary" onClick={onConfirmChange} disabled={submitting}>
               {submitting ? '处理中' : '确认变更'}
             </button>
+          </div>
+        ) : null}
+        {currentDeployment ? (
+          <div className="cw-deployment-info">
+            <GitCommit size={14} />
+            <span>
+              <b>当前部署版本 {currentDeployment.version}</b>
+              {currentDeployment.summary ? <em>摘要：{currentDeployment.summary}</em> : null}
+            </span>
           </div>
         ) : null}
       </div>
@@ -682,6 +692,42 @@ function CustomAnswer({ onSubmit }) {
       <button type="button" className="cw-custom-submit" disabled={!value.trim()} onClick={submit}>添加</button>
     </div>
   )
+}
+
+function deploymentStatusInfo({ view, focusTask, steps, traceItems }) {
+  const deploymentStep = (Array.isArray(steps) ? steps : []).find(step => {
+    const kind = step && step.kind
+    const agentKey = step && (step.agentKey || step.agent_key)
+    return kind === 'deployment' && step.status === 'running' && (!agentKey || agentKey === 'deployer')
+  })
+  if (!deploymentStep) return null
+  const requirement = (view && view.child && view.child.requirement) || requirementFromJob(focusTask) || {}
+  const summary = String(requirement.coreScenario || '').trim()
+  return {
+    version: deploymentVersionLabel({ view, focusTask, traceItems }),
+    summary,
+  }
+}
+
+function requirementFromJob(job) {
+  const raw = job && (job.confirmed_requirement_json || job.confirmedRequirementJSON)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch (_) {
+    return null
+  }
+}
+
+function deploymentVersionLabel({ view, focusTask, traceItems }) {
+  const deployedApp = view && view.resolvedApplication
+  const existing = deployedApp && (deployedApp.version || deployedApp.version_label || deployedApp.versionLabel)
+  const match = existing && String(existing).match(/v\s*(\d+)/i)
+  if (match) return `V${match[1]}`
+  const versionEvents = (Array.isArray(traceItems) ? traceItems : []).filter(it => it && it.type === 'version').length
+  const baseVersionID = focusTask && (focusTask.base_version_id || focusTask.baseVersionID)
+  const nextNumber = Math.max(1, versionEvents + 1, baseVersionID ? 2 : 1)
+  return `V${nextNumber}`
 }
 
 function RequirementSummary({ requirement }) {

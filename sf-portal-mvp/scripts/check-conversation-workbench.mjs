@@ -144,6 +144,11 @@ assert.match(workbenchCss, /\.cw-delete-confirm-actions/, 'custom delete confirm
 assert.match(workbenchJsx, /updated_at/, 'history drawer must show updated time')
 assert.match(workbenchJsx, /coreScenario/, 'history drawer must show requirement summary')
 assert.match(workbenchJsx, /resolvedApplication|createdAgent|seededJob/, 'history drawer must show resolved outcome')
+assert.match(workbenchJsx, /deploymentStatusInfo/, 'ConversationWorkbench must derive deployment status info for the selected task')
+assert.match(workbenchJsx, /cw-deployment-info/, 'ConversationWorkbench must render deployment info in the workbench body')
+assert.match(workbenchJsx, /当前部署版本/, 'deployment info must label the current deployment version')
+assert.match(workbenchJsx, /coreScenario/, 'deployment info must use the requirement coreScenario as the summary')
+assert.match(workbenchCss, /\.cw-deployment-info/, 'deployment info must have dedicated workbench body styles')
 
 const appsPanelJsx = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
 const useApplicationsJs = readFileSync(new URL('../src/hooks/useApplications.js', import.meta.url), 'utf8')
@@ -153,3 +158,4 @@ assert.match(useApplicationsJs, /deleteApplication/, 'useApplications must expos
 assert.match(useApplicationsJs, /app\.deleted/, 'useApplications must refresh on app.deleted')
 
 console.log('check-conversation-workbench: OK')
+
