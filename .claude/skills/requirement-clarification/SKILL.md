@@ -238,8 +238,9 @@ catalog index is `.claude/skills/requirement-clarification/blueprints.json`.
 
 `mock_then_api` means **real-data first, fail honestly** — it is NOT "fall back to
 mock on failure". Treat it identically to `live_api` for the honest-data contract:
-the app must attempt the real fetch, and on failure show an explicit error/empty
-state (logged in `output.json` `warnings`). It must never fabricate data or
+the app must attempt the real fetch, and on failure render the **Degraded State**
+(see `software-factory-app`: banner + structural preview, **no fabricated values**),
+logged in `output.json` `warnings`. It must never fabricate data or
 silently substitute mock.
 
 ## Data Skill Mapping
