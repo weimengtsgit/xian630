@@ -29,6 +29,11 @@ const defaultContainerPort = 80
 
 const activeDeploymentProbeTimeout = 1500 * time.Millisecond
 
+// A running job whose row has not advanced within this window is treated as a
+// stale executor lock for direct rebuild actions. Fresh same-app jobs still
+// block rebuild because both write the same generated app directory and image.
+const rebuildRunningJobFreshness = time.Hour
+
 var renamePath = os.Rename
 
 // containerHealthURL builds the health-check URL for a container's host port.
@@ -341,7 +346,7 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Per-app executor conflict: a running JOB for this app's slug writes the
 	// same generated-apps/<slug>/ dir + image tag a rebuild targets. Serialize.
-	if n, _ := s.store.CountRunningJobsByAppSlug(ctx, app.Slug); n > 0 {
+	if n, _ := s.store.CountRecentRunningJobsByAppSlug(ctx, app.Slug, time.Now().Add(-rebuildRunningJobFreshness)); n > 0 {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "app busy"})
 		return
 	}
@@ -836,6 +841,7 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tombstone := ""
+	directCleanup := false
 	if _, err := os.Stat(appDir); err == nil {
 		tombstone = filepath.Join(s.cfg.ArtifactRoot, "deleted-apps", app.ID+"-"+app.Slug)
 		if !filepath.IsAbs(tombstone) {
@@ -847,9 +853,9 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := moveDirectory(appDir, tombstone); err != nil {
-			log.Printf("delete app %s: move app directory %q -> %q: %v", appID, appDir, tombstone, err)
-			writeError(w, http.StatusInternalServerError, "move app directory")
-			return
+			log.Printf("delete app %s: move app directory %q -> %q failed; falling back to post-delete cleanup: %v", appID, appDir, tombstone, err)
+			tombstone = ""
+			directCleanup = true
 		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		writeError(w, http.StatusInternalServerError, "stat app directory")
@@ -872,6 +878,10 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 	}
 	if tombstone != "" {
 		_ = os.RemoveAll(tombstone)
+	} else if directCleanup {
+		if err := os.RemoveAll(appDir); err != nil {
+			log.Printf("delete app %s: cleanup app directory %q: %v", appID, appDir, err)
+		}
 	}
 	s.hub.Publish(Event{Type: "app.deleted", Data: map[string]string{"id": app.ID, "slug": app.Slug}})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": app.ID, "slug": app.Slug})

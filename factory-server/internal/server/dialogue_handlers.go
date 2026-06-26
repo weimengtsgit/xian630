@@ -726,8 +726,9 @@ func (s *Server) getDialogue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
-// deleteDialogue handles DELETE /api/dialogues/:id. It refuses to delete a
-// dialogue that is still actively drafting (the runner may still be appending).
+// deleteDialogue handles DELETE /api/dialogues/:id. It allows deleting a
+// dialogue in any status; in-flight linked jobs are canceled before the rows are
+// removed so background runners do not keep appending to a deleted dialogue.
 func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	dlg, err := s.store.GetDialogueSession(r.Context(), id)

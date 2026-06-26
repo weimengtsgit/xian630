@@ -582,6 +582,29 @@ func TestStartReturns404ForMissingApp(t *testing.T) {
 	}
 }
 
+func TestRebuildIgnoresStaleRunningJobForSameApp(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	job := model.Job{
+		ID:              "job_stale_running_for_rebuild",
+		AppSlug:         "east-sea-situation",
+		Status:          model.JobStatusRunning,
+		CurrentStepKind: model.StepRequirementAnalysis,
+		CreatedAt:       time.Now().Add(-2 * time.Hour),
+		UpdatedAt:       time.Now().Add(-2 * time.Hour),
+	}
+	if err := srv.store.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("seed stale running job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rebuild", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for stale running job; body=%s", rec.Code, rec.Body.String())
+	}
+}
 func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
 	srv, r := newOpsServer(t, fr)
@@ -636,6 +659,50 @@ func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 	expectEvent(t, ch, "app.deleted")
 }
 
+func TestDeleteGeneratedAppContinuesWhenTombstoneMoveFails(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	appDir := filepath.Join(root, "generated-apps", "demo-move-fail")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write app file: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-move-fail", Slug: "demo-move-fail", Name: "Demo Move Fail", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-move-fail",
+		ManifestPath: "generated-apps/demo-move-fail/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+
+	origRename := renamePath
+	renamePath = func(oldpath, newpath string) error {
+		if oldpath == appDir && strings.Contains(newpath, filepath.Join("deleted-apps", app.ID+"-"+app.Slug)) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: os.ErrPermission}
+		}
+		return origRename(oldpath, newpath)
+	}
+	t.Cleanup(func() { renamePath = origRename })
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-move-fail", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 despite tombstone move failure; body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := srv.store.GetApplication(context.Background(), app.ID); got != nil {
+		t.Fatalf("app row still exists: %#v", got)
+	}
+	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+		t.Fatalf("app dir still exists or stat failed differently: %v", err)
+	}
+}
 func TestDeleteGeneratedAppFallsBackWhenTombstoneRenameCrossDevice(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
 	srv, r := newOpsServer(t, fr)

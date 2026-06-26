@@ -432,6 +432,18 @@ func (s *Store) CountRunningJobsByAppSlug(ctx context.Context, appSlug string) (
 	return n, err
 }
 
+// CountRecentRunningJobsByAppSlug returns running jobs for appSlug whose store
+// row was updated at or after since. It lets operators rebuild after a crashed
+// executor leaves an old running row behind, while still serializing against a
+// currently active same-app pipeline.
+func (s *Store) CountRecentRunningJobsByAppSlug(ctx context.Context, appSlug string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE status = ? AND app_slug = ? AND updated_at >= ?`,
+		string(model.JobStatusRunning), appSlug, ms(since)).Scan(&n)
+	return n, err
+}
+
 // MarkJobRunning flips a job to running, sets lock_owner, stamps started_at the
 // first time the job runs, and bumps updated_at.
 func (s *Store) MarkJobRunning(ctx context.Context, jobID, lockOwner string) error {
