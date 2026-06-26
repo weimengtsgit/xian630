@@ -7,17 +7,6 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 )
 
-// containsSkill reports whether the data-skill list contains key. Order is not
-// part of the contract; only presence matters.
-func containsSkill(skills []string, key string) bool {
-	for _, s := range skills {
-		if s == key {
-			return true
-		}
-	}
-	return false
-}
-
 // TestDeriveDataSkillsLiveTide proves the real-data-default derivation: a
 // live_api requirement whose scenario mentions the tide domain MUST surface the
 // tide-data-skill, even though the model never put one in the profile.
@@ -63,6 +52,26 @@ func TestDeriveDataSkillsLiveCarrier(t *testing.T) {
 	}
 	if got := deriveDataSkills(req); !containsSkill(got, "carrier-affiliation-data-skill") {
 		t.Fatalf("deriveDataSkills = %v, want carrier-affiliation-data-skill for live_api carrier scenario", got)
+	}
+}
+
+// TestDeriveDataSkillsLiveMilitaryAISRoutesToCarrier proves the merchant/military
+// AIS split: a requirement about MILITARY vessel AIS (carriers / warships / navy —
+// 航母/舰船/军舰) MUST route to carrier-affiliation-data-skill, whose ontology
+// RawAISData adapter is the real source for military vessel tracks. It must NOT
+// be served only by ais-density-data-skill, whose MarineCadastre source is
+// merchant-density and carries no military vessels.
+func TestDeriveDataSkillsLiveMilitaryAISRoutesToCarrier(t *testing.T) {
+	req := clarification.Requirement{
+		DataPolicy:   "live_api",
+		AppName:      "航母编队舰船AIS航迹监控",
+		CoreScenario: "追踪航母打击群内军舰与舰艇的AIS航迹",
+		MainEntities: []string{"航母", "舰船", "军舰"},
+	}
+	if got := deriveDataSkills(req); !containsSkill(got, "carrier-affiliation-data-skill") {
+		t.Fatalf("deriveDataSkills = %v, want carrier-affiliation-data-skill for military-vessel AIS (ontology RawAISData), not the merchant-density skill", got)
+	} else if containsSkill(got, "ais-density-data-skill") {
+		t.Fatalf("deriveDataSkills = %v, must not include ais-density-data-skill for military-vessel AIS", got)
 	}
 }
 

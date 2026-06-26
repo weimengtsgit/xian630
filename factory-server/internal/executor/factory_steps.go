@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -311,15 +312,31 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	if manifest.Entry == "static-vite" {
 		_ = writeStaticHostingDockerfile(buildApp.Path)
 	}
+	// Deterministically fix the most common generated-nginx.conf pitfalls BEFORE
+	// building, so the image's nginx can actually start:
+	//   1. An unquoted location regex with a brace quantifier (e.g. "^/x/(\d{4})")
+	//      makes nginx's lexer end the regex token at the "{" → misleading
+	//      "missing closing parenthesis". Quoting fixes it.
+	//   2. A LITERAL external-host proxy_pass (e.g. "https://api.open-meteo.com/")
+	//      is resolved at config load; podman's aardvark resolver SERVFAILs the
+	//      external AAAA lookup, so nginx dies with "host not found in upstream".
+	//      Converting to a variable + a public resolver defers resolution to
+	//      request time (and lets the container start).
+	// See sanitizeNginxLocationRegexes / sanitizeNginxProxyPassUpstreams.
+	_ = sanitizeNginxLocationRegexes(filepath.Join(buildApp.Path, "nginx.conf"))
+	_ = sanitizeNginxProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
+	_ = sanitizeNginxVariableProxyPassUpstreams(filepath.Join(buildApp.Path, "nginx.conf"))
+	_ = sanitizeOntologyNginxProxyCredentials(filepath.Join(buildApp.Path, "nginx.conf"), f.Workspace)
 	var res deploy.CommandResult
+	var imageRef deploy.ImageRef
 	var err error
 	if f.StreamCmds != nil {
 		b := newCommandStreamBatcher(ctx, emit)
 		b.start()
-		_, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, version.ID, b.addStdout, b.addStderr)
+		imageRef, res, err = rt.BuildImageWithCallbacks(ctx, buildApp, version.ID, b.addStdout, b.addStderr)
 		b.close()
 	} else {
-		_, res, err = rt.BuildImage(ctx, buildApp, version.ID)
+		imageRef, res, err = rt.BuildImage(ctx, buildApp, version.ID)
 	}
 	f.writeLogs(ctx, job, step, res)
 	if err != nil || res.ExitCode != 0 {
@@ -329,7 +346,47 @@ func (f *FactoryRunner) runImageBuild(ctx context.Context, job model.Job, step m
 	// manifest is used to confirm the build context is valid for this app; the
 	// actual output verification is the deploy step's health check.
 	_ = manifest
+	// Validate the nginx config baked into the image (static-vite only). The
+	// sanitizers above fix the common pitfalls (brace regexes, literal external
+	// upstreams); this catches anything ELSE that would make the container exit
+	// at startup — an unbalanced brace, an undefined variable, a malformed
+	// directive. Such a failure would otherwise surface 30s later as a deploy
+	// health_check_failed (NOT a repairable step), leaving the user stuck
+	// retrying a doomed deploy. image_build IS repairable: failing here feeds
+	// the `nginx -t` error back to code_generation via RepairFromFailure. See
+	// validateStaticNginxConfig.
+	if manifest.Entry == "static-vite" {
+		if vres, vok := f.validateStaticNginxConfig(ctx, job, step, emit, imageRef.FullName); !vok {
+			_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
+			return vres, nil
+		}
+	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+// validateStaticNginxConfig runs `nginx -t` inside the freshly built image to
+// catch a generated nginx.conf that nginx will refuse to load (truncated regex,
+// unbalanced braces, an undefined variable, a bad proxy_pass, etc.). The config
+// is already COPY'd into the nginx:alpine-based image, so this validates exactly
+// what deploy will run, with no host volume mount or SELinux concern. Failing
+// here is preferable to the deploy step's 30s health-check timeout: image_build
+// is a repairable step, so RepairFromFailure forwards this error (plus the
+// captured nginx -t output) to code_generation for a targeted fix.
+func (f *FactoryRunner) validateStaticNginxConfig(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter, imageRef string) (StepResult, bool) {
+	rt := f.runtime()
+	res, ok := f.runCmd(ctx, job, step, emit, "", rt.Name(), "run", "--rm", imageRef, "nginx", "-t")
+	if ok {
+		return StepResult{}, true
+	}
+	detail := strings.TrimSpace(strings.TrimRight(res.Stdout, "\n") + "\n" + res.Stderr)
+	return StepResult{
+		Status:    model.StepStatusFailed,
+		ErrorCode: model.ErrorImageBuildFailed,
+		ErrorMessage: fmt.Sprintf(
+			"nginx.conf 语法校验失败：镜像内的 nginx 拒绝加载该配置（nginx -t 退出码 %d）。\n%s\n"+
+				"请只修复 nginx.conf 中导致语法错误的指令（例如 location 正则括号未闭合、大括号不匹配、proxy_pass 目标写错、引用了未定义的 nginx 变量），使 `nginx -t` 通过；不要改动其它文件，不要改变业务逻辑或页面结构。",
+			res.ExitCode, detail),
+	}, false
 }
 
 // ensureCandidateVersion returns the application_versions row for this job,
@@ -347,11 +404,11 @@ func (f *FactoryRunner) ensureCandidateVersion(ctx context.Context, appID, jobID
 		parentID = priorEff.ID
 	}
 	created, err := f.Store.CreateApplicationVersion(ctx, model.ApplicationVersion{
-		ID:            "ver_" + id.New(),
-		ApplicationID: appID,
+		ID:              "ver_" + id.New(),
+		ApplicationID:   appID,
 		ParentVersionID: parentID,
-		JobID:         jobID,
-		Status:        model.ApplicationVersionBuilding,
+		JobID:           jobID,
+		Status:          model.ApplicationVersionBuilding,
 	})
 	if err != nil {
 		return nil, StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("create version for job %s: %v", jobID, err)}, false
@@ -455,7 +512,16 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	if health == nil {
 		health = deploy.CheckHTTP
 	}
-	if herr := health(ctx, healthURL, 10*time.Second); herr != nil {
+	if herr := health(ctx, healthURL, deploy.HealthCheckTimeout()); herr != nil {
+		// Capture container logs before cleanup so connection-refused/timeouts can
+		// be distinguished from an actual container crash (nginx config error,
+		// missing dist, etc.).
+		logsRes, _ := f.Cmds.Run(ctx, "", rt.Name(), "logs", container.Name)
+		errMsg := herr.Error()
+		if logs := strings.TrimSpace(logsRes.Stdout + logsRes.Stderr); logs != "" {
+			errMsg += "\ncontainer logs:\n" + deploy.Truncate(logs, 2000)
+		}
+
 		_, _ = rt.StopContainer(ctx, container.Name)
 		_, _ = rt.RemoveContainer(ctx, container.Name)
 		now := time.Now()
@@ -480,7 +546,7 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		}
 		// When a prior effective version exists it is RETAINED: the app keeps
 		// serving on it and its container is NOT stopped.
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorHealthCheckFailed, ErrorMessage: herr.Error()}, nil
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorHealthCheckFailed, ErrorMessage: errMsg}, nil
 	}
 
 	// Success: record the running deployment, then transactionally promote the
@@ -585,6 +651,310 @@ func (f *FactoryRunner) stopPreviousDeployments(ctx context.Context, rt deploy.C
 	}
 }
 
+// isFullNginxConfig reports whether path contains a top-level nginx config with
+// events{} and/or http{} blocks. Such files must become /etc/nginx/nginx.conf;
+// bare server{} blocks must go to /etc/nginx/conf.d/default.conf.
+func isFullNginxConfig(path string) bool {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Match "events {" or "http {" at the top level. Server blocks live
+		// inside http{}, so they do not trigger this.
+		if strings.HasPrefix(line, "events ") || strings.HasPrefix(line, "events{") ||
+			strings.HasPrefix(line, "http ") || strings.HasPrefix(line, "http{") {
+			return true
+		}
+	}
+	return false
+}
+
+// nginxLocationRegexRe matches a "location ~<*> <regex> {" line and captures
+// the prefix ("    location ~ ") and the unquoted regex token. Multiline mode
+// keeps ^/$ on line boundaries and "." off newlines. The non-greedy regex +
+// the trailing "\s*\{\s*$" anchor capture the regex up to the line's final "{"
+// (the block opener), so an interior brace like the "{4}" in "\d{4}" stays in
+// the captured regex rather than being mistaken for the block opener.
+var nginxLocationRegexRe = regexp.MustCompile(`(?m)^(\s*location\s+~\*?\s+)(.+?)\s*\{\s*$`)
+
+// sanitizeNginxLocationRegexes quotes any unquoted location regex that contains
+// a brace. nginx's config lexer treats an UNQUOTED "{" as a block-opening
+// delimiter, so it truncates a location regex like "^/x/(\d{4})$" at the "{",
+// hands PCRE "^/x/(\d", and fails with a misleading "missing closing
+// parenthesis". Quoting the regex makes the lexer read it as one string token
+// and pass it to PCRE intact. This is a deterministic fix for a pitfall the
+// code-gen model keeps hitting and cannot diagnose from nginx's error. It is a
+// no-op for regexes without braces and for already-quoted regexes. Missing file
+// (non-nginx app) is not an error.
+func sanitizeNginxLocationRegexes(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil // nothing to sanitize (non-nginx app or absent config)
+	}
+	src := string(raw)
+	out := nginxLocationRegexRe.ReplaceAllStringFunc(src, func(line string) string {
+		m := nginxLocationRegexRe.FindStringSubmatch(line)
+		if m == nil {
+			return line
+		}
+		prefix, rx := m[1], m[2]
+		if strings.HasPrefix(rx, `"`) {
+			return line // already quoted
+		}
+		if !strings.ContainsAny(rx, "{}") {
+			return line // no brace → nginx parses it fine unquoted
+		}
+		// Escape any embedded double-quotes (rare in a regex) and wrap.
+		return prefix + `"` + strings.ReplaceAll(rx, `"`, `\"`) + `" {`
+	})
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+// nginxProxyPassRe matches a "proxy_pass <scheme>://<host><rest>;" line and
+// captures indent, scheme, host (FQDN chars only — so "$var" upstreams do not
+// match), and the trailing rest (path, and ":port" if present).
+var nginxProxyPassRe = regexp.MustCompile(`(?m)^(\s*)proxy_pass\s+(https?)://([A-Za-z0-9.\-]+)([^\s;]*);\s*$`)
+
+var nginxListenRe = regexp.MustCompile(`(?m)^\s*listen\b[^\n]*;`)
+
+var nginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+var nginxVariableHostSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+);\s*$`)
+var nginxVariableProxyPassRe = regexp.MustCompile(`(?m)^\s*proxy_pass\s+https?://\$[A-Za-z_][A-Za-z0-9_]*`)
+var nginxOntologyLocationBlockRe = regexp.MustCompile(`(?ms)location\s+/api/ontology/\s*\{.*?\n\s*\}`)
+
+// sanitizeNginxProxyPassUpstreams converts a LITERAL external-host proxy_pass
+// (e.g. "proxy_pass https://api.open-meteo.com/;") into a variable form plus a
+// public resolver. nginx resolves a literal upstream at config-load time, and in
+// this podman environment aardvark-dns SERVFAILs the external AAAA query, so
+// nginx dies with "host not found in upstream" and the container never starts.
+// With a variable upstream ("set $sf_upstream ...; proxy_pass https://$sf_upstream/;")
+// nginx defers resolution to request time, and a server-level "resolver 8.8.8.8"
+// (which resolves cleanly, unlike aardvark) makes those lookups work at runtime.
+//
+// Skipped (left literal): variable upstreams ($var), localhost, bare container
+// names (no dot — resolved by aardvark at load, fine), IPv4 literals, and hosts
+// with an explicit :port (variable+port is awkward; rare for external APIs).
+// Missing file (non-nginx app) is not an error.
+func sanitizeNginxProxyPassUpstreams(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	converted := false
+	out := nginxProxyPassRe.ReplaceAllStringFunc(src, func(line string) string {
+		m := nginxProxyPassRe.FindStringSubmatch(line)
+		if m == nil {
+			return line
+		}
+		indent, scheme, host, rest := m[1], m[2], m[3], m[4]
+		switch {
+		case host == "localhost", !strings.Contains(host, "."), isIPv4(host):
+			return line // resolves at load fine; leave literal
+		case strings.HasPrefix(rest, ":"):
+			return line // explicit :port — skip (rare)
+		}
+		converted = true
+		return indent + "set $sf_upstream \"" + host + "\";\n" +
+			indent + "proxy_pass " + scheme + "://$sf_upstream" + rest + ";"
+	})
+	if !converted {
+		return nil
+	}
+	// One server-level resolver after the first `listen` so the variable
+	// upstreams can resolve at request time. Injected at most once; valid in
+	// server scope alongside any per-location resolver the model may have set.
+	done := false
+	out = nginxListenRe.ReplaceAllStringFunc(out, func(line string) string {
+		if done {
+			return line
+		}
+		done = true
+		return line + "\n    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;"
+	})
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+// sanitizeNginxVariableProxyPassUpstreams collapses generated configs such as:
+//
+//	set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+//	proxy_pass http://$ontology_upstream/;
+//
+// back to a literal host:port proxy_pass. For host:port APIs this is safer than
+// a request-time nginx resolver in the current Podman runtime: Docker's
+// 127.0.0.11 resolver is unavailable, and variable proxy_pass with a URI has
+// surprising path-forwarding semantics. Literal host:port keeps nginx's normal
+// location URI replacement and lets the OS resolver handle startup resolution.
+func sanitizeNginxVariableProxyPassUpstreams(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	out := rewriteOntologyVariablePortProxyPasses(src)
+	converted := false
+	matches := nginxVariableUpstreamSetRe.FindAllStringSubmatch(out, -1)
+	for _, m := range matches {
+		indent, variable, upstream := m[1], m[2], m[3]
+		host, _, _ := strings.Cut(upstream, ":")
+		if !strings.Contains(host, ".") && !isIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		uri := proxyMatch[1]
+		if uri == "" {
+			uri = "/"
+		}
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		converted = true
+	}
+	if converted && !nginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerOnlyNginxResolver(out)
+	}
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func rewriteOntologyVariablePortProxyPasses(src string) string {
+	if !strings.Contains(src, "/api/ontology/") {
+		return src
+	}
+	out := nginxOntologyLocationBlockRe.ReplaceAllStringFunc(src, rewriteOntologyVariablePortProxyPassBlock)
+	if out != src && !nginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerOnlyNginxResolver(out)
+	}
+	return out
+}
+
+func rewriteOntologyVariablePortProxyPassBlock(block string) string {
+	out := block
+	for _, m := range nginxVariableHostSetRe.FindAllStringSubmatch(block, -1) {
+		indent, variable, host := m[1], m[2], m[3]
+		if !strings.Contains(host, ".") && !isIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `:(\d+)([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		port, uri := proxyMatch[1], proxyMatch[2]
+		if uri != "" && uri != "/" {
+			continue
+		}
+		replacement := indent + "rewrite ^/api/ontology/(.*)$ /$1 break;\n" +
+			indent + "proxy_pass http://" + host + ":" + port + ";"
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], replacement, 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], replacement, 1)
+	}
+	return out
+}
+
+func sanitizeOntologyNginxProxyCredentials(path, workspace string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	if !strings.Contains(src, "/api/ontology/") && !strings.Contains(src, "/ontology/") {
+		return nil
+	}
+	env, err := readOntologyEnv(workspace)
+	if err != nil {
+		return nil
+	}
+	token := strings.TrimSpace(env["ONTOLOGY_AUTH_TOKEN"])
+	spaceID := strings.TrimSpace(env["ONTOLOGY_SPACE_ID"])
+	scopeType := strings.TrimSpace(env["ONTOLOGY_SCOPE_TYPE"])
+	if scopeType == "" {
+		scopeType = "Space"
+	}
+	out := src
+	if token != "" {
+		out = replaceProxySetHeader(out, "Authorization", "Bearer "+token)
+	}
+	if spaceID != "" {
+		out = replaceProxySetHeader(out, "Spaceid", spaceID)
+	}
+	if scopeType != "" {
+		out = replaceProxySetHeader(out, "scopeType", scopeType)
+	}
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func readOntologyEnv(workspace string) (map[string]string, error) {
+	path := filepath.Join(workspace, ".claude", "skills", "carrier-affiliation-data-skill", "config", "ontology.env")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		env[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return env, nil
+}
+
+func replaceProxySetHeader(src, header, value string) string {
+	re := regexp.MustCompile(`(?m)^(\s*proxy_set_header\s+` + regexp.QuoteMeta(header) + `\s+)"[^"]*";\s*$`)
+	return re.ReplaceAllString(src, `${1}"`+value+`";`)
+}
+
+func removeDockerOnlyNginxResolver(src string) string {
+	lines := strings.SplitAfter(src, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "resolver ") && strings.Contains(line, "127.0.0.11") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
+}
+
+// isIPv4 reports whether s is a dotted-quad IPv4 literal (so it can be left as a
+// literal proxy_pass upstream — it resolves at load without DNS).
+func isIPv4(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || len(p) > 3 {
+			return false
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // writeStaticHostingDockerfile overwrites the app's Dockerfile with a dist-copy
 // nginx image when the host has already built dist/index.html (i.e. a static-vite
 // app whose test_verification step produced a bundle in the candidate dir). It
@@ -610,7 +980,15 @@ func writeStaticHostingDockerfile(appDir string) error {
 	if _, err := os.Stat(nginxConf); err != nil {
 		_ = os.WriteFile(nginxConf, []byte("server {\n  listen 80;\n  server_name localhost;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri /index.html; }\n}\n"), 0o644)
 	}
-	b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
+	// Some generated apps ship a full nginx config (top-level events{} + http{}),
+	// while others ship only a server{} block. A full config must be the main
+	// /etc/nginx/nginx.conf; a bare server{} block belongs in conf.d/default.conf.
+	// Putting a full config into conf.d causes "events directive is not allowed".
+	nginxConfDest := "/etc/nginx/conf.d/default.conf"
+	if isFullNginxConfig(nginxConf) {
+		nginxConfDest = "/etc/nginx/nginx.conf"
+	}
+	b.WriteString("COPY nginx.conf " + nginxConfDest + "\n")
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString("CMD [\"nginx\", \"-g\", \"daemon off;\"]\n")
 	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644); err != nil {
@@ -625,12 +1003,15 @@ func writeStaticHostingDockerfile(appDir string) error {
 	return nil
 }
 
-// wslVMHealthIP returns the host a container health probe should target. On
-// Windows+WSL2 it is the WSL VM IP (wslrelay forwarding is unreliable); in a
-// containerized deploy set FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
+// wslVMHealthIP returns the host a container health probe should target. The
+// lookup order is: FACTORY_HEALTH_HOST env var, podman machine gateway
+// (macOS/Linux), WSL VM IP (Windows+WSL2), and finally 127.0.0.1.
 func wslVMHealthIP() string {
 	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
 		return v
+	}
+	if ip := deploy.PodmanMachineGateway(); ip != "" {
+		return ip
 	}
 	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
 		`ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+\.\d+\.\d+\.\d+'`).Output()

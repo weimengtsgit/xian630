@@ -110,6 +110,150 @@ func AuditHonestData(projectDir, dataPolicy string, dataSkills []string) error {
 		ErrSchemaValidationFailed, dataPolicy, strings.Join(shown, "\n  - "))
 }
 
+// AuditCarrierOntologyContract rejects generated carrier-affiliation apps that
+// ask the ontology/DaaS API for invented raw fields. The ontology docs expose
+// AviationCarrier longitude/latitude as "longitude"/"latitude"; generated apps
+// have repeatedly guessed "curLongitude"/"curLatitude", which the upstream
+// rejects with HTTP 400 after deployment. This audit is intentionally scoped to
+// real-data carrier apps so unrelated domains can use similarly named local
+// fields without being blocked.
+func AuditCarrierOntologyContract(projectDir, dataPolicy string, dataSkills []string) error {
+	if dataPolicy != "live_api" && dataPolicy != "mock_then_api" {
+		return nil
+	}
+	if !hasCarrierAffiliationSkill(dataSkills) {
+		return nil
+	}
+
+	var findings []string
+	forbidden := []string{"curLongitude", "curLatitude"}
+	_ = filepath.WalkDir(projectDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if auditSkipSegment(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, rerr := filepath.Rel(projectDir, path)
+		if rerr != nil {
+			return nil
+		}
+		relSlash := filepath.ToSlash(rel)
+		if auditSkipFile(relSlash, d.Name()) || !isDataLayerFile(relSlash) {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if !auditedExts[ext] {
+			return nil
+		}
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil || len(raw) > honestDataMaxFileBytes {
+			return nil
+		}
+		body := string(raw)
+		for _, field := range forbidden {
+			if strings.Contains(body, field) {
+				findings = append(findings, fmt.Sprintf("%s: forbidden ontology field %s; use documented longitude/latitude", relSlash, field))
+			}
+		}
+		for _, field := range []string{"refHMId", "recordTime", "speed", "heading"} {
+			if containsEntityQuotedField(body, "AircraftCarrierTrackLog", field) {
+				findings = append(findings, fmt.Sprintf("%s: forbidden AircraftCarrierTrackLog field %s; use documented refAviationCarrier/trackInitTime/longitude/latitude", relSlash, field))
+			}
+		}
+		if containsEntityQuotedField(body, "MaritimeBaseCombatPlatform", "callsign") {
+			findings = append(findings, fmt.Sprintf("%s: forbidden MaritimeBaseCombatPlatform field callsign; use documented mmsi/id fallback", relSlash))
+		}
+		if containsRawADSNullFilter(body) {
+			findings = append(findings, fmt.Sprintf("%s: RawADSData uses unsupported is not + null filter; omit the filter instead", relSlash))
+		}
+		return nil
+	})
+
+	if len(findings) == 0 {
+		return nil
+	}
+	shown := findings
+	if len(shown) > honestDataMaxFindings {
+		shown = shown[:honestDataMaxFindings]
+		shown = append(shown, fmt.Sprintf("... %d more findings omitted", len(findings)-honestDataMaxFindings))
+	}
+	return fmt.Errorf("%w: carrier ontology field contract violation\n  - %s",
+		ErrSchemaValidationFailed, strings.Join(shown, "\n  - "))
+}
+
+func containsEntityQuotedField(body, entity, field string) bool {
+	for start := strings.Index(body, entity); start >= 0; {
+		end := start + 1000
+		if end > len(body) {
+			end = len(body)
+		}
+		window := body[start:end]
+		fieldList := firstBracketedSegment(window)
+		if strings.Contains(fieldList, `"`+field+`"`) || strings.Contains(fieldList, `'`+field+`'`) {
+			return true
+		}
+		next := strings.Index(body[start+len(entity):], entity)
+		if next < 0 {
+			break
+		}
+		start += len(entity) + next
+	}
+	return false
+}
+
+func firstBracketedSegment(s string) string {
+	open := strings.Index(s, "[")
+	if open < 0 {
+		return ""
+	}
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return s[open : i+1]
+			}
+		}
+	}
+	return s[open:]
+}
+
+func containsRawADSNullFilter(body string) bool {
+	for start := strings.Index(body, "RawADSData"); start >= 0; {
+		end := start + 2000
+		if end > len(body) {
+			end = len(body)
+		}
+		window := body[start:end]
+		if regexp.MustCompile(`logic\s*:\s*["']is not["']`).MatchString(window) &&
+			regexp.MustCompile(`condition\s*:\s*null`).MatchString(window) {
+			return true
+		}
+		next := strings.Index(body[start+len("RawADSData"):], "RawADSData")
+		if next < 0 {
+			break
+		}
+		start += len("RawADSData") + next
+	}
+	return false
+}
+
+func hasCarrierAffiliationSkill(dataSkills []string) bool {
+	for _, skill := range dataSkills {
+		if strings.Contains(strings.ToLower(skill), "carrier-affiliation-data-skill") {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	honestDataMaxFindings  = 12
 	honestDataMaxFileBytes = 1 << 20 // 1 MiB — skip minified/vendored blobs

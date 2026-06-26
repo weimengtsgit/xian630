@@ -132,7 +132,7 @@ export function ConversationWorkbench({
 
   const submitText = async () => {
     const value = input.trim()
-    if (!value || submitting || locked) return
+    if (!value || submitting || (locked && !composerActive)) return
     setInput('')
     await onSend(value)
   }
@@ -181,6 +181,17 @@ export function ConversationWorkbench({
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
+            onPickClarification={value => {
+              if (!value) return
+              setInput(prev => {
+                const trimmed = String(prev).trim()
+                // Append rather than overwrite so multi-question clarifications
+                // (or multiple picks) accumulate in the composer. The answer goes
+                // to answerJob as free text the agent reads, so a combined reply
+                // like "演示数据；两级审批；年假、病假" is exactly what we want.
+                return trimmed ? `${trimmed}；${value}` : value
+              })
+            }}
           />
         ))}
 
@@ -303,8 +314,18 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
+  if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
+  if (item.type === 'clarification_prompt') {
+    // A pipeline step (solution_design / code_generation) paused for user input.
+    // Render the question(s) + structured options as a card; picking an option
+    // fills the composer (the reply goes through the normal send → answerJob
+    // path, which resets the step so the agent reads the user's answer).
+    return (
+      <ClarificationPromptCard item={item} onPick={onPickClarification} submitting={submitting} />
+    )
+  }
   if (item.type === 'analysis_stream') {
     // D6: the persisted analysis lands after the round completes and renders
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
@@ -585,6 +606,57 @@ function QuestionCard({ q, value, setValue }) {
       </div>
       {q.allowCustom ? <CustomAnswer onSubmit={v => q.multiSelect ? setValue([...selected, v]) : setValue(v)} /> : null}
       {customSelected.length > 0 ? <div className="cw-custom-selected">{customSelected.join('、')}</div> : null}
+    </div>
+  )
+}
+
+// ClarificationPromptCard renders a job-step clarification (solution_design /
+// code_generation pausing for user input) as a distinct, attention-grabbing card
+// in the conversation flow. Unlike the pre-job QuestionCard (which has its own
+// submit + draftAnswers state), a job-step clarification is answered via the
+// normal composer: picking an option (or typing) fills the composer, and sending
+// goes through answerJob → the step resets and the agent reads the reply.
+function ClarificationPromptCard({ item, onPick, submitting }) {
+  const questions = Array.isArray(item.questions) ? item.questions : []
+  // Whether ANY question offers structured options. The agent does not always
+  // emit an options array (sometimes it writes (A)/(B)/(C) into the question
+  // text instead). When there are no pickable options, the hint must NOT say
+  // "点击上方选项" — it would mislead the user.
+  const hasAnyOptions = questions.some(q => Array.isArray(q.options) && q.options.length > 0)
+  const pick = value => {
+    if (submitting || typeof onPick !== 'function') return
+    onPick(value)
+  }
+  return (
+    <div className="cw-item cw-agent cw-clarification">
+      <span className="cw-item-label">需要你澄清</span>
+      {questions.map((q, qi) => (
+        <div key={q.id || qi} className="cw-clarification-q">
+          <p className="cw-clarification-text">{q.question}</p>
+          {q.options && q.options.length > 0 ? (
+            <div className="cw-options">
+              {q.options.map(opt => (
+                <button
+                  key={opt.value || opt.label}
+                  type="button"
+                  className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
+                  onClick={() => pick(opt.label || opt.value)}
+                  disabled={submitting}
+                >
+                  <span className="cw-option-head">
+                    <b>{opt.label || opt.value}</b>
+                    {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
+        </div>
+      ))}
+      <small className="cw-clarification-hint">
+        {hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'}
+      </small>
     </div>
   )
 }

@@ -146,6 +146,58 @@ func TestClaudeStepRunnerRegistersGeneratedAppFromCodeGenerationOutput(t *testin
 	}
 }
 
+func TestClaudeStepRunnerPassesRepairContextToCodeGeneration(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"projectDir":     "generated-apps/demo",
+			"createdFiles":   []string{"generated-apps/demo/.factory/app.json"},
+			"needsUserInput": false,
+			"questions":      []any{},
+			"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+			"warnings":       []string{},
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepCodeGeneration)
+	step.UserPrompt = "repair_from_failure\nfailed_step: test_verification\n只修复导致当前失败的问题\nTS6133"
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s, want succeeded: %s", res.Status, res.ErrorMessage)
+	}
+	attemptDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "code_generation", "attempt-1")
+	prompt, err := os.ReadFile(filepath.Join(attemptDir, "prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if !bytes.Contains(prompt, []byte("repair_from_failure")) || !bytes.Contains(prompt, []byte("TS6133")) {
+		t.Fatalf("prompt missing repair context:\n%s", prompt)
+	}
+	input, err := os.ReadFile(filepath.Join(attemptDir, "input.json"))
+	if err != nil {
+		t.Fatalf("read input: %v", err)
+	}
+	if !bytes.Contains(input, []byte(`"repairContext"`)) || !bytes.Contains(input, []byte("test_verification")) {
+		t.Fatalf("input missing repair context:\n%s", input)
+	}
+}
+
 func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T) {
 	workspace := t.TempDir()
 	artifactRoot := filepath.Join(t.TempDir(), ".factory-runs")

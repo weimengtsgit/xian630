@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -192,6 +193,58 @@ func TestStartUsesConfiguredContainerRuntime(t *testing.T) {
 	}
 	if !hasCall(fr.calls, "docker", "run", "-d", "--name sf-east-sea-situation-", "-p ", ":80") {
 		t.Fatalf("missing docker run call; calls=%v", fr.calls)
+	}
+}
+
+func TestSanitizeGeneratedAppNginxFixesOntologyVariableProxyPassWithPortInProxyPass(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "ontology.env"), []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+    location /api/ontology/ {
+        set $upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeGeneratedAppNginx(conf, dir); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	for _, want := range []string{
+		"rewrite ^/api/ontology/(.*)$ /$1 break;",
+		"proxy_pass http://ceshi.projects.bingosoft.net:8081;",
+		`proxy_set_header Authorization "Bearer real-token";`,
+		`proxy_set_header Spaceid "real-space";`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sanitized nginx missing %q;\ngot:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "$upstream") || strings.Contains(got, "<ONTOLOGY_AUTH_TOKEN>") || strings.Contains(got, "SPACE_123") {
+		t.Fatalf("variable upstream or placeholders should not remain;\ngot:\n%s", got)
+	}
+	if err := sanitizeGeneratedAppNginx(conf, dir); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
 	}
 }
 
@@ -581,6 +634,29 @@ func TestStartReturns404ForMissingApp(t *testing.T) {
 	}
 }
 
+func TestRebuildIgnoresStaleRunningJobForSameApp(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	job := model.Job{
+		ID:              "job_stale_running_for_rebuild",
+		AppSlug:         "east-sea-situation",
+		Status:          model.JobStatusRunning,
+		CurrentStepKind: model.StepRequirementAnalysis,
+		CreatedAt:       time.Now().Add(-2 * time.Hour),
+		UpdatedAt:       time.Now().Add(-2 * time.Hour),
+	}
+	if err := srv.store.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("seed stale running job: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rebuild", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for stale running job; body=%s", rec.Code, rec.Body.String())
+	}
+}
 func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
 	srv, r := newOpsServer(t, fr)
@@ -633,6 +709,103 @@ func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 		t.Fatalf("expected podman rm for running container; calls=%v", fr.calls)
 	}
 	expectEvent(t, ch, "app.deleted")
+}
+
+func TestDeleteGeneratedAppContinuesWhenTombstoneMoveFails(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	appDir := filepath.Join(root, "generated-apps", "demo-move-fail")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write app file: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-move-fail", Slug: "demo-move-fail", Name: "Demo Move Fail", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-move-fail",
+		ManifestPath: "generated-apps/demo-move-fail/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+
+	origRename := renamePath
+	renamePath = func(oldpath, newpath string) error {
+		if oldpath == appDir && strings.Contains(newpath, filepath.Join("deleted-apps", app.ID+"-"+app.Slug)) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: os.ErrPermission}
+		}
+		return origRename(oldpath, newpath)
+	}
+	t.Cleanup(func() { renamePath = origRename })
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-move-fail", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 despite tombstone move failure; body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := srv.store.GetApplication(context.Background(), app.ID); got != nil {
+		t.Fatalf("app row still exists: %#v", got)
+	}
+	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+		t.Fatalf("app dir still exists or stat failed differently: %v", err)
+	}
+}
+func TestDeleteGeneratedAppFallsBackWhenTombstoneRenameCrossDevice(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	srv.cfg.ArtifactRoot = filepath.Join(t.TempDir(), "runs")
+	appDir := filepath.Join(root, "generated-apps", "demo-cross-device")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write app file: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-cross-device", Slug: "demo-cross-device", Name: "Demo Cross Device", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-cross-device",
+		ManifestPath: "generated-apps/demo-cross-device/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	origRename := renamePath
+	renamePath = func(oldpath, newpath string) error {
+		if oldpath == appDir && strings.Contains(newpath, filepath.Join("deleted-apps", app.ID+"-"+app.Slug)) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRename(oldpath, newpath)
+	}
+	t.Cleanup(func() { renamePath = origRename })
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-cross-device", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+		t.Fatalf("app dir still exists or stat failed differently: %v", err)
+	}
+	got, err := srv.store.GetApplication(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("app row still exists: %#v", got)
+	}
+	tombstone := filepath.Join(srv.cfg.ArtifactRoot, "deleted-apps", app.ID+"-"+app.Slug)
+	if _, err := os.Stat(tombstone); !os.IsNotExist(err) {
+		t.Fatalf("tombstone should be removed after DB delete, stat err=%v", err)
+	}
 }
 
 // TestDeleteGeneratedAppClearsReferencingDialogue verifies that deleting an app

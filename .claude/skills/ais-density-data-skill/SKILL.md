@@ -1,9 +1,30 @@
 ---
 name: ais-density-data-skill
-description: Historical-only AIS merchant-density skill — free real-time AIS does not exist, so obtain historical AIS data (downloadable MarineCadastre/DMA/GFW archives, or the browser-fetchable MarineCadastre ArcGIS transit-count raster for the U.S. EEZ) and aggregate it into 50-NM density grids; if every historical source is unreachable, fall back to CORS public-web endpoints — never fabricate vessel counts. Use when a request mentions AIS, merchant density, shipping density, 50-nautical-mile grid, vessel traffic analysis, or historical shipping density. It does NOT fetch real-time data or call paid AIS APIs. Skip only when the user explicitly requests mock/demo data.
+description: Historical-only AIS MERCHANT-density skill — free real-time AIS does not exist, so obtain historical AIS data (downloadable MarineCadastre/DMA/GFW archives, or the browser-fetchable MarineCadastre ArcGIS transit-count raster for the U.S. EEZ) and aggregate it into 50-NM density grids; if every historical source is unreachable, fall back to CORS public-web endpoints — never fabricate vessel counts. Use when a request mentions AIS, merchant density, shipping density, 50-nautical-mile grid, vessel traffic analysis, or historical shipping density. MERCHANT SHIPPING ONLY — military vessels (carriers/warships/destroyers/cruisers/frigates/amphibs/any navy vessel) are NOT served here; their AIS tracks come from the ontology RawAISData entity via carrier-affiliation-data-skill. It does NOT fetch real-time data or call paid AIS APIs. Skip only when the user explicitly requests mock/demo data.
 ---
 
 # AIS Density Skill
+
+## Merchant-only — military AIS routes elsewhere
+
+This skill is **merchant / commercial shipping density only**. AIS data in this
+factory is split by TARGET FLEET:
+
+- **Merchant density** (商船, cargo, tankers — aggregate counts per 50-NM cell,
+  US EEZ, annual) → **this skill** (NOAA MarineCadastre).
+- **Military vessels** — carriers, warships, destroyers, cruisers, frigates,
+  amphibious ships, supply ships, ANY navy/naval vessel, per-vessel tracks by
+  MMSI → **`carrier-affiliation-data-skill`** (ontology `RawAISData` entity,
+  ~48 US-Navy vessels, global, ~weeks-fresh). MarineCadastre carries only
+  merchant traffic and would show ~0 military vessels.
+
+If the request targets a military vessel in any way (航母 / 舰船 / 军舰 / 舰艇 /
+驱逐舰 / 巡洋舰 / 护卫舰 / 两栖舰 / 舰队 / 军队 / warship / naval / navy /
+destroyer / cruiser / frigate …), STOP and defer to `carrier-affiliation-data-
+skill`'s `RawAISData` adapter — do NOT build a merchant density grid for it.
+Conversely, never serve a merchant-density request from `RawAISData` (it holds
+only ~48 military vessels). The server-side `deriveDataSkills` router maps
+military terms to the carrier skill; this skill stays merchant-only.
 
 ## Default Rule
 

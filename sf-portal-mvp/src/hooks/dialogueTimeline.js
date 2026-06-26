@@ -108,7 +108,7 @@ export function lockedFromView(view) {
 // the optimistic/persisted user message. It is SUPPRESSED when the persisted view
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
-export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null) {
+export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = []) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
 
@@ -196,6 +196,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         content: safeString(msg.content),
         folded: true,
         expanded: true,
+      })
+      continue
+    }
+    if (msg.role === 'agent' && (msg.kind === 'reply' || msg.kind === 'message')) {
+      items.push({
+        id: msg.id,
+        type: 'agent_message',
+        content: safeString(msg.content),
       })
     }
     // Other parent agent kinds (business_draft handled below) are dropped here.
@@ -295,6 +303,45 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         prompt: safeString(view.agentDraft.prompt),
       },
     })
+  }
+
+  // 5b. Job-step clarifications: when a pipeline step (solution_design /
+  // code_generation) pauses for user input, the backend emits a clarification
+  // work trace carrying the question(s) AND their structured options. Surface
+  // them as a dedicated clarification_prompt card IN the conversation flow (not
+  // just the folded trace panel) so the user sees WHAT to answer and can pick
+  // an option. The trace payload is
+  // {questions:[{id,question,defaultAnswer,options:[{value,label,recommended}]}]}.
+  // Order by sequence (ascending) so multiple clarifications appear in emit order.
+  if (Array.isArray(workTraceItems)) {
+    const clarifications = workTraceItems
+      .filter(it => it && it.type === 'clarification' && it.payload && Array.isArray(it.payload.questions) && it.payload.questions.length > 0)
+      .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+    for (const c of clarifications) {
+      const seq = c.sequence || 0
+      const questions = c.payload.questions.map((q, i) => {
+        const options = Array.isArray(q.options)
+          ? q.options.map(opt => ({
+            value: safeString(opt.value || opt.id || opt.label),
+            label: safeString(opt.label || opt.value || opt.id),
+            recommended: !!opt.recommended,
+          })).filter(opt => opt.value || opt.label)
+          : []
+        return {
+          id: safeString(q.id) || `clar_q_${seq}_${i}`,
+          // Agents emit the question text under `question` or `text`; honor both
+          // so the card never shows an empty prompt.
+          question: safeString(q.question || q.text),
+          defaultAnswer: safeString(q.defaultAnswer),
+          options,
+        }
+      })
+      items.push({
+        id: `clarify_${c.dialogueId || ''}_${seq}_${c.id || ''}`,
+        type: 'clarification_prompt',
+        questions,
+      })
+    }
   }
 
   // 6. Resolved outcome (application / agent / seeded job).

@@ -33,11 +33,79 @@ type StepOutput struct {
 }
 
 // Question is a single clarification the agent wants the user to answer before
-// the step can complete (design §5.1).
+// the step can complete (design §5.1). Options carries the structured choices
+// the agent offers (e.g. "use-mock-data" vs "provide-real-api"); surfaced via
+// the clarification work trace so the conversation UI can render them as a
+// pickable card rather than a bare text blob.
+//
+// Agents are inconsistent about field names: the prompt's contract uses
+// question/value, but the model sometimes emits text/id. UnmarshalJSON
+// normalizes both shapes so a clarification never silently loses its question
+// text or option values.
 type Question struct {
-	ID            string `json:"id"`
-	Question      string `json:"question"`
-	DefaultAnswer string `json:"defaultAnswer"`
+	ID            string           `json:"id"`
+	Question      string           `json:"question"`
+	DefaultAnswer string           `json:"defaultAnswer"`
+	Options       []QuestionOption `json:"options,omitempty"`
+}
+
+// UnmarshalJSON accepts the contract shape ({question, options:[{value,label}]})
+// and the model's alternate shape ({text, options:[{id,label}]}) — the agent
+// emits both in practice, and a missing question text made the task card print
+// raw JSON. After decode, Question always holds the question text and each
+// option always has a Value (falling back to its id/label).
+func (q *Question) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		ID            string           `json:"id"`
+		Question      string           `json:"question"`
+		Text          string           `json:"text"`
+		DefaultAnswer string           `json:"defaultAnswer"`
+		Options       []QuestionOption `json:"options"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	q.ID = r.ID
+	q.Question = r.Question
+	if q.Question == "" {
+		q.Question = r.Text
+	}
+	q.DefaultAnswer = r.DefaultAnswer
+	q.Options = r.Options
+	return nil
+}
+
+// QuestionOption is one structured choice on a clarification question.
+type QuestionOption struct {
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Recommended bool   `json:"recommended,omitempty"`
+}
+
+// UnmarshalJSON accepts {value,label} (contract) and {id,label} (alternate).
+// Value falls back to id, then label, so the option is always pickable.
+func (o *QuestionOption) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		Value       string `json:"value"`
+		ID          string `json:"id"`
+		Label       string `json:"label"`
+		Recommended bool   `json:"recommended"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	o.Value = r.Value
+	if o.Value == "" {
+		o.Value = r.ID
+	}
+	if o.Value == "" {
+		o.Value = r.Label
+	}
+	o.Label = r.Label
+	o.Recommended = r.Recommended
+	return nil
 }
 
 // SkillPaths is a []string that unmarshals usedSkills from EITHER of the two
@@ -264,13 +332,19 @@ type requirementAnalysisOutput struct {
 	// thinking/reasoning and every other hidden provider field are NOT in this
 	// struct, so the lenient decoder drops them (boundary locked by contract
 	// tests that include both a workLog and a thinking field).
-	WorkLog    []workLogEntry `json:"workLog"`
-	Validation struct {
-		Complete            bool     `json:"complete"`
-		Supported           bool     `json:"supported"`
-		MissingFields       []string `json:"missingFields"`
-		UnsupportedRequests []string `json:"unsupportedRequests"`
-	} `json:"validation"`
+	WorkLog    []workLogEntry      `json:"workLog"`
+	Validation requirementValidation `json:"validation"`
+}
+
+// requirementValidation is the freeze/audit verdict the requirement_analysis
+// step emits. A frozen requirement that is incomplete or unsupported hard-fails
+// the pipeline (see ValidateRequirementAnalysis); the MissingFields and
+// UnsupportedRequests are surfaced in the error so the user knows why.
+type requirementValidation struct {
+	Complete            bool     `json:"complete"`
+	Supported           bool     `json:"supported"`
+	MissingFields       []string `json:"missingFields"`
+	UnsupportedRequests []string `json:"unsupportedRequests"`
 }
 
 // ValidateRequirementAnalysis decodes and validates the output.json the
@@ -286,12 +360,52 @@ func ValidateRequirementAnalysis(path string) (StepOutput, error) {
 		return StepOutput{}, err
 	}
 	if !raw.Validation.Complete || !raw.Validation.Supported {
-		return StepOutput{}, fmt.Errorf("confirmed requirement rejected: %w", ErrSchemaValidationFailed)
+		return StepOutput{}, fmt.Errorf("confirmed requirement rejected: %w%s",
+			ErrSchemaValidationFailed, requirementRejectionDetail(raw.Validation))
 	}
 	if raw.AppType == "" || raw.AppName == "" || len(raw.GenerationProfile) == 0 {
 		return StepOutput{}, fmt.Errorf("missing required requirement fields: %w", ErrSchemaValidationFailed)
 	}
 	return StepOutput{}, nil
+}
+
+// requirementRejectionDetail formats the agent's missingFields and
+// unsupportedRequests into a human-readable suffix for the rejection error, so
+// the card surfaces WHY the requirement was rejected (not just the code). Each
+// reason is capped; the whole suffix is bounded so it fits on a card.
+func requirementRejectionDetail(v requirementValidation) string {
+	var reasons []string
+	if !v.Complete {
+		for _, m := range v.MissingFields {
+			reasons = append(reasons, "缺少字段: "+m)
+		}
+	}
+	if !v.Supported {
+		for _, u := range v.UnsupportedRequests {
+			reasons = append(reasons, "不支持: "+truncateReason(u))
+		}
+	}
+	if len(reasons) == 0 {
+		if !v.Complete {
+			return " (需求不完整)"
+		}
+		return " (超出支持能力)"
+	}
+	combined := strings.Join(reasons, "; ")
+	if len([]rune(combined)) > 500 {
+		combined = string([]rune(combined)[:497]) + "..."
+	}
+	return " — " + combined
+}
+
+// truncateReason caps a single rejection reason so one verbose entry cannot
+// dominate the error message.
+func truncateReason(s string) string {
+	const max = 160
+	if len([]rune(s)) <= max {
+		return s
+	}
+	return string([]rune(s)[:max-3]) + "..."
 }
 
 // solutionDesignOutput mirrors design §5.2. The schema is large; the validator

@@ -134,5 +134,20 @@ assert.match(workTraceFn[0], /list\.length/, 'collapsed WorkTraceList header mus
 assert.match(workbenchJsx, /seededJob/, 'ConversationWorkbench must read view.seededJob for the continuous-loop unlock')
 assert.match(workbenchJsx, /continuousLoop/, 'ConversationWorkbench must derive a continuousLoop flag from the seeded job status')
 assert.match(workbenchJsx, /composerActive/, 'ConversationWorkbench composer gate must use composerActive (versionDeployed || continuousLoop)')
+const submitTextMatch = workbenchJsx.match(/const submitText = async \(\) => \{[\s\S]*?\n  \}/)
+assert.ok(submitTextMatch, 'ConversationWorkbench must define submitText')
+assert.match(
+  submitTextMatch[0],
+  /locked\s*&&\s*!composerActive/,
+  'submitText must allow sending when the continuous-loop composer is visible despite a locked/resolved session',
+)
+assert.match(useDialogueJs, /dialogue\.turn\.completed/, 'useDialogueSessions must route completed turn events from global SSE')
+assert.match(useDialogueJs, /dialogue\.turn\.failed/, 'useDialogueSessions must route failed turn events from global SSE')
+assert.match(useDialogueJs, /dialogue\.turn\.canceled/, 'useDialogueSessions must route canceled turn events from global SSE')
+assert.match(
+  useDialogueJs,
+  /TERMINAL_TURN_TYPES[\s\S]*setPendingTurn\(null\)/,
+  'terminal turn events must clear the pending-turn indicator; inquiry turns do not emit work-trace rows',
+)
 
 console.log('check-visible-work-trace: OK')

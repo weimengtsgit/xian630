@@ -1558,6 +1558,18 @@ func generationProfileForRequirement(appType string, blueprintRefs []string, exi
 }
 
 var blueprintProfileAdditions = map[string]map[string][]string{
+	"carrier-homeport-tide-window": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
+	"carrier-deck-wind-calculator": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
+	"merchant-density-grid-alert": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
+	"social-sighting-cluster-alert": {
+		"pattern": {"maritime-alert-dashboard"},
+	},
 	"carrier-air-wing-affiliation-inference": {
 		"pattern": {"maritime-alert-dashboard", "affiliation-inference-dashboard"},
 	},
@@ -1610,6 +1622,17 @@ var dataDomainKeywords = []struct {
 		"航母已知位置", "离舰判定", "离舰", "起降识别", "海陆掩膜", "海陆分类",
 		"ontology", "aviationcarrier", "carrieraviation", "rawads",
 		"aircraftcarriertracklog", "opensky", "usni", "航母舰载机",
+		// Military-vessel AIS: per the merchant/military AIS split, ANY military
+		// vessel (carriers, warships, navy) routes here — its ontology RawAISData
+		// adapter is the real AIS source for military vessel tracks. Merchant
+		// density stays on ais-density-data-skill (MarineCadastre), which carries
+		// no military vessels. ais-density may also match the bare token "ais"
+		// (over-deriving is benign); the SKILL docs disambiguate by target fleet.
+		"航母", "舰船", "军舰", "军船", "舰艇", "水面舰艇", "水面舰", "战舰",
+		"驱逐舰", "巡洋舰", "护卫舰", "两栖舰", "舰队", "军用舰船", "军队",
+		"舰船航迹", "军舰ais", "rawais",
+		"warship", "naval vessel", "naval ship", "naval", "navy",
+		"destroyer", "cruiser", "frigate", "military vessel", "military ship",
 	}},
 }
 
@@ -1639,7 +1662,51 @@ func deriveDataSkills(req clarification.Requirement) []string {
 			}
 		}
 	}
+	if hasMilitaryAISIntent(haystack) {
+		out = withoutSkill(out, "ais-density-data-skill")
+		if !containsSkill(out, "carrier-affiliation-data-skill") {
+			out = append(out, "carrier-affiliation-data-skill")
+		}
+	}
 	return out
+}
+
+func hasMilitaryAISIntent(haystack string) bool {
+	if !strings.Contains(haystack, "ais") && !strings.Contains(haystack, "rawais") {
+		return false
+	}
+	for _, kw := range []string{
+		"航母", "舰船", "军舰", "军船", "舰艇", "水面舰艇", "战舰",
+		"驱逐舰", "巡洋舰", "护卫舰", "两栖舰", "舰队", "军用舰船", "军队",
+		"warship", "naval vessel", "naval ship", "naval", "navy",
+		"destroyer", "cruiser", "frigate", "military vessel", "military ship",
+	} {
+		if strings.Contains(haystack, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutSkill(skills []string, key string) []string {
+	out := skills[:0]
+	for _, skill := range skills {
+		if skill != key {
+			out = append(out, skill)
+		}
+	}
+	return out
+}
+
+// containsSkill reports whether the data-skill list contains key. Order is not
+// part of the contract; only presence matters.
+func containsSkill(skills []string, key string) bool {
+	for _, skill := range skills {
+		if skill == key {
+			return true
+		}
+	}
+	return false
 }
 
 // recomputeGenerationProfile is the single server-side entrypoint for deriving a

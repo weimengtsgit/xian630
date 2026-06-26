@@ -375,6 +375,427 @@ func TestImageBuildUsesConfiguredRuntimeNotPodman(t *testing.T) {
 	}
 }
 
+// TestImageBuildFailsOnInvalidNginxConfig: a static-vite app whose generated
+// nginx.conf nginx refuses to load (here: a truncated location regex
+// "^/api/marinecadastre/(\d", the real-world glm long-output-truncation failure)
+// must fail image_build with the nginx -t output — not sail through and surface
+// 30s later as a non-repairable deploy health_check_failed.
+func TestImageBuildFailsOnInvalidNginxConfig(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	// Ship a generated nginx.conf with a truncated location regex (missing "+)").
+	// writeStaticHostingDockerfile only synthesizes one when absent, so it keeps
+	// this broken file and bakes it into the nginx:alpine image.
+	appDir := filepath.Join(ws, "generated-apps", "demo")
+	if err := os.WriteFile(filepath.Join(appDir, "nginx.conf"),
+		[]byte("server {\n  listen 80;\n  location ~ ^/api/marinecadastre/(\\d {\n    return 200;\n  }\n}\n"),
+		0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	r, cmds := newFactoryRunner(st, ws, true)
+	// Simulate `nginx -t` rejecting the baked config (the validation runs
+	// `podman run --rm <image> nginx -t`). The fake build step itself succeeds.
+	cmds.setRes("podman run", deploy.CommandResult{
+		ExitCode: 1,
+		Stderr:   `nginx: [emerg] pcre2_compile() failed: missing closing parenthesis in "^/api/marinecadastre/(\d" in /etc/nginx/conf.d/default.conf:13`,
+	})
+
+	job, step := factoryJobStep(model.StepImageBuild)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorImageBuildFailed {
+		t.Fatalf("status = %s/%s (%s), want failed/image_build_failed", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	if !strings.Contains(res.ErrorMessage, "nginx") ||
+		!strings.Contains(res.ErrorMessage, "missing closing parenthesis") {
+		t.Fatalf("error message should include the nginx -t output; got:\n%s", res.ErrorMessage)
+	}
+	// The candidate version must be marked failed.
+	versions, err := st.ListApplicationVersions(context.Background(), "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].Status != model.ApplicationVersionFailed {
+		t.Fatalf("expected one failed version; got %+v", versions)
+	}
+}
+
+// TestSanitizeNginxLocationRegexesQuotesBraceQuantifier: an unquoted location
+// regex with a brace quantifier (the real "\d{4}" failure) gets quoted; regexes
+// without braces, prefix locations, and already-quoted regexes are untouched;
+// and the transform is idempotent.
+func TestSanitizeNginxLocationRegexesQuotesBraceQuantifier(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location ~ ^/api/marinecadastre/(\d{4})/MapServer/(.*)$ {
+        return 200;
+    }
+    location ~* ^/v[0-9]+/items$ {
+        return 200;
+    }
+    location ~ "^/already/(\d{2})/x$" {
+        return 200;
+    }
+    location / {
+        try_files $uri /index.html;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxLocationRegexes(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	wantBrace := `    location ~ "^/api/marinecadastre/(\d{4})/MapServer/(.*)$" {`
+	wantNoBrace := `    location ~* ^/v[0-9]+/items$ {`
+	wantAlready := `    location ~ "^/already/(\d{2})/x$" {`
+	for _, want := range []string{wantBrace, wantNoBrace, wantAlready} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sanitized output missing %q;\ngot:\n%s", want, got)
+		}
+	}
+	// The brace location must be quoted exactly once (no double-quoting).
+	if c := strings.Count(got, "~ \"^/api/marinecadastre"); c != 1 {
+		t.Fatalf("brace location quoted %d times, want 1;\ngot:\n%s", c, got)
+	}
+	// Idempotent: a second run is a no-op.
+	if err := sanitizeNginxLocationRegexes(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd run:\n%s", string(got2Bytes))
+	}
+	// A missing file (non-nginx app) is not an error.
+	if err := sanitizeNginxLocationRegexes(filepath.Join(dir, "nope.conf")); err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+}
+
+// TestSanitizeNginxProxyPassUpstreams: a literal external-host proxy_pass is
+// converted to a variable + server-level resolver; container names, IPs,
+// localhost, and already-variable upstreams are left literal. Idempotent.
+func TestSanitizeNginxProxyPassUpstreams(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    root /usr/share/nginx/html;
+    location /api/wind/ {
+        proxy_pass https://api.open-meteo.com/;
+    }
+    location /api/internal/ {
+        proxy_pass http://factory:8787/;
+    }
+    location /api/local/ {
+        proxy_pass http://127.0.0.1:3000/;
+    }
+    location /api/var/ {
+        set $backend "api.example.com";
+        proxy_pass https://$backend/path;
+    }
+    location / { try_files $uri /index.html; }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+
+	wantConv := "        set $sf_upstream \"api.open-meteo.com\";\n        proxy_pass https://$sf_upstream/;"
+	if !strings.Contains(got, wantConv) {
+		t.Fatalf("external host not converted to variable;\ngot:\n%s", got)
+	}
+	// Container name, IP, and localhost literals left as-is.
+	for _, want := range []string{
+		"proxy_pass http://factory:8787/;",
+		"proxy_pass http://127.0.0.1:3000/;",
+		"proxy_pass https://$backend/path;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected literal left untouched %q;\ngot:\n%s", want, got)
+		}
+	}
+	// Server-level resolver injected exactly once, after the (single) listen.
+	if c := strings.Count(got, "resolver 8.8.8.8"); c != 1 {
+		t.Fatalf("resolver injected %d times, want 1;\ngot:\n%s", c, got)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(strings.Split(got, "resolver 8.8.8.8")[0]), "listen 80;") {
+		// sanity: resolver comes right after the listen line (allow for the
+		// trailing newline + indent we injected)
+	}
+	listenIdx := strings.Index(got, "listen 80;")
+	resolverIdx := strings.Index(got, "resolver 8.8.8.8")
+	if listenIdx < 0 || resolverIdx < 0 || resolverIdx < listenIdx {
+		t.Fatalf("resolver should come after listen;\ngot:\n%s", got)
+	}
+	// Idempotent.
+	if err := sanitizeNginxProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2, _ := os.ReadFile(conf)
+	if string(got2) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2))
+	}
+	// Missing file is not an error.
+	if err := sanitizeNginxProxyPassUpstreams(filepath.Join(dir, "nope.conf")); err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+}
+
+func TestSanitizeNginxVariableProxyPassWithPort(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+        proxy_pass http://$ontology_upstream/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "127.0.0.11") {
+		t.Fatalf("Docker-only resolver should be removed from generated app config;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$ontology_upstream") {
+		t.Fatalf("variable upstream should be collapsed to literal host:port;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081/;") {
+		t.Fatalf("literal upstream proxy_pass missing;\ngot:\n%s", got)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
+func TestSanitizeNginxVariableProxyPassWithPortAndURI(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+        proxy_pass http://$ontology_upstream/daasDMS/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "127.0.0.11") {
+		t.Fatalf("Docker-only resolver should be removed from generated app config;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$ontology_upstream") {
+		t.Fatalf("variable upstream should be collapsed to literal host:port with URI;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081/daasDMS/;") {
+		t.Fatalf("literal upstream proxy_pass with URI missing;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyVariableProxyPassWithPortInProxyPass(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+    location /api/ontology/ {
+        set $upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if !strings.Contains(got, "rewrite ^/api/ontology/(.*)$ /$1 break;") {
+		t.Fatalf("ontology proxy should rewrite the app proxy prefix before forwarding;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081;") {
+		t.Fatalf("ontology upstream should collapse to literal host:port without trailing URI;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$upstream") {
+		t.Fatalf("external variable upstream should be collapsed;\ngot:\n%s", got)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
+func TestSanitizeOntologyVariableProxyPassDoesNotRewriteOtherLocations(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /api/weather/ {
+        set $upstream api.open-meteo.com;
+        proxy_pass http://$upstream:8080/;
+    }
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$ontology_upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if !strings.Contains(got, "proxy_pass http://$upstream:8080/;") {
+		t.Fatalf("non-ontology proxy should not be rewritten;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081;") {
+		t.Fatalf("ontology proxy should be rewritten;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyNginxProxyCredentialsReplacesPlaceholders(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	envFile := filepath.Join(envDir, "ontology.env")
+	if err := os.WriteFile(envFile, []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /api/ontology/ {
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeOntologyNginxProxyCredentials(conf, dir); err != nil {
+		t.Fatalf("sanitize credentials: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	for _, bad := range []string{"<ONTOLOGY_AUTH_TOKEN>", "SPACE_123"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("placeholder %q still present;\ngot:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, `proxy_set_header Authorization "Bearer real-token";`) ||
+		!strings.Contains(got, `proxy_set_header Spaceid "real-space";`) {
+		t.Fatalf("real ontology credentials not injected;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyNginxProxyCredentialsSupportsOntologyLocation(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	envFile := filepath.Join(envDir, "ontology.env")
+	if err := os.WriteFile(envFile, []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /ontology/ {
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeOntologyNginxProxyCredentials(conf, dir); err != nil {
+		t.Fatalf("sanitize credentials: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "<ONTOLOGY_AUTH_TOKEN>") || strings.Contains(got, "SPACE_123") {
+		t.Fatalf("ontology location credentials were not injected;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, `proxy_set_header Authorization "Bearer real-token";`) ||
+		!strings.Contains(got, `proxy_set_header Spaceid "real-space";`) {
+		t.Fatalf("real ontology credentials not injected for /ontology/ location;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeNginxVariableProxyPassKeepsInternalServiceName(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ontology-server:8081;
+        proxy_pass http://$ontology_upstream/;
+        proxy_set_header Host $host;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "proxy_pass http://ontology-server:8081/;") {
+		t.Fatalf("internal service name should not be collapsed to a static upstream;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "set $ontology_upstream ontology-server:8081;") ||
+		!strings.Contains(got, "proxy_pass http://$ontology_upstream/;") {
+		t.Fatalf("internal service variable upstream should be preserved;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "resolver 127.0.0.11") {
+		t.Fatalf("resolver line should be preserved when no collapse is performed;\ngot:\n%s", got)
+	}
+}
+
 // fakeContainerRuntime is a deploy.ContainerRuntime double that records its
 // calls. It stands in for docker/podman so the runtime-selection logic can be
 // tested without a real container engine.
@@ -1326,6 +1747,77 @@ func TestFactoryStepStreamingStillRedactsSecretInArtifact(t *testing.T) {
 	// TestStepEmitterEmitRedactsBeforePersistAndPublish.
 	if !strings.Contains(emit.joined(model.ExecutionRecordCommandStdout), "built ok") {
 		t.Errorf("command_stdout record not streamed; got:\n%s", emit.joined(model.ExecutionRecordCommandStdout))
+	}
+}
+
+func TestIsFullNginxConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare server block", "server { listen 80; }\n", false},
+		{"full config with events", "events { worker_connections 1024; }\nhttp { server { listen 80; } }\n", true},
+		{"full config with http only", "http { server { listen 80; } }\n", true},
+		{"comments ignored", "# events {\nserver { listen 80; }\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".conf")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+			if got := isFullNginxConfig(path); got != tc.want {
+				t.Fatalf("isFullNginxConfig(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesFullConfigToMainPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("events { worker_connections 1024; }\nhttp { server { listen 80; } }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/nginx.conf") {
+		t.Fatalf("full nginx config should be copied to /etc/nginx/nginx.conf; got:\n%s", dockerfile)
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesServerBlockToConfD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("server { listen 80; }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/conf.d/default.conf") {
+		t.Fatalf("bare server block should be copied to /etc/nginx/conf.d/default.conf; got:\n%s", dockerfile)
 	}
 }
 

@@ -39,4 +39,28 @@ func TestHealthCheckFailsOnTimeout(t *testing.T) {
 	if !strings.Contains(err.Error(), "health_check_failed") {
 		t.Fatalf("expected health_check_failed in error, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "last error:") {
+		t.Fatalf("expected timeout error to include last probe error, got: %v", err)
+	}
+}
+
+func TestHealthCheckTimeoutEnvOverride(t *testing.T) {
+	t.Setenv("FACTORY_HEALTH_TIMEOUT", "750ms")
+	if got := HealthCheckTimeout(); got != 750*time.Millisecond {
+		t.Fatalf("HealthCheckTimeout() = %v, want 750ms", got)
+	}
+}
+
+func TestHealthCheckTimeoutDefault(t *testing.T) {
+	t.Setenv("FACTORY_HEALTH_TIMEOUT", "")
+	if got := HealthCheckTimeout(); got != defaultHealthCheckTimeout {
+		t.Fatalf("HealthCheckTimeout() = %v, want %v", got, defaultHealthCheckTimeout)
+	}
+}
+
+func TestHealthCheckTimeoutInvalidFallsBack(t *testing.T) {
+	t.Setenv("FACTORY_HEALTH_TIMEOUT", "not-a-duration")
+	if got := HealthCheckTimeout(); got != defaultHealthCheckTimeout {
+		t.Fatalf("HealthCheckTimeout() = %v, want %v", got, defaultHealthCheckTimeout)
+	}
 }

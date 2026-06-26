@@ -64,6 +64,68 @@ for (const card of appItem.cards) {
   assert.equal(card.blueprint, undefined, 'card must not leak blueprint field')
 }
 
+// Continuing-session inquiry replies are persisted as ordinary agent replies and
+// must remain visible in the dialogue thread, not be dropped as unknown metadata.
+const inquiryTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_inquiry', status: 'active', intent: 'application_generation', route_locked: true },
+  messages: [
+    { id: 'u_q', role: 'user', kind: 'message', content: '为什么 AviationCarrier 401？' },
+    { id: 'a_reply', role: 'agent', kind: 'reply', content: 'HTTP 401 表示认证失败。' },
+  ],
+  route: {},
+})
+assert.deepEqual(
+  inquiryTimeline.map(item => item.type),
+  ['user_message', 'agent_message'],
+  'continuing-session agent replies must render as visible agent_message items',
+)
+assert.equal(inquiryTimeline[1].content, 'HTTP 401 表示认证失败。')
+
+// ---- job-step clarification surfaces as a structured conversation card -------
+
+// When a pipeline step (solution_design / code_generation) pauses for user
+// input, the backend emits a clarification work trace. buildDialogueTimeline
+// must turn it into a visible clarification_prompt card in the conversation
+// flow (not just the folded trace panel), carrying the question text AND the
+// structured options so the UI can render pickable choices.
+const clarTimeline = buildDialogueTimeline(
+  {
+    session: { id: 'dlg_clar', status: 'active', intent: 'application_generation', route_locked: true },
+    messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '做一个请假审批系统' }],
+    route: {},
+  },
+  null, null, null,
+  [
+    { type: 'assistant_output', sequence: 1, payload: { text: '分析中' }, dialogueId: 'dlg_clar', id: 't1' },
+    {
+      type: 'clarification',
+      sequence: 2,
+      payload: {
+        questions: [{
+          id: 'data-source',
+          // Agents emit the prompt under `text` OR `question`; honor both.
+          text: '用演示数据还是真实API？',
+          defaultAnswer: '演示数据',
+          options: [
+            // Options may use `id` OR `value`; the mapper must fall back.
+            { id: 'use-mock-data', label: '使用演示数据模式', recommended: true },
+            { id: 'provide-real-api', label: '提供真实后端API' },
+          ],
+        }],
+      },
+      dialogueId: 'dlg_clar',
+      id: 't2',
+    },
+  ],
+)
+const clarCard = clarTimeline.find(it => it.type === 'clarification_prompt')
+assert.ok(clarCard, 'a clarification work trace must surface as a clarification_prompt card')
+assert.equal(clarCard.questions.length, 1, 'card carries one question')
+assert.equal(clarCard.questions[0].question, '用演示数据还是真实API？')
+assert.equal(clarCard.questions[0].options.length, 2, 'card carries the structured options')
+assert.equal(clarCard.questions[0].options[0].value, 'use-mock-data')
+assert.equal(clarCard.questions[0].options[0].recommended, true, 'recommended flag is preserved')
+
 // ---- no blueprint text in rendered timeline items ---------------------------
 
 // The requirement summary must not surface BlueprintRefs even if the raw child
@@ -487,5 +549,16 @@ assert.match(
   /setOptimisticUserMessage\(null\)/,
   'send must clear the optimistic message (rollback) — on error and once the persisted view loads',
 )
+
+// A failed parent dialogue may have NO child clarification (for example a route
+// runner failure). In that case "重试本轮" must not call the child clarification
+// retry endpoint, because the backend correctly 409s with "dialogue has no active
+// clarification child". The hook falls back to creating a fresh dialogue from the
+// original prompt; child clarification failures still use retryDialogueRound.
+const retryFnMatch = dialogueHookJs.match(/const retry = useCallback\(async \(\) => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static checks')
+const retryBody = retryFnMatch[0]
+assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
+assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
 
 console.log('check-dialogue-workbench: OK')

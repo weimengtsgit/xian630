@@ -1,14 +1,13 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
-  HelpCircle,
   ExternalLink,
   RotateCcw,
   Ban,
+  Wrench,
 } from 'lucide-react'
-import { factoryApi } from '../api/client'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
@@ -58,6 +57,7 @@ export function JobCenter({
   steps,
   onCancel,
   onRetry,
+  onRepairFromFailure,
   loading,
   // Task 6 state surface from useJobs:
   summary,
@@ -70,29 +70,9 @@ export function JobCenter({
   loadStepRecords,
   getArtifactContent,
 }) {
-  const [detail, setDetail] = useState(null)
   // Local drawer tab is owned by the drawer; JobCenter only owns whether the
   // drawer is open (driven by selectedStepId).
   const [drawerOpen, setDrawerOpen] = useState(false)
-
-  // For waiting_user we try to fetch job detail to surface a clarifying
-  // question if present; keep defensive — failures just hide the area.
-  useEffect(() => {
-    let cancelled = false
-    setDetail(null)
-    if (!activeJob || activeJob.status !== 'waiting_user') return undefined
-    factoryApi
-      .getJob(activeJob.id)
-      .then(d => {
-        if (!cancelled) setDetail(d)
-      })
-      .catch(() => {
-        if (!cancelled) setDetail(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeJob && activeJob.id, activeJob && activeJob.status])
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so
@@ -122,12 +102,15 @@ export function JobCenter({
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
   const canCancelHeader = activeJob && !isTerminal
-  const waitingQuestions =
-    detail &&
-    (detail.pending_questions ||
-      detail.clarify_questions ||
-      detail.waiting_questions ||
-      detail.questions)
+  // deployment is included so a health_check_failed deploy can be repaired
+  // (regenerated with the failure context). The backend enforces that ONLY
+  // health_check_failed deploy failures are actually repairable; other deploy
+  // failures (port/run infra errors) are rejected server-side with a message.
+  const canRepairFromFailure =
+    jobStatus === 'failed' &&
+    ['test_verification', 'image_build', 'deployment'].includes(
+      activeJob?.current_step_kind,
+    )
 
   // --- Drawer wiring ------------------------------------------------------
   // Opening a card resolves the REAL stepId (from stepByKind / cardView) and
@@ -285,24 +268,6 @@ export function JobCenter({
         })}
       </div>
 
-      {jobStatus === 'waiting_user' && (
-        <div className="jc-waiting">
-          <HelpCircle size={18} />
-          <div className="jc-waiting-body">
-            <strong>等待用户澄清</strong>
-            {Array.isArray(waitingQuestions) && waitingQuestions.length > 0 ? (
-              <ul>
-                {waitingQuestions.map((q, i) => (
-                  <li key={i}>{typeof q === 'string' ? q : q.question || q.text || JSON.stringify(q)}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>任务需要你的补充输入，请在底部对话区回复或前往任务详情页回答。</p>
-            )}
-          </div>
-        </div>
-      )}
-
       {jobStatus === 'failed' && (
         <div className="jc-actions">
           <button
@@ -312,6 +277,15 @@ export function JobCenter({
           >
             <RotateCcw size={14} /> 重试当前阶段
           </button>
+          {canRepairFromFailure ? (
+            <button
+              type="button"
+              className="jc-action jc-retry"
+              onClick={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
+            >
+              <Wrench size={14} /> 发送错误给代码修复
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -348,6 +322,7 @@ export function JobCenter({
         loadingOlder={false}
         onCancel={() => onCancel && onCancel(activeJob.id)}
         onRetry={() => onRetry && onRetry(activeJob.id)}
+        onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
         artifacts={artifacts || []}
         getArtifactContent={getArtifactContent}
       />

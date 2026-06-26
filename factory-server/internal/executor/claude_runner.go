@@ -95,6 +95,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		"blueprintRefs":        blueprintRefs,
 		"skills":               skillPaths,
 		"blueprintDocs":        blueprintPaths,
+		"repairContext":        step.UserPrompt,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -107,7 +108,17 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// every code_generation run. Captured for all steps but consumed only by
 	// code_generation's audit.
 	baseline := c.Claude.BaselineStatus(ctx, c.AuditRunner)
-	if err := c.Claude.Run(ctx, ws, c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy), input, step.Kind == model.StepCodeGeneration, emit); err != nil {
+	prompt := c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy)
+	// step.UserPrompt carries the user's answer when a step is re-run after
+	// pausing for clarification (waiting_user → answerJob → SetStepUserPrompt),
+	// OR a repair-from-failure instruction. For generative steps we surface it
+	// so the agent incorporates the answer instead of re-asking the same
+	// question. Without this the re-run is blind (identical input).
+	if strings.TrimSpace(step.UserPrompt) != "" &&
+		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration) {
+		prompt += "\n\n[user_input]\n" + step.UserPrompt + "\n"
+	}
+	if err := c.Claude.Run(ctx, ws, prompt, input, step.Kind == model.StepCodeGeneration, emit); err != nil {
 		// Even on failure, capture sanitized audit copies of whatever operational
 		// files exist (input/prompt are always written by ClaudeRunner.Run before
 		// the agent runs; output may or may not exist). Best-effort: a capture
@@ -201,16 +212,29 @@ func emitClarificationTrace(ctx context.Context, trace runner.TraceEmitter, ques
 }
 
 // clarificationPayload builds a JSON payload for a clarification.required trace
-// carrying ONLY the question text and the agent's suggested default answer — the
-// public clarification the user must resolve. No tool I/O or reasoning.
+// carrying the question text, the agent's suggested default answer, AND the
+// structured options the agent offered — the public clarification the user must
+// resolve. No tool I/O or reasoning. Options let the conversation UI render a
+// pickable card instead of a bare text blob.
 func clarificationPayload(questions []runner.Question) string {
+	type opt struct {
+		Value       string `json:"value,omitempty"`
+		Label       string `json:"label,omitempty"`
+		Recommended bool   `json:"recommended,omitempty"`
+	}
 	type q struct {
+		ID            string `json:"id,omitempty"`
 		Question      string `json:"question"`
 		DefaultAnswer string `json:"defaultAnswer,omitempty"`
+		Options       []opt  `json:"options,omitempty"`
 	}
 	out := make([]q, 0, len(questions))
 	for _, qq := range questions {
-		out = append(out, q{Question: qq.Question, DefaultAnswer: qq.DefaultAnswer})
+		opts := make([]opt, 0, len(qq.Options))
+		for _, o := range qq.Options {
+			opts = append(opts, opt{Value: o.Value, Label: o.Label, Recommended: o.Recommended})
+		}
+		out = append(out, q{ID: qq.ID, Question: qq.Question, DefaultAnswer: qq.DefaultAnswer, Options: opts})
 	}
 	b, err := json.Marshal(struct {
 		Questions []q `json:"questions"`
@@ -257,7 +281,7 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 		// inline. The existing finalize→MarkStepWaitingUser then leaves the turn
 		// waiting. Routed through the gate (persist-before-publish + allowlist).
 		emitClarificationTrace(ctx, trace, out.Questions, raw.Warnings)
-		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
 
 	// Honest-data audit: when the confirmed requirement is a real-data policy
@@ -271,6 +295,9 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 	}
 	genProfile, _ := parseGenerationProfile(confirmedReq)
 	if err := runner.AuditHonestData(projectDir, parseDataPolicy(confirmedReq), genProfile["data"]); err != nil {
+		return c.failureFromError(err)
+	}
+	if err := runner.AuditCarrierOntologyContract(projectDir, parseDataPolicy(confirmedReq), genProfile["data"]); err != nil {
 		return c.failureFromError(err)
 	}
 
@@ -332,7 +359,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		// Step 3 (high-impact uncertainty): emit clarification.required before
 		// the waiting transition. See finishCodeGeneration for the rationale.
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
-		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true}
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
 	return StepResult{Status: model.StepStatusSucceeded}
 }
@@ -419,7 +446,10 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
 	}
 	if step.Kind == model.StepSolutionDesign {
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。用户需求：" + job.UserPrompt +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。" +
+			"需要用户澄清时，questions 中每个问题必须用结构化字段：question 为问题文本（只描述要决策什么，不要把选项塞进 question），options 为选项数组，每个选项含 value（机器可读的选项值，如 mock_data、real_api）和 label（中文可读选项描述），可在最推荐选项上加 recommended:true。禁止把 (A)/(B)/(C) 等选项写进 question 文本；选项必须放在 options 数组里，否则前端无法渲染成可点击选项。示例：{\"id\":\"data-source\",\"question\":\"请确认数据获取方式\",\"options\":[{\"value\":\"mock_data\",\"label\":\"使用演示数据\",\"recommended\":true},{\"value\":\"real_api\",\"label\":\"提供真实后端API\"}]}。" +
+			"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案（例如用户选择演示数据则 dataPolicy 按 mock_data 处理），不要再重复提出已回答过的澄清问题；只有在出现全新且未决的决策点时才再次 needsUserInput=true。" +
+			"用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
 	if step.Kind == model.StepCodeGeneration {
@@ -429,6 +459,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
+			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
 			"面向用户的页面文案、标题、标签、图表说明、详情说明，以及 output.json / output.md 中的人类可读文本，默认必须使用简体中文；只有标识符、slug、路径、枚举值、代码符号可以保留非中文。" +
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
@@ -440,7 +471,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。" +
 			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
 	case model.StepSolutionDesign:
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n用户需求：" + job.UserPrompt +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案，不要重复提出已回答过的澄清问题。\n用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
@@ -449,6 +480,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
+			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	default:

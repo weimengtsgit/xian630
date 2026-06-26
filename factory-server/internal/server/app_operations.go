@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
@@ -22,10 +27,14 @@ import (
 // (design §5.6). Manifest wiring of a custom port is a later task.
 const defaultContainerPort = 80
 
-// healthCheckTimeout caps the post-start readiness probe (design §5.6: 10s).
-const healthCheckTimeout = 10 * time.Second
-
 const activeDeploymentProbeTimeout = 1500 * time.Millisecond
+
+// A running job whose row has not advanced within this window is treated as a
+// stale executor lock for direct rebuild actions. Fresh same-app jobs still
+// block rebuild because both write the same generated app directory and image.
+const rebuildRunningJobFreshness = time.Hour
+
+var renamePath = os.Rename
 
 // containerHealthURL builds the health-check URL for a container's host port.
 // On Windows+WSL2, port forwarding through wslrelay is unreliable (IPv6-only
@@ -51,12 +60,15 @@ func appURLHost() string {
 	return wslVMIP()
 }
 
-// wslVMIP returns the host a container health probe should target. On
-// Windows+WSL2 it is the WSL VM IP; in a containerized deploy set
-// FACTORY_HEALTH_HOST (e.g. "host-gateway") to override.
+// wslVMIP returns the host a container health probe should target. The lookup
+// order is: FACTORY_HEALTH_HOST env var, podman machine gateway (macOS/Linux),
+// WSL VM IP (Windows+WSL2), and finally 127.0.0.1.
 func wslVMIP() string {
 	if v := os.Getenv("FACTORY_HEALTH_HOST"); v != "" {
 		return v
+	}
+	if ip := deploy.PodmanMachineGateway(); ip != "" {
+		return ip
 	}
 	out, err := exec.Command("wsl", "-d", "podman-machine-default", "--", "sh", "-c",
 		"ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\\s)\\d+\\.\\d+\\.\\d+\\.\\d+'").Output()
@@ -156,6 +168,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
 	if err := s.prepareGeneratedStaticViteBuild(ctx, *app, buildApp.Path); err != nil {
+		log.Printf("startAppInternal prepareGeneratedStaticViteBuild failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
 	}
@@ -163,6 +176,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	// 1. Build image.
 	img, _, err := rt.BuildImage(ctx, buildApp, tag)
 	if err != nil {
+		log.Printf("startAppInternal BuildImage failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}
 	}
@@ -189,7 +203,12 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 
 	// 4. Health check. On failure, stop+remove the container (best-effort) and
 	// record a failed deployment so the app is not left in a half-state.
-	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
+	if err := s.healthCheck(ctx, healthURL, deploy.HealthCheckTimeout()); err != nil {
+		logsRes, _ := s.runner.Run(ctx, "", rt.Name(), "logs", cr.Name)
+		errMsg := err.Error()
+		if logs := strings.TrimSpace(logsRes.Stdout + logsRes.Stderr); logs != "" {
+			errMsg += "\ncontainer logs:\n" + deploy.Truncate(logs, 2000)
+		}
 		_, _ = rt.StopContainer(ctx, cr.Name)
 		_, _ = rt.RemoveContainer(ctx, cr.Name)
 		now := time.Now()
@@ -208,7 +227,7 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 		_ = s.store.CreateDeployment(ctx, failedDep)
 		s.publishDeploymentUpdated(ctx, failedDep.ID)
 		s.markAppError(ctx, appID)
-		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "health check failed"}
+		return nil, nil, errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, errMsg}
 	}
 
 	// 5. Success: persist the running deployment and flip the app to running.
@@ -327,7 +346,7 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// Per-app executor conflict: a running JOB for this app's slug writes the
 	// same generated-apps/<slug>/ dir + image tag a rebuild targets. Serialize.
-	if n, _ := s.store.CountRunningJobsByAppSlug(ctx, app.Slug); n > 0 {
+	if n, _ := s.store.CountRecentRunningJobsByAppSlug(ctx, app.Slug, time.Now().Add(-rebuildRunningJobFreshness)); n > 0 {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "app busy"})
 		return
 	}
@@ -335,12 +354,14 @@ func (s *Server) rebuildApp(w http.ResponseWriter, r *http.Request) {
 	tag := string(app.Source)
 	buildApp := s.workspaceApp(*app)
 	if err := s.prepareGeneratedStaticViteBuild(ctx, *app, buildApp.Path); err != nil {
+		log.Printf("rebuildApp prepareGeneratedStaticViteBuild failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
 		return
 	}
 	img, _, err := s.containerRuntime().BuildImage(ctx, buildApp, tag)
 	if err != nil {
+		log.Printf("rebuildApp BuildImage failed for %s: %v", appID, err)
 		s.markAppError(ctx, appID)
 		errResponse{http.StatusBadGateway, model.ErrorImageBuildFailed, "image build failed"}.write(w)
 		return
@@ -379,7 +400,9 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 	if _, err := os.Stat(filepath.Join(appDir, "package-lock.json")); err == nil {
 		installArgs = []string{"ci"}
 	}
+	log.Printf("prepareGeneratedStaticViteBuild: running %s %s in %s", installName, strings.Join(installArgs, " "), appDir)
 	if res, err := s.runner.Run(ctx, appDir, installName, installArgs...); err != nil || res.ExitCode != 0 {
+		log.Printf("prepareGeneratedStaticViteBuild: %s %s FAILED exit=%d err=%v", installName, strings.Join(installArgs, " "), res.ExitCode, err)
 		return fmt.Errorf("%s %s failed: %w", installName, strings.Join(installArgs, " "), err)
 	}
 
@@ -391,7 +414,9 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 	if len(buildArgs) == 0 {
 		buildArgs = []string{"npm", "run", "build"}
 	}
+	log.Printf("prepareGeneratedStaticViteBuild: running %s in %s", buildCmd, appDir)
 	if res, err := s.runner.Run(ctx, appDir, buildArgs[0], buildArgs[1:]...); err != nil || res.ExitCode != 0 {
+		log.Printf("prepareGeneratedStaticViteBuild: %s FAILED exit=%d err=%v", buildCmd, res.ExitCode, err)
 		return fmt.Errorf("%s failed: %w", buildCmd, err)
 	}
 
@@ -402,7 +427,164 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 	if _, err := os.Stat(filepath.Join(appDir, outputDir, "index.html")); err != nil {
 		return fmt.Errorf("build output missing index.html in %s: %w", outputDir, err)
 	}
+	_ = sanitizeGeneratedAppNginx(filepath.Join(appDir, "nginx.conf"), s.cfg.WorkspaceRoot)
 	return writeStaticViteDockerfile(appDir, outputDir)
+}
+
+var serverNginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+var serverNginxVariableHostSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+);\s*$`)
+var serverNginxVariableProxyPassRe = regexp.MustCompile(`(?m)^\s*proxy_pass\s+https?://\$[A-Za-z_][A-Za-z0-9_]*`)
+var serverNginxOntologyLocationBlockRe = regexp.MustCompile(`(?ms)location\s+/api/ontology/\s*\{.*?\n\s*\}`)
+
+func sanitizeGeneratedAppNginx(path, workspace string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	src := string(raw)
+	out := collapseExternalVariableUpstreams(src)
+	out = injectOntologyProxyHeaders(out, workspace)
+	if out == src {
+		return nil
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
+}
+
+func collapseExternalVariableUpstreams(src string) string {
+	out := rewriteServerOntologyVariablePortProxyPasses(src)
+	converted := false
+	for _, m := range serverNginxVariableUpstreamSetRe.FindAllStringSubmatch(out, -1) {
+		indent, variable, upstream := m[1], m[2], m[3]
+		host, _, _ := strings.Cut(upstream, ":")
+		if !strings.Contains(host, ".") && !serverIsIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		uri := proxyMatch[1]
+		if uri == "" {
+			uri = "/"
+		}
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], indent+"proxy_pass http://"+upstream+uri+";", 1)
+		converted = true
+	}
+	if converted && !serverNginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerResolver(out)
+	}
+	return out
+}
+
+func rewriteServerOntologyVariablePortProxyPasses(src string) string {
+	if !strings.Contains(src, "/api/ontology/") {
+		return src
+	}
+	out := serverNginxOntologyLocationBlockRe.ReplaceAllStringFunc(src, rewriteServerOntologyVariablePortProxyPassBlock)
+	if out != src && !serverNginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerResolver(out)
+	}
+	return out
+}
+
+func rewriteServerOntologyVariablePortProxyPassBlock(block string) string {
+	out := block
+	for _, m := range serverNginxVariableHostSetRe.FindAllStringSubmatch(block, -1) {
+		indent, variable, host := m[1], m[2], m[3]
+		if !strings.Contains(host, ".") && !serverIsIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `:(\d+)([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		port, uri := proxyMatch[1], proxyMatch[2]
+		if uri != "" && uri != "/" {
+			continue
+		}
+		replacement := indent + "rewrite ^/api/ontology/(.*)$ /$1 break;\n" +
+			indent + "proxy_pass http://" + host + ":" + port + ";"
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], replacement, 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], replacement, 1)
+	}
+	return out
+}
+
+func injectOntologyProxyHeaders(src, workspace string) string {
+	if !strings.Contains(src, "/api/ontology/") {
+		return src
+	}
+	env, err := readServerOntologyEnv(workspace)
+	if err != nil {
+		return src
+	}
+	out := src
+	if token := strings.TrimSpace(env["ONTOLOGY_AUTH_TOKEN"]); token != "" {
+		out = replaceServerProxySetHeader(out, "Authorization", "Bearer "+token)
+	}
+	if spaceID := strings.TrimSpace(env["ONTOLOGY_SPACE_ID"]); spaceID != "" {
+		out = replaceServerProxySetHeader(out, "Spaceid", spaceID)
+	}
+	scopeType := strings.TrimSpace(env["ONTOLOGY_SCOPE_TYPE"])
+	if scopeType == "" {
+		scopeType = "Space"
+	}
+	return replaceServerProxySetHeader(out, "scopeType", scopeType)
+}
+
+func readServerOntologyEnv(workspace string) (map[string]string, error) {
+	raw, err := os.ReadFile(filepath.Join(workspace, ".claude", "skills", "carrier-affiliation-data-skill", "config", "ontology.env"))
+	if err != nil {
+		return nil, err
+	}
+	env := map[string]string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		env[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return env, nil
+}
+
+func replaceServerProxySetHeader(src, header, value string) string {
+	re := regexp.MustCompile(`(?m)^(\s*proxy_set_header\s+` + regexp.QuoteMeta(header) + `\s+)"[^"]*";\s*$`)
+	return re.ReplaceAllString(src, `${1}"`+value+`";`)
+}
+
+func removeDockerResolver(src string) string {
+	lines := strings.SplitAfter(src, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "resolver ") && strings.Contains(line, "127.0.0.11") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
+}
+
+func serverIsIPv4(s string) bool {
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || len(p) > 3 {
+			return false
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func writeStaticViteDockerfile(appDir, outputDir string) error {
@@ -412,12 +594,20 @@ func writeStaticViteDockerfile(appDir, outputDir string) error {
 	b.WriteString(strings.Trim(outputDir, "/"))
 	b.WriteString("/ /usr/share/nginx/html/\n")
 	if _, err := os.Stat(filepath.Join(appDir, "nginx.conf")); err == nil {
-		b.WriteString("COPY nginx.conf /etc/nginx/nginx.conf\n")
+		b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
 	}
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString(`CMD ["nginx", "-g", "daemon off;"]`)
 	b.WriteString("\n")
-	return os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	// Overwrite .dockerignore so podman build doesn't skip the prebuilt dist/.
+	// Generated apps ship a .dockerignore that excludes dist + node_modules
+	// (correct for the ORIGINAL multi-stage Dockerfile), but after we replace the
+	// Dockerfile with the offline nginx one, dist/ MUST be included.
+	ignoreContent := "node_modules\n"
+	return os.WriteFile(filepath.Join(appDir, ".dockerignore"), []byte(ignoreContent), 0o644)
 }
 
 // rollbackRequestBody is the explicit-confirm body for POST /api/apps/:id/rollback.
@@ -516,12 +706,17 @@ func (s *Server) rollbackApp(w http.ResponseWriter, r *http.Request) {
 	}
 	healthURL := containerHealthURL(hostPort)
 	url := containerAppURL(hostPort)
-	if err := s.healthCheck(ctx, healthURL, healthCheckTimeout); err != nil {
+	if err := s.healthCheck(ctx, healthURL, deploy.HealthCheckTimeout()); err != nil {
+		logsRes, _ := s.runner.Run(ctx, "", rt.Name(), "logs", cr.Name)
+		errMsg := err.Error()
+		if logs := strings.TrimSpace(logsRes.Stdout + logsRes.Stderr); logs != "" {
+			errMsg += "\ncontainer logs:\n" + deploy.Truncate(logs, 2000)
+		}
 		// Rollback health failure: do NOT flip the app; leave the current
 		// effective running. Clean up the rollback candidate container only.
 		_, _ = rt.StopContainer(ctx, cr.Name)
 		_, _ = rt.RemoveContainer(ctx, cr.Name)
-		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "rollback health check failed; current version left running"}.write(w)
+		errResponse{http.StatusBadGateway, model.ErrorHealthCheckFailed, "rollback health check failed; current version left running: " + errMsg}.write(w)
 		return
 	}
 
@@ -683,6 +878,7 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tombstone := ""
+	directCleanup := false
 	if _, err := os.Stat(appDir); err == nil {
 		tombstone = filepath.Join(s.cfg.ArtifactRoot, "deleted-apps", app.ID+"-"+app.Slug)
 		if !filepath.IsAbs(tombstone) {
@@ -693,9 +889,10 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "prepare tombstone")
 			return
 		}
-		if err := os.Rename(appDir, tombstone); err != nil {
-			writeError(w, http.StatusInternalServerError, "move app directory")
-			return
+		if err := moveDirectory(appDir, tombstone); err != nil {
+			log.Printf("delete app %s: move app directory %q -> %q failed; falling back to post-delete cleanup: %v", appID, appDir, tombstone, err)
+			tombstone = ""
+			directCleanup = true
 		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		writeError(w, http.StatusInternalServerError, "stat app directory")
@@ -718,6 +915,10 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 	}
 	if tombstone != "" {
 		_ = os.RemoveAll(tombstone)
+	} else if directCleanup {
+		if err := os.RemoveAll(appDir); err != nil {
+			log.Printf("delete app %s: cleanup app directory %q: %v", appID, appDir, err)
+		}
 	}
 	s.hub.Publish(Event{Type: "app.deleted", Data: map[string]string{"id": app.ID, "slug": app.Slug}})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": app.ID, "slug": app.Slug})
@@ -767,5 +968,78 @@ func restoreTombstone(tombstone, appDir string) {
 	if tombstone == "" || appDir == "" {
 		return
 	}
-	_ = os.Rename(tombstone, appDir)
+	_ = moveDirectory(tombstone, appDir)
+}
+
+func moveDirectory(src, dst string) error {
+	if err := renamePath(src, dst); err != nil {
+		if !errors.Is(err, syscall.EXDEV) {
+			return err
+		}
+		if err := copyDirectory(src, dst); err != nil {
+			_ = os.RemoveAll(dst)
+			return err
+		}
+		if err := os.RemoveAll(src); err != nil {
+			_ = os.RemoveAll(dst)
+			return err
+		}
+	}
+	return nil
+}
+
+func copyDirectory(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !srcInfo.IsDir() {
+		return fmt.Errorf("%s is not a directory", src)
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode()
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, mode.Perm())
+		case mode&os.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case mode.IsRegular():
+			return copyFile(path, target, mode.Perm())
+		default:
+			return nil
+		}
+	})
+}
+
+func copyFile(src, dst string, mode fs.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

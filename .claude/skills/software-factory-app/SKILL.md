@@ -13,6 +13,12 @@ description: Generate a deployable React/Vite static application for the softwar
 - Keep the app static and self-contained, but obey the **Honest Data** rule below
   for what populates the data layer — do not default to mock data.
 - Ensure `npm run build` creates `dist/index.html`.
+- **Build script MUST be `"build": "vite build"`** — NEVER `"tsc && vite build"`.
+  Vite uses esbuild to transpile TypeScript without type-checking, so unused
+  imports/locals never fail the build. `tsc` in the build chain rejects generated
+  code on `noUnusedLocals`/`TS6133` and breaks `image_build`. If the project
+  uses TypeScript, also set `"noUnusedLocals": false` and
+  `"noUnusedParameters": false` in `tsconfig.json` as a safety net.
 - Use `source: "generated"` in `.factory/app.json`.
 - Use this exact manifest shape, replacing `<slug>`, `<name>`, `<type>`, and descriptive values only:
 
@@ -73,5 +79,68 @@ failure, even if it "makes the build pass"):
 
 - Buildable with `npm install` or `npm ci`.
 - Deployable by Podman with the generated Dockerfile.
+- All external API calls go through nginx reverse proxy, NEVER directly from browser JS.
 - Runtime page has meaningful non-empty content.
 - Buttons and controls have visible feedback.
+
+## API Proxy Rule (nginx reverse proxy)
+
+When the app calls an external API (ontology DaaS, NOAA tide, Open-Meteo wind,
+AIS archives, etc.), the app's nginx.conf MUST include a reverse-proxy location
+so the browser sends same-origin requests and nginx forwards them to the external
+API. This avoids CORS failures (external APIs typically do not return
+`Access-Control-Allow-Origin: *`) and keeps auth tokens server-side.
+
+### Pattern
+
+**CRITICAL — use nginx variables for every `proxy_pass` with an external hostname.**
+nginx resolves hostnames at **startup** by default; if the container DNS can't reach
+the external host (common in Podman), nginx crashes with `[emerg] host not found in
+upstream`. Using a variable defers resolution to **request time** so nginx starts
+even when DNS is temporarily unreachable.
+
+```nginx
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Runtime DNS resolution so nginx doesn't crash at startup.
+    # Do not use Docker-only 127.0.0.11; production runs under Podman.
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+    resolver_timeout 5s;
+
+    # Reverse-proxy external API to avoid browser CORS
+    location /api/data/ {
+        set $upstream <EXTERNAL_HOST>;       # e.g. api.open-meteo.com
+        proxy_pass https://$upstream/<path>; # use $upstream variable, NOT a literal hostname
+        proxy_http_version 1.1;
+        proxy_set_header Host <external-host>;
+        # Inject auth headers server-side (never expose to browser)
+        proxy_set_header Authorization "Bearer <token>";
+        proxy_set_header <custom-header> "<value>";
+        proxy_buffering off;
+        proxy_read_timeout 120s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+### JS adapter
+
+The browser JS MUST use the same-origin proxy path, NEVER the external URL:
+
+```js
+// CORRECT: same-origin through nginx proxy
+const url = '/api/data/entity/Xxx/list';
+
+// WRONG: direct external URL — WILL fail with CORS in browser
+const url = 'http://external-api.example.com:8081/entity/Xxx/list';
+```
+
+Any data skill that provides an API base URL (`ONTOLOGY_API_BASE_URL`,
+`TIDE_API_BASE_URL`, etc.) MUST be consumed through the nginx reverse proxy,
+not called directly from client-side JavaScript.

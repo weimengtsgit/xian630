@@ -22,8 +22,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
+	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
@@ -63,6 +65,7 @@ type dialogueTurnStore interface {
 	CompleteDialogueTurn(ctx context.Context, id string, status model.TurnStatus) error
 	GetDialogueSession(ctx context.Context, id string) (*model.DialogueSession, error)
 	LatestDialogueMessages(ctx context.Context, dialogueID string, limit int) ([]model.DialogueMessage, error)
+	AppendDialogueMessage(ctx context.Context, msg model.DialogueMessage) error
 	GetDialogueTurn(ctx context.Context, id string) (*model.DialogueTurn, error)
 	CancelRunningDialogueTurn(ctx context.Context, dialogueID string) (string, error)
 }
@@ -437,9 +440,35 @@ func (w *TurnWorker) applyTurnIntent(ctx context.Context, dialogueID string, tur
 	case model.TurnIntentApplicationInquiry,
 		model.TurnIntentTaskControl,
 		model.TurnIntentGeneralDialogue:
-		// No job. A conversational reply (if any) was emitted by the classifier.
+		w.appendTurnReply(ctx, dialogueID, turn, out)
 	}
 	return true
+}
+
+func (w *TurnWorker) appendTurnReply(ctx context.Context, dialogueID string, turn *model.DialogueTurn, out dialogue.TurnOutput) {
+	reply := strings.TrimSpace(out.Summary.Reply)
+	if reply == "" {
+		reply = strings.TrimSpace(out.Summary.UserFacingText)
+	}
+	if reply == "" {
+		return
+	}
+	meta, _ := json.Marshal(map[string]string{
+		"turn_id": turn.ID,
+		"intent":  string(out.Intent),
+	})
+	msg := model.DialogueMessage{
+		ID:           "dmsg_" + idpkg.New(),
+		DialogueID:   dialogueID,
+		Role:         "agent",
+		Kind:         "reply",
+		Content:      reply,
+		MetadataJSON: string(meta),
+		CreatedAt:    time.Now(),
+	}
+	if err := w.store.AppendDialogueMessage(ctx, msg); err != nil {
+		log.Printf("turn worker: append reply dialogue %s turn %s: %v", dialogueID, turn.ID, err)
+	}
 }
 
 func marshalTurnSummary(s dialogue.TurnSummary) string {

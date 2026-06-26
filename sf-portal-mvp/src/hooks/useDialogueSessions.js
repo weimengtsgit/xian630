@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { factoryApi } from '../api/client'
 import { subscribeFactoryEvents, subscribeDialogueTrace } from '../api/events'
 import {
@@ -47,9 +47,22 @@ const DIALOGUE_TYPES = new Set([
   'dialogue.resolved',
   'dialogue.abandoned',
   'dialogue.deleted',
+  'dialogue.message.accepted',
+  'dialogue.turn.started',
+  'dialogue.turn.completed',
+  'dialogue.turn.failed',
+  'dialogue.turn.canceled',
+  'dialogue.change.proposed',
+  'dialogue.forked',
   // Wrapped child clarification events arrive via publishDialogueChild; they carry
   // a parent dialogue_id so the portal updates one state source.
   'clarification.summary.updated',
+])
+
+const TERMINAL_TURN_TYPES = new Set([
+  'dialogue.turn.completed',
+  'dialogue.turn.failed',
+  'dialogue.turn.canceled',
 ])
 
 const terminal = status => status === 'resolved' || status === 'abandoned' || status === 'failed'
@@ -67,6 +80,20 @@ export function useDialogueSessions() {
   // dialogue, fed by the per-dialogue SSE stream (Constraint #7 — NOT the global
   // /api/events). Reset + re-hydrated whenever the selected dialogue changes.
   const [workTrace, setWorkTrace] = useState(initialWorkTraceState())
+  // clarificationSeqKey: a STABLE string key derived from the clarification
+  // traces only (their sequences). The work-trace stream is high-frequency
+  // (assistant/tool tokens), so the timeline rebuild effect MUST NOT depend on
+  // workTrace.items directly — only on this low-frequency key. A new job-step
+  // clarification (solution_design/code_generation pausing for user input)
+  // changes the key and triggers exactly one timeline rebuild, surfacing the
+  // question as a conversation bubble.
+  const clarificationSeqKey = useMemo(() => {
+    const items = Array.isArray(workTrace.items) ? workTrace.items : []
+    return items
+      .filter(it => it && it.type === 'clarification')
+      .map(it => it.sequence)
+      .join(',')
+  }, [workTrace.items])
   // pendingTurn: a 202 ack {dialogueId, turnId, acceptedAt} from send when the
   // session is CONTINUING (route already locked). The workbench renders a
   // cancel-current-turn control against it. Cleared when the trace shows the
@@ -119,11 +146,14 @@ export function useDialogueSessions() {
     // D5: rebuild even before the first persisted view lands so the optimistic
     // user message (and streaming analysis) renders immediately on a brand-new
     // dialogue. buildDialogueTimeline(null, ...) surfaces just those transients.
+    // clarificationSeqKey (not workTrace.items) is a dependency so a new job-step
+    // clarification rebuilds the timeline to surface the question bubble, WITHOUT
+    // rebuilding on every high-frequency assistant/tool trace token.
     if (!state.view && !optimisticUserMessage) return
     setState(prev => (prev.view === state.view
-      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking) }
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items) }
       : prev))
-  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -164,7 +194,7 @@ export function useDialogueSessions() {
         ...prev,
         selectedDialogueId: id,
         view,
-        timeline: buildDialogueTimeline(view),
+        timeline: buildDialogueTimeline(view, null, null, null, workTrace.items),
         questions: openQuestionsForView(view),
         requirement: view.child ? (view.child.requirement || null) : null,
         needsRefresh: null,
@@ -420,16 +450,28 @@ export function useDialogueSessions() {
     setSubmitting(true)
     setError(null)
     try {
-      const view = await factoryApi.retryDialogueRound(state.view.session.id)
+      const sess = state.view.session
+      const child = state.view.child
+      let view
+      if (child && child.status === 'failed') {
+        view = await factoryApi.retryDialogueRound(sess.id)
+      } else {
+        const prompt = String(sess.initial_prompt || '').trim()
+        if (!prompt) throw new Error('无法重试：会话没有可重新提交的原始需求')
+        pendingNewDialogueRef.current = true
+        view = await factoryApi.createDialogue({ initialPrompt: prompt })
+        if (mountedRef.current) refreshSessions().catch(() => {})
+      }
       await loadView(view.session.id)
       return view
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
+      pendingNewDialogueRef.current = false
       throw err
     } finally {
       if (mountedRef.current) setSubmitting(false)
     }
-  }, [loadView, state.view, submitting])
+  }, [loadView, refreshSessions, state.view, submitting])
 
   const abandon = useCallback(async () => {
     if (!state.view || submitting) return null
@@ -644,6 +686,10 @@ export function useDialogueSessions() {
       if (!isDialogue && type !== 'clarification.summary.updated') return
       const ev = raw && typeof raw === 'object' && 'seq' in raw ? raw.data : raw
       if (!ev) return
+      if (TERMINAL_TURN_TYPES.has(type) && pendingTurnRef.current) {
+        const turnId = ev.turn_id || ev.turnId || (ev.data && (ev.data.turn_id || ev.data.turnId))
+        if (!turnId || pendingTurnRef.current.turnId === turnId) setPendingTurn(null)
+      }
       // A brand-new dialogue's createDialogue publishes dialogue.created BEFORE
       // its routing/clarification stream. If a send is pending, select it now so
       // the streaming analysis + thinking fold live beneath the user's input
