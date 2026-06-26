@@ -201,7 +201,7 @@ function ApplicationCard({ app, action, onStart, onStop, onRebuild, onRegenerate
           </button>
         )}
         {isGenerated(app) && (
-          <button type="button" className="card-btn ghost-btn" onClick={() => onRegenerate && onRegenerate(app)} title="基于该应用重新生成" disabled={busy}>
+          <button type="button" className="card-btn ghost-btn" onClick={() => onRegenerate && onRegenerate(app)} title="基于该智能体重新生成" disabled={busy}>
             {action === 'regenerate' ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
             {action === 'regenerate' ? ACTION_TEXT[action] : '重新生成'}
           </button>
@@ -211,11 +211,11 @@ function ApplicationCard({ app, action, onStart, onStop, onRebuild, onRegenerate
             type="button"
             className="card-btn danger-btn"
             onClick={() => {
-              if (window.confirm(`确认删除生成应用「${app.name || app.slug}」？本地生成目录会被删除，生成审计记录会保留。`)) {
+              if (window.confirm(`确认删除生成智能体「${app.name || app.slug}」？本地生成目录会被删除，生成审计记录会保留。`)) {
                 onDelete && onDelete(app.id)
               }
             }}
-            title="删除生成应用"
+            title="删除生成智能体"
             disabled={busy}
           >
             {action === 'delete' ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}

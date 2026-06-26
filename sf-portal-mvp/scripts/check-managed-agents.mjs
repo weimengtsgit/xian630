@@ -8,6 +8,12 @@ const workbench = fs.readFileSync(new URL('../src/components/ConversationWorkben
 
 assert.match(client, /listManagedAgents:\s*\(\)\s*=>\s*request\('\/api\/managed-agents'\)/)
 assert.match(panel, /纳管智能体/)
+assert.match(panel, /基于该智能体重新生成/)
+assert.match(panel, /确认删除生成智能体/)
+assert.match(panel, /删除生成智能体/)
+assert.doesNotMatch(panel, /基于该应用重新生成/)
+assert.doesNotMatch(panel, /确认删除生成应用/)
+assert.doesNotMatch(panel, /删除生成应用/)
 assert.match(panel, /managedAgents/)
 assert.match(workbench, /card\.kind === 'managed_agent'/)
 assert.match(workbench, /window\.open\(card\.runtimeUrl/)

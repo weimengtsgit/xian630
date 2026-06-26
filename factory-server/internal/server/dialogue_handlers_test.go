@@ -862,6 +862,12 @@ func TestRouteSelectEmptyExistingApplicationFallsBackToGeneration(t *testing.T) 
 	if view.Child == nil || view.Session.ClarificationSessionID == "" {
 		t.Fatalf("empty existing-app selection must create a clarification child, got %#v", view)
 	}
+	if !strings.Contains(view.Route.UserFacingReason, "新智能体") {
+		t.Fatalf("empty existing-app fallback reason should use 智能体 product noun, got %q", view.Route.UserFacingReason)
+	}
+	if strings.Contains(view.Route.UserFacingReason, "新应用") {
+		t.Fatalf("empty existing-app fallback reason leaked old product noun: %q", view.Route.UserFacingReason)
+	}
 }
 
 // TestApplicationGenerationWithoutBlueprintStillCreatesClarification verifies
@@ -873,7 +879,7 @@ func TestApplicationGenerationWithoutBlueprintStillCreatesClarification(t *testi
 	  "confidence": "high",
 	  "existingApplicationSlugs": [],
 	  "internalBlueprintSlug": "",
-	  "userFacingReason": "将先澄清需求并生成一个可运行的新应用。",
+	  "userFacingReason": "将先澄清需求并生成一个可运行的新智能体。",
 	  "needsRouteConfirmation": false
 	}`
 	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeNoBlueprint})

@@ -128,6 +128,34 @@ _Avoid_: 智能体思维链, 原始推理, 单纯运行日志
 The structured requirement record confirmed by the user after clarification and used as the input for creating a generation task.
 _Avoid_: 初始需求, 聊天记录, 分析工作日志
 
+**研判边界**:
+The business judgement frame captured during requirement clarification: the data sources, monitored objects and scope, judgement rules and thresholds, target judgement outcome, refresh or replay cadence, output view, and unavailable-data behavior for the generated application.
+_Avoid_: 软件生成边界, 普通需求字段, 实现范围
+
+**研判边界摘要**:
+A concise user-facing summary of the judgement boundary captured in the confirmed requirement. In the current implementation it complements the selected data-source family without decomposing every rule, scope, cadence, or output view into separate schema fields.
+_Avoid_: 完整实现规格, 原始需求复述, 隐式数据源承诺
+
+**真实数据研判约束**:
+A requirement-clarification constraint for customer-facing military or naval generated applications: judgement results must be based on real selected data-source boundaries rather than mock or demo values. Internal demos, preset applications, tests, and structural previews may still use demo data under their separate demo-data boundary.
+_Avoid_: mock 结果选项, 演示数据研判结果, 静默降级为 mock
+
+**数据来源边界**:
+The real data-source family selected for a customer-facing judgement application, such as ontology data, public internet sources, specific social platforms, web crawling, or public search interfaces. It is a user-facing clarification decision distinct from the internal data policy used by the generation pipeline.
+_Avoid_: dataPolicy 选项, mock/真实二选一, 数据接入实现细节
+
+**本体数据源**:
+A customer-provided ontology or DaaS data boundary with a documented access path, entity model, authentication handling, request shape, response shape, and coverage notes. It is the preferred source family when the requested judgement can be answered by known customer entities.
+_Avoid_: 本体 MCP 泛称, 未验证客户库, 模型自造实体
+
+**网络公开搜索**:
+A high-level real-source family for public web search or public web result retrieval selected during clarification. In the current simplified clarification it is only a source-family choice; generated applications must still use runtime-accessible endpoints or an explicit proxy/connector and must not rely on generation-time agent tools as their live data source.
+_Avoid_: 任意互联网数据, 未授权平台搜索, 默认可爬取
+
+**可接入数据源**:
+A data source that Factory may offer or confirm during clarification because it has a documented connector, authentication path where needed, request shape, coverage boundary, and failure behavior. A source mentioned only by a scenario or by the user is not accessible until this evidence exists.
+_Avoid_: 凭空数据源, 场景文字里的来源, 未验证公网接口
+
 **推荐收敛确认**:
 A late-stage clarification interaction that presents the remaining decisions with their recommended values, so the user can accept the recommended set or make a targeted adjustment before confirming the requirement summary.
 _Avoid_: 最终生成确认, 普通澄清问题, 强制默认值

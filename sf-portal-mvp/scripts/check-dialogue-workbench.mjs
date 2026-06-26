@@ -179,7 +179,7 @@ const generationChoiceView = {
   messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '创建一个新的排班应用' }],
   route: {
     intent: 'application_generation', confidence: 'high', needsRouteConfirmation: true,
-    userFacingReason: '我会澄清需求并生成一个可运行的新应用。', existingApplicationSlugs: [],
+    userFacingReason: '我会澄清需求并生成一个可运行的新智能体。', existingApplicationSlugs: [],
   },
 }
 const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')

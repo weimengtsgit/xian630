@@ -7,10 +7,10 @@
     "baidu": {
       "surface": "managed_agent",
       "order": 1,
-      "name": "百度",
-      "description": "百度搜索入口，用于验证纳管智能体外部链接跳转。",
-      "url": "https://www.baidu.com",
-      "keywords": ["百度", "搜索", "外部链接"]
+      "name": "动向研判智能体",
+      "description": "动向研判智能体",
+      "url": "",
+      "keywords": ["动向", "研判"]
     },
     "carrier-homeport-tide-window": { "surface": "blueprint" },
     "carrier-deck-wind-calculator": { "surface": "blueprint" },

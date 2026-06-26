@@ -1176,7 +1176,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		// candidate. Do not lock the user into an empty recommendation view.
 		intent = dialogue.IntentApplicationGeneration
 		route.Intent = intent
-		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
+		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新智能体。"
 	}
 
 	switch intent {
