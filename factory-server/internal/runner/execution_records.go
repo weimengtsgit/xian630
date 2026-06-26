@@ -33,3 +33,49 @@ type NopEmitter struct{}
 
 // Emit discards the record and returns nil.
 func (NopEmitter) Emit(context.Context, model.ExecutionRecordKind, string) error { return nil }
+
+// TraceEmitter is the scoped seam through which a runner forwards SAFE work-
+// trace events (assistant observation, tool action, clarification) to the
+// executor, which routes every trace through the server's persist-before-
+// publish gate (recordAndPublishWorkTrace → AppendDialogueTrace). It is the
+// PRODUCER side of the work-trace pipeline (Task 4): the runner produces safe,
+// redacted, capped payloads and calls Trace; it never touches the store or
+// computes the dialogue sequence.
+//
+// CRITICAL SECURITY INVARIANT (Constraint #9): only allowlisted trace categories
+// ever reach TraceEmitter. Raw hidden thinking / thinking_delta / chain-of-
+// thought must NEVER be passed here — they are dropped at the source
+// (stream.go: emitStreamLine ignores thinking blocks). A trace that bypasses
+// this seam cannot reach the SSE wire or DB because the store gate rejects any
+// non-allowlisted type and the SSE forwarder validates persisted rows.
+//
+// Why a separate interface and not a method on StepRecordEmitter? The executor's
+// real stepEmitter (which owns the job/step/dialogue attribution the gate needs)
+// implements BOTH; the runner reaches it via TraceEmitterFrom(emit), a type
+// assertion. NopEmitter and test-only emitters that do not implement
+// TraceEmitter yield a nop trace path, so callers never nil-check.
+type TraceEmitter interface {
+	// Trace forwards one safe trace event. traceType is a WorkTraceType string
+	// value (e.g. model.WorkTraceAssistant); payload is a JSON string or capped
+	// prose already redacted by the producer. It MUST be idempotent-safe: a nil
+	// receiver or a store error never aborts the agent run.
+	Trace(ctx context.Context, traceType, payload string) error
+}
+
+// TraceEmitterFrom returns the TraceEmitter capability of emit when emit also
+// implements it, else a NopTraceEmitter. This is how the runner discovers the
+// trace seam from the StepRecordEmitter it was handed, without forcing every
+// emitter implementation to implement Trace.
+func TraceEmitterFrom(emit StepRecordEmitter) TraceEmitter {
+	if t, ok := emit.(TraceEmitter); ok {
+		return t
+	}
+	return NopTraceEmitter{}
+}
+
+// NopTraceEmitter is a TraceEmitter that discards everything. It is the
+// fallback used when the emitter does not implement TraceEmitter.
+type NopTraceEmitter struct{}
+
+// Trace discards the trace and returns nil.
+func (NopTraceEmitter) Trace(context.Context, string, string) error { return nil }

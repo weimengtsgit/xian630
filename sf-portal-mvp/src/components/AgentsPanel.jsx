@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bot, Plus, X } from 'lucide-react'
+import { Bot, Loader2, Plus, Trash2, X } from 'lucide-react'
 import './AgentsPanel.css'
 
 const emptyForm = {
@@ -12,7 +12,24 @@ const emptyForm = {
   enabled: true,
 }
 
-export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
+// formatAgentTime renders an agent's created_at as MM-dd HH:mm, or '' when it
+// is absent / the 0 backfill (rows that predate the column) / unparseable.
+function formatAgentTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  const ms = date.getTime()
+  if (!Number.isFinite(ms) || ms < 946684800000) return ''
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+export function AgentsPanel({
+  agents,
+  loading,
+  error,
+  onCreateAgent,
+  onDeleteAgent,
+  deletingAgentId,
+}) {
   const list = Array.isArray(agents) ? agents : []
   const [selectedId, setSelectedId] = useState('')
   const [detailOpen, setDetailOpen] = useState(false)
@@ -40,6 +57,29 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
     const key = agent.key || agent.agent_key || agent.id
     setSelectedId(agent.id || key)
     setDetailOpen(true)
+  }
+
+  const openAgentDetailFromKeyboard = (event, agent) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    openAgentDetail(agent)
+  }
+
+  const agentDeleteId = agent => agent.id || agent.key || agent.agent_key
+
+  const canDeleteAgent = agent => {
+    return Boolean(onDeleteAgent && agentDeleteId(agent) && agent.category === 'business_processing')
+  }
+
+  const requestDeleteAgent = (event, agent) => {
+    event.stopPropagation()
+    const deleteId = agentDeleteId(agent)
+    if (!deleteId || deletingAgentId) return
+
+    const name = agent.name || agent.key || agent.agent_key || deleteId
+    if (window.confirm(`确认删除智能体「${name}」？此操作不可撤销。`)) {
+      onDeleteAgent(deleteId)
+    }
   }
 
   const closeAgentDetail = () => {
@@ -97,7 +137,7 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
   return (
     <div className="agents-panel">
       <div className="panel-header">
-        <h2>智能体</h2>
+        <h2>协作智能体</h2>
         <div className="agents-header-actions">
           <span className="panel-count">{list.length} 个</span>
           <button
@@ -125,14 +165,17 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
               const key = agent.key || agent.agent_key || agent.id
               const enabled =
                 agent.enabled === undefined ? true : Boolean(agent.enabled)
+              const generatedAt = formatAgentTime(agent.created_at)
               return (
-                <button
+                <div
                   key={agent.id || key}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   className={`agent-card ${enabled ? 'is-enabled' : 'is-disabled'} ${
                     selectedAgent === agent ? 'is-selected' : ''
                   }`}
                   onClick={() => openAgentDetail(agent)}
+                  onKeyDown={event => openAgentDetailFromKeyboard(event, agent)}
                 >
                   <div className="agent-avatar">
                     <Bot size={20} />
@@ -147,12 +190,31 @@ export function AgentsPanel({ agents, loading, error, onCreateAgent }) {
                     <div className="agent-meta">
                       <span className="agent-key">{key}</span>
                       {agent.role && <span className="agent-role">{agent.role}</span>}
+                      {generatedAt ? <span className="agent-time">生成于 {generatedAt}</span> : null}
                     </div>
                     {agent.description && (
                       <p className="agent-desc">{agent.description}</p>
                     )}
                   </div>
-                </button>
+                  {canDeleteAgent(agent) ? (
+                    <div className="agent-card-footer">
+                      <button
+                        type="button"
+                        className="card-btn danger-btn"
+                        onClick={event => requestDeleteAgent(event, agent)}
+                        title="删除智能体"
+                        disabled={deletingAgentId === agentDeleteId(agent)}
+                      >
+                        {deletingAgentId === agentDeleteId(agent) ? (
+                          <Loader2 size={14} className="spin" />
+                        ) : (
+                          <Trash2 size={14} />
+                        )}
+                        {deletingAgentId === agentDeleteId(agent) ? '删除中' : '删除'}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               )
             })}
           </div>

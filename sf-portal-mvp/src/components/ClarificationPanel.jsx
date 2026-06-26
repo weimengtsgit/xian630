@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusText } from '../hooks/clarificationLogic'
+import { displayRequirementValue } from '../displayLabels'
 import './ClarificationPanel.css'
 
 // Renders the clarification flow: streaming analysis work-logs, structured
@@ -252,11 +253,11 @@ export function ClarificationPanel({
           <div className="clar-summary">
             <strong className="clar-summary-title">确认需求摘要</strong>
             <div className="clar-summary-grid">
-              <SummaryRow label="应用类型" value={requirement.appType} />
-              <SummaryRow label="应用名称" value={requirement.appName} />
+              <SummaryRow label="智能体类型" value={displayRequirementValue('appType', requirement.appType)} />
+              <SummaryRow label="智能体名称" value={requirement.appName} />
               <SummaryRow label="核心场景" value={requirement.coreScenario} />
               <SummaryRow label="主视图" value={requirement.primaryView} />
-              <SummaryRow label="数据策略" value={requirement.dataPolicy} />
+              <SummaryRow label="数据策略" value={displayRequirementValue('dataPolicy', requirement.dataPolicy)} />
             </div>
             {Array.isArray(requirement.blueprintRefs) &&
             requirement.blueprintRefs.length > 0 ? (
@@ -297,7 +298,7 @@ export function ClarificationPanel({
                 : '需求尚未就绪，无法确认'
           }
         >
-          确认并生成
+          确认并生成智能体
         </button>
       </footer>
     </section>

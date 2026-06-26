@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/agents"
@@ -19,6 +18,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runlog"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
@@ -35,9 +35,8 @@ type Server struct {
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
 	runner      deploy.CommandRunner                                               // default: &deploy.OSRunner{}
-	runtime     deploy.ContainerRuntime                                             // container runtime (Podman or Docker)
+	runtime     deploy.ContainerRuntime                                            // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
-	execBusy    *atomic.Bool                                                       // global executor lock (Task 10 holds it during jobs)
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
 
 	// Job pipeline executor (Task 10). Runs the fixed six-step factory pipeline
@@ -60,7 +59,14 @@ type Server struct {
 	// + business-agent drafting) via the real Claude Code CLI. Mirrors clarifier:
 	// product path is ALWAYS the real CLI; tests override this field with a fake.
 	dialogueRouter dialogue.Runner
-	runLog         *runlog.Logger
+	// turnClassifier classifies one follow-up message on a CONTINUING dialogue
+	// session into one of the five turn intents. Product path is the real CLI
+	// (Runner.ClassifyTurn); tests override this field with a fake.
+	turnClassifier dialogue.TurnClassifier
+	// turnWorker drains pending dialogue turns (Task 2). It is started from
+	// Start and is also startable from tests so they can drive it.
+	turnWorker *TurnWorker
+	runLog     *runlog.Logger
 }
 
 type claudeCommandAdapter struct {
@@ -173,7 +179,6 @@ func (a claudeCommandAdapter) RunStreamWithInput(ctx context.Context, dir, input
 // owned by the server (initialized here) so callers don't need to supply them.
 // The signature is stable: adding deploy wiring does not change it.
 func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
-	execBusy := new(atomic.Bool)
 	runLogger := runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups)
 	osRunner := &deploy.OSRunner{}
 
@@ -204,7 +209,6 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		runner:      osRunner,
 		runtime:     runtime,
 		healthCheck: deploy.CheckHTTP,
-		execBusy:    execBusy,
 		cc:          &ccstatus.Client{BaseURL: cfg.CCStatusBaseURL}, // HTTP=nil → client uses its 2s short-timeout default so a hung cc-status can't block handlers
 		runLog:      runLogger,
 	}
@@ -215,7 +219,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	factory := &executor.FactoryRunner{
 		Store:        st,
 		Cmds:         osRunner,
-		Runtime:      runtime, // docker or podman, per FACTORY_CONTAINER_RUNTIME (defaults podman)
+		Runtime:      runtime,  // docker or podman, per FACTORY_CONTAINER_RUNTIME (defaults podman)
 		StreamCmds:   osRunner, // *deploy.OSRunner satisfies deploy.StreamCommandRunner → npm/container emit live command_stdout/command_stderr records
 		Alloc:        deploy.DefaultAllocator(),
 		Health:       deploy.CheckHTTP,
@@ -239,6 +243,11 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		ArtifactRoot:  cfg.ArtifactRoot,
 	}
+	// Turn classifier runs against the REAL Claude Code CLI in production (the
+	// same dialogue.Runner implements TurnClassifier via ClassifyTurn). Tests
+	// override s.turnClassifier directly with a fake.
+	s.turnClassifier = s.dialogueRouter
+	s.turnWorker = NewTurnWorker(s, st, s.turnClassifier)
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
 		Store:        st,
 		Workspace:    cfg.WorkspaceRoot,
@@ -258,7 +267,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		log.Printf("FACTORY_LLM_CONSOLE=1: claude request/response traces stream to stderr")
 	}
 	dispatch := executor.NewDispatcher(factory, claude)
-	s.exec = executor.NewExecutor(st, dispatch, execBusy)
+	s.exec = executor.NewExecutor(st, dispatch, cfg.MaxConcurrentJobs)
 	s.exec.RunLog = runLogger
 	s.exec.OnUpdate = func(ctx context.Context, update executor.ExecutionUpdate) {
 		s.publishStepUpdated(ctx, update.StepID)
@@ -273,6 +282,17 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// it verbatim over SSE does not leak artifact content.
 	s.exec.OnRecord = func(ctx context.Context, u runner.ExecutionRecordUpdate) {
 		s.hub.Publish(Event{Type: "step.record.appended", Data: u.Record})
+	}
+	// OnTrace routes every SAFE work-trace event the runner produces through the
+	// centralized persist-before-publish gate (recordAndPublishWorkTrace). This
+	// is the ONLY path a trace reaches the store/SSE: the gate enforces the
+	// allowlist + cap + sensitive-key stripping, persists the row (allocating
+	// its dialogue sequence) BEFORE publishing, and the SSE forwarder re-
+	// validates persisted rows. The runner produces safe, allowlisted payloads;
+	// raw hidden thinking never reaches here (dropped at the source in
+	// stream.go:emitStreamLine). No trace data is published any other way.
+	s.exec.OnTrace = func(ctx context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
+		return s.recordAndPublishWorkTrace(ctx, ev)
 	}
 	return s
 }
@@ -297,6 +317,15 @@ func (s *Server) appLock(appID string) *sync.Mutex {
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	// The conversation surface streams the model's raw thinking (思考过程).
+	// Ensure spawned `claude` CLI subprocesses run with extended thinking enabled
+	// so thinking_delta arrives — inherited via the process env by the runner.
+	// Honor an explicit override; only default when unset. The executor/trace
+	// pipeline's #9 boundary is the source-level drop in internal/runner and
+	// internal/executor, not the absence of thinking data in the process env.
+	if os.Getenv("MAX_THINKING_TOKENS") == "" {
+		os.Setenv("MAX_THINKING_TOKENS", "16000")
+	}
 	// Startup scan: best-effort. A scan failure (e.g. a misconfigured workspace
 	// root) must NOT prevent the server from listening — log and continue.
 	apps, err := s.scanner.Scan(ctx)
@@ -322,6 +351,13 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.store.BackfillClarificationDialogues(ctx); err != nil {
 		log.Printf("backfill clarification dialogues: %v", err)
 	}
+	// Idempotently transition legacy resolved dialogues into continuing active
+	// sessions so a dialogue whose first application is deployed stays open for
+	// follow-up modification/inquiry turns (Task 2). Best-effort, like the
+	// clarification backfill above.
+	if err := s.store.BackfillResolvedDialoguesToActive(ctx); err != nil {
+		log.Printf("backfill resolved dialogues to active: %v", err)
+	}
 
 	s.srv = &http.Server{Addr: s.cfg.Addr, Handler: corsMiddleware(s.routes())}
 	go func() {
@@ -333,6 +369,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// Start the pipeline executor's drain loop; it exits when ctx is cancelled
 	// (server shutdown).
 	s.exec.Start(ctx)
+	// Start the dialogue turn worker's drain loop; it exits when ctx is
+	// cancelled (server shutdown).
+	s.turnWorker.Start(ctx)
 	s.logEvent("server_started", map[string]any{
 		"pid":                os.Getpid(),
 		"addr":               s.cfg.Addr,
@@ -365,6 +404,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)
 	r.Handle("POST", "/api/apps/:id/rebuild", s.rebuildApp)
+	r.Handle("POST", "/api/apps/:id/rollback", s.rollbackApp)
 	r.Handle("DELETE", "/api/apps/:id", s.deleteApp)
 
 	r.Handle("GET", "/api/agents", s.listAgents)
@@ -372,6 +412,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/agents/create", s.createAgent)
 	r.Handle("PATCH", "/api/agents/:id", s.updateAgent)
 	r.Handle("GET", "/api/agents/:id/runs", s.agentRuns)
+	r.Handle("DELETE", "/api/agents/:id", s.deleteAgent)
 
 	r.Handle("POST", "/api/jobs", s.createJob)
 	r.Handle("GET", "/api/jobs", s.listJobs)
@@ -383,6 +424,7 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)
 	r.Handle("POST", "/api/jobs/:id/retry-current-step", s.retryCurrentStep)
+	r.Handle("POST", "/api/jobs/:id/repair-from-failure", s.repairFromFailure)
 
 	// Clarification session lifecycle (Task 4). A portal chat message creates a
 	// clarification session (NOT a job) until the user confirms.
@@ -407,7 +449,10 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/dialogues", s.listDialogues)
 	r.Handle("GET", "/api/dialogues/:id", s.getDialogue)
 	r.Handle("DELETE", "/api/dialogues/:id", s.deleteDialogue)
+	r.Handle("POST", "/api/dialogues/:id/archive", s.archiveDialogue)
 	r.Handle("POST", "/api/dialogues/:id/messages", s.addDialogueMessage)
+	r.Handle("POST", "/api/dialogues/:id/turns/:turnId/cancel", s.cancelDialogueTurn)
+	r.Handle("POST", "/api/dialogues/:id/changes/confirm", s.confirmDialogueChange)
 	r.Handle("POST", "/api/dialogues/:id/route", s.selectDialogueRoute)
 	r.Handle("POST", "/api/dialogues/:id/applications/:applicationID/open", s.openDialogueApp)
 	r.Handle("POST", "/api/dialogues/:id/clarification/answers", s.answerDialogueClarification)
@@ -419,6 +464,14 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/dialogues/:id/business-agent/confirm", s.confirmDialogueBusinessAgent)
 	r.Handle("POST", "/api/dialogues/:id/business-agent/continue", s.continueDialogueBusinessAgent)
 	r.Handle("POST", "/api/dialogues/:id/business-agent/consolidation", s.applyDialogueBusinessConsolidation)
+
+	// Dialogue-scoped visible work-trace transport (Task 3). REST hydration +
+	// SSE stream, both filtered to :id, sequence-replayable. Constraint #7: the
+	// model's process/conclusions/task status flow ONLY through this
+	// dialogueId-filtered, sequence-replayable trace. The global /api/events
+	// stream above stays for legacy consumers.
+	r.Handle("GET", "/api/dialogues/:id/work-trace", s.dialogueTraceEvents)
+	r.Handle("GET", "/api/dialogues/:id/work-trace/stream", s.dialogueTraceStream)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

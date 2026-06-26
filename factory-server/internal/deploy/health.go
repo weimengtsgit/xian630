@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -17,10 +18,27 @@ const pollInterval = 200 * time.Millisecond
 // perRequestTimeout caps each individual HTTP probe.
 const perRequestTimeout = 2 * time.Second
 
+// defaultHealthCheckTimeout is the post-start readiness probe timeout. The
+// original design §5.6 specified 10s, but real-world local Podman (especially on
+// macOS) needs more time for networking/port-forwarding to settle; 30s keeps
+// failures fast enough while covering the observed flakiness.
+const defaultHealthCheckTimeout = 30 * time.Second
+
+// HealthCheckTimeout returns the readiness-probe timeout. Override with
+// FACTORY_HEALTH_TIMEOUT (e.g. "10s", "1m") for environments that need a
+// different value.
+func HealthCheckTimeout() time.Duration {
+	if v := os.Getenv("FACTORY_HEALTH_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultHealthCheckTimeout
+}
+
 // CheckHTTP polls url with GET until it returns status 200-399 or the timeout
-// elapses (design §5.6: "10 秒内返回 200-399"). It honors ctx cancellation.
-// On timeout/failure it returns an error whose message contains
-// "health_check_failed".
+// elapses. It honors ctx cancellation. On timeout/failure it returns an error
+// whose message contains "health_check_failed".
 // isLocalhost reports whether host is a loopback or link-local address that
 // should never go through a proxy.
 func isLocalhost(host string) bool {
@@ -53,6 +71,9 @@ func CheckHTTP(ctx context.Context, url string, timeout time.Duration) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	var lastErr error
+	var lastStatus int
+
 	// Probe immediately, then on each tick.
 	firstProbe := true
 	for {
@@ -67,6 +88,12 @@ func CheckHTTP(ctx context.Context, url string, timeout time.Duration) error {
 		}
 
 		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("%s: timeout after %s (last error: %v)", model.ErrorHealthCheckFailed, timeout, lastErr)
+			}
+			if lastStatus != 0 {
+				return fmt.Errorf("%s: timeout after %s (last status: %d)", model.ErrorHealthCheckFailed, timeout, lastStatus)
+			}
 			return fmt.Errorf("%s: timeout after %s", model.ErrorHealthCheckFailed, timeout)
 		}
 		if err := ctx.Err(); err != nil {
@@ -80,6 +107,8 @@ func CheckHTTP(ctx context.Context, url string, timeout time.Duration) error {
 
 		resp, err := client.Do(req)
 		if err != nil {
+			lastErr = err
+			lastStatus = 0
 			// Transient/conn-refused: keep polling until deadline.
 			if time.Now().After(deadline) {
 				return fmt.Errorf("%s: %w", model.ErrorHealthCheckFailed, err)
@@ -91,6 +120,8 @@ func CheckHTTP(ctx context.Context, url string, timeout time.Duration) error {
 		if resp.StatusCode >= 200 && resp.StatusCode <= 399 {
 			return nil
 		}
+		lastErr = nil
+		lastStatus = resp.StatusCode
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s: last status %d", model.ErrorHealthCheckFailed, resp.StatusCode)
 		}

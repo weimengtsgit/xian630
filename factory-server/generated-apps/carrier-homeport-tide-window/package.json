@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check:blueprint": "node scripts/check-blueprint-parity.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

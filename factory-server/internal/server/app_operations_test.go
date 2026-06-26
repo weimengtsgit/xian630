@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ type srvRunner struct {
 	calls   []srvCall
 	failIdx int // negative = never fail; else fail the i-th call with runnerErr
 	failErr error
+	onRun   func(dir, name string, args []string)
 }
 
 type srvCall struct {
@@ -36,6 +38,9 @@ type srvCall struct {
 func (r *srvRunner) Run(_ context.Context, dir, name string, args ...string) (deploy.CommandResult, error) {
 	idx := len(r.calls)
 	r.calls = append(r.calls, srvCall{dir: dir, name: name, args: append([]string(nil), args...)})
+	if r.onRun != nil {
+		r.onRun(dir, name, args)
+	}
 	if r.failIdx >= 0 && idx == r.failIdx {
 		return deploy.CommandResult{ExitCode: 1, Stderr: "forced failure"}, r.failErr
 	}
@@ -419,28 +424,37 @@ func TestStopAlreadyStoppedIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRebuildReturnsConflictWhenExecutorBusy(t *testing.T) {
+func TestRebuildReturnsConflictWhenAppBusy(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
-	_, r := newOpsServer(t, fr)
-	// Pre-acquire the global executor lock as if a job is running (Task 10).
-	// We reach into the server via a fresh instance to hold the flag.
-	srv2, r2 := newOpsServer(t, fr)
-	srv2.execBusy.Store(true)
+	srv, r := newOpsServer(t, fr)
+	// Seed a RUNNING pipeline job for the app's slug: a rebuild conflicts with a
+	// running job of the SAME app (they both write generated-apps/<slug>/ + the
+	// same image tag). The executor-busy conflict is now per-app, not global —
+	// so a job for an unrelated app must NOT block this rebuild.
+	job := model.Job{
+		ID:              "job_running_for_rebuild",
+		AppSlug:         "east-sea-situation",
+		Status:          model.JobStatusRunning,
+		CurrentStepKind: model.StepRequirementAnalysis,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	if err := srv.store.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("seed running job: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rebuild", nil)
 	rec := httptest.NewRecorder()
-	r2.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 	var body map[string]any
 	_ = json.NewDecoder(rec.Body).Decode(&body)
-	if body["error"] != "executor busy" {
-		t.Errorf("body = %v, want executor busy", body)
+	if body["error"] != "app busy" {
+		t.Errorf("body = %v, want app busy", body)
 	}
-	// Not used, but keeps r referenced for symmetry with the helper.
-	_ = r
 }
 
 func TestRebuildBuildsImageAndReturnsBuilt(t *testing.T) {
@@ -476,6 +490,83 @@ func TestRebuildBuildsImageAndReturnsBuilt(t *testing.T) {
 	// Rebuild must NOT run a container.
 	if hasCall(fr.calls, "podman", "run") {
 		t.Errorf("rebuild should not run a container; calls=%v", fr.calls)
+	}
+}
+
+func TestRebuildGeneratedStaticVitePrebuildsDistBeforeImageBuild(t *testing.T) {
+	root := ""
+	appDir := ""
+	fr := &srvRunner{failIdx: -1}
+	fr.onRun = func(dir, name string, args []string) {
+		if dir == appDir && name == "npm" && strings.Join(args, " ") == "run build" {
+			if err := os.MkdirAll(filepath.Join(appDir, "dist"), 0o755); err != nil {
+				t.Fatalf("mkdir dist: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(appDir, "dist", "index.html"), []byte("<div>ok</div>"), 0o644); err != nil {
+				t.Fatalf("write dist/index.html: %v", err)
+			}
+		}
+	}
+	srv, r := newOpsServer(t, fr)
+	root = srv.cfg.WorkspaceRoot
+	appDir = filepath.Join(root, "generated-apps", "demo-static")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app: %v", err)
+	}
+	manifest := `{
+  "schemaVersion": 1,
+  "slug": "demo-static",
+  "name": "Demo Static",
+  "type": "command_dashboard",
+  "source": "generated",
+  "entry": "static-vite",
+  "path": "generated-apps/demo-static",
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}`
+	if err := os.WriteFile(filepath.Join(appDir, ".factory", "app.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "package.json"), []byte(`{"scripts":{"build":"vite build"}}`), 0o644); err != nil {
+		t.Fatalf("write package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "Dockerfile"), []byte("FROM node:18-alpine\nRUN npm ci\nRUN npm run build\n"), 0o644); err != nil {
+		t.Fatalf("write dockerfile: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-static", Slug: "demo-static", Name: "Demo Static", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-static",
+		ManifestPath: "generated-apps/demo-static/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed generated app: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-demo-static/rebuild", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !hasCall(fr.calls, "npm", "install") {
+		t.Fatalf("generated static-vite rebuild should install dependencies on host; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "npm", "run build") {
+		t.Fatalf("generated static-vite rebuild should build dist on host; calls=%v", fr.calls)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(appDir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if strings.Contains(string(dockerfile), "npm ci") || strings.Contains(string(dockerfile), "npm run build") {
+		t.Fatalf("Dockerfile should serve prebuilt dist without in-container npm, got:\n%s", string(dockerfile))
+	}
+	if !strings.Contains(string(dockerfile), "COPY dist/ /usr/share/nginx/html/") {
+		t.Fatalf("Dockerfile should copy host-built dist, got:\n%s", string(dockerfile))
 	}
 }
 
@@ -545,6 +636,106 @@ func TestDeleteGeneratedAppRemovesDirectoryRowsAndPublishesEvent(t *testing.T) {
 	expectEvent(t, ch, "app.deleted")
 }
 
+func TestDeleteGeneratedAppFallsBackWhenTombstoneRenameCrossDevice(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	srv.cfg.ArtifactRoot = filepath.Join(t.TempDir(), "runs")
+	appDir := filepath.Join(root, "generated-apps", "demo-cross-device")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "index.html"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write app file: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-cross-device", Slug: "demo-cross-device", Name: "Demo Cross Device", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-cross-device",
+		ManifestPath: "generated-apps/demo-cross-device/.factory/app.json", Status: model.AppStatusStopped,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	origRename := renamePath
+	renamePath = func(oldpath, newpath string) error {
+		if oldpath == appDir && strings.Contains(newpath, filepath.Join("deleted-apps", app.ID+"-"+app.Slug)) {
+			return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+		}
+		return origRename(oldpath, newpath)
+	}
+	t.Cleanup(func() { renamePath = origRename })
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-cross-device", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(appDir); !os.IsNotExist(err) {
+		t.Fatalf("app dir still exists or stat failed differently: %v", err)
+	}
+	got, err := srv.store.GetApplication(context.Background(), app.ID)
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("app row still exists: %#v", got)
+	}
+	tombstone := filepath.Join(srv.cfg.ArtifactRoot, "deleted-apps", app.ID+"-"+app.Slug)
+	if _, err := os.Stat(tombstone); !os.IsNotExist(err) {
+		t.Fatalf("tombstone should be removed after DB delete, stat err=%v", err)
+	}
+}
+
+// TestDeleteGeneratedAppClearsReferencingDialogue verifies that deleting an app
+// reconciles dialogues whose resolved_application_id points at it. Without this,
+// composeDialogueView silently drops resolvedApplication (GetApplication -> nil)
+// and the continuous loop stalls on a dangling reference to a deleted app.
+func TestDeleteGeneratedAppClearsReferencingDialogue(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	root := srv.cfg.WorkspaceRoot
+	appDir := filepath.Join(root, "generated-apps", "demo-dlg-ref")
+	if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+		t.Fatalf("mkdir app dir: %v", err)
+	}
+	now := time.Now()
+	app := model.Application{
+		ID: "app-demo-dlg-ref", Slug: "demo-dlg-ref", Name: "Demo Dlg Ref", Type: "command_dashboard",
+		Source: model.AppSourceGenerated, Path: "generated-apps/demo-dlg-ref",
+		ManifestPath: "generated-apps/demo-dlg-ref/.factory/app.json", Status: model.AppStatusRunning,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	dlg := model.DialogueSession{
+		ID: "dlg_demo_dlg_ref", InitialPrompt: "p", Status: model.DialogueStatusActive,
+		Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true,
+		ResolvedApplicationID: app.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := srv.store.CreateDialogueSession(context.Background(), dlg); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/apps/app-demo-dlg-ref", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := srv.store.GetDialogueSession(context.Background(), dlg.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get dialogue: %v %v", err, got != nil)
+	}
+	if got.ResolvedApplicationID != "" {
+		t.Fatalf("deleting app must clear the referencing dialogue's resolved_application_id, got %q", got.ResolvedApplicationID)
+	}
+}
+
 func TestDeleteRejectsPresetApp(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
 	_, r := newOpsServer(t, fr)
@@ -577,6 +768,131 @@ func TestDeleteRejectsGeneratedAppOutsideGeneratedRoot(t *testing.T) {
 	got, _ := srv.store.GetApplication(context.Background(), app.ID)
 	if got == nil {
 		t.Fatalf("unsafe app row was deleted")
+	}
+}
+
+// TestRollbackPromotesPreviousVersionThroughHealth (Task 6): an explicit-confirm
+// rollback re-builds, re-runs, and re-healths the previous (superseded)
+// version's image, then promotes it to effective, superseding the current. The
+// current effective container is stopped.
+func TestRollbackPromotesPreviousVersionThroughHealth(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	ctx := context.Background()
+	now := time.Now()
+
+	// Current effective v2 (running).
+	depV2 := model.Deployment{
+		ID: "dep_v2", AppID: "app-east-sea-situation",
+		ImageName: "localhost/software-factory/east-sea-situation", ImageTag: "ver_v2",
+		ContainerName: "sf-v2", HostPort: 18000, ContainerPort: 80,
+		URL: "http://127.0.0.1:18000", Status: "running", CreatedAt: now, StartedAt: &now,
+	}
+	if err := srv.store.CreateDeployment(ctx, depV2); err != nil {
+		t.Fatalf("seed v2 dep: %v", err)
+	}
+	promoted := now
+	if _, err := srv.store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_v2", ApplicationID: "app-east-sea-situation", JobID: "job_v2",
+		Status: model.ApplicationVersionEffective, DeploymentID: depV2.ID, SourcePath: "scene/east-sea-situation",
+		CreatedAt: now, PromotedAt: &promoted,
+	}); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+	// Previous superseded v1 (the rollback target).
+	depV1 := model.Deployment{
+		ID: "dep_v1", AppID: "app-east-sea-situation",
+		ImageName: "localhost/software-factory/east-sea-situation", ImageTag: "ver_v1",
+		ContainerName: "sf-v1-dead", HostPort: 18001, ContainerPort: 80,
+		URL: "http://127.0.0.1:18001", Status: "stopped", CreatedAt: now.Add(-time.Hour),
+	}
+	if err := srv.store.CreateDeployment(ctx, depV1); err != nil {
+		t.Fatalf("seed v1 dep: %v", err)
+	}
+	v1Promoted := now.Add(-30 * time.Minute)
+	if _, err := srv.store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_v1", ApplicationID: "app-east-sea-situation", JobID: "job_v1",
+		Status: model.ApplicationVersionSuperseded, DeploymentID: depV1.ID, SourcePath: "scene/east-sea-situation",
+		CreatedAt: now.Add(-time.Hour), PromotedAt: &v1Promoted,
+	}); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	if err := srv.store.SetAppRuntime(ctx, "app-east-sea-situation", string(model.AppStatusRunning), depV2.URL); err != nil {
+		t.Fatalf("set runtime: %v", err)
+	}
+
+	body := strings.NewReader(`{"confirm":true,"version_id":"ver_v1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rollback", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// v1 is now effective; v2 superseded.
+	eff, _ := srv.store.GetEffectiveApplicationVersion(ctx, "app-east-sea-situation")
+	if eff == nil || eff.ID != "ver_v1" {
+		t.Fatalf("effective = %#v, want ver_v1", eff)
+	}
+	v2, _ := srv.store.GetApplicationVersionByID(ctx, "ver_v2")
+	if v2 == nil || v2.Status != model.ApplicationVersionSuperseded {
+		t.Fatalf("v2 status = %#v, want superseded", v2)
+	}
+	// v2's container was stopped; a new container was run for v1.
+	if !hasCall(fr.calls, "podman", "stop", "sf-v2") {
+		t.Errorf("current container should be stopped; calls=%v", fr.calls)
+	}
+	if !hasCall(fr.calls, "podman", "run") {
+		t.Errorf("rollback should run a container for v1; calls=%v", fr.calls)
+	}
+}
+
+// TestRollbackRequiresConfirmation (Task 6): a rollback without confirm is
+// rejected with 400.
+func TestRollbackRequiresConfirmation(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	_, r := newOpsServer(t, fr)
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rollback",
+		strings.NewReader(`{"confirm":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRollbackRejectsWhenNoPreviousVersion (Task 6): a rollback with no
+// superseded prior version is rejected with 409.
+func TestRollbackRejectsWhenNoPreviousVersion(t *testing.T) {
+	fr := &srvRunner{failIdx: -1}
+	srv, r := newOpsServer(t, fr)
+	ctx := context.Background()
+	now := time.Now()
+	// Only an effective version, no superseded prior.
+	dep := model.Deployment{
+		ID: "dep_only", AppID: "app-east-sea-situation", ContainerName: "sf-only",
+		HostPort: 18000, ContainerPort: 80, URL: "http://127.0.0.1:18000",
+		Status: "running", CreatedAt: now, StartedAt: &now,
+	}
+	if err := srv.store.CreateDeployment(ctx, dep); err != nil {
+		t.Fatalf("seed dep: %v", err)
+	}
+	promoted := now
+	if _, err := srv.store.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_only", ApplicationID: "app-east-sea-situation", JobID: "job_only",
+		Status: model.ApplicationVersionEffective, DeploymentID: dep.ID, CreatedAt: now, PromotedAt: &promoted,
+	}); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	body := strings.NewReader(`{"confirm":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/apps/app-east-sea-situation/rollback", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

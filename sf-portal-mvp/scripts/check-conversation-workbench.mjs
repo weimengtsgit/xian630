@@ -137,7 +137,7 @@ assert.match(workbenchJsx, /Trash2/, 'history drawer delete button must use a de
 assert.doesNotMatch(workbenchJsx, /window\.confirm/, 'history deletion must use an in-app confirmation instead of browser native confirm')
 assert.match(workbenchJsx, /pendingDelete/, 'history deletion must keep pending confirmation state')
 assert.match(workbenchJsx, /cw-delete-confirm/, 'history deletion must render a custom confirmation panel')
-assert.match(workbenchJsx, /deletable/, 'history drawer must gate deletion by session status')
+assert.doesNotMatch(workbenchJsx, /进行中的会话不可删除/, 'history drawer must allow deleting a session in any status (no in-flight gate)')
 assert.match(workbenchCss, /\.cw-history-delete/, 'history delete button must have dedicated styles')
 assert.match(workbenchCss, /\.cw-delete-confirm\s*\{[\s\S]*position:\s*absolute/, 'custom delete confirmation must be positioned inside the workbench')
 assert.match(workbenchCss, /\.cw-delete-confirm-actions/, 'custom delete confirmation must style action buttons')

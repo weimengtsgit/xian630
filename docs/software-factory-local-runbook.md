@@ -145,8 +145,13 @@ a route locks it; a new request needs a new dialogue.
 2. The model infers the `existing_application_reuse` intent and emits a
    structured recommendation (`dialogue.application.recommended`) pointing at a
    configured preset application.
-3. Confirm the route. The dialogue resolves and the recommended application can
-   be opened or started directly — no generation job is created.
+3. Confirm the route. The conversation appends a route-choice bubble such as
+   `我选择：复用「东海态势应用」`; any follow-up analysis/recommendation appears
+   beneath it. The dialogue resolves and the recommended 智能体 can be opened or
+   started directly — no generation job is created.
+4. Click `打开智能体` or `启动并打开`. The conversation appends
+   `我打开：东海态势应用` or `我启动并打开：东海态势应用`, then appends the open
+   result.
 
 ### Manual flow 2 — application generation (6-round adaptive clarification)
 
@@ -156,17 +161,27 @@ a route locks it; a new request needs a new dialogue.
    生成一个航母编队近一个月航行轨迹和事件的东海地图复盘应用
    ```
 
-2. The model infers the `application_generation` intent. Confirm the route; a
-   child **clarification session** is created. The center panel **streams
+2. The model infers the `application_generation` intent. Confirm the route; the
+   conversation appends `我选择：新建智能体`, then a child **clarification
+   session** is created. The center panel **streams
    analysis work-logs and structured option cards** — this is *not* an
    immediate job.
-3. The clarification is **adaptive and limited to 6 rounds**:
-   - Rounds 1–4: at most **one** question per round, each with 2–3 options.
+3. The clarification is **adaptive and limited to 6 rounds**; 6 is a maximum,
+   not a quota, so the flow may converge earlier after all high-impact items are
+   explicitly confirmed:
+   - Rounds 1–4: one business-specific batch per round containing all currently
+     identified high-impact / must-confirm items, with option questions
+     carrying 2–3 options and recommendations. Low-impact inferred details are
+     shown as assumptions in analysis/summary rather than required questions.
+     After the user submits the batch, the conversation appends one Chinese
+     answer-summary bubble such as `审批层级：直属主管 + HR；假期余额来源：真实接口`;
+     the next round's 思考过程 and 分析过程 appear beneath that bubble.
    - Round 5: **recommendation consolidation** — remaining decisions are listed
      with their recommended values for one-shot accept or targeted adjustment.
    - Round 6: a single-field adjustment, then the session reaches
      `ready_to_confirm`. There is **no seventh round**.
-4. Click `确认并生成`.
+4. Review the `确认需求摘要` that appears as the next agent message in the
+   conversation flow, then click its attached `确认并生成智能体` action.
 5. A **Job appears only after confirmation**. It runs the fixed six-step
    pipeline:
    `requirement_analysis` → `solution_design` → `code_generation` →
@@ -226,11 +241,12 @@ artifacts.
 
 The real clarification runner invokes Claude Code with
 `--output-format stream-json --include-partial-messages --verbose`. Factory
-consumes those token-level events internally, filters out hook/system events and
-hidden `thinking_delta` content, then emits only safe `clarification.*` SSE
-events to the portal. During the stream, Factory incrementally extracts
-`workLog[].content` from the structured JSON being produced, so the UI can show
-the auditable analysis text as it grows. It never forwards raw chain-of-thought.
+consumes those token-level events internally, filters out hook/system events,
+and emits both the dedicated 思考过程 stream (`thinking` / `thinking_delta`) and
+the safe `clarification.*` analysis stream to the portal. During the stream,
+Factory incrementally extracts `workLog[].content` from the structured JSON
+being produced, so the UI can show the auditable analysis text as it grows
+separately from raw Claude Code thinking.
 
 ### Known MVP limitation (reload)
 
@@ -272,9 +288,15 @@ The `dialogue.*` family includes `dialogue.created`, `dialogue.intent.updated`,
 `dialogue.application.recommended`, `dialogue.route.confirmed`,
 `dialogue.agent_draft.updated`, `dialogue.agent.created`,
 `dialogue.clarification.updated`, `dialogue.resolved`, `dialogue.abandoned`,
-`dialogue.deleted`. `clarification.*` is retained as a legacy/backfill family.
-Internal blueprint slugs, raw Claude `stdout`/`stderr`, and `thinking_delta`
-content are **never** forwarded to the browser.
+`dialogue.deleted`, `dialogue.archived`, `dialogue.forked`,
+`dialogue.message.accepted`, `dialogue.turn.*`, and `dialogue.change.proposed`.
+The continuing-session trace events (`dialogue.work_trace`) are carried on the
+**dialogue-scoped** `/api/dialogues/:id/work-trace/stream` (see the Workbench
+section), not the global stream. `clarification.*` is retained as a
+legacy/backfill family.
+Internal blueprint slugs and raw Claude `stdout`/`stderr` are **never**
+forwarded to the browser. Claude Code CLI `thinking_delta` is forwarded only
+through the dedicated dialogue 思考过程 channel.
 
 ## Environment variables
 
@@ -289,6 +311,7 @@ content are **never** forwarded to the browser.
 | `FACTORY_LOG_MAX_BYTES` | `10485760` | rotate `FACTORY_LOG_PATH` after this many bytes |
 | `FACTORY_LOG_MAX_BACKUPS` | `5` | number of rotated `FACTORY_LOG_PATH.N` files to keep |
 | `FACTORY_FAKE_CLAUDE` | unset | `1`/`true`/`yes`/`on` enables the deterministic fake claude runner |
+| `FACTORY_MAX_CONCURRENT_JOBS` | `3` | bounded scheduler: max generation jobs run in parallel. Clamped to **1–16** on startup (values below 1 become 1; above 16 become 16). Independent applications run concurrently; a second job for an app already being generated is held queued until the first reaches a terminal state (same-app serialization) |
 | `VITE_FACTORY_API_BASE_URL` | `http://127.0.0.1:8787` | portal → factory-server base URL |
 
 ## Runtime logs
@@ -399,8 +422,9 @@ Record `kind` values: `system`, `activity`, `summary`, `command_stdout`,
 The portal subscribes to the job's SSE stream. The execution-record event type
 is `step.record.appended`; its `data` is one persisted record. The envelope
 carries a monotonic `seq` the frontend uses for **gap detection** — on a missed
-`seq` it re-hydrates from REST (see Recovery below). SSE never carries file
-content or hidden reasoning.
+`seq` it re-hydrates from REST (see Recovery below). This job-record SSE never
+carries file content or hidden reasoning; Claude Code CLI thinking is exposed
+only through the dedicated dialogue 思考过程 channel.
 
 ### Redaction
 
@@ -440,6 +464,127 @@ REST snapshots — execution-summary (cards), per-step records (drawer), and the
 artifact list — **before** applying any new SSE deltas. Detailed
 execution-records are paged per step + attempt and fetched only when the drawer
 opens, so a reload does not pull every step's full history eagerly.
+
+## Continuous Conversation Workbench (continuing sessions, traces, retention)
+
+Once a dialogue's first application is generated and deployed, the dialogue
+**stays open** in the `active` continuing phase (a legacy `resolved` dialogue is
+backfilled to `active` on startup). Follow-up modification/inquiry turns are
+processed asynchronously: `POST /api/dialogues/:id/messages` returns
+**202 Accepted** with `{dialogueId, turnId, acceptedAt}` and a per-dialogue turn
+worker drains turns in arrival order. In-flight turns can be canceled via
+`POST /api/dialogues/:id/turns/:turnId/cancel`.
+
+### Bounded concurrent generation
+
+Generation jobs are scheduled by a bounded worker pool. Control it with
+`FACTORY_MAX_CONCURRENT_JOBS` (default **3**, clamped to **1–16**).
+
+- **Independent applications run concurrently.** A generation for app B is not
+  blocked by an in-flight generation for app A.
+- **Same-app generation is serialized.** A second job for an app that already has
+  a running/queued job is held back by `ClaimNextRunnableJob` (it serializes on
+  `app_slug`); it becomes claimable only once the prior job reaches a terminal
+  state. This guarantees a versioned candidate build (v2) does not race the
+  currently-effective version (v1) of the same app.
+
+### Versioned builds, promotion, and retain-on-failure
+
+Each generation produces an `application_versions` row (`queued` → `building` →
+`effective`/`failed`/`superseded`). On a successful deployment the candidate is
+**promoted** (prior effective is superseded in one transaction). If the
+candidate's **health check fails**, the prior effective version is **retained**:
+it stays `effective` and its deployment stays `running` — the failed candidate is
+recorded as `failed` in the lineage for audit. A version can be rolled back via
+`POST /api/apps/:id/rollback` (`{"confirm":true,"version_id":"..."}`), which
+re-promotes the previous effective version through a health check.
+
+### Visible work-trace replay (per dialogue)
+
+The model's auditable process flows ONLY through the dialogue-scoped work-trace,
+never through the global `/api/events` stream:
+
+```bash
+# REST hydration — ascending by sequence, filtered to ONE dialogue
+curl http://127.0.0.1:8787/api/dialogues/<id>/work-trace
+curl 'http://127.0.0.1:8787/api/dialogues/<id>/work-trace?afterSequence=5'
+
+# SSE stream — replays persisted rows first, then forwards live events
+curl -N http://127.0.0.1:8787/api/dialogues/<id>/work-trace/stream
+```
+
+**Reconnect / `Last-Event-ID`:** each SSE frame carries the row's `sequence` as
+the SSE `id:` line. On reconnect, send the last received sequence as the
+`Last-Event-ID` request header (or the `afterSequence` query param) and replay
+resumes from the NEXT sequence — already-seen rows are never re-sent. When both
+are set, the **header wins**. The stream replays persisted rows first, then
+switches to live forwarding, de-duplicating across the replay→live boundary.
+
+**Isolation:** both endpoints filter strictly to `:id`. A trace event for
+dialogue B is never delivered on dialogue A's stream — enforced server-side at
+both the REST query and the SSE live forwarder, which also store-validates every
+live event (an event not present in `work_trace_events` is dropped, so a
+misbehaving producer cannot inject un-persisted data).
+
+### Attachment caps and thinking-channel separation (Constraint #9 revised)
+
+Raw request/response bodies and credentials **never reach** the trace, the SSE
+stream, or stored attachments. Claude Code CLI `thinking` / `thinking_delta` is
+the exception introduced by ADR 0007: it reaches only the dedicated 思考过程
+channel and must not be mixed into generic trace/tool/stdout/stderr channels:
+
+- The trace store is a single trust boundary: `AppendDialogueTrace` rejects any
+  type outside the allowlist (`intent`, `approach`, `assumption`,
+  `clarification`, `tool`, `data`, `validation`, `change_confirmation`, `task`,
+  `version`, `deployment`, `warning`, `error`, `assistant_output`). `thinking`,
+  `raw_request`, `raw_response`, and empty/credential-ish types are **rejected**
+  (nothing is persisted).
+- Even on an allowed type, sensitive JSON keys (`api_key`, `token`, `secret`,
+  `password`, `authorization`, `credential`, `private_key`, … matched at any
+  nesting depth, case-insensitively) are zeroed to `[redacted]` before insert.
+- Per-payload size is capped and oversized payloads are truncated with a marker
+  rather than stored whole. Text artifacts are tailed at **10 MiB** (see the
+  generation-observability section above). Thinking emitted by the real CLI is
+  excluded from the generic trace-emission pipeline and forwarded through the
+  dedicated 思考过程 channel instead.
+
+### Retention and explicit deletion
+
+Audit history persists until **explicit** deletion:
+
+- **Archiving** a dialogue (`POST /api/dialogues/:id/archive`) flips it to the
+  `archived` phase and emits `dialogue.archived` — it shelves the conversation
+  WITHOUT deleting anything (trace, versions, deployments, and job records all
+  remain). It is idempotent.
+- **Deleting an application** (`DELETE /api/apps/:id`) removes the
+  `applications` row and its `deployments` in one transaction, but **preserves**
+  audit history: the linked `jobs`, `job_steps`, `application_versions`, and
+  `work_trace_events` rows remain readable (they orphan but are not purged).
+- **Explicitly deleting a dialogue** (`DELETE /api/dialogues/:id`) removes the
+  `dialogue_sessions` and `dialogue_messages` rows; linked jobs, apps, versions,
+  and trace events are intentionally left untouched.
+- **Semantic trace, version, and deployment records therefore persist until
+  explicit dialogue deletion.** Attachments are always redacted and size-capped
+  (Constraint #9). There is no automatic TTL purge of audit records.
+
+### Migration smoke check (legacy dialogues)
+
+When `factory-server` starts against a database from an earlier build:
+
+- legacy `resolved` dialogues are backfilled to `active`
+  (`BackfillResolvedDialoguesToActive`);
+- the four `jobs` lineage columns (`dialogue_id`, `application_id`,
+  `base_version_id`, `kind`) are added via `ensureColumn`;
+- the `application_versions`, `dialogue_turns`, and `work_trace_events` tables
+  are created (`CREATE TABLE IF NOT EXISTS`).
+
+All of the above are **idempotent** — restarting the server does not duplicate or
+rewrite already-migrated rows. Verify after first startup:
+
+```bash
+curl http://127.0.0.1:8787/api/dialogues      # backfilled dialogues present
+# restart factory-server, re-run the same call — ids and statuses unchanged
+```
 
 ## Notes / known constraints
 

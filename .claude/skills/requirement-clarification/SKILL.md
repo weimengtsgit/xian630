@@ -1,20 +1,25 @@
 ---
 name: requirement-clarification
-description: Guide a user from an initial software factory request to a structured confirmed application requirement, one decision at a time, over an adaptive 6-round flow.
+description: Guide a user from an initial software factory request to a structured confirmed application requirement through adaptive multi-question batch clarification rounds.
 ---
 
 # Requirement Clarification
 
 Use this skill when Factory asks you to run a clarification round for a software
 factory user request. Clarification is now **application-only** and follows an
-**adaptive, one-decision-at-a-time, 6-round** flow.
+**adaptive, multi-question batch, up-to-6-round** flow. Six rounds is a maximum,
+not a quota: converge earlier when all high-impact items and required fields are
+explicitly resolved.
 
 ## Adaptive Method (6 rounds)
 
-1. **Rounds 1–4 — one decision at a time.** Each round you may emit ZERO
-   questions or EXACTLY ONE required question, with 2–3 options and a
-   recommendation. Never emit more than one question in a round — Factory
-   rejects a round with multiple questions.
+1. **Rounds 1–4 — business-specific question batches.** Each round you may emit
+   ZERO questions or a batch containing ALL currently identified high-impact /
+   must-confirm questions. Each option question should have 2–3 options and a
+   recommendation. Do not turn low-impact fields that can be reasonably assumed
+   into questions merely to fill a count; state those assumptions in `workLog`
+   and include them in the final requirement summary. Do not skip straight to
+   `ready_to_confirm` in round 1 if any high-impact item is still only assumed.
 2. **Round 5 — consolidation (only if still incomplete after round 4).** Emit a
    `consolidation` list: one entry per remaining missing field, each with a
    recommended typed value, a reason, and alternatives. This is a model round.
@@ -23,7 +28,42 @@ factory user request. Clarification is now **application-only** and follows an
    you again, then marks `ready_to_confirm`.
 
 When enough information is present, stop asking and return `ready_to_confirm`
-with a complete `requirement` and a `normalizedScenarioName`.
+with a complete `requirement` and a `normalizedScenarioName`; do not continue
+asking just to use all six rounds.
+
+## High-Impact Confirmation Gate (高影响确认事项)
+
+Some requirement decisions are HIGH-IMPACT: they fundamentally shape the
+generated application and must be explicitly confirmed by the user, not assumed.
+A field you fill from a blueprint assumption is **NOT** a confirmed high-impact
+decision — the user must actually answer.
+
+Each round, identify the open 高影响确认事项 (e.g. data source/policy, scope of
+coverage, primary user role). While ANY remain open:
+
+1. **Surface ALL of them at once** as the round's `questions[]` (each with 2–3
+   options and a recommendation) so the user can confirm every high-impact item
+   in a single batch — do NOT dribble them out one per round.
+2. **List the full set** in `openHighImpact` (the same items you surfaced as
+   `questions[]`).
+3. When the user answers, the NEXT round re-evaluates: DROP every resolved item
+   from `openHighImpact`, surface any STILL-open ones again as `questions[]`,
+   or — when none remain — return `ready_to_confirm`.
+
+`ready_to_confirm` requires `openHighImpact` to be EMPTY, **regardless of how
+detailed the first message is or how complete the requirement looks**. A
+detailed first message does NOT let you skip the high-impact gate.
+
+Each `openHighImpact` entry is **user-facing only**:
+
+- `id` and `label` are plain-language identifiers (e.g. `data_policy`,
+  "数据来源策略"). NEVER use internal blueprint/catalog slugs.
+- `recommendation` is the option value you recommend (optional).
+- `options` is 2–3 plain-language options, each a `value` + `label`.
+
+Factory validates structure: an entry with an empty id/label, more than 3
+options, or a value that looks like an internal slug (`software-factory-app`,
+`carrier-formation-replay`) is dropped.
 
 ## Output Contract
 
@@ -59,6 +99,17 @@ Output ONLY this JSON object (no prose, no ```json fences):
       "alternatives": ["列表"]
     }
   ],
+  "openHighImpact": [
+    {
+      "id": "data_policy",
+      "label": "数据来源策略",
+      "recommendation": "mock_data",
+      "options": [
+        { "value": "mock_data", "label": "Mock 数据优先", "reason": "便于快速验证" },
+        { "value": "api_first", "label": "接口数据优先", "reason": "对接真实系统" }
+      ]
+    }
+  ],
   "requirement": {
     "appType": "situation_replay",
     "appName": "",
@@ -79,16 +130,22 @@ Output ONLY this JSON object (no prose, no ```json fences):
 }
 ```
 
-- `status` is `waiting_user` (more clarification needed, at most one question)
+- `status` is `waiting_user` (more clarification needed, one batch of questions)
   or `ready_to_confirm` (complete, no questions).
 - `normalizedScenarioName` — a concise scenario name the model supplies. Factory
   appends a trusted Base36 serial in a later step; do NOT include any serial or
   numeric suffix here.
-- `questions` — at most ONE question per round (rounds 1–4); each with 2–3
-  options. More than one question is a contract violation.
+- `questions` — ALL open high-impact questions in one round (each with 2–3
+  options), so the user answers them in a single batch. Zero questions only when
+  returning `ready_to_confirm`.
 - `consolidation` — emitted at round 5 only. One entry per remaining missing
   field. `recommendedValue` is a typed JSON value (string for scalars, array for
   list fields like `targetUsers`, `mainEntities`, `acceptanceFocus`).
+- `openHighImpact` — the currently-open 高影响确认事项 (see the High-Impact
+  Confirmation Gate section). While non-empty, `status` must be `waiting_user`
+  and EVERY item in this list is also surfaced as a `questions[]` entry. Only
+  when this list is empty may you return `ready_to_confirm`. User-facing only:
+  no internal slugs.
 - `requirement.blueprintRefs` — server-side-only metadata. Blueprints are an
   internal Factory reference; populate `blueprintRefs` when the intent matches;
   otherwise use an empty array. NEVER surface blueprints in any user-facing
@@ -98,13 +155,21 @@ Output ONLY this JSON object (no prose, no ```json fences):
 
 - Never output `confirmed`; Factory reserves that status for after the user
   clicks the final confirm action and a generation job is created.
-- Ask at most ONE question per round (rounds 1–4). Each question has 2–3
-  options and a recommendation. Do NOT exceed 6 rounds.
+- Surface ALL open high-impact questions in one round (each with 2–3 options
+  and a recommendation) so the user confirms them in a single batch. Do NOT
+  exceed 6 rounds.
+- **High-impact items are non-skippable (D3).** While `openHighImpact` is
+  non-empty you MUST return `waiting_user` and surface EVERY one of them as a
+  `questions[]` entry. A complete requirement filled from blueprint assumptions
+  does NOT clear the gate — the user must explicitly confirm each high-impact
+  item. Never emit internal blueprint/catalog slugs in `openHighImpact`
+  ids/labels.
 - Do not create a generation job. Do not generate code.
-- Never expose hidden chain-of-thought or thinking. The `workLog` is the only
-  user-facing analysis surface — it explains what you identified, why you
-  recommend an option, and what remains unconfirmed. Never relay hidden
-  reasoning.
+- The `workLog` is the user-facing analysis surface (分析过程) — it explains what
+  you identified, why you recommend an option, and what remains unconfirmed.
+  Your raw thinking is ALSO surfaced live on the conversation surface (思考过程),
+  streamed token-by-token — think naturally; do not put secrets, credentials, or
+  internal blueprint/catalog slugs in it.
 - Never describe a blueprint as a template, sample, or copy source. Blueprints
   are an internal Factory reference only and must not appear in user-facing
   output.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -283,7 +284,11 @@ func TestTestVerificationDependencyInstallFails(t *testing.T) {
 	}
 }
 
-// TestImageBuildRunsPodmanBuild: podman build invoked with the right tag.
+// TestImageBuildRunsPodmanBuild: podman build invoked with the version-keyed
+// tag. A candidate build resolves to an isolated versioned dir under the app's
+// generated-apps/<slug>/ tree and tags the image
+// localhost/software-factory/<slug>:<version-id> so candidate + effective
+// images coexist.
 func TestImageBuildRunsPodmanBuild(t *testing.T) {
 	st := newFactoryTestStore(t)
 	ws := seedFactoryWorkspace(t, true)
@@ -298,16 +303,8 @@ func TestImageBuildRunsPodmanBuild(t *testing.T) {
 		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
 	}
 	names := cmds.names()
-	want := "podman build -t localhost/software-factory/demo:job-job_demo_1 ."
-	if len(names) != 1 || names[0] != want {
-		t.Fatalf("calls = %v, want [%q]", names, want)
-	}
-	// The podman build must run in the workspace-rooted project dir
-	// (filepath.Join(workspace, app.Path)), not the bare relative app.Path.
-	// In production the server's cwd is factory-server/, not the workspace
-	// root, so a bare "generated-apps/demo" would resolve the build context
-	// against the wrong directory.
-	wantDir := filepath.Join(ws, "generated-apps", "demo")
+	// The tag is the candidate version id (ver_<rand>), not the job id. Capture
+	// it from the build argv and assert the repo/slug prefix + the ver_ tag.
 	var buildCall *fakeCmdCall
 	for i := range cmds.calls {
 		c := &cmds.calls[i]
@@ -319,8 +316,31 @@ func TestImageBuildRunsPodmanBuild(t *testing.T) {
 	if buildCall == nil {
 		t.Fatalf("no podman build call recorded; calls=%v", names)
 	}
-	if buildCall.Dir != wantDir {
-		t.Fatalf("podman build dir = %q, want %q (workspace-rooted)", buildCall.Dir, wantDir)
+	// argv shape: build -t localhost/software-factory/demo:<ver-id> .
+	wantTagPrefix := "localhost/software-factory/demo:ver_"
+	gotTag := ""
+	for i, a := range buildCall.Args {
+		if a == "-t" && i+1 < len(buildCall.Args) {
+			gotTag = buildCall.Args[i+1]
+		}
+	}
+	if !strings.HasPrefix(gotTag, wantTagPrefix) {
+		t.Fatalf("image tag = %q, want prefix %q", gotTag, wantTagPrefix)
+	}
+	// The candidate build must run inside the isolated versioned dir, NOT the
+	// effective source dir (generated-apps/demo). The candidate dir is
+	// generated-apps/demo/versions/<ver-id>.
+	if !strings.HasPrefix(buildCall.Dir, filepath.Join(ws, "generated-apps", "demo", "versions")+string(os.PathSeparator)) {
+		t.Fatalf("podman build dir = %q, want a versioned subdir under generated-apps/demo/versions/", buildCall.Dir)
+	}
+	// An application_versions row must have been recorded for this candidate,
+	// linked to the job, in the building state.
+	versions, err := st.ListApplicationVersions(context.Background(), "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].JobID != job.ID || versions[0].Status != model.ApplicationVersionBuilding {
+		t.Fatalf("expected one building version for job %s; got %+v", job.ID, versions)
 	}
 }
 
@@ -651,6 +671,244 @@ func TestDeploymentHealthFailCleansUp(t *testing.T) {
 	}
 	if app.Status != model.AppStatusError {
 		t.Fatalf("app status = %s, want error", app.Status)
+	}
+}
+
+// TestCandidateBuildDoesNotMutateEffectiveSource (Task 6): a candidate build's
+// npm install + build output land ONLY in the isolated versioned candidate dir,
+// never in the effective source dir generated-apps/demo/. The effective source
+// must be byte-for-byte untouched (no dist/, no node_modules leak).
+func TestCandidateBuildDoesNotMutateEffectiveSource(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	// Snapshot the effective source tree BEFORE the candidate run.
+	effSrc := filepath.Join(ws, "generated-apps", "demo")
+	before := dirListing(t, effSrc)
+	r, _ := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepTestVerification)
+	if res, err := r.Run(context.Background(), job, step, runner.NopEmitter{}); err != nil || res.Status != model.StepStatusSucceeded {
+		t.Fatalf("Run: %v %#v", err, res)
+	}
+
+	// The candidate build wrote its outputs (e.g. a fresh dist from the fake
+	// npm run build) into versions/<ver>/, NOT into the effective source.
+	after := dirListing(t, effSrc)
+	if !equalListing(before, after) {
+		t.Fatalf("effective source dir was mutated by candidate build\nbefore=%v\nafter =%v", before, after)
+	}
+	// The versions subtree must exist under the effective source.
+	versionsDir := filepath.Join(effSrc, "versions")
+	if entries, err := os.ReadDir(versionsDir); err != nil || len(entries) == 0 {
+		t.Fatalf("candidate versions dir missing/empty: %v", err)
+	}
+}
+
+// dirListing returns the sorted set of relative paths under root (recursive),
+// excluding any "versions" subtree (that is the candidate workspace, not the
+// effective source content).
+func dirListing(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		if rel == "." || strings.HasPrefix(rel, "versions") {
+			if d.IsDir() && rel == "versions" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func equalListing(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// seedEffectiveVersion seeds app-demo with an already-effective v1 (status
+// effective, promoted) plus its running deployment, then returns the version id
+// and deployment. This is the baseline the Task-6 retain-on-failure path must
+// preserve when a candidate v2 fails its health check.
+func seedEffectiveVersion(t *testing.T, st *store.Store) (string, model.Deployment) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	depV1 := model.Deployment{
+		ID:            "dep_v1",
+		AppID:         "app-demo",
+		ImageName:     "localhost/software-factory/demo",
+		ImageTag:      "ver_v1",
+		ContainerName: "sf-demo-v1",
+		HostPort:      18000,
+		ContainerPort: 8080,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}
+	if err := st.CreateDeployment(ctx, depV1); err != nil {
+		t.Fatalf("seed v1 deployment: %v", err)
+	}
+	if err := st.SetAppRuntime(ctx, "app-demo", string(model.AppStatusRunning), depV1.URL); err != nil {
+		t.Fatalf("seed app running: %v", err)
+	}
+	promoted := now
+	v1, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID:            "ver_v1",
+		ApplicationID: "app-demo",
+		JobID:         "job_v1",
+		Status:        model.ApplicationVersionEffective,
+		DeploymentID:  depV1.ID,
+		SourcePath:    "generated-apps/demo",
+		CreatedAt:     now,
+		PromotedAt:    &promoted,
+	})
+	if err != nil {
+		t.Fatalf("seed effective v1: %v", err)
+	}
+	return v1.ID, depV1
+}
+
+// TestFailedDeploymentLeavesPreviousEffectiveVersionRunning (Task 6): when a
+// candidate v2 fails its health check AND a prior effective version v1 exists,
+// v1 must remain effective with its deployment still running, v2 is marked
+// failed, and the app must NOT be flipped to error.
+func TestFailedDeploymentLeavesPreviousEffectiveVersionRunning(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	v1ID, depV1 := seedEffectiveVersion(t, st)
+	// Failing health check for the candidate.
+	r, cmds := newFactoryRunner(st, ws, false)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorHealthCheckFailed {
+		t.Fatalf("result = %s/%s, want failed/health_check_failed", res.Status, res.ErrorCode)
+	}
+
+	ctx := context.Background()
+	// v1 must STILL be the effective version.
+	eff, err := st.GetEffectiveApplicationVersion(ctx, "app-demo")
+	if err != nil {
+		t.Fatalf("GetEffectiveApplicationVersion: %v", err)
+	}
+	if eff == nil || eff.ID != v1ID {
+		t.Fatalf("effective version = %+v, want v1 %s (retained)", eff, v1ID)
+	}
+	// v1's deployment must still be running — the candidate's health failure
+	// must not stop the prior effective container.
+	gotDepV1, err := st.GetDeployment(ctx, depV1.ID)
+	if err != nil || gotDepV1 == nil {
+		t.Fatalf("get v1 deployment: %#v %v", gotDepV1, err)
+	}
+	if gotDepV1.Status != "running" {
+		t.Fatalf("v1 deployment status = %q, want running (prior service retained)", gotDepV1.Status)
+	}
+	// The candidate v2 must be marked failed.
+	versions, err := st.ListApplicationVersions(ctx, "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	var failed int
+	for _, v := range versions {
+		if v.JobID == job.ID && v.Status == model.ApplicationVersionFailed {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("expected candidate v2 failed; versions=%+v", versions)
+	}
+	// The app must remain RUNNING (not error) because the prior effective
+	// version is still serving.
+	app, err := st.GetApplication(ctx, "app-demo")
+	if err != nil {
+		t.Fatalf("GetApplication: %v", err)
+	}
+	if app.Status != model.AppStatusRunning {
+		t.Fatalf("app status = %s, want running (prior effective retained)", app.Status)
+	}
+	if app.RuntimeURL != depV1.URL {
+		t.Fatalf("app runtime_url = %q, want %q (prior effective URL retained)", app.RuntimeURL, depV1.URL)
+	}
+	// The prior effective container (sf-demo-v1) must NOT have been stopped.
+	for _, n := range cmds.names() {
+		if strings.Contains(n, "sf-demo-v1") {
+			t.Fatalf("prior effective container was touched on candidate failure: %s", n)
+		}
+	}
+}
+
+// TestSuccessfulDeploymentPromotesCandidateVersion (Task 6): a candidate v2
+// that passes its health check becomes the effective version, v1 is superseded,
+// the app is running on the new URL, and the old effective container is stopped.
+func TestSuccessfulDeploymentPromotesCandidateVersion(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	v1ID, depV1 := seedEffectiveVersion(t, st)
+	r, cmds := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+
+	ctx := context.Background()
+	// v2 is now effective; v1 superseded.
+	eff, err := st.GetEffectiveApplicationVersion(ctx, "app-demo")
+	if err != nil || eff == nil {
+		t.Fatalf("effective version: %#v %v", eff, err)
+	}
+	if eff.JobID != job.ID {
+		t.Fatalf("effective version job = %q, want %q (candidate promoted)", eff.JobID, job.ID)
+	}
+	if eff.DeploymentID == "" {
+		t.Fatalf("promoted version has no deployment_id")
+	}
+	v1, err := st.GetApplicationVersionByID(ctx, v1ID)
+	if err != nil {
+		t.Fatalf("get v1: %v", err)
+	}
+	if v1.Status != model.ApplicationVersionSuperseded {
+		t.Fatalf("v1 status = %s, want superseded", v1.Status)
+	}
+	// The old effective container was stopped.
+	if !containsCommand(cmds.names(), "podman stop sf-demo-v1") {
+		t.Fatalf("old effective container should be stopped; calls=%v", cmds.names())
+	}
+	gotDepV1, _ := st.GetDeployment(ctx, depV1.ID)
+	if gotDepV1.Status != "stopped" {
+		t.Fatalf("old deployment status = %q, want stopped", gotDepV1.Status)
+	}
+	// New active deployment exists and app is running on the new URL.
+	active, err := st.GetActiveDeployment(ctx, "app-demo")
+	if err != nil || active == nil || active.ID == depV1.ID {
+		t.Fatalf("active deployment = %#v %v", active, err)
+	}
+	app, _ := st.GetApplication(ctx, "app-demo")
+	if app.Status != model.AppStatusRunning || app.RuntimeURL != active.URL {
+		t.Fatalf("app = %s/%q, want running/%q", app.Status, app.RuntimeURL, active.URL)
 	}
 }
 
@@ -1068,6 +1326,77 @@ func TestFactoryStepStreamingStillRedactsSecretInArtifact(t *testing.T) {
 	// TestStepEmitterEmitRedactsBeforePersistAndPublish.
 	if !strings.Contains(emit.joined(model.ExecutionRecordCommandStdout), "built ok") {
 		t.Errorf("command_stdout record not streamed; got:\n%s", emit.joined(model.ExecutionRecordCommandStdout))
+	}
+}
+
+func TestIsFullNginxConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare server block", "server { listen 80; }\n", false},
+		{"full config with events", "events { worker_connections 1024; }\nhttp { server { listen 80; } }\n", true},
+		{"full config with http only", "http { server { listen 80; } }\n", true},
+		{"comments ignored", "# events {\nserver { listen 80; }\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".conf")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+			if got := isFullNginxConfig(path); got != tc.want {
+				t.Fatalf("isFullNginxConfig(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesFullConfigToMainPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("events { worker_connections 1024; }\nhttp { server { listen 80; } }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/nginx.conf") {
+		t.Fatalf("full nginx config should be copied to /etc/nginx/nginx.conf; got:\n%s", dockerfile)
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesServerBlockToConfD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("server { listen 80; }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/conf.d/default.conf") {
+		t.Fatalf("bare server block should be copied to /etc/nginx/conf.d/default.conf; got:\n%s", dockerfile)
 	}
 }
 

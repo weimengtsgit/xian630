@@ -67,14 +67,15 @@ func TestAuditHonestDataFlagsMockIdentifier(t *testing.T) {
 	}
 }
 
-// TestAuditHonestDataFlagsMathSinTide proves a Math.sin tide synthesizer in a
-// data-layer file is caught when a numeric data skill is declared.
-func TestAuditHonestDataFlagsMathSinTide(t *testing.T) {
+// TestAuditHonestDataMathSinPasses proves Math.sin/cos in a data-layer file is
+// NOT flagged: the numeric-synthesis rule was removed because it could not tell
+// synthetic series apart from legitimate geometry/distance math (haversine,
+// projections), which falsely blocked real data-science apps.
+func TestAuditHonestDataMathSinPasses(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export function series(h){ return Math.sin(h/12*Math.PI); }\n")
-	err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"})
-	if !errors.Is(err, ErrSchemaValidationFailed) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed for Math.sin tide synth", err)
+	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil (Math.sin is not a reliable synthetic signal)", err)
 	}
 }
 

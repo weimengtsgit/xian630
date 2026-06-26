@@ -11,23 +11,24 @@ import (
 // CreateJob inserts a new job row.
 func (s *Store) CreateJob(ctx context.Context, job model.Job) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
 		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
 		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
-		job.ClarificationSessionID, job.ConfirmedRequirementJSON)
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind)
 	return err
 }
 
 // CreateJobStep inserts a new job step row.
 func (s *Store) CreateJobStep(ctx context.Context, step model.JobStep) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
 		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
-		boolToInt(step.NeedsUserInput), step.UserPrompt, string(step.ErrorCode), step.ErrorMessage,
+		boolToInt(step.NeedsUserInput), step.UserPrompt, step.PendingQuestions, string(step.ErrorCode), step.ErrorMessage,
 		step.ClaudeSessionID, step.CCStatusSessionID)
 	return err
 }
@@ -37,13 +38,78 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 // + the clarification link are committed atomically.
 func createJobStepInTx(ctx context.Context, tx *sql.Tx, step model.JobStep) error {
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
 		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
-		boolToInt(step.NeedsUserInput), step.UserPrompt, string(step.ErrorCode), step.ErrorMessage,
+		boolToInt(step.NeedsUserInput), step.UserPrompt, step.PendingQuestions, string(step.ErrorCode), step.ErrorMessage,
 		step.ClaudeSessionID, step.CCStatusSessionID)
 	return err
+}
+
+func createJobInTx(ctx context.Context, tx *sql.Tx, job model.Job) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
+		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
+		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
+		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind)
+	return err
+}
+
+func (s *Store) seedJobInTx(ctx context.Context, tx *sql.Tx, job model.Job, steps []model.JobStep) error {
+	if err := createJobInTx(ctx, tx, job); err != nil {
+		return err
+	}
+	for _, step := range steps {
+		if s.jobOnCreateStepHook != nil {
+			if err := s.jobOnCreateStepHook(step); err != nil {
+				return err
+			}
+		}
+		if err := createJobStepInTx(ctx, tx, step); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SeedJob atomically creates a job and its full fixed step plan. It is used by
+// revision generation as well as initial generation so either path rolls back
+// completely when an individual step insert fails.
+func (s *Store) SeedJob(ctx context.Context, job model.Job, steps []model.JobStep) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SeedJobWithApplicationVersion atomically creates a revision job, its steps,
+// and the queued immutable candidate version. The caller derives application
+// and parent-version ids from server-side lineage before invoking this method.
+func (s *Store) SeedJobWithApplicationVersion(ctx context.Context, job model.Job, steps []model.JobStep, version model.ApplicationVersion) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+		return err
+	}
+	if version.CreatedAt.IsZero() {
+		version.CreatedAt = time.Now()
+	}
+	if err := createApplicationVersion(ctx, tx, version); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SeedClarificationJob atomically creates a confirmed clarification's generation
@@ -60,24 +126,8 @@ func (s *Store) SeedClarificationJob(ctx context.Context, job model.Job, steps [
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
-		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
-		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
-		job.ClarificationSessionID, job.ConfirmedRequirementJSON); err != nil {
+	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
 		return err
-	}
-	for _, step := range steps {
-		if s.jobOnCreateStepHook != nil {
-			if err := s.jobOnCreateStepHook(step); err != nil {
-				return err
-			}
-		}
-		if err := createJobStepInTx(ctx, tx, step); err != nil {
-			return err
-		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE clarification_sessions SET created_job_id = ?, updated_at = ? WHERE id = ?`,
@@ -98,7 +148,7 @@ func (s *Store) SetJobStepSeedHook(fn func(model.JobStep) error) {
 // ListJobSteps returns the steps for a job ordered by sequence.
 func (s *Store) ListJobSteps(ctx context.Context, jobID string) ([]model.JobStep, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id
 FROM job_steps
 WHERE job_id = ?
 ORDER BY seq`, jobID)
@@ -115,7 +165,7 @@ ORDER BY seq`, jobID)
 		var needsUserInput int
 		if err := rows.Scan(&st.ID, &st.JobID, &kind, &st.Seq, &st.AgentKey,
 			&status, &st.Attempt, &started, &ended, &needsUserInput,
-			&st.UserPrompt, &errorCode, &st.ErrorMessage,
+			&st.UserPrompt, &st.PendingQuestions, &errorCode, &st.ErrorMessage,
 			&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
 			return nil, err
 		}
@@ -147,7 +197,8 @@ func scanJob(sc scanner) (*model.Job, error) {
 	if err := sc.Scan(&j.ID, &j.UserPrompt, &j.NormalizedPrompt, &j.AppSlug, &j.AppName,
 		&status, &stepKind, &j.CreatedAppID, &j.LockOwner,
 		&createdMs, &started, &ended, &updatedMs,
-		&j.ClarificationSessionID, &j.ConfirmedRequirementJSON); err != nil {
+		&j.ClarificationSessionID, &j.ConfirmedRequirementJSON,
+		&j.DialogueID, &j.ApplicationID, &j.BaseVersionID, &j.Kind); err != nil {
 		return nil, err
 	}
 	j.Status = model.JobStatus(status)
@@ -161,7 +212,7 @@ func scanJob(sc scanner) (*model.Job, error) {
 
 // jobSelectCols lists the jobs columns in scan order, shared by GetJob and
 // ListJobs to keep the SELECT and scanJob in sync.
-const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json`
+const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind`
 
 // GetJob returns the job with the given id. It returns (nil, nil) on a miss —
 // a missing row is not an error — mirroring GetApplication/GetAgent.
@@ -195,6 +246,26 @@ func (s *Store) ListJobs(ctx context.Context, status string) ([]model.Job, error
 	}
 	defer rows.Close()
 
+	out := make([]model.Job, 0)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *j)
+	}
+	return out, rows.Err()
+}
+
+// ListJobsByDialogue returns every job linked to a dialogue (via dialogue_id),
+// oldest-first. deleteDialogue uses it to cancel any still-in-flight job before
+// removing a dialogue the user can now delete in any status.
+func (s *Store) ListJobsByDialogue(ctx context.Context, dialogueID string) ([]model.Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobSelectCols+` FROM jobs WHERE dialogue_id = ? ORDER BY created_at ASC`, dialogueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	out := make([]model.Job, 0)
 	for rows.Next() {
 		j, err := scanJob(rows)
@@ -263,6 +334,102 @@ func (s *Store) GetOldestQueuedJob(ctx context.Context) (*model.Job, error) {
 		return nil, err
 	}
 	return j, nil
+}
+
+// ClaimNextRunnableJob atomically claims the next job a worker should run:
+// the oldest QUEUED job whose app_slug has NO currently RUNNING job, flipped to
+// running with lock_owner stamped and started_at stamped on first run. It
+// returns (nil, nil) when no such job exists (every queued job's app already has
+// a running job, or nothing is queued).
+//
+// ATOMICITY: the claim is a BeginTx→SELECT→UPDATE→Commit transaction (two
+// statements), NOT a single UPDATE. Atomicity depends on the single-connection
+// pool (store.Open pins SetMaxOpenConns(1)): concurrent workers' BeginTx calls
+// serialize on that one connection, so worker B cannot begin until worker A
+// commits — its SELECT then sees the row already flipped to running. Do NOT
+// raise SetMaxOpenConns (e.g. for read concurrency) without first collapsing
+// the SELECT+UPDATE into a single conditional UPDATE: a bare
+// SELECT-then-UPDATE double-claims once the pool can hand out >1 connection,
+// because Go's database/sql releases the connection back to the pool between the
+// two statements and two workers can SELECT the same queued row before either
+// UPDATEs.
+//
+// SERIALIZATION KEY IS app_slug (NOT application_id). Two jobs for the same app
+// both write generated-apps/<slug>/ and the same image tag — a destructive race
+// — so the claim must serialize them by slug. application_id is empty for
+// generation jobs until the app registers mid-run, so keying the claim on it
+// would fail to serialize same-app generation jobs. app_slug is the stable
+// per-lineage key present at seed for BOTH job kinds: generation pre-allocates
+// it (dialogue_handlers.go), and modification targets an existing app whose slug
+// is known. The claim therefore excludes queued jobs whose app_slug matches any
+// running job's app_slug.
+func (s *Store) ClaimNextRunnableJob(ctx context.Context, workerID string) (*model.Job, error) {
+	now := ms(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Inside the transaction: SELECT the oldest eligible queued job, then UPDATE
+	// it to running by id. Because the pool has a single connection
+	// (SetMaxOpenConns(1)), a second worker's BeginTx blocks until this tx
+	// commits — so its SELECT cannot see the same queued row the first worker is
+	// about to flip. This serialization is the atomicity guarantee; it relies on
+	// the single-connection pool, NOT on SQLite's writer lock alone.
+	var jobID string
+	err = tx.QueryRowContext(ctx, `
+SELECT j.id FROM jobs j
+WHERE j.status = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM jobs r
+    WHERE r.status IN (?, ?) AND r.app_slug = j.app_slug AND r.app_slug <> ''
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM jobs r
+    WHERE r.status IN (?, ?) AND r.app_slug = '' AND j.app_slug = ''
+  )
+ORDER BY j.created_at ASC
+LIMIT 1`,
+		string(model.JobStatusQueued),
+		string(model.JobStatusRunning),
+		string(model.JobStatusWaitingUser),
+		string(model.JobStatusRunning),
+		string(model.JobStatusWaitingUser)).Scan(&jobID)
+	if err == sql.ErrNoRows {
+		// Nothing eligible: commit the read tx (no write lock held) and return.
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs
+SET status = ?, lock_owner = ?, started_at = COALESCE(started_at, ?), updated_at = ?
+WHERE id = ?`,
+		string(model.JobStatusRunning), workerID, now, now, jobID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	// Re-read so the returned job reflects the flipped status + started_at.
+	return s.GetJob(ctx, jobID)
+}
+
+// CountRunningJobsByAppSlug returns the number of jobs currently in the running
+// state for the given app_slug. rebuildApp uses it to scope the executor-busy
+// conflict per app: a rebuild conflicts only with a running JOB for the same
+// app, not with jobs of unrelated apps.
+func (s *Store) CountRunningJobsByAppSlug(ctx context.Context, appSlug string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM jobs WHERE status = ? AND app_slug = ?`,
+		string(model.JobStatusRunning), appSlug).Scan(&n)
+	return n, err
 }
 
 // MarkJobRunning flips a job to running, sets lock_owner, stamps started_at the
@@ -338,10 +505,43 @@ UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
 // CreatedAppID instead of relying on the slug alone.
 func (s *Store) SetJobCreatedApp(ctx context.Context, jobID, appID, slug, name string) error {
 	now := ms(time.Now())
-	_, err := s.db.ExecContext(ctx, `
-UPDATE jobs SET created_app_id = ?, app_slug = ?, app_name = ?, updated_at = ? WHERE id = ?`,
-		appID, slug, name, now, jobID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs SET created_app_id = ?, application_id = ?, app_slug = ?, app_name = ?, updated_at = ? WHERE id = ?`,
+		appID, appID, slug, name, now, jobID); err != nil {
+		return err
+	}
+	var dialogueID string
+	if err := tx.QueryRowContext(ctx, `SELECT dialogue_id FROM jobs WHERE id = ?`, jobID).Scan(&dialogueID); err != nil {
+		return err
+	}
+	if dialogueID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET resolved_application_id = ?, status = CASE WHEN status = ? THEN ? ELSE status END, updated_at = ?
+WHERE id = ?`, appID, string(model.DialogueStatusTaskRunning), string(model.DialogueStatusActive), now, dialogueID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetLatestJobForApplication returns the newest job that produced or targets
+// appID. Revision confirmation reuses its server-confirmed requirement rather
+// than accepting a requirement payload from the browser.
+func (s *Store) GetLatestJobForApplication(ctx context.Context, appID string) (*model.Job, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+jobSelectCols+`
+FROM jobs WHERE application_id = ? OR created_app_id = ?
+ORDER BY created_at DESC LIMIT 1`, appID, appID)
+	j, err := scanJob(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return j, err
 }
 
 // MarkStepRunning flips a step to running, bumps attempt, and stamps started_at
@@ -382,11 +582,12 @@ UPDATE job_steps SET status = ?, ended_at = ?, error_code = ?, error_message = ?
 }
 
 // MarkStepWaitingUser flips a step to waiting_user, recording whether the
-// runner asked for user input.
-func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID string) error {
+// runner asked for user input and persisting the clarifying questions (JSON)
+// the step raised so the job detail can surface them to the user.
+func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID, questionsJSON string) error {
 	_, err := s.db.ExecContext(ctx, `
-UPDATE job_steps SET status = ?, needs_user_input = 1, ended_at = NULL WHERE id = ?`,
-		string(model.StepStatusWaitingUser), stepID)
+UPDATE job_steps SET status = ?, needs_user_input = 1, pending_questions = ?, ended_at = NULL WHERE id = ?`,
+		string(model.StepStatusWaitingUser), questionsJSON, stepID)
 	return err
 }
 
@@ -403,7 +604,7 @@ UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
 // (nil, nil) if there is no such step.
 func (s *Store) GetStepByKind(ctx context.Context, jobID string, kind model.StepKind) (*model.JobStep, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, error_code, error_message, claude_session_id, cc_status_session_id
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id
 FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 	var st model.JobStep
 	var kstatus, errorCode, kkind string
@@ -411,7 +612,7 @@ FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 	var needsUserInput int
 	if err := row.Scan(&st.ID, &st.JobID, &kkind, &st.Seq, &st.AgentKey,
 		&kstatus, &st.Attempt, &started, &ended, &needsUserInput,
-		&st.UserPrompt, &errorCode, &st.ErrorMessage,
+		&st.UserPrompt, &st.PendingQuestions, &errorCode, &st.ErrorMessage,
 		&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -434,9 +635,20 @@ FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 func (s *Store) ResetStepToPending(ctx context.Context, stepID string) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE job_steps
-SET status = ?, ended_at = NULL, error_code = '', error_message = '', needs_user_input = 0, started_at = NULL
+SET status = ?, ended_at = NULL, error_code = '', error_message = '', needs_user_input = 0, pending_questions = '', started_at = NULL
 WHERE id = ?`,
 		string(model.StepStatusPending), stepID)
+	return err
+}
+
+// SetStepUserPrompt stores per-step operator context. The executor uses this
+// for repair-from-failure runs so the next code_generation attempt receives the
+// failed test/image-build output without changing the job's original prompt.
+func (s *Store) SetStepUserPrompt(ctx context.Context, stepID, prompt string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps
+SET user_prompt = ?
+WHERE id = ?`, prompt, stepID)
 	return err
 }
 

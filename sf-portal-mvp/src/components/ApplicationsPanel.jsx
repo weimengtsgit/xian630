@@ -49,9 +49,9 @@ export function ApplicationsPanel({
   return (
     <div className="applications-panel">
       <div className="panel-header">
-        <h2>应用列表</h2>
+        <h2>业务智能体</h2>
         <div className="panel-header-right">
-          <span className="panel-count">{list.length} 个应用</span>
+          <span className="panel-count">{list.length} 个智能体</span>
           <button
             type="button"
             className="panel-refresh-btn"
@@ -70,7 +70,7 @@ export function ApplicationsPanel({
           <div className="panel-loading">加载中...</div>
         ) : list.length === 0 ? (
           <div className="panel-loading">
-            {error ? '无法连接到工厂服务' : '暂无应用'}
+            {error ? '无法连接到工厂服务' : '暂无智能体'}
           </div>
         ) : (
           <div className="applications-list">

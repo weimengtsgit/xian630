@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -295,9 +296,27 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		ExistingApplications: appCandidates,
 		Blueprints:           bpCandidates,
 	}
-	out, err := s.dialogueRouter.RouteIntent(ctx, input, s.publishDialogueEvent)
+	routeThinking := ""
+	out, err := s.dialogueRouter.RouteIntent(ctx, input, func(ev dialogue.StreamEvent) {
+		if ev.Type == "dialogue.route.thinking" {
+			routeThinking = ev.Delta
+		}
+		s.publishDialogueEvent(ev)
+	})
 	if err != nil {
 		return persistedRoute{}, nil, err
+	}
+	if strings.TrimSpace(routeThinking) != "" {
+		if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID:         "dmsg_" + idpkg.New(),
+			DialogueID: dlg.ID,
+			Role:       "agent",
+			Kind:       "thinking",
+			Content:    routeThinking,
+			CreatedAt:  time.Now(),
+		}); err != nil {
+			return persistedRoute{}, nil, err
+		}
 	}
 	route := persistedRoute{
 		Intent:                   out.Intent,
@@ -409,7 +428,7 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 	if dlg.ClarificationSessionID != "" {
 		child, err := s.store.GetClarificationSession(ctx, dlg.ClarificationSessionID)
 		if err == nil && child != nil {
-			cv := s.viewFromSession(child)
+			cv := s.viewFromSessionWithMessages(ctx, child)
 			view.Child = &cv
 		}
 	}
@@ -434,8 +453,9 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		view.AgentDraftStatus = record.Status
 		view.AgentConsolidation = s.latestBusinessConsolidation(ctx, id)
 	}
-	// Seeded job for a resolved application-generation dialogue.
-	if dlg.Status == model.DialogueStatusResolved && dlg.Intent == model.DialogueIntentApplicationGeneration {
+	// Seeded job for an application-generation dialogue, including its continuing
+	// task_running/active phases.
+	if dlg.Intent == model.DialogueIntentApplicationGeneration {
 		view.SeededJob = s.findJobForDialogue(ctx, dlg)
 	}
 	return view, nil
@@ -737,11 +757,11 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	// A drafting dialogue may still have a runner appending messages (round in
-	// flight), so it cannot be safely deleted. routing/recommending/resolved/
-	// failed/abandoned are all safe: the synchronous rounds have completed.
-	if dlg.Status == model.DialogueStatusDraftingApplication || dlg.Status == model.DialogueStatusDraftingBusinessAgent {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "in-flight dialogue cannot be deleted", "status": dlg.Status})
+	// A dialogue may now be deleted in any status. If it is still in flight,
+	// cancel any linked active job first so a runner is not left appending to a
+	// dialogue that is about to disappear.
+	if err := s.cancelDialogueJobs(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel in-flight jobs")
 		return
 	}
 	if err := s.store.DeleteDialogueSession(r.Context(), id); err != nil {
@@ -752,9 +772,75 @@ func (s *Server) deleteDialogue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
-// addDialogueMessage handles POST /api/dialogues/:id/messages. While unlocked,
-// it appends the user message and repeats the routing procedure. Once the route
-// is locked it rejects further routing with 409.
+// cancelDialogueJobs cancels every still-active job linked to a dialogue. A
+// missing or already-terminal job is skipped. Used before deleting a dialogue,
+// which the user can now remove in any status — without this an in-flight
+// runner would keep appending to a dialogue that no longer exists.
+func (s *Server) cancelDialogueJobs(ctx context.Context, dialogueID string) error {
+	if s.exec == nil {
+		return nil
+	}
+	jobs, err := s.store.ListJobsByDialogue(ctx, dialogueID)
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		switch j.Status {
+		case model.JobStatusQueued, model.JobStatusRunning, model.JobStatusWaitingUser:
+		default:
+			continue
+		}
+		if err := s.exec.Cancel(ctx, j.ID); err != nil {
+			// Best-effort: a job that already finished or is unknown must not
+			// block the delete.
+			log.Printf("delete dialogue %s: cancel job %s: %v", dialogueID, j.ID, err)
+		}
+	}
+	return nil
+}
+
+// archiveDialogue handles POST /api/dialogues/:id/archive. It transitions a
+// continuing dialogue into the archived phase so the workbench can shelve a
+// finished conversation without deleting its audit trail (trace events,
+// versions, deployments, and job records persist). It emits dialogue.archived.
+// The call is idempotent: archiving an already-archived dialogue is a 200 no-op.
+// Task 8 added the archived status in Task 2 but no route; this is that route.
+func (s *Server) archiveDialogue(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	dlg, err := s.store.GetDialogueSession(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get dialogue")
+		return
+	}
+	if dlg == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	// Idempotent: an already-archived dialogue stays archived and we still ack.
+	if dlg.Status != model.DialogueStatusArchived {
+		if err := s.store.UpdateDialogueStatus(r.Context(), id, model.DialogueStatusArchived, dlg.ErrorCode, dlg.ErrorMessage); err != nil {
+			writeError(w, http.StatusInternalServerError, "archive dialogue")
+			return
+		}
+		s.publishDialogueSimple("dialogue.archived", id, map[string]string{"id": id})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "archived", "id": id})
+}
+
+// addDialogueMessage handles POST /api/dialogues/:id/messages.
+//
+// Pre-route (status=routing, route not locked): the message is the user refining
+// their initial request before choosing a route, so the handler appends the
+// message and re-runs the (synchronous) intent-routing procedure, returning the
+// composed view — the legacy 200 contract preserved for the routing phase.
+//
+// Continuing session (status is one of the active/analyzing/... phases, i.e. the
+// session route is already established and the dialogue stays open): the handler
+// persists the user message + a pending dialogue_turn, signals the per-dialogue
+// turn worker, and returns 202 Accepted {dialogueId, turnId, acceptedAt}. No
+// model content travels in the response body — it flows via dialogue.* events.
+// At most one turn runs per session; a later message while a turn is in-flight
+// stays pending and is processed in order once the current turn ends.
 func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	dlg, err := s.store.GetDialogueSession(r.Context(), id)
@@ -766,8 +852,13 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if dlg.RouteLocked {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "route is locked; create a new dialogue for a new request"})
+	// A locked route that is still in a route/clarification/drafting phase (not
+	// yet a continuing session) is mid-resolution and does not accept free
+	// messages: the user must complete that flow (clarification answer /
+	// business-agent continue) instead. This preserves the legacy 409 the 27
+	// existing tests rely on for a locked-but-unresolved route.
+	if dlg.RouteLocked && !model.IsContinuingDialogueStatus(dlg.Status) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "route is locked; complete the active flow or create a new dialogue"})
 		return
 	}
 	var body addDialogueMessageBody
@@ -789,7 +880,35 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add message")
 		return
 	}
-	// Re-run routing with the full history.
+
+	// Continuing session: async turn contract (202). Route is already
+	// established, so this message is a follow-up turn, not a re-route.
+	if model.IsContinuingDialogueStatus(dlg.Status) {
+		turnID := "dturn_" + idpkg.New()
+		turn := model.DialogueTurn{
+			ID: turnID, DialogueID: id, MessageID: msg.ID,
+			Intent: "", Status: model.TurnStatusPending, CreatedAt: now,
+		}
+		if err := s.store.CreateDialogueTurn(ctx, turn); err != nil {
+			writeError(w, http.StatusInternalServerError, "create turn")
+			return
+		}
+		s.publishDialogueSimple("dialogue.message.accepted", id, map[string]any{
+			"turn_id":    turnID,
+			"message_id": msg.ID,
+		})
+		if s.turnWorker != nil {
+			s.turnWorker.Signal()
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"dialogueId": id,
+			"turnId":     turnID,
+			"acceptedAt": now.UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	// Pre-route phase: synchronous re-routing (legacy 200 contract).
 	allMsgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
 	route, _, rerr := s.runRouting(ctx, dlg, body.Content, allMsgs)
 	if rerr != nil {
@@ -806,6 +925,154 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// cancelDialogueTurn handles POST /api/dialogues/:id/turns/:turnId/cancel. It
+// verifies the turn belongs to the dialogue and is currently running, flips it
+// to canceled via the store, emits dialogue.turn.canceled, and — critically —
+// invokes the in-flight round's cancel func (via the turn worker) so the
+// running model round actually aborts. This is the end-to-end cancel: the turn
+// becomes terminal before the next pending turn begins, rather than relying on
+// the row-flip alone. Returns 202 Accepted (the cancel is accepted; the worker
+// finalizes the terminal transition asynchronously). Mirrors the executor's
+// cancelJob handler style.
+func (s *Server) cancelDialogueTurn(w http.ResponseWriter, r *http.Request) {
+	dialogueID := Param(r, "id")
+	turnID := Param(r, "turnId")
+	ctx := r.Context()
+	turn, err := s.store.GetDialogueTurn(ctx, turnID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get turn")
+		return
+	}
+	if turn == nil || turn.DialogueID != dialogueID {
+		writeError(w, http.StatusNotFound, "turn not found")
+		return
+	}
+	if turn.Status != model.TurnStatusRunning {
+		// Already terminal (or still pending): nothing to cancel. Idempotent
+		// re-cancel of a terminal turn is a no-op success so a client retry does
+		// not get a spurious error.
+		writeJSON(w, http.StatusOK, map[string]any{"turnId": turnID, "status": string(turn.Status)})
+		return
+	}
+	canceledID, err := s.store.CancelRunningDialogueTurn(ctx, dialogueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel turn")
+		return
+	}
+	// Kill the in-flight model round so it aborts (only the turn that is
+	// actively running in the worker is interrupted). If the worker had already
+	// moved on (race) canceledID is "" — the turn was terminalized by the row
+	// flip alone and no cancel func applies.
+	if s.turnWorker != nil {
+		s.turnWorker.CancelRunningTurn(turnID)
+	}
+	s.publishDialogueSimple("dialogue.turn.canceled", dialogueID, map[string]any{
+		"turn_id": turnID,
+	})
+	// Re-signal the worker so it drains the next pending turn for this dialogue
+	// now that the running turn is terminal.
+	if s.turnWorker != nil {
+		s.turnWorker.Signal()
+	}
+	_ = canceledID
+	writeJSON(w, http.StatusAccepted, map[string]any{"turnId": turnID, "status": string(model.TurnStatusCanceled)})
+}
+
+// confirmDialogueChange creates a revision job from the latest completed
+// application-modification turn. The browser supplies no application id,
+// version id, requirement, or prompt: all four are derived from durable server
+// records so a confirmation cannot revise a different application lineage.
+func (s *Server) confirmDialogueChange(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dialogueID := Param(r, "id")
+	dlg, err := s.store.GetDialogueSession(ctx, dialogueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get dialogue")
+		return
+	}
+	if dlg == nil || dlg.Status != model.DialogueStatusChangeConfirmation {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "no change awaiting confirmation"})
+		return
+	}
+	if dlg.ResolvedApplicationID == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "initial application is not ready"})
+		return
+	}
+	turn, err := s.store.GetLatestCompletedDialogueTurnByIntent(ctx, dialogueID, model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "change proposal not found"})
+		return
+	}
+	app, err := s.store.GetApplication(ctx, dlg.ResolvedApplicationID)
+	if err != nil || app == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "linked application not found"})
+		return
+	}
+	base, err := s.store.GetEffectiveApplicationVersion(ctx, app.ID)
+	if err != nil || base == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "no effective application version"})
+		return
+	}
+	source, err := s.store.GetLatestJobForApplication(ctx, app.ID)
+	if err != nil || source == nil || source.ConfirmedRequirementJSON == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "confirmed requirement unavailable"})
+		return
+	}
+	var summary dialogue.TurnSummary
+	_ = json.Unmarshal([]byte(turn.SummaryJSON), &summary)
+	prompt := strings.TrimSpace(summary.ChangeDescription)
+	if prompt == "" {
+		prompt = "修改应用"
+	}
+	now := time.Now()
+	jobID := "job_" + idpkg.New()
+	versionID := "ver_" + idpkg.New()
+	job := model.Job{
+		ID: jobID, UserPrompt: prompt, AppName: app.Name, AppSlug: app.Slug,
+		Status: model.JobStatusQueued, CurrentStepKind: model.StepRequirementAnalysis,
+		ConfirmedRequirementJSON: source.ConfirmedRequirementJSON, DialogueID: dialogueID,
+		ApplicationID: app.ID, BaseVersionID: base.ID, Kind: "revise", CreatedAt: now, UpdatedAt: now,
+	}
+	steps := make([]model.JobStep, 0, len(stepPlan))
+	for i, sp := range stepPlan {
+		steps = append(steps, model.JobStep{ID: "step_" + idpkg.New(), JobID: jobID, Kind: sp.kind, Seq: i + 1, AgentKey: sp.agentKey, Status: model.StepStatusPending})
+	}
+	version := model.ApplicationVersion{
+		ID: versionID, ApplicationID: app.ID, ParentVersionID: base.ID, JobID: jobID,
+		Status: model.ApplicationVersionQueued, CreatedAt: now,
+	}
+	if err := s.store.SeedJobWithApplicationVersion(ctx, job, steps, version); err != nil {
+		writeError(w, http.StatusInternalServerError, "seed revision job")
+		return
+	}
+	_ = s.store.UpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusTaskRunning, "", "")
+	s.publishDialogueSimple("dialogue.change.confirmed", dialogueID, map[string]any{"turn_id": turn.ID, "job_id": jobID, "base_version_id": base.ID})
+	s.hub.Publish(Event{Type: "job.created", Data: job})
+	s.exec.Signal()
+	writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID})
+}
+
+// forkDialogue creates a new dialogue draft seeded by a fork target prompt,
+// originating from sourceDialogueID. It is the new_application turn side
+// effect: the new dialogue starts in routing so it gets its own first-message
+// route, and carries no messages of its own yet. Returns the new dialogue id.
+func (s *Server) forkDialogue(ctx context.Context, sourceDialogueID, seedPrompt string) string {
+	now := time.Now()
+	newID := "dlg_" + idpkg.New()
+	dlg := model.DialogueSession{
+		ID:            newID,
+		InitialPrompt: seedPrompt,
+		Status:        model.DialogueStatusRouting,
+		Intent:        model.DialogueIntentRouting,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := s.store.CreateDialogueSession(ctx, dlg); err != nil {
+		return ""
+	}
+	return newID
 }
 
 // selectDialogueRoute handles POST /api/dialogues/:id/route. It persists the
@@ -855,6 +1122,11 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
 	}
 
+	if err := s.appendDialogueUserEcho(ctx, id, routeSelectionEcho(ctx, s, route, intent)); err != nil {
+		writeError(w, http.StatusInternalServerError, "persist route selection")
+		return
+	}
+
 	switch intent {
 	case dialogue.IntentExistingApplication:
 		// Enter recommending with the candidate cards derived from the route.
@@ -893,7 +1165,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		s.runRoundAndPersist(ctx, childID, 1)
+		s.runRoundAndPersistForDialogue(ctx, childID, 1, id)
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
 
 	case dialogue.IntentBusinessProcessingAgent:
@@ -954,23 +1226,40 @@ func (s *Server) runBusinessDraftRound(ctx context.Context, dialogueID string, d
 		CurrentDraft:     currentDraft,
 		CurrentQuestions: nil,
 	}
-	out, err := s.dialogueRouter.RunBusinessDraftRound(ctx, input, s.publishDialogueEvent)
+	draftThinking := ""
+	out, err := s.dialogueRouter.RunBusinessDraftRound(ctx, input, func(ev dialogue.StreamEvent) {
+		if ev.Type == "dialogue.draft.thinking" {
+			draftThinking = ev.Delta
+		}
+		s.publishDialogueEvent(ev)
+	})
 	if err != nil {
 		return err
 	}
-	// Persist work-log + questions + consolidation + agentDraft as messages.
+	// Persist thinking + work-log + questions + consolidation + agentDraft as messages.
 	now := time.Now()
+	analysisAt := now
+	if strings.TrimSpace(draftThinking) != "" {
+		if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "thinking",
+			Content: draftThinking, CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		analysisAt = now.Add(time.Millisecond)
+	}
 	for _, wl := range out.WorkLog {
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "analysis_work_log",
-			Content: wl.Content, CreatedAt: now,
+			Content: wl.Content, CreatedAt: analysisAt,
 		})
 	}
+	questionAt := analysisAt.Add(time.Millisecond)
 	for _, q := range out.Questions {
 		qBytes, _ := json.Marshal(q)
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "question",
-			MetadataJSON: string(qBytes), CreatedAt: now,
+			MetadataJSON: string(qBytes), CreatedAt: questionAt,
 		})
 		s.publishDialogueSimple("dialogue.draft.question.created", dialogueID, q)
 	}
@@ -1045,8 +1334,16 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 	defer s.appLock(appID).Unlock()
 
 	ctx := r.Context()
+	openEcho := "我打开：" + app.Name
+	if strings.TrimSpace(app.Name) == "" {
+		openEcho = "我打开：" + app.Slug
+	}
 	// If the app is stopped (no usable URL), start it via the shared operation.
 	if app.RuntimeURL == "" {
+		openEcho = "我启动并打开：" + app.Name
+		if strings.TrimSpace(app.Name) == "" {
+			openEcho = "我启动并打开：" + app.Slug
+		}
 		if _, refreshed, serr := s.startAppInternal(ctx, appID); serr != nil {
 			if er, ok := serr.(errResponse); ok {
 				er.write(w)
@@ -1057,6 +1354,10 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 		} else if refreshed != nil {
 			app = refreshed
 		}
+	}
+	if err := s.appendDialogueUserEcho(ctx, id, openEcho); err != nil {
+		writeError(w, http.StatusInternalServerError, "persist open action")
+		return
 	}
 	// Re-read to get the usable runtime URL.
 	app, err = s.store.GetApplication(ctx, appID)
@@ -1085,6 +1386,33 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+func routeSelectionEcho(ctx context.Context, s *Server, route persistedRoute, intent dialogue.Intent) string {
+	if intent == dialogue.IntentExistingApplication {
+		cards := s.cardsFromRoute(ctx, route)
+		name := "已有智能体"
+		if len(cards) > 0 && strings.TrimSpace(cards[0].Name) != "" {
+			name = strings.TrimSpace(cards[0].Name)
+		}
+		return "我选择：复用「" + name + "」"
+	}
+	return "我选择：新建智能体"
+}
+
+func (s *Server) appendDialogueUserEcho(ctx context.Context, dialogueID, content string) error {
+	content = strings.TrimSpace(content)
+	if dialogueID == "" || content == "" {
+		return nil
+	}
+	return s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+		ID:         "dmsg_" + idpkg.New(),
+		DialogueID: dialogueID,
+		Role:       "user",
+		Kind:       "message",
+		Content:    content,
+		CreatedAt:  time.Now(),
+	})
+}
+
 func slugInRecommendation(route persistedRoute, slug string) bool {
 	for _, s := range route.ExistingApplicationSlugs {
 		if s == slug {
@@ -1110,7 +1438,7 @@ func (s *Server) requireDialogueChild(ctx context.Context, id string) (*model.Di
 	if child == nil {
 		return dlg, "", nil, false, nil
 	}
-	cv := s.viewFromSession(child)
+	cv := s.viewFromSessionWithMessages(ctx, child)
 	view, _ := s.composeDialogueView(ctx, id)
 	return dlg, dlg.ClarificationSessionID, &cv, true, view
 }
@@ -1152,7 +1480,7 @@ func (s *Server) answerDialogueClarification(w http.ResponseWriter, r *http.Requ
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurn(ctx, childID, updated)
+	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
 	_ = advanced
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -1204,7 +1532,18 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 		}
 		adjustedBytes, _ := json.Marshal(adjusted)
 		_ = s.store.UpdateClarificationRequirement(ctx, childID, string(adjustedBytes))
-		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusReadyToConfirm, "", "")
+		// D3 / ADR 0006: applying consolidation does NOT clear
+		// openHighImpact. A round can return BOTH a consolidation list AND a
+		// non-empty openHighImpact list (independent RoundOutput fields), so
+		// accepting the recommendations while a high-impact confirmation item
+		// is still open must NOT promote to ready_to_confirm — the same gate
+		// the sibling no-model sites (advanceAfterUserTurn,
+		// normalizeClarificationReadiness) enforce via openHighImpactOpen.
+		status := model.ClarificationStatusReadyToConfirm
+		if s.openHighImpactOpen(sess) {
+			status = model.ClarificationStatusWaitingUser
+		}
+		_ = s.store.SetClarificationStatus(ctx, childID, status, "", "")
 		s.publishDialogueChild(ctx, id, childID, adjusted)
 		_ = dlg
 		_ = cv
@@ -1243,7 +1582,7 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurn(ctx, childID, updated)
+	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
 	_ = advanced
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -1376,7 +1715,7 @@ func (s *Server) retryDialogueClarificationRound(w http.ResponseWriter, r *http.
 	if retryRound < 1 {
 		retryRound = 1
 	}
-	s.runRoundAndPersist(ctx, childID, retryRound)
+	s.runRoundAndPersistForDialogue(ctx, childID, retryRound, id)
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1451,8 +1790,13 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		CurrentStepKind:          model.StepRequirementAnalysis,
 		ClarificationSessionID:   childID,
 		ConfirmedRequirementJSON: string(reqBytes),
-		CreatedAt:                now,
-		UpdatedAt:                now,
+		// DialogueID links the job to the dialogue its safe agent activity is
+		// surfaced under (Task 4). It is the work_trace_events sequence-
+		// partition key: the executor stamps it onto every trace the runner
+		// produces, so the dialogue-scoped SSE stream can filter them.
+		DialogueID: id,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	steps := make([]model.JobStep, 0, len(stepPlan))
 	for i, sp := range stepPlan {
@@ -1470,10 +1814,16 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		return
 	}
 	_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusConfirmed, "", "")
-	// Resolve the parent. The resolved application is created by the job pipeline
-	// (not here), so ResolvedApplicationID stays empty; the seeded job is the link.
+	// Keep the parent interactive while its initial task runs. The application id
+	// is filled atomically by SetJobCreatedApp once code generation registers it.
+	// Marking this as task_running (rather than terminal resolved) makes follow-up
+	// messages use the continuing-turn path immediately.
 	if err := s.store.SetDialogueResolved(ctx, id, "", ""); err != nil {
 		writeError(w, http.StatusInternalServerError, "resolve dialogue")
+		return
+	}
+	if err := s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusTaskRunning, "", ""); err != nil {
+		writeError(w, http.StatusInternalServerError, "set dialogue task running")
 		return
 	}
 	s.hub.Publish(Event{Type: "job.created", Data: job})
@@ -1483,7 +1833,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		"clarification_session_id": job.ClarificationSessionID,
 		"source":                   "dialogue_confirm",
 	})
-	s.publishDialogueSimple("dialogue.resolved", id, map[string]any{
+	s.publishDialogueSimple("dialogue.task.running", id, map[string]any{
 		"seeded_job_id": jobID,
 		"app_name":      factoryName,
 	})

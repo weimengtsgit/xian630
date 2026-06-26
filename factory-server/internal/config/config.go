@@ -20,6 +20,11 @@ type Config struct {
 	LogMaxBackups    int
 	ShutdownTimeout  time.Duration
 	ContainerRuntime string // "podman" or "docker"
+	// MaxConcurrentJobs bounds how many pipeline jobs run at once across DIFFERENT
+	// applications. Jobs for the SAME application are always serialized (their
+	// generated-apps/<slug>/ dir + image tag cannot be written by two runs at
+	// once). Default 3, clamped to [1,16].
+	MaxConcurrentJobs int
 }
 
 func Resolve(getenv func(string) string) Config {
@@ -38,6 +43,7 @@ func Resolve(getenv func(string) string) Config {
 		LogMaxBackups:    5,
 		ShutdownTimeout:  5 * time.Second,
 		ContainerRuntime: "podman", // default
+		MaxConcurrentJobs: 3,       // default; clamp [1,16] below
 	}
 	if v := getenv("FACTORY_ADDR"); v != "" {
 		cfg.Addr = v
@@ -74,6 +80,22 @@ func Resolve(getenv func(string) string) Config {
 		default:
 			log.Printf("WARNING: Invalid FACTORY_CONTAINER_RUNTIME=%q, using podman", v)
 		}
+	}
+	// FACTORY_MAX_CONCURRENT_JOBS bounds the executor's worker pool. Invalid
+	// values fall back to the default (mirrors FACTORY_CONTAINER_RUNTIME); valid
+	// values are clamped to [1,16] so a misconfigured high number cannot spawn an
+	// unbounded number of workers (each worker runs a full Claude subprocess).
+	if v := getenv("FACTORY_MAX_CONCURRENT_JOBS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.MaxConcurrentJobs = n
+		} else {
+			log.Printf("WARNING: Invalid FACTORY_MAX_CONCURRENT_JOBS=%q, using default 3", v)
+		}
+	}
+	if cfg.MaxConcurrentJobs < 1 {
+		cfg.MaxConcurrentJobs = 1
+	} else if cfg.MaxConcurrentJobs > 16 {
+		cfg.MaxConcurrentJobs = 16
 	}
 	// Resolve WorkspaceRoot against the process cwd to an ABSOLUTE path. The
 	// workspace feeds the project-local skill/blueprint path builders

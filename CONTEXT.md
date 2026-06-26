@@ -9,12 +9,32 @@ A software-development subflow within a dialogue session where the system refine
 _Avoid_: 生成任务, Job, 任务
 
 **对话会话**:
-A persistent, resumable conversation that first identifies the user's intent, then routes to an existing application recommendation or application-generation requirement clarification. Business-processing agent drafting is not a user-visible route in the current phase.
+A persistent, resumable conversation for one application lineage that first identifies the user's intent, then routes to an existing application recommendation or application-generation requirement clarification. It may contain multiple generation tasks over time, including later application modifications; a request for a distinct application starts a new dialogue session; business-processing agent drafting is not a user-visible route in the current phase.
 _Avoid_: 单次路由结果, 生成任务, 仅需求澄清会话
 
-**对话意图**:
-The currently inferred route of an unconfirmed dialogue session: existing-application reuse or application generation. It may change only before the user confirms a route or explicitly starts a new requirement; business-processing agent drafting is a dormant future route, and any model suggestion of that route is treated as application generation in the current phase.
-_Avoid_: 生成任务状态, 智能体角色, 固定标签
+**会话阶段**:
+The current interaction stage within a continuing dialogue session, such as clarification, change confirmation, task execution, deployment outcome, or waiting for user input. A phase does not end the dialogue session.
+_Avoid_: 会话终态, 任务状态, 生成完成即关闭
+
+**会话分析轮次**:
+One model-driven analysis of a user message within a dialogue session. A session runs at most one analysis round at a time; later messages wait in order or replace the current round when the user cancels it.
+_Avoid_: 并行澄清轮次, 无序模型调用, 生成任务
+
+**会话路由**:
+The initial route inferred for a dialogue session: existing-application reuse or application generation. It establishes the first conversation context; business-processing agent drafting is a dormant future route, and any model suggestion of that route is treated as application generation in the current phase.
+_Avoid_: 生成任务状态, 智能体角色, 轮次意图
+
+**路由选择回显**:
+A user-visible conversation message that records the user's explicit route choice, such as choosing to reuse an existing 智能体 or create a new 智能体. It anchors any following 思考过程, 分析过程, recommendation, or clarification.
+_Avoid_: 隐藏按钮状态, 仅内部 route_locked 标记, 固定选择面板
+
+**智能体打开回显**:
+A user-visible conversation message that records the user's explicit action to open or start-and-open a recommended 智能体. It appears before the resolved/open result so the transcript preserves the user's final reuse action.
+_Avoid_: 隐藏启动动作, 仅 resolved_outcome, 自动打开记录
+
+**轮次意图**:
+The user need inferred from one new message in a continuing dialogue session: application modification, new application, application inquiry, task control, or general dialogue. It determines the next interaction without reclassifying the session's initial route.
+_Avoid_: 会话路由, 生成任务状态, 固定标签
 
 **已有应用复用**:
 An intent outcome in which a configured existing application is judged to satisfy the user's need and is recommended for direct use rather than generating a duplicate application.
@@ -36,16 +56,44 @@ _Avoid_: 生成任务草稿, 空任务
 A previously created dialogue session that remains available for review or continuation according to its lifecycle state.
 _Avoid_: 任务历史, 应用历史
 
+**会话归档**:
+The user-initiated removal of a continuing dialogue session from active work without removing its messages, visible work trace, application lineage, or audit records.
+_Avoid_: 会话删除, 应用删除, 完成后自动关闭
+
+**会话删除**:
+An explicitly confirmed, irreversible removal of a dialogue session and its messages, visible work trace, and audit attachments.
+_Avoid_: 会话归档, 应用删除, 自动清理
+
 **会话工作台**:
 The central portal experience for reviewing and continuing a dialogue session, including intent results, model analysis process, route-specific confirmation, and application requirement clarification where applicable.
 _Avoid_: 需求澄清区域, 独立澄清面板, 任务区
 
 **生成任务**:
-A confirmed unit of work that runs the software factory pipeline to create, verify, build, and deploy an application.
+A confirmed, independently executable unit of work within a dialogue session that creates or modifies one application version through the software factory pipeline.
 _Avoid_: 澄清会话, 对话, 应用
 
+**焦点任务**:
+The task shown by default for the selected dialogue session: its newest non-terminal task, or its most recently completed task when none remain active. Its execution start time is distinct from its queueing time.
+_Avoid_: 全局当前任务, 最近创建任务, 排队开始时间
+
+**应用版本**:
+A deployable revision of an application produced by one generation task. Versions preserve the application's linear evolution within its continuing dialogue session and identify the preceding version as their baseline.
+_Avoid_: 独立应用, 覆盖式修改, 会话版本
+
+**应用谱系**:
+One application and its ordered versions, generation tasks, deployments, and continuing dialogue session. A distinct application has a distinct application lineage and dialogue session.
+_Avoid_: 多应用混合会话, 无关联任务集合
+
+**生效版本**:
+The one application version currently serving users. A new version becomes effective only after deployment and health verification succeed; a failed deployment leaves the prior effective version available.
+_Avoid_: 正在构建版本, 未验证部署, 已失效版本
+
+**应用修改**:
+A user-requested change to an application already linked to the dialogue session. It retains that application's identity and creates a new application version after confirmation and deployment.
+_Avoid_: 新建重复应用, 覆盖历史版本, 独立会话
+
 **应用**:
-A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task.
+A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. The pipeline agents (协作智能体智能体) appear only on non-workbench surfaces such as the 协作智能体 tab, so they do not collide with the user-facing 智能体 label.
 _Avoid_: 任务, 会话, 模板
 
 **应用删除**:
@@ -61,24 +109,47 @@ A factory-generated message that reports workflow state changes during a clarifi
 _Avoid_: 分析工作日志, 原始思考过程
 
 **分析工作日志**:
-A user-facing, model-generated, structured explanation of what the requirement analysis agent identified, why it recommends a choice, and what still needs confirmation.
-_Avoid_: 原始思考过程, 思维链, 系统状态日志
+A user-facing record of an agent's recognized user goal, identified facts, proposed approach, assumptions, clarification needs, recommendations, tool activity summaries, data-source decisions, and validation results. It is a part of the visible work trace and never contains hidden model reasoning.
+_Avoid_: 模型思考过程, 思维链, 系统状态日志
 
 **模型分析过程**:
-The user-facing analysis trail shown inside a clarification conversation, composed from structured analysis work logs and model output summaries rather than hidden chain-of-thought.
-_Avoid_: 原始思考过程, 隐藏推理, 思维链
+The analysis portion of the visible work trace shown inside a clarification conversation, composed from structured analysis work logs and model output summaries.
+
+**模型思考过程 (思考过程)**:
+The Claude Code CLI raw reasoning stream (`thinking` / `thinking_delta`) shown token-by-token in the conversation workbench as a distinct 思考过程 block. It is separate from 分析工作日志 and must remain explicitly attributed to the dialogue turn, clarification round, or generation step that produced it.
+_Avoid_: 分析工作日志, 系统状态日志, 无归属原始输出
+
+**可见工作轨迹**:
+An ordered, persistent, user-facing record of analysis, model thinking, tool activity, data-source decisions, validation, output, and state changes for a dialogue or generation task. It is pushed in real time and can be replayed after a reconnect; every event is attributed to its dialogue and, where applicable, its task.
+_Avoid_: 仅最终回复, 无归属的原始输出
+
+**工作轨迹事件**:
+One ordered fact in a visible work trace, carrying its identity, dialogue-level sequence, occurrence time, dialogue attribution, and any applicable task, application, version, step, or attempt attribution. Task and step local sequences additionally verify the completeness of their own execution stream.
+_Avoid_: 无序日志行, 仅实时消息, 原始模型输出
+
+**审计附件**:
+A size-limited, redacted retained artifact supporting a visible work trace event, such as a command-output excerpt or interface-response excerpt. It is distinct from the long-lived semantic audit record.
+_Avoid_: 未受限原始日志, 聊天流正文, 临时浏览器数据
 
 **步骤执行记录**:
 The auditable record for one generation-task pipeline step, combining system status logs, user-facing analysis work logs where applicable, execution output, and linked artifacts without treating raw model reasoning as product content.
-_Avoid_: 智能体思维链, 原始推理, 单纯运行日志
+_Avoid_: 单纯运行日志, 无归属原始输出
 
 **确认需求摘要**:
-The structured requirement record confirmed by the user after clarification and used as the input for creating a generation task.
-_Avoid_: 初始需求, 聊天记录, 分析工作日志
+The structured requirement record shown as an agent message in the conversation after clarification and used as the input for creating a generation task after the user confirms it. Its confirm action belongs to this message in the dialogue flow.
+_Avoid_: 初始需求, 固定底部面板, 分析工作日志
+
+**澄清答案回显**:
+A user-visible conversation message that summarizes one submitted batch of clarification answers using the question labels and selected option labels. It is appended as the user's next dialogue turn and anchors the following 思考过程 and 分析过程.
+_Avoid_: 原始选项值, 多条零散答案, 隐藏表单状态
 
 **推荐收敛确认**:
 A late-stage clarification interaction that presents the remaining decisions with their recommended values, so the user can accept the recommended set or make a targeted adjustment before confirming the requirement summary.
 _Avoid_: 最终生成确认, 普通澄清问题, 强制默认值
+
+**高影响确认事项**:
+An unresolved decision that can change business meaning, data source, external interface, permission, deployment, or user-visible behavior. It must be confirmed before the agent continues the affected work.
+_Avoid_: 默认假设, 低风险细节, 静默推断
 
 **模板约束下的自由生成**:
 A generation mode where the factory can create a new application for a confirmed requirement while keeping the result within the product's supported structure, style, and deployability boundaries.
@@ -131,6 +202,10 @@ _Avoid_: 真实数据接入, 临时假数据, 后端采集服务
 **数据接入能力包**:
 A project-local skill or adapter contract that defines how a future generated application should connect to a real external data source, including authentication assumptions, request/response shape, and replacement points for the demo data provider.
 _Avoid_: 场景蓝本, 预置应用代码, 当前必须实现的实时采集服务
+
+**工具授权**:
+The permission level governing an agent's use of a tool or interface. Trusted read-only operations may run automatically with visible trace events; unconfigured, sensitive, costly, writing, deployment, rollback, and destructive operations require the applicable user confirmation.
+_Avoid_: 无限制自动调用, 每一步重复确认, 隐式写入
 
 **态势复盘类应用**:
 An application type focused on reviewing time-based operational activity through maps, tracks, events, and timelines.
@@ -188,13 +263,13 @@ _Avoid_: 全局个人技能, 普通模板文件
 The selected set of generation skill keys derived from a confirmed requirement and passed into the generation task.
 _Avoid_: 用户手选技能, 随机 agent 偏好
 
-**软件开发智能体**:
+**协作智能体智能体**:
 A Factory-owned agent that performs one fixed responsibility in the application-generation pipeline, such as requirement analysis, solution design, code generation, testing, image build, or deployment.
 _Avoid_: 业务处理智能体, 用户自定义智能体, 场景蓝本
 
 **业务处理智能体**:
 A user-confirmed definition of a business-handling role, containing a name, description, and prompt. In this phase it is cataloged and displayed but not directly executed.
-_Avoid_: 软件开发智能体, 已运行任务, 生成应用
+_Avoid_: 协作智能体智能体, 已运行任务, 生成应用
 
 **业务处理智能体建议**:
 A dormant future route that would recommend creating a business-processing agent and ask for the user's confirmation. It is not exposed as a current user-visible dialogue outcome while intelligent-agent requests are routed to assistant-application generation.

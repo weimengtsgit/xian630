@@ -153,7 +153,9 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 // getJob handles GET /api/jobs/:id. In addition to the job, it reports whether
 // the optional cc-status observation service is reachable via the
 // cc_status_available field. cc-status is OPTIONAL: a down service yields
-// cc_status_available=false but never fails this endpoint.
+// cc_status_available=false but never fails this endpoint. When the job is
+// waiting for user input, the current step's clarifying questions are surfaced
+// as `pending_questions` so the UI can show WHAT the user must answer.
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	job, err := s.store.GetJob(r.Context(), Param(r, "id"))
 	if err != nil {
@@ -167,15 +169,30 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 
 	available := s.ccStatusAvailable(r.Context())
 
+	// Surface the waiting step's questions (JSON string → parsed array) when the
+	// job is paused for user input. Best-effort: a missing/unparseable snapshot
+	// just leaves the field empty so the UI falls back to its generic message.
+	var pendingQuestions any
+	if job.Status == model.JobStatusWaitingUser && job.CurrentStepKind != "" {
+		if step, qerr := s.store.GetStepByKind(r.Context(), job.ID, job.CurrentStepKind); qerr == nil && step != nil && step.PendingQuestions != "" {
+			var qs any
+			if jerr := json.Unmarshal([]byte(step.PendingQuestions), &qs); jerr == nil {
+				pendingQuestions = qs
+			}
+		}
+	}
+
 	// Anonymous struct so we can extend the fixed model.Job with the flag
 	// without changing the model package. JSON-marshals to the job's fields
 	// plus "cc_status_available".
 	writeJSON(w, http.StatusOK, struct {
 		model.Job
 		CCStatusAvailable bool `json:"cc_status_available"`
+		PendingQuestions  any  `json:"pending_questions"`
 	}{
 		Job:               *job,
 		CCStatusAvailable: available,
+		PendingQuestions:  pendingQuestions,
 	})
 }
 
@@ -396,6 +413,16 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if step != nil {
+			// Persist the user's answer onto the step's user_prompt so the
+			// re-run can read it (the generative-step prompts append
+			// step.UserPrompt as a clarification). Without this the step
+			// re-runs with identical input and re-asks the same question.
+			if strings.TrimSpace(content) != "" {
+				if err := s.store.SetStepUserPrompt(r.Context(), step.ID, content); err != nil {
+					writeError(w, http.StatusInternalServerError, "set step answer")
+					return
+				}
+			}
 			if err := s.store.ResetStepToPending(r.Context(), step.ID); err != nil {
 				writeError(w, http.StatusInternalServerError, "reset step")
 				return
@@ -425,6 +452,21 @@ func (s *Server) retryCurrentStep(w http.ResponseWriter, r *http.Request) {
 	job, err := s.exec.RetryCurrentStep(r.Context(), id)
 	if err != nil {
 		// A missing job → 404; a non-retryable state → 409; otherwise 500.
+		if err.Error() == "job not found" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) repairFromFailure(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	job, err := s.exec.RepairFromFailure(r.Context(), id)
+	if err != nil {
 		if err.Error() == "job not found" {
 			writeError(w, http.StatusNotFound, "not found")
 			return

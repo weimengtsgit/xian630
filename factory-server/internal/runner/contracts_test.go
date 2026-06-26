@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -212,7 +213,8 @@ func TestReadAndDecodeRepairsUnescapedQuotesInsideStringValues(t *testing.T) {
 // TestValidateRequirementAnalysisRejectedRequirement proves the hard-fail rule:
 // a structurally-valid frozen output whose validation reports complete=false or
 // supported=false is rejected with ErrSchemaValidationFailed (the step must NOT
-// pause for clarification — it fails the pipeline).
+// pause for clarification — it fails the pipeline). The rejection reason must
+// be surfaced in the error so the user knows why.
 func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 	  "confirmedRequirementId":"clar_2",
@@ -225,6 +227,9 @@ func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	_, err := ValidateRequirementAnalysis(p)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("err = %v, want ErrSchemaValidationFailed for validation.complete=false", err)
+	}
+	if !strings.Contains(err.Error(), "coreScenario") {
+		t.Fatalf("rejection error should surface missing field coreScenario; got: %v", err)
 	}
 
 	p2 := writeJSON(t, t.TempDir(), "output.json", []byte(`{
@@ -239,6 +244,9 @@ func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("err = %v, want ErrSchemaValidationFailed for validation.supported=false", err)
 	}
+	if !strings.Contains(err.Error(), "real-time satellite feed") {
+		t.Fatalf("rejection error should surface unsupported request; got: %v", err)
+	}
 }
 
 func TestValidateSolutionDesignHappy(t *testing.T) {
@@ -252,6 +260,47 @@ func TestValidateSolutionDesignHappy(t *testing.T) {
 	}
 	if out.NeedsUserInput {
 		t.Fatal("NeedsUserInput = true, want false")
+	}
+}
+
+// TestSolutionDesignQuestionNormalizesAlternateFields proves the Question
+// decoder tolerates the model's alternate field names: question text under
+// `text` (not `question`) and option identity under `id` (not `value`). Without
+// this the clarification card loses its question text and option values.
+func TestSolutionDesignQuestionNormalizesAlternateFields(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+		"needsUserInput": true,
+		"usedSkills": [".claude/skills/software-factory-app/SKILL.md"],
+		"questions": [
+			{
+				"id": "q1",
+				"text": "用演示数据还是真实API？",
+				"options": [
+					{"id": "mock", "label": "演示数据"},
+					{"id": "api", "label": "真实API"}
+				]
+			}
+		]
+	}`))
+	out, err := ValidateSolutionDesign(p)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	}
+	q := out.Questions[0]
+	if q.Question != "用演示数据还是真实API？" {
+		t.Fatalf("question text = %q, want normalized from `text`", q.Question)
+	}
+	if len(q.Options) != 2 {
+		t.Fatalf("options = %d, want 2", len(q.Options))
+	}
+	if q.Options[0].Value != "mock" {
+		t.Fatalf("option[0].value = %q, want normalized from `id`", q.Options[0].Value)
+	}
+	if q.Options[0].Label != "演示数据" {
+		t.Fatalf("option[0].label = %q", q.Options[0].Label)
 	}
 }
 

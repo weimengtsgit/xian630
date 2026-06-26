@@ -8,8 +8,9 @@
 // slugs (not in the candidate sets the runner supplied) are rejected, malformed
 // JSON is rejected, and the server-side-only internalBlueprintSlug is redacted
 // from every emitted StreamEvent (it survives only in the returned RouteOutput
-// for Factory use). thinking_delta / non-user-facing CLI stream data is never
-// surfaced — only text_delta text.
+// for Factory use). text_delta streams as *.delta (safe output) and
+// thinking_delta as *.thinking (the model's raw reasoning, shown live as a
+// 思考过程 block on the conversation surface).
 package dialogue
 
 import (

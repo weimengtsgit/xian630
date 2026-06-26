@@ -1,15 +1,13 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
-  HelpCircle,
   ExternalLink,
   RotateCcw,
   Ban,
+  Wrench,
 } from 'lucide-react'
-import { factoryApi } from '../api/client'
-import { displayJobTitle } from '../hooks/jobSelection'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
@@ -36,11 +34,30 @@ const JOB_STATUS_LABEL = {
   cancelled: '已取消',
 }
 
+// formatJobTime renders a job timestamp as HH:mm:ss (or MM-dd HH:mm when the
+// job predates today). Used for both created_at (queue time) and started_at
+// (actual exec start) — the two are kept visually distinct in the header.
+function formatJobTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  if (sameDay) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 export function JobCenter({
   activeJob,
   steps,
   onCancel,
   onRetry,
+  onRepairFromFailure,
   loading,
   // Task 6 state surface from useJobs:
   summary,
@@ -53,29 +70,9 @@ export function JobCenter({
   loadStepRecords,
   getArtifactContent,
 }) {
-  const [detail, setDetail] = useState(null)
   // Local drawer tab is owned by the drawer; JobCenter only owns whether the
   // drawer is open (driven by selectedStepId).
   const [drawerOpen, setDrawerOpen] = useState(false)
-
-  // For waiting_user we try to fetch job detail to surface a clarifying
-  // question if present; keep defensive — failures just hide the area.
-  useEffect(() => {
-    let cancelled = false
-    setDetail(null)
-    if (!activeJob || activeJob.status !== 'waiting_user') return undefined
-    factoryApi
-      .getJob(activeJob.id)
-      .then(d => {
-        if (!cancelled) setDetail(d)
-      })
-      .catch(() => {
-        if (!cancelled) setDetail(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [activeJob && activeJob.id, activeJob && activeJob.status])
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so
@@ -105,12 +102,9 @@ export function JobCenter({
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
   const canCancelHeader = activeJob && !isTerminal
-  const waitingQuestions =
-    detail &&
-    (detail.pending_questions ||
-      detail.clarify_questions ||
-      detail.waiting_questions ||
-      detail.questions)
+  const canRepairFromFailure =
+    jobStatus === 'failed' &&
+    ['test_verification', 'image_build'].includes(activeJob?.current_step_kind)
 
   // --- Drawer wiring ------------------------------------------------------
   // Opening a card resolves the REAL stepId (from stepByKind / cardView) and
@@ -203,7 +197,22 @@ export function JobCenter({
       <header className="jc-header">
         <div className="jc-title-block">
           <span className="jc-label">当前任务</span>
-          <h2 className="jc-prompt">{displayJobTitle(activeJob)}</h2>
+          {/* started_at (actual exec start) vs created_at (queue time) — Constraint #10.
+              Show both, distinctly, when present. */}
+          <div className="jc-time-block">
+            {activeJob.started_at ? (
+              <span className="jc-time jc-time-started" title="开始执行">
+                <small>开始执行</small>
+                <time dateTime={activeJob.started_at}>{formatJobTime(activeJob.started_at)}</time>
+              </span>
+            ) : null}
+            {activeJob.ended_at ? (
+              <span className="jc-time jc-time-ended" title="结束执行">
+                <small>结束执行</small>
+                <time dateTime={activeJob.ended_at}>{formatJobTime(activeJob.ended_at)}</time>
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="jc-header-right">
           <span className={`jc-status-badge jc-status-${jobStatus}`}>
@@ -253,24 +262,6 @@ export function JobCenter({
         })}
       </div>
 
-      {jobStatus === 'waiting_user' && (
-        <div className="jc-waiting">
-          <HelpCircle size={18} />
-          <div className="jc-waiting-body">
-            <strong>等待用户澄清</strong>
-            {Array.isArray(waitingQuestions) && waitingQuestions.length > 0 ? (
-              <ul>
-                {waitingQuestions.map((q, i) => (
-                  <li key={i}>{typeof q === 'string' ? q : q.question || q.text || JSON.stringify(q)}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>任务需要你的补充输入，请在底部对话区回复或前往任务详情页回答。</p>
-            )}
-          </div>
-        </div>
-      )}
-
       {jobStatus === 'failed' && (
         <div className="jc-actions">
           <button
@@ -280,25 +271,31 @@ export function JobCenter({
           >
             <RotateCcw size={14} /> 重试当前阶段
           </button>
-        </div>
-      )}
-
-      {jobStatus === 'completed' && (
-        <div className="jc-completed">
-          <CheckCircle2 size={18} />
-          <span>任务已完成</span>
-          {activeJob.runtime_url || activeJob.url ? (
-            <a
-              className="jc-open"
-              href={activeJob.runtime_url || activeJob.url}
-              target="_blank"
-              rel="noreferrer"
+          {canRepairFromFailure ? (
+            <button
+              type="button"
+              className="jc-action jc-retry"
+              onClick={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
             >
-              <ExternalLink size={14} /> 打开应用
-            </a>
+              <Wrench size={14} /> 发送错误给代码修复
+            </button>
           ) : null}
         </div>
       )}
+
+      {jobStatus === 'completed' && (activeJob.runtime_url || activeJob.url) ? (
+        <div className="jc-completed">
+          <CheckCircle2 size={18} />
+          <a
+            className="jc-open"
+            href={activeJob.runtime_url || activeJob.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink size={14} /> 打开应用
+          </a>
+        </div>
+      ) : null}
 
       {loading && <div className="jc-loading-hint">同步任务状态中...</div>}
 
@@ -319,6 +316,7 @@ export function JobCenter({
         loadingOlder={false}
         onCancel={() => onCancel && onCancel(activeJob.id)}
         onRetry={() => onRetry && onRetry(activeJob.id)}
+        onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
         artifacts={artifacts || []}
         getArtifactContent={getArtifactContent}
       />

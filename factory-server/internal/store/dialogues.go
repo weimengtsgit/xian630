@@ -171,15 +171,110 @@ WHERE id = ?`,
 	return err
 }
 
-// DeleteDialogueSession removes one dialogue session and its transcript
-// messages in a transaction. Linked jobs, apps, agents, and execution records
-// are intentionally left untouched.
+// ClearDialoguesReferencingApp nulls resolved_application_id on every dialogue
+// that pointed at appID — used when the application is deleted so no dialogue
+// row carries a dangling reference to a non-existent application (which would
+// otherwise make composeDialogueView silently drop resolvedApplication and lock
+// the continuous loop). The dialogue status is left untouched: the session can
+// still re-generate. Returns the ids of the dialogues that were reconciled so
+// the caller can publish refresh events.
+func (s *Store) ClearDialoguesReferencingApp(ctx context.Context, appID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM dialogue_sessions WHERE resolved_application_id = ?`, appID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(ids) > 0 {
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET resolved_application_id = '', updated_at = ?
+WHERE resolved_application_id = ?`,
+			ms(time.Now()), appID); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+// ClearDialoguesReferencingAgent nulls created_agent_id on every dialogue that
+// references agentID (so deleting a business agent leaves no dangling pointer),
+// returning the affected dialogue ids so the caller can republish their views.
+// Mirrors ClearDialoguesReferencingApp.
+func (s *Store) ClearDialoguesReferencingAgent(ctx context.Context, agentID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM dialogue_sessions WHERE created_agent_id = ?`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(ids) > 0 {
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET created_agent_id = '', updated_at = ?
+WHERE created_agent_id = ?`,
+			ms(time.Now()), agentID); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+// DeleteDialogueSession removes one dialogue session, its transcript messages,
+// AND the source clarification session + its messages that backfilled it — all
+// in one transaction. The clarification cleanup is mandatory: the startup
+// migration BackfillClarificationDialogues recreates a dialogue for every
+// clarification lacking one, so leaving the clarification behind would
+// resurrect the deleted dialogue on the next restart. A dialogue with no
+// linked clarification (e.g. a business-agent dialogue) is unaffected — the
+// subqueries match nothing. Linked jobs/apps/agents/execution records are
+// intentionally left untouched.
 func (s *Store) DeleteDialogueSession(ctx context.Context, id string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Cascade to the source clarification BEFORE the dialogue row is deleted, so
+	// the subquery can still resolve clarification_session_id from it. When the
+	// dialogue has no clarification link the subquery yields NULL/'' and these
+	// statements are no-ops.
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM clarification_messages WHERE session_id = (
+  SELECT clarification_session_id FROM dialogue_sessions WHERE id = ?
+)`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM clarification_sessions WHERE id = (
+  SELECT clarification_session_id FROM dialogue_sessions WHERE id = ?
+)`, id); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM dialogue_messages WHERE dialogue_id = ?`, id); err != nil {
 		return err
 	}

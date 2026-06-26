@@ -41,12 +41,61 @@ export function useJobs() {
   const [lastReadByStepAttempt, setLastReadByStepAttempt] = useState({})
 
   const mountedRef = useRef(true)
+  const jobsRef = useRef([])
   // Last SSE envelope `seq` we processed. Gap detection (constraint #9).
   const lastSeqRef = useRef(0)
   // Debounce timer handle for snapshot resync.
   const resyncTimerRef = useRef(null)
   // Track which job we're hydrated against so SSE for other jobs is ignored.
   const activeJobIdRef = useRef(null)
+  // The centre task panel is selected by the current dialogue, not by a
+  // process-wide "latest job". Null intentionally means that the selected
+  // dialogue has no task to display (for example a brand-new dialogue).
+  const selectedJobIdRef = useRef(null)
+  const focusSelectionSetRef = useRef(false)
+
+  const clearActiveJob = useCallback(() => {
+    activeJobIdRef.current = null
+    setActiveJob(null)
+    setSteps([])
+    setSummary([])
+    setArtifacts([])
+    setSelectedStepId(null)
+    setSelectedAttempt(null)
+    setRecordsByStepAttempt({})
+    setStreamRecords([])
+    setLastReadByStepAttempt({})
+  }, [])
+
+  const hydrateJob = useCallback(async job => {
+    if (!job) {
+      clearActiveJob()
+      return
+    }
+    const jobId = job.id
+    activeJobIdRef.current = jobId
+    setActiveJob(job)
+    setSelectedStepId(null)
+    setSelectedAttempt(null)
+    setRecordsByStepAttempt({})
+    setStreamRecords([])
+    setLastReadByStepAttempt({})
+
+    const [stepsData, summaryData, artifactsData] = await Promise.all([
+      factoryApi.getJobSteps(jobId).catch(() => []),
+      factoryApi.getJobExecutionSummary(jobId).catch(() => []),
+      factoryApi.getJobArtifacts(jobId).catch(() => []),
+    ])
+    // A history-dialogue switch may have selected another task while the old
+    // request was in flight. Never paint the old job's details into the new
+    // dialogue's task panel.
+    if (!mountedRef.current || activeJobIdRef.current !== jobId) return
+    const stepsList = Array.isArray(stepsData) ? stepsData : stepsData.steps || []
+    setSteps(stepsList)
+    setSummary(Array.isArray(summaryData) ? summaryData : summaryData.steps || [])
+    const arts = Array.isArray(artifactsData) ? artifactsData : artifactsData.artifacts || []
+    setArtifacts(arts)
+  }, [clearActiveJob])
 
   // -------------------------------------------------------------------------
   // Snapshot resync (constraint #9): re-fetch execution-summary + merge when
@@ -63,31 +112,34 @@ export function useJobs() {
     const data = await factoryApi.listJobs()
     const list = Array.isArray(data) ? data : data.jobs || []
     if (!mountedRef.current) return
+    jobsRef.current = list
     setJobs(list)
 
-    const active = selectDisplayJob(list)
-    setActiveJob(active || null)
+    const selectedJobId = selectedJobIdRef.current
+    const active = focusSelectionSetRef.current
+      ? list.find(job => job.id === selectedJobId)
+      : selectDisplayJob(list)
+    await hydrateJob(active || null)
+  }, [hydrateJob])
 
-    if (active) {
-      activeJobIdRef.current = active.id
-      const [stepsData, summaryData, artifactsData] = await Promise.all([
-        factoryApi.getJobSteps(active.id).catch(() => []),
-        factoryApi.getJobExecutionSummary(active.id).catch(() => []),
-        factoryApi.getJobArtifacts(active.id).catch(() => []),
-      ])
-      if (!mountedRef.current) return
-      const stepsList = Array.isArray(stepsData) ? stepsData : stepsData.steps || []
-      setSteps(stepsList)
-      setSummary(Array.isArray(summaryData) ? summaryData : summaryData.steps || [])
-      const arts = Array.isArray(artifactsData) ? artifactsData : artifactsData.artifacts || []
-      setArtifacts(arts)
-    } else {
-      activeJobIdRef.current = null
-      setSteps([])
-      setSummary([])
-      setArtifacts([])
+  // Called by App whenever the selected dialogue's focus task changes. The
+  // task details and all task actions are consequently scoped to that dialogue.
+  const selectJob = useCallback(async jobId => {
+    focusSelectionSetRef.current = true
+    selectedJobIdRef.current = jobId || null
+    if (!jobId) {
+      clearActiveJob()
+      return
     }
-  }, [])
+    const job = jobsRef.current.find(item => item.id === jobId)
+    if (job) {
+      await hydrateJob(job)
+      return
+    }
+    // The focus selector can run before the first list snapshot settles.
+    // Refresh instead of falling back to a job from another dialogue.
+    await fetchSnapshot()
+  }, [clearActiveJob, fetchSnapshot, hydrateJob])
 
   const scheduleResync = useCallback(() => {
     if (resyncTimerRef.current != null) return
@@ -200,6 +252,19 @@ export function useJobs() {
       setError(null)
       try {
         await factoryApi.retryCurrentStep(id)
+        await refresh()
+      } catch (err) {
+        setError(err.message || String(err))
+      }
+    },
+    [refresh],
+  )
+
+  const repairFromFailure = useCallback(
+    async id => {
+      setError(null)
+      try {
+        await factoryApi.repairFromFailure(id)
         await refresh()
       } catch (err) {
         setError(err.message || String(err))
@@ -322,10 +387,12 @@ export function useJobs() {
     loading,
     error,
     refresh,
+    selectJob,
     createJob,
     cancelJob,
     answerJob,
     retryCurrentStep,
+    repairFromFailure,
     // New (Task 5):
     selectedStepId,
     selectedAttempt,

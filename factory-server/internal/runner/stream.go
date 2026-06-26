@@ -26,17 +26,21 @@ var safeToolNames = map[string]bool{
 
 // streamClaudeEvents parses one chunk of claude stream-json stdout (which may
 // contain zero, one, or several newline-delimited JSON objects, or a partial
-// trailing line) and emits the records the drawer renders:
+// trailing line) and emits the SAFE records/traces the drawer renders:
 //
-//   - thinking / thinking_delta → thinking records. 方案 B relaxes the old
-//     "ignore all hidden reasoning" policy: the model's reasoning IS now shown.
-//     Each thought is still redacted at the stepEmitter chokepoint before
-//     persist+SSE, so a credential the model reasons about is masked. Chunked to
-//     ≤4 KiB so a long trace becomes browsable records, not one giant blob.
+//   - thinking_delta → EMITTED as WorkTraceThinking TRACE (ADR 0007). Claude Code
+//     CLI's reasoning is surfaced in the conversation workbench as a dedicated
+//     thinking channel, separate from analysis work logs.
+//   - assistant text block → an assistant_output TRACE (WorkTraceAssistant)
+//     carrying a redacted, capped observation of the prose. Routed through the
+//     TraceEmitter seam → executor → server recordAndPublishWorkTrace gate, so
+//     the gate's redaction/cap/allowlist applies. text was previously silently
+//     dropped; it now surfaces as a safe observation.
 //   - tool_use Write/Edit → file_delta records ("新建 src/App.jsx +142" /
-//     "编辑 src/App.jsx +12 -5") computed from the tool input, so the drawer
-//     shows the live per-file code-generation progress like Claude Code / Codex.
-//   - tool_use Read/Grep/Glob → activity records with a redacted relative path.
+//     "编辑 src/App.jsx +12 -5") AND a tool TRACE (WorkTraceTool) with the tool
+//     name + path-sanitized input + derived line counts.
+//   - tool_use Read/Grep/Glob → activity records with a redacted relative path
+//     AND a tool TRACE with the name + sanitized path.
 //     Non-allowlisted tools (WebSearch, …) and Bash are ignored.
 //
 // A chunk that is not a complete JSON object (a partial line flushed by the
@@ -46,12 +50,13 @@ func streamClaudeEvents(ctx context.Context, emit StepRecordEmitter, chunk strin
 	if emit == nil {
 		return
 	}
+	trace := TraceEmitterFrom(emit)
 	for _, line := range strings.Split(chunk, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || !strings.HasPrefix(line, "{") {
 			continue
 		}
-		emitStreamLine(ctx, emit, line)
+		emitStreamLine(ctx, emit, trace, line)
 	}
 }
 
@@ -59,19 +64,26 @@ func streamClaudeEvents(ctx context.Context, emit StepRecordEmitter, chunk strin
 // stream-json line. Verified against a live capture (code_generation
 // attempt-1/stdout.log, CLI v2.1.181): each line is a top-level NDJSON object
 // whose "type" is one of system / assistant / user / result / stream_event.
-// Only "assistant" turns carry the content blocks we render, and they are
-// NESTED under message.content[] (NOT top-level): a thinking block
+// Assistant turns carry the content blocks we render NESTED under
+// message.content[] (NOT top-level): a thinking block
 // {type:"thinking",thinking:"…"}, a tool_use block
 // {type:"tool_use",name:"Write|Edit|Read",input:{file_path,…}}, or a text
-// block {type:"text",text:"…"}. stream_event (--include-partial-messages
-// partials), system (hooks/init), and user (tool results) are ignored — we
-// render complete turns only, which carry the full thinking text + full
+// block {type:"text",text:"…"}. Some stream shapes ALSO emit a tool_use
+// directly at the top level (type:"tool_use", name/input as siblings), so the
+// top-level Name/Input fields model that shape too. stream_event
+// (--include-partial-messages partials), system (hooks/init), and user (tool
+// results) are ignored — we render complete turns only, which carry the full
 // tool_use input (so file deltas are accurate) and still stream in live as the
 // agent works turn by turn. Any field absent from these structs is dropped by
 // json.Unmarshal.
 type claudeStreamEvent struct {
-	Type    string `json:"type"`
-	Message struct {
+	Type          string         `json:"type"`
+	Subtype       string         `json:"subtype"`        // stream_event subtype
+	Name          string         `json:"name"`           // top-level tool_use shape
+	Input         map[string]any `json:"input"`          // top-level tool_use shape
+	Thinking      string         `json:"thinking"`       // type: thinking full thinking
+	ThinkingDelta string         `json:"thinking_delta"` // type: thinking delta (streaming)
+	Message       struct {
 		Content []contentBlock `json:"content"`
 	} `json:"message"`
 }
@@ -79,11 +91,12 @@ type claudeStreamEvent struct {
 // contentBlock is one block inside an assistant turn's message.content[]. Only
 // the fields the drawer consumes are modeled.
 type contentBlock struct {
-	Type     string         `json:"type"`     // thinking | text | tool_use
-	Thinking string         `json:"thinking"` // type=thinking (方案 B)
-	Text     string         `json:"text"`     // type=text
-	Name     string         `json:"name"`     // type=tool_use
-	Input    map[string]any `json:"input"`    // type=tool_use
+	Type          string         `json:"type"`           // thinking | text | tool_use
+	Thinking      string         `json:"thinking"`       // type=thinking full thinking
+	ThinkingDelta string         `json:"thinking_delta"` // type=thinking delta (streaming)
+	Text          string         `json:"text"`           // type=text
+	Name          string         `json:"name"`           // type=tool_use
+	Input         map[string]any `json:"input"`          // type=tool_use
 }
 
 // toolUseActivityRedacter rewrites an absolute or workspace-rooted path in a
@@ -161,23 +174,45 @@ func cleanRelPath(p string) string {
 	return strings.Join(clean, "/")
 }
 
-// emitStreamLine decodes one real CLI stream-json line and emits the records
-// the drawer renders. Only "assistant" turns are decoded further — their
-// message.content[] blocks become records (verified against a live capture):
+// emitStreamLine decodes one real CLI stream-json line and emits the SAFE
+// records + traces the drawer renders:
 //
-//   - thinking block → thinking record(s) (方案 B: hidden reasoning now shown;
-//     still redacted at the stepEmitter chokepoint). Chunked to ≤4 KiB.
-//   - tool_use Write/Edit → file_delta record ("新建 src/App.jsx +142" /
-//     "编辑 src/App.jsx +12 -5") computed from the input, for live per-file
-//     code-generation progress.
-//   - tool_use Read/Grep/Glob → activity record with a redacted relative path.
-//     Non-allowlisted tools and Bash are ignored.
+//   - top-level thinking_delta → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - top-level thinking → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - top-level tool_use → tool trace/record
+//   - assistant turn blocks:
+//   - thinking_delta block → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - thinking block → EMITTED as WorkTraceThinking TRACE (ADR 0007)
+//   - text block → an assistant_output TRACE (WorkTraceAssistant)
+//   - tool_use → file_delta/activity record + tool trace
 //
 // It swallows decode errors: a malformed line is a transport hiccup, not a step
 // failure.
-func emitStreamLine(ctx context.Context, emit StepRecordEmitter, line string) {
+func emitStreamLine(ctx context.Context, emit StepRecordEmitter, trace TraceEmitter, line string) {
 	var ev claudeStreamEvent
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return
+	}
+
+	// Handle top-level thinking_delta first (ADR 0007: surface thinking)
+	if ev.Type == "thinking_delta" || (ev.Type == "thinking" && ev.ThinkingDelta != "") {
+		if strings.TrimSpace(ev.ThinkingDelta) != "" {
+			emitThinkingTrace(ctx, trace, ev.ThinkingDelta)
+		}
+		return
+	}
+	if ev.Type == "thinking" && ev.Thinking != "" {
+		if strings.TrimSpace(ev.Thinking) != "" {
+			emitThinkingTrace(ctx, trace, ev.Thinking)
+		}
+		return
+	}
+
+	// A top-level tool_use event (some CLI/stream shapes emit tool_use directly
+	// rather than nested in an assistant turn) is handled here so a tool trace is
+	// produced regardless of nesting.
+	if ev.Type == "tool_use" && ev.Name != "" {
+		emitToolUse(ctx, emit, trace, ev.Name, ev.Input)
 		return
 	}
 	if ev.Type != "assistant" {
@@ -186,39 +221,99 @@ func emitStreamLine(ctx context.Context, emit StepRecordEmitter, line string) {
 	for _, b := range ev.Message.Content {
 		switch b.Type {
 		case "thinking":
-			emitThinking(ctx, emit, b.Thinking)
-		case "tool_use":
-			switch b.Name {
-			case "Write", "Edit":
-				if d, ok := computeFileDelta(b.Name, b.Input); ok {
-					_ = emit.Emit(ctx, model.ExecutionRecordFileDelta, d.content())
-				}
-			default:
-				if safeToolNames[b.Name] {
-					_ = emit.Emit(ctx, model.ExecutionRecordActivity, toolUseActivityContent(b.Name, b.Input))
-				}
+			// ADR 0007: surface thinking_delta in conversation workbench
+			if strings.TrimSpace(b.ThinkingDelta) != "" {
+				emitThinkingTrace(ctx, trace, b.ThinkingDelta)
+			} else if strings.TrimSpace(b.Thinking) != "" {
+				emitThinkingTrace(ctx, trace, b.Thinking)
 			}
+		case "text":
+			// Assistant prose → a redacted, capped observation trace. The gate
+			// (recordAndPublishWorkTrace) applies its own redaction/cap too, so
+			// this is defense-in-depth. Empty prose is a no-op.
+			if t := strings.TrimSpace(b.Text); t != "" {
+				_ = trace.Trace(ctx, string(model.WorkTraceAssistant), truncateUTF8(t, maxObservationBytes))
+			}
+		case "tool_use":
+			emitToolUse(ctx, emit, trace, b.Name, b.Input)
 		}
 	}
 }
 
-// maxThinkingChunkBytes caps a single thinking record so a long reasoning trace
-// is split into browsable chunks rather than one giant blob. 4 KiB mirrors the
-// command-chunk cap.
-const maxThinkingChunkBytes = 4 * 1024
-
-// emitThinking emits the model's thinking text as one or more thinking records,
-// each ≤ maxThinkingChunkBytes on a UTF-8 rune boundary. Empty text is a no-op.
-func emitThinking(ctx context.Context, emit StepRecordEmitter, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
+func emitThinkingTrace(ctx context.Context, trace TraceEmitter, text string) {
+	payload, err := json.Marshal(map[string]string{"text": truncateUTF8(text, maxObservationBytes)})
+	if err != nil {
 		return
 	}
-	for len(text) > 0 {
-		chunk := truncateUTF8(text, maxThinkingChunkBytes)
-		_ = emit.Emit(ctx, model.ExecutionRecordThinking, chunk)
-		text = text[len(chunk):]
+	_ = trace.Trace(ctx, string(model.WorkTraceThinking), string(payload))
+}
+
+// emitToolUse emits the safe records + trace for one tool_use block: a
+// file_delta record (+ a tool trace) for Write/Edit, or an activity record (+ a
+// tool trace) for Read/Grep/Glob, plus the tool trace carrying the name +
+// sanitized path. Non-allowlisted tools are ignored.
+func emitToolUse(ctx context.Context, emit StepRecordEmitter, trace TraceEmitter, name string, input map[string]any) {
+	switch name {
+	case "Write", "Edit":
+		if d, ok := computeFileDelta(name, input); ok {
+			_ = emit.Emit(ctx, model.ExecutionRecordFileDelta, d.content())
+			_ = trace.Trace(ctx, string(model.WorkTraceTool), toolTracePayload(name, d.path, d.content()))
+		}
+	default:
+		if safeToolNames[name] {
+			content := toolUseActivityContent(name, input)
+			_ = emit.Emit(ctx, model.ExecutionRecordActivity, content)
+			_ = trace.Trace(ctx, string(model.WorkTraceTool), toolTracePayload(name, toolInputPath(input), content))
+		}
 	}
+}
+
+// maxObservationBytes caps a single assistant observation trace so a long prose
+// turn becomes a bounded summary rather than a wall of text. The gate applies
+// its own 8 KiB cap too, so this is defense-in-depth.
+const maxObservationBytes = 4 * 1024
+
+// toolTracePayload builds a JSON payload for a tool TRACE carrying only
+// allowlisted, path-sanitized input. name is the tool NAME; path is the
+// already-redacted relative path (empty when none); summary is the derived
+// human description (file_delta line counts, or the activity line). No raw tool
+// input/output/command content is included — only the name + a safe path + the
+// derived summary.
+func toolTracePayload(name, path, summary string) string {
+	type toolTrace struct {
+		Name    string `json:"name"`
+		Path    string `json:"path,omitempty"`
+		Summary string `json:"summary,omitempty"`
+	}
+	b, err := json.Marshal(toolTrace{Name: name, Path: path, Summary: summary})
+	if err != nil {
+		return `{"name":` + jsonStringSafe(name) + `}`
+	}
+	return string(b)
+}
+
+// toolInputPath returns the redacted relative path from a tool_use input
+// (file_path/path/pattern), or "" when none. Mirrors the key precedence of
+// toolUseActivityContent.
+func toolInputPath(input map[string]any) string {
+	if input == nil {
+		return ""
+	}
+	for _, key := range []string{"file_path", "path", "pattern"} {
+		if v, ok := input[key].(string); ok && v != "" {
+			return redactPath(v)
+		}
+	}
+	return ""
+}
+
+// jsonStringSafe returns name as a JSON string literal for the error fallback.
+func jsonStringSafe(name string) string {
+	b, err := json.Marshal(name)
+	if err != nil {
+		return `""`
+	}
+	return string(b)
 }
 
 // fileDelta is the +added/-removed change to one file, derived from a Write/Edit

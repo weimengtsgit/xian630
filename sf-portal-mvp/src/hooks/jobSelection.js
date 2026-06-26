@@ -19,7 +19,6 @@ export function selectDisplayJob(jobs) {
 export function displayJobTitle(job) {
   if (!job) return ''
   return (
-    job.app_name ||
     job.normalized_prompt ||
     job.user_prompt ||
     job.prompt ||

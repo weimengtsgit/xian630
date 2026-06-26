@@ -46,7 +46,7 @@ body,
   top: 0;
   left: 0;
   right: 0;
-  height: 73px;
+  height: 36px;
   z-index: 20;
   display: grid;
   grid-template-columns: 1fr minmax(560px, 760px) 1fr;
@@ -107,7 +107,7 @@ body,
 /* Title Ribbon */
 .title-ribbon {
   position: relative;
-  height: 73px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -118,7 +118,7 @@ body,
 }
 
 .title-ribbon h1 {
-  margin: 15px 0 0;
+  margin: 0;
   color: #edfaff;
   font-size: 18px;
   font-weight: 800;
@@ -127,7 +127,7 @@ body,
 
 .ribbon-cap {
   position: absolute;
-  top: 35px;
+  top: 18px;
   width: 42%;
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(104, 221, 255, 0.58), transparent);
@@ -145,7 +145,7 @@ body,
 .left-toolbar {
   position: absolute;
   left: 0;
-  top: 73px;
+  top: 36px;
   bottom: 0;
   width: 56px;
   z-index: 15;
@@ -188,7 +188,7 @@ body,
 .workbench {
   position: absolute;
   left: 56px;
-  top: 73px;
+  top: 36px;
   right: 0;
   bottom: 0;
   z-index: 5;
@@ -215,16 +215,6 @@ body,
 .wb-right > * {
   flex: 1;
   min-height: 0;
-}
-
-.wb-center {
-  gap: 14px;
-}
-
-.wb-center > .job-center {
-  flex: 0 1 30%;
-  min-height: 140px;
-  max-height: 30%;
 }
 
 .wb-center > .conversation-workbench {

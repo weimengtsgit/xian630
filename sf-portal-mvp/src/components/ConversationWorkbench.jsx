@@ -1,20 +1,38 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
+  Archive,
+  Ban,
   Check,
+  CheckCircle2,
+  Copy,
+  ChevronDown,
+  ChevronRight,
   Edit3,
   ExternalLink,
+  FileCode,
+  GitCommit,
+  HelpCircle,
   Loader2,
+  MessageSquare,
   MessageSquarePlus,
   History,
   PlayCircle,
   RefreshCw,
+  RotateCcw,
   Send,
   Trash2,
   X,
+  XCircle,
 } from 'lucide-react'
-import { statusText, titleForDialogue } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/dialogueTimeline'
+import { STAGE_LABELS } from './StepCard'
+import { displayRequirementValue } from '../displayLabels'
 import './ConversationWorkbench.css'
+
+// Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
+// its business-facing content is being reworked. Flip to true to bring it back.
+const SHOW_WORK_TRACE = false
 
 export function ConversationWorkbench({
   session,
@@ -39,9 +57,28 @@ export function ConversationWorkbench({
   onRetry,
   onAbandon,
   onDeleteSession,
+  workTrace,
+  pendingTurn,
+  focusTask,
+  traceSteps,
+  taskPanel,
+  onCancelTurn,
+  onConfirmChange,
+  onRollback,
+  onArchive,
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const textareaRef = useRef(null)
+  // Auto-grow the composer textarea with its content (capped by the CSS
+  // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
+  const resizeTextarea = () => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(resizeTextarea, [input])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
@@ -58,9 +95,36 @@ export function ConversationWorkbench({
     view.agentDraft.name &&
     view.agentDraft.description &&
     view.agentDraft.prompt
-  const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
+
+  // ---- continuous-workbench derived state (Task 7) ------------------------
+  const traceItems = Array.isArray(workTrace) ? workTrace : []
+  const hasPendingTurn = !!(pendingTurn && pendingTurn.turnId)
+  const workbenchTitle = resolveWorkbenchTitle(view, session)
+  // A version has deployed when the view carries a resolved application with a
+  // runtime url, OR the trace shows a deployment/version event. We render the
+  // "vN 已生效，可继续描述修改需求" hint then, and keep the composer active.
+  const deployedApp = view && view.resolvedApplication
+  const versionLabel = deployedApp && (deployedApp.version || deployedApp.version_label || (deployedApp.status === 'running' ? 'v1' : ''))
+  const versionDeployed = !!(deployedApp && (deployedApp.runtimeUrl || deployedApp.runtime_url || deployedApp.status === 'running'))
+  // Continuous loop (doc Step 4 "make the workbench continuous"): once a job is
+  // seeded for this dialogue the route is "in generation" — queued, running, or
+  // completed — and the composer must stay active so the user can describe
+  // further modifications. The backend accepts these as follow-up turns while
+  // the dialogue status is continuing (IsContinuingDialogueStatus includes
+  // active/task_running/change_confirmation). versionDeployed alone is too
+  // strict: it requires a RUNNING app with a runtimeUrl, which a freshly
+  // generated (or stopped, or not-yet-surfaced) app lacks — so without this the
+  // composer locked even though generation finished and the user could iterate.
+  const seededJob = view && view.seededJob
+  const continuousLoop = !!(seededJob && ['queued', 'running', 'completed'].includes(seededJob.status))
+  const composerActive = versionDeployed || continuousLoop
+  // Change-summary confirmation: a trace event of type change_confirmation or
+  // dialogue.change.proposed surfaces a confirm panel (the continuous loop).
+  const changeProposal = traceItems.find(
+    it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
+  )
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -69,7 +133,7 @@ export function ConversationWorkbench({
 
   const submitText = async () => {
     const value = input.trim()
-    if (!value || submitting || locked) return
+    if (!value || submitting || (locked && !composerActive)) return
     setInput('')
     await onSend(value)
   }
@@ -89,7 +153,7 @@ export function ConversationWorkbench({
       <header className="cw-header">
         <div className="cw-title">
           <span className="cw-kicker">会话工作台</span>
-          <strong>{session ? titleForDialogue(session) : '新会话'}</strong>
+          <strong>{workbenchTitle}</strong>
         </div>
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
@@ -98,25 +162,90 @@ export function ConversationWorkbench({
         </div>
       </header>
 
+      {/* The focus task belongs to the selected dialogue. Keeping the task
+          panel inside this workbench makes a history-session switch change the
+          conversation, task status, timing, and task actions as one unit. */}
+      {focusTask && taskPanel ? <div className="cw-focus-task">{taskPanel}</div> : null}
+
       <div className="cw-body">
-        {timeline.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有应用，还是生成新应用。</div>
-        ) : (
-          timeline.map(item => (
-            <TimelineItem
-              key={item.id}
-              item={item}
-              draftAnswers={draftAnswers}
-              setDraftAnswers={setDraftAnswers}
-              submitting={submitting}
-              onSelectRoute={onSelectRoute}
-              onOpenApp={onOpenApp}
-              onAcceptConsolidation={onAcceptConsolidation}
-              onSend={onSend}
-            />
-          ))
-        )}
+        {timeline.length === 0 && traceItems.length === 0 ? (
+          <div className="cw-empty">输入需求后，将自动识别是复用已有智能体，还是生成新智能体。</div>
+        ) : null}
+        {timeline.map(item => (
+          <TimelineItem
+            key={item.id}
+            item={item}
+            draftAnswers={draftAnswers}
+            setDraftAnswers={setDraftAnswers}
+            submitting={submitting}
+            onSelectRoute={onSelectRoute}
+            onOpenApp={onOpenApp}
+            onAcceptConsolidation={onAcceptConsolidation}
+            canConfirm={canConfirmClarification && !submitting}
+            onConfirm={onConfirm}
+            onSend={onSend}
+            onPickClarification={value => {
+              if (!value) return
+              setInput(prev => {
+                const trimmed = String(prev).trim()
+                // Append rather than overwrite so multi-question clarifications
+                // (or multiple picks) accumulate in the composer. The answer goes
+                // to answerJob as free text the agent reads, so a combined reply
+                // like "演示数据；两级审批；年假、病假" is exactly what we want.
+                return trimmed ? `${trimmed}；${value}` : value
+              })
+            }}
+          />
+        ))}
+
+        {/* Continuous-workbench trace surface (Task 7): the dialogue-scoped,
+            sequence-replayable visible work-trace. Rendered as a compact
+            activity list appended after the composed timeline items. */}
+        {SHOW_WORK_TRACE && traceItems.length > 0 ? <WorkTraceList items={traceItems} steps={traceSteps} /> : null}
+
+        {/* After a version deploys, surface the "已生效，可继续描述修改需求"
+            hint and keep the composer active (continuous loop). */}
+        {versionDeployed ? (
+          <div className="cw-version-hint">
+            <GitCommit size={14} />
+            <span>{versionLabel ? `${versionLabel} ` : ''}已生效，可继续描述修改需求</span>
+            {deployedApp && (deployedApp.runtimeUrl || deployedApp.runtime_url) ? (
+              <a className="cw-version-open" href={deployedApp.runtimeUrl || deployedApp.runtime_url} target="_blank" rel="noreferrer">
+                <ExternalLink size={12} /> 打开
+              </a>
+            ) : null}
+            {/* Confirm-gated rollback to the prior effective version. */}
+            {onRollback && deployedApp && deployedApp.id ? (
+              <RollbackControl appId={deployedApp.id} onRollback={onRollback} submitting={submitting} />
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Change-summary confirmation panel: the continuous loop surfaces a
+            proposed change for the user to confirm before the worker applies it. */}
+        {changeProposal ? (
+          <div className="cw-change-confirm">
+            <strong>变更确认</strong>
+            <span>{(changeProposal.payload && (changeProposal.payload.summary || changeProposal.payload.description)) || '有新的变更建议待确认。'}</span>
+            <button type="button" className="primary" onClick={onConfirmChange} disabled={submitting}>
+              {submitting ? '处理中' : '确认变更'}
+            </button>
+          </div>
+        ) : null}
       </div>
+
+      {/* Pending-turn indicator + cancel-current-turn control (202 ack path). */}
+      {hasPendingTurn ? (
+        <div className="cw-pending-turn">
+          <Loader2 size={14} className="spin" />
+          <span>本轮处理中{pendingTurn.acceptedAt ? `（${formatAcceptedAt(pendingTurn.acceptedAt)}）` : ''}</span>
+          {onCancelTurn ? (
+            <button type="button" className="cw-cancel-turn" onClick={onCancelTurn} disabled={submitting} title="取消本轮">
+              <Ban size={12} /> 取消本轮
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {activeQuestions.length > 0 ? (
         <div className="cw-answer-bar">
@@ -127,10 +256,10 @@ export function ConversationWorkbench({
         </div>
       ) : null}
 
-      {canConfirm ? (
+      {canConfirmBusiness ? (
         <div className="cw-answer-bar">
           <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>
-            {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
+            {submitting ? '处理中' : '确认创建'}
           </button>
         </div>
       ) : null}
@@ -140,18 +269,30 @@ export function ConversationWorkbench({
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
         {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
-        {status === 'resolved' ? (
+        {/* Archive control: archive a resolved dialogue. The backend endpoint
+            (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
+            refreshes the view so the composer is replaced by a terminal hint. */}
+        {onArchive && session && status === 'resolved' ? (
+          <button type="button" onClick={onArchive} disabled={submitting} title="归档此会话">
+            <Archive size={12} /> 归档
+          </button>
+        ) : null}
+        {/* Continuous loop: a version that deployed keeps the composer ACTIVE so
+            the user can describe further changes, even though the dialogue is
+            resolved. Only true terminal-without-deployment states lock it. */}
+        {status === 'resolved' && !composerActive ? (
           <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
-        ) : status === 'abandoned' || status === 'failed' ? (
+        ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
           <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
-        ) : locked ? (
+        ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
           <>
             <textarea
+              ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder="输入需求或补充说明"
+              placeholder={composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
               disabled={submitting}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
             />
@@ -176,15 +317,42 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend }) {
-  if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
-  if (item.type === 'analysis_stream') {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, canConfirm, onConfirm, onSend, onPickClarification }) {
+  if (item.type === 'user_message') return <CopyableMessage className="cw-item cw-user" copyText={item.content}>{item.content}</CopyableMessage>
+  if (item.type === 'agent_message') return <CopyableMessage className="cw-item cw-agent" copyText={item.content}>{item.content}</CopyableMessage>
+  if (item.type === 'clarification_prompt') {
+    // A pipeline step (solution_design / code_generation) paused for user input.
+    // Render the question(s) + structured options as a card; picking an option
+    // fills the composer (the reply goes through the normal send → answerJob
+    // path, which resets the step so the agent reads the user's answer).
     return (
-      <div className="cw-item cw-agent">
-        <span className="cw-item-label">分析过程</span>
-        {item.content}
-      </div>
+      <ClarificationPromptCard item={item} onPick={onPickClarification} submitting={submitting} />
     )
+  }
+  if (item.type === 'analysis_stream') {
+    // D6: the persisted analysis lands after the round completes and renders
+    // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
+    // the full text. Rendered as plaintext only (never dangerouslySetInnerHTML).
+    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} />
+  }
+  if (item.type === 'live_analysis') {
+    // D1/D2: the transient streaming safe analysis work log. Monospace,
+    // plaintext `<pre>`-safe, NEVER dangerouslySetInnerHTML. Rendered as a
+    // distinct "分析过程" block while the round/step is in flight. When `pending`
+    // (no view yet, send just accepted) a spinner marks it as actively working
+    // so the workbench does not look frozen during the routing wait.
+    return (
+      <CopyableMessage className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`} copyText={item.content}>
+        <span className="cw-item-label">
+          {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
+          {item.kind === 'step' ? '生成过程' : '分析过程'}
+        </span>
+        <pre className="cw-live-text">{item.content}</pre>
+      </CopyableMessage>
+    )
+  }
+  if (item.type === 'live_thinking' || item.type === 'thinking_summary') {
+    return <ThinkingSummary item={item} />
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
@@ -204,22 +372,105 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
+  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} canConfirm={canConfirm} onConfirm={onConfirm} submitting={submitting} />
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
   if (item.type === 'resolved_outcome') {
     return (
-      <div className="cw-item cw-resolved">
+      <CopyableMessage className="cw-item cw-resolved" copyText={item.label}>
         <Check size={14} />
         <span>{item.label}</span>
-      </div>
+      </CopyableMessage>
     )
   }
   if (item.type === 'system_status') {
     return <div className="cw-system">{statusText(item.status)}</div>
   }
   return null
+}
+
+// FoldedAnalysis (D6) renders the persisted analysis work log as a COLLAPSED
+// block with an expand/collapse toggle. The round's streamed analysis folds above
+// its conclusion once the persisted analysis lands; the user expands to read it.
+// Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
+function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
+  const [expanded, setExpanded] = useState(!!initialExpanded)
+  const text = String(content || '')
+  return (
+    <CopyableMessage className="cw-item cw-agent cw-folded-analysis" copyText={expanded ? text : (label || '分析过程')}>
+      <button
+        type="button"
+        className="cw-fold-toggle"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-item-label">{label || '分析过程'}</span>
+        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+    </CopyableMessage>
+  )
+}
+
+function ThinkingSummary({ item }) {
+  const summary = String(item.summary || '').trim()
+  const raw = String(item.content || '').trim()
+  const copyText = summary || raw
+  return (
+    <CopyableMessage className="cw-item cw-agent cw-live-thinking cw-thinking-summary" copyText={copyText}>
+      <span className="cw-item-label"><Loader2 size={12} className="cw-spin" />思考摘要</span>
+      {summary ? (
+        <pre className="cw-live-text cw-thinking-summary-text">{summary}</pre>
+      ) : (
+        <p className="cw-thinking-summary-empty">中文摘要将在分析过程生成后显示。</p>
+      )}
+      {raw ? (
+        <details className="cw-raw-thinking">
+          <summary>原始思考过程</summary>
+          <pre className="cw-live-text">{raw}</pre>
+        </details>
+      ) : null}
+    </CopyableMessage>
+  )
+}
+
+function CopyableMessage({ className, copyText, children }) {
+  const [copied, setCopied] = useState(false)
+  const text = String(copyText || '').trim()
+  const copy = async event => {
+    event.stopPropagation()
+    if (!text) return
+    await copyDialogueText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <div className={`${className || ''} cw-copyable`}>
+      {children}
+      {text ? (
+        <button type="button" className="cw-copy-btn" onClick={copy} title={copied ? '已复制' : '复制内容'} aria-label={copied ? '已复制' : '复制内容'}>
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+async function copyDialogueText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const el = document.createElement('textarea')
+  el.value = text
+  el.setAttribute('readonly', '')
+  el.style.position = 'fixed'
+  el.style.opacity = '0'
+  document.body.appendChild(el)
+  el.select()
+  document.execCommand('copy')
+  document.body.removeChild(el)
 }
 
 function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, submitting }) {
@@ -229,13 +480,13 @@ function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, s
       <div className="cw-route-options">
         {canReuseExistingApplication ? (
           <button type="button" disabled={submitting} onClick={() => onSelectRoute('existing_application')}>
-            <b>复用已有应用</b>
-            <small>打开匹配的现有应用</small>
+            <b>复用已有智能体</b>
+            <small>打开匹配的现有智能体</small>
           </button>
         ) : null}
         <button type="button" disabled={submitting} onClick={() => onSelectRoute('application_generation')}>
-          <b>生成新应用</b>
-          <small>通过需求澄清生成助手应用或业务应用</small>
+          <b>生成新智能体</b>
+          <small>通过需求澄清生成助手智能体或业务智能体</small>
         </button>
       </div>
     </div>
@@ -247,7 +498,7 @@ function AppRecommendationList({ cards, onOpenApp, submitting }) {
   if (list.length === 0) return null
   return (
     <div className="cw-apps">
-      <strong>推荐应用</strong>
+      <strong>推荐智能体</strong>
       <div className="cw-app-list">
         {list.map(card => (
           <AppRecommendationCard key={card.applicationId || card.slug} card={card} onOpenApp={onOpenApp} submitting={submitting} />
@@ -273,9 +524,9 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
       {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
       <div className="cw-app-actions">
         {running ? (
-          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开应用">
+          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开智能体">
             <ExternalLink size={14} />
-            <span>打开应用</span>
+            <span>打开智能体</span>
           </button>
         ) : stopped ? (
           <button type="button" className="cw-app-action cw-app-action-primary" onClick={open} disabled={submitting} title="启动并打开">
@@ -413,6 +664,57 @@ function QuestionCard({ q, value, setValue }) {
   )
 }
 
+// ClarificationPromptCard renders a job-step clarification (solution_design /
+// code_generation pausing for user input) as a distinct, attention-grabbing card
+// in the conversation flow. Unlike the pre-job QuestionCard (which has its own
+// submit + draftAnswers state), a job-step clarification is answered via the
+// normal composer: picking an option (or typing) fills the composer, and sending
+// goes through answerJob → the step resets and the agent reads the reply.
+function ClarificationPromptCard({ item, onPick, submitting }) {
+  const questions = Array.isArray(item.questions) ? item.questions : []
+  // Whether ANY question offers structured options. The agent does not always
+  // emit an options array (sometimes it writes (A)/(B)/(C) into the question
+  // text instead). When there are no pickable options, the hint must NOT say
+  // "点击上方选项" — it would mislead the user.
+  const hasAnyOptions = questions.some(q => Array.isArray(q.options) && q.options.length > 0)
+  const pick = value => {
+    if (submitting || typeof onPick !== 'function') return
+    onPick(value)
+  }
+  return (
+    <div className="cw-item cw-agent cw-clarification">
+      <span className="cw-item-label">需要你澄清</span>
+      {questions.map((q, qi) => (
+        <div key={q.id || qi} className="cw-clarification-q">
+          <p className="cw-clarification-text">{q.question}</p>
+          {q.options && q.options.length > 0 ? (
+            <div className="cw-options">
+              {q.options.map(opt => (
+                <button
+                  key={opt.value || opt.label}
+                  type="button"
+                  className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
+                  onClick={() => pick(opt.label || opt.value)}
+                  disabled={submitting}
+                >
+                  <span className="cw-option-head">
+                    <b>{opt.label || opt.value}</b>
+                    {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
+        </div>
+      ))}
+      <small className="cw-clarification-hint">
+        {hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'}
+      </small>
+    </div>
+  )
+}
+
 function CustomAnswer({ onSubmit }) {
   const [value, setValue] = useState('')
   const submit = () => {
@@ -435,18 +737,23 @@ function CustomAnswer({ onSubmit }) {
   )
 }
 
-function RequirementSummary({ requirement }) {
+function RequirementSummary({ requirement, canConfirm, onConfirm, submitting }) {
   const rows = [
-    ['应用类型', requirement.appType],
-    ['应用名称', requirement.appName],
+    ['智能体类型', displayRequirementValue('appType', requirement.appType)],
+    ['智能体名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
-    ['数据策略', requirement.dataPolicy],
+    ['数据策略', displayRequirementValue('dataPolicy', requirement.dataPolicy)],
   ].filter(([, value]) => value)
   return (
     <div className="cw-summary">
       <strong>确认需求摘要</strong>
       {rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+      {canConfirm ? (
+        <button type="button" className="primary cw-summary-confirm" onClick={onConfirm} disabled={submitting}>
+          {submitting ? '处理中' : '确认并生成智能体'}
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -466,7 +773,6 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
   const requestDelete = entry => {
     const sess = entry && entry.session
     if (!sess) return
-    if (sess.status === 'routing' || sess.status === 'drafting_application' || sess.status === 'drafting_business_agent') return
     setPendingDelete(entry)
   }
 
@@ -492,7 +798,6 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
         {list.map(entry => {
           const sess = entry && entry.session
           if (!sess) return null
-          const deletable = sess.status !== 'routing' && sess.status !== 'drafting_application' && sess.status !== 'drafting_business_agent'
           return (
             <div key={sess.id} className={`cw-history-row${sess.id === selectedId ? ' active' : ''}`}>
               <button type="button" className="cw-history-item" onClick={() => onSelect(sess.id)}>
@@ -507,9 +812,9 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
               <button
                 type="button"
                 className="cw-history-delete"
-                disabled={!deletable || deletingDialogueId === sess.id}
+                disabled={deletingDialogueId === sess.id}
                 onClick={() => requestDelete(entry)}
-                title={deletable ? '删除历史会话' : '进行中的会话不可删除'}
+                title="删除历史会话"
                 aria-label="删除历史会话"
               >
                 {deletingDialogueId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
@@ -524,7 +829,7 @@ function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClo
             <span className="cw-delete-confirm-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
             <div className="cw-delete-confirm-copy">
               <strong id="cw-delete-confirm-title">删除历史会话</strong>
-              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的应用或 Agent。</p>
+              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
             </div>
             <div className="cw-delete-confirm-actions">
               <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>取消</button>
@@ -569,7 +874,7 @@ function summaryForEntry(entry) {
 function resultForEntry(entry) {
   if (!entry) return ''
   const sess = entry.session || {}
-  if (entry.resolvedApplication) return entry.resolvedApplication.name || '应用已就绪'
+  if (entry.resolvedApplication) return entry.resolvedApplication.name || '智能体已就绪'
   if (entry.createdAgent) return entry.createdAgent.name || 'Agent 已创建'
   if (entry.seededJob) return entry.seededJob.app_name ? `生成任务：${entry.seededJob.app_name}` : '生成任务已创建'
   if (sess.status === 'resolved') return '已完成'
@@ -578,8 +883,8 @@ function resultForEntry(entry) {
 
 function fieldLabel(field) {
   const map = {
-    appType: '应用类型',
-    appName: '应用名称',
+    appType: '智能体类型',
+    appName: '智能体名称',
     coreScenario: '核心场景',
     primaryView: '主视图',
     dataPolicy: '数据策略',
@@ -592,4 +897,225 @@ function formatValue(value) {
   if (Array.isArray(value)) return value.join('、')
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+// ---- continuous-workbench components (Task 7) ------------------------------
+
+// WorkTraceList renders the dialogue-scoped visible work-trace as a compact
+// activity list. Each row is one backend WorkTraceEvent (folded ascending,
+// deduped, isolated to the selected dialogue by workTraceState). The payload is
+// already summarized server-side; we surface its label/title/text only.
+//
+// Collapsible (mirrors FoldedAnalysis): defaults COLLAPSED so the conversation
+// stays clean, with a live step count in the header so a collapsed trace still
+// signals in-flight progress. The user expands to read the detail.
+// Business-facing trace rendering. The backend emits WorkTraceType values
+// (intent / approach / tool / assistant_output / deployment …), NOT the dotted
+// names the old label map guessed at — so most events fell back to the raw
+// English type. This layer maps each real type to a milestone sentence and
+// folds the noisy technical types (tool / assistant_output) into one
+// expandable group, so business users see a clean progress flow instead of
+// file diffs and model prose.
+const FOLDED_TRACE_TYPES = new Set(['tool', 'assistant_output'])
+
+// groupTraceItems walks items in order and folds runs of technical types
+// (tool / assistant_output) into one expandable group node. Milestone types
+// stay as individual rows. tool and assistant runs group separately (never
+// merged) even when adjacent.
+function groupTraceItems(items, stageByStepId) {
+  const groups = []
+  for (const it of items) {
+    if (FOLDED_TRACE_TYPES.has(it.type)) {
+      // Group by (type, stage) so a phase change splits the run — each folded
+      // group then belongs to exactly one pipeline stage and can be titled by it.
+      const stage = traceStageOf(it, stageByStepId)
+      const last = groups[groups.length - 1]
+      if (last && last.kind === 'folded' && last.type === it.type && last.stage === stage) {
+        last.items.push(it)
+      } else {
+        groups.push({ kind: 'folded', type: it.type, stage, items: [it] })
+      }
+    } else {
+      groups.push({ kind: 'milestone', item: it })
+    }
+  }
+  return groups
+}
+
+// traceStageOf resolves a trace row's pipeline stage label (e.g. 代码生成) from
+// its step_id via the step list the App passes in. '' when the step is unknown.
+function traceStageOf(it, stageByStepId) {
+  const sid = it && (it.stepId || it.step_id || '')
+  return (sid && stageByStepId && stageByStepId[sid]) || ''
+}
+
+// traceClassFor maps a real WorkTraceType to a color bucket.
+function traceClassFor(type) {
+  if (!type) return 'info'
+  if (type === 'error') return 'error'
+  if (type === 'warning' || type === 'assumption') return 'warn'
+  if (type === 'clarification' || type === 'change_confirmation') return 'confirm'
+  if (type === 'deployment' || type === 'version' || type === 'intent' || type === 'approach' || type === 'validation') return 'ok'
+  return 'info'
+}
+
+function traceIconFor(type) {
+  const cls = traceClassFor(type)
+  if (cls === 'error') return <XCircle size={14} />
+  if (cls === 'warn') return <AlertTriangle size={14} />
+  if (cls === 'confirm') return <HelpCircle size={14} />
+  if (cls === 'ok') return <CheckCircle2 size={14} />
+  return <Loader2 size={14} className="spin" />
+}
+
+// traceMilestoneText turns one milestone trace into a single business sentence.
+function traceMilestoneText(it) {
+  const p = it.payload || {}
+  const raw = p.summary || p.message || p.text || p.description || p.label || ''
+  switch (it.type) {
+    case 'intent': return '已理解你的需求'
+    case 'approach': return '已规划实现方案'
+    case 'clarification': {
+      const n = Array.isArray(p.questions) ? p.questions.length : 0
+      return n > 0 ? `需要你确认 ${n} 个问题` : '需要你补充确认'
+    }
+    case 'assumption': return p.assumption ? `按默认前提处理:${p.assumption}` : '按默认前提处理'
+    case 'validation': return /fail|invalid|失败/i.test(String(raw)) ? '校验未通过' : '校验通过'
+    case 'change_confirmation': {
+      const desc = p.summary || p.change_description || ''
+      return desc ? `有修改建议待你确认:${desc}` : '有修改建议待你确认'
+    }
+    case 'version': return p.version || p.label ? `新版本就绪 · ${p.version || p.label}` : '新版本就绪'
+    case 'deployment': return '已部署上线'
+    case 'task': return raw ? `任务进展:${raw}` : '任务已推进'
+    case 'data': return raw ? `已准备数据:${raw}` : '已准备数据'
+    case 'warning': return raw || '有提醒'
+    case 'error': return raw || '处理出错'
+    default: return raw || it.type || ''
+  }
+}
+
+// toolRowText renders one folded tool row as a short business verb + target
+// (file path preferred; the +N/-M line-count noise is dropped — meaningless to
+// a business user).
+function toolRowText(p) {
+  const name = (p && p.name) || ''
+  const verb = ({ Write: '编写', Edit: '编辑', MultiEdit: '编辑', Bash: '执行命令' })[name] || name || '操作'
+  const path = p && p.path ? p.path : ''
+  const summary = p && p.summary ? p.summary : ''
+  const target = path || summary
+  return target ? `${verb} ${target}` : verb
+}
+
+// assistantRowText renders one folded assistant-output row, capped so a long
+// model paragraph cannot blow out the trace panel.
+function assistantRowText(payload) {
+  const s = String(payload == null ? '' : payload)
+  return s.length > 140 ? `${s.slice(0, 140)}…` : s
+}
+
+function foldedGroupLabel(type, count, stage) {
+  if (type === 'tool') return stage ? `正在做【${stage}】${count} 步操作` : `正在执行 ${count} 步操作`
+  return stage ? `【${stage}】思考过程(${count} 条)` : `思考过程(共 ${count} 条)`
+}
+
+function WorkTraceList({ items, steps }) {
+  const list = Array.isArray(items) ? items : []
+  const [expanded, setExpanded] = useState(false)
+  // step_id → stage label (e.g. 代码生成) so folded groups can be titled by the
+  // pipeline phase they belong to, instead of a generic "正在执行".
+  const stageByStepId = useMemo(() => {
+    const m = {}
+    for (const s of (Array.isArray(steps) ? steps : [])) {
+      if (s && s.id && s.kind) m[s.id] = STAGE_LABELS[s.kind] || String(s.kind)
+    }
+    return m
+  }, [steps])
+  if (list.length === 0) return null
+  const groups = groupTraceItems(list, stageByStepId)
+  return (
+    <div className="cw-trace">
+      <button
+        type="button"
+        className="cw-fold-toggle"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-item-label">执行轨迹 · {list.length} 步</span>
+        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {expanded ? (
+        <ul className="cw-trace-list">
+          {groups.map((g, i) => g.kind === 'milestone' ? (
+            <li
+              key={g.item.id || `${g.item.sequence}` || i}
+              className={`cw-trace-item cw-trace-${traceClassFor(g.item.type)}`}
+            >
+              <span className="cw-trace-icon">{traceIconFor(g.item.type)}</span>
+              <span className="cw-trace-text">{traceMilestoneText(g.item)}</span>
+            </li>
+          ) : (
+            <FoldedTraceGroup key={i} type={g.type} rows={g.items} stage={g.stage} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
+// FoldedTraceGroup is the collapsed "N steps" group for technical traces
+// (tool calls / assistant output). Collapsed by default; expand to see each row.
+function FoldedTraceGroup({ type, rows, stage }) {
+  const [open, setOpen] = useState(false)
+  const Icon = type === 'tool' ? <FileCode size={14} /> : <MessageSquare size={14} />
+  return (
+    <li className={`cw-trace-item cw-trace-info cw-trace-folded${open ? ' open' : ''}`}>
+      <button type="button" className="cw-trace-fold-toggle" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        <span className="cw-trace-icon">{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+        {Icon}
+        <span className="cw-trace-text">{foldedGroupLabel(type, rows.length, stage)}</span>
+      </button>
+      {open ? (
+        <ul className="cw-trace-detail">
+          {rows.map((r, idx) => (
+            <li key={r.id || idx}>{type === 'tool' ? toolRowText(r.payload) : assistantRowText(r.payload)}</li>
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  )
+}
+
+// RollbackControl is the confirm-gated rollback to the prior effective version.
+// Destructive → requires an explicit second click after arming.
+function RollbackControl({ appId, onRollback, submitting }) {
+  const [armed, setArmed] = useState(false)
+  const submit = () => {
+    if (submitting) return
+    if (!armed) {
+      setArmed(true)
+      return
+    }
+    onRollback(appId)
+    setArmed(false)
+  }
+  return (
+    <button
+      type="button"
+      className={`cw-rollback${armed ? ' cw-rollback-armed' : ''}`}
+      onClick={submit}
+      disabled={submitting}
+      title={armed ? '再次点击确认回滚到上一版本' : '回滚到上一版本'}
+    >
+      <RotateCcw size={12} />
+      <span>{armed ? '确认回滚' : '回滚'}</span>
+    </button>
+  )
+}
+
+function formatAcceptedAt(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }

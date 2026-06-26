@@ -109,6 +109,15 @@ func TestRouteIntentPromptUsesSkillAndPermitsOnlyReadGrepGlob(t *testing.T) {
 	if !sawPromptSkill {
 		t.Fatalf("prompt must reference dialogue-intent-routing skill: %v", fr.args)
 	}
+	prompt := strings.Join(fr.args, " ")
+	if !strings.Contains(prompt, filepath.Join(root, ".claude", "skills", "dialogue-intent-routing", "SKILL.md")) {
+		t.Fatalf("prompt must use an absolute skill path rooted at WorkspaceRoot: %s", prompt)
+	}
+	for _, required := range []string{`"intent"`, `"confidence"`, `"existingApplicationSlugs"`, `"internalBlueprintSlug"`, `"userFacingReason"`, `"needsRouteConfirmation"`} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt must inline route output contract field %s: %s", required, prompt)
+		}
+	}
 	// artifacts written
 	for _, rel := range []string{"input.json", "prompt.md", "output.json", "stdout.log", "stderr.log", "stream.jsonl"} {
 		if _, err := os.Stat(filepath.Join(root, ".factory-runs", "dialogues", "dia_1", "route", rel)); err != nil {
@@ -349,6 +358,36 @@ func TestRouteIntentRejectsInvalidIntent(t *testing.T) {
 	}
 }
 
+func TestRouteIntentAdaptsLegacyActionBlueprintOutput(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: "```json\n" + mustJSON(t, map[string]any{
+		"action": "application_generation",
+		"blueprint": map[string]any{
+			"slug":    "carrier-formation-replay",
+			"name":    "航母编队复盘",
+			"appType": "situation_replay",
+			"summary": "展示航母编队复盘。",
+		},
+	}) + "\n```"}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_legacy_shape", UserMessage: "写一个航母编队复盘应用",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent should adapt legacy action/blueprint shape: %v", err)
+	}
+	if out.Intent != IntentApplicationGeneration {
+		t.Fatalf("intent = %q, want application_generation", out.Intent)
+	}
+	if out.InternalBlueprintSlug != "carrier-formation-replay" {
+		t.Fatalf("internalBlueprintSlug = %q", out.InternalBlueprintSlug)
+	}
+	if !out.NeedsRouteConfirmation {
+		t.Fatal("legacy application_generation output must still require route confirmation")
+	}
+}
+
 // --- intent routing: malformed JSON ---
 
 func TestRouteIntentRejectsMalformedJSON(t *testing.T) {
@@ -367,9 +406,13 @@ func TestRouteIntentRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
-// --- intent routing: thinking_delta filtered from streamed events ---
+// --- intent routing: thinking_delta streams on a dedicated .thinking channel ---
 
-func TestRouteIntentFiltersThinkingDeltaFromStream(t *testing.T) {
+// The conversation surface streams the model's thinking. thinking_delta is
+// surfaced as a separate dialogue.route.thinking event (the 思考过程 block),
+// while the safe output (text_delta) reconstructs on the .delta channel — the
+// two never cross-contaminate. (#9 still applies to the executor/trace pipeline.)
+func TestRouteIntentSurfacesThinkingOnThinkingChannel(t *testing.T) {
 	root := t.TempDir()
 	out := RouteOutput{
 		Intent: IntentExistingApplication, Confidence: ConfidenceHigh,
@@ -396,14 +439,26 @@ func TestRouteIntentFiltersThinkingDeltaFromStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RouteIntent stream: %v", err)
 	}
+	var sawDelta, sawThinking bool
 	for _, ev := range events {
-		if strings.Contains(ev.Delta, "hidden internal reasoning") {
-			t.Fatalf("thinking_delta leaked into event delta: %q", ev.Delta)
+		if ev.Type == "dialogue.route.delta" {
+			sawDelta = true
+			if strings.Contains(ev.Delta, "hidden internal reasoning") {
+				t.Fatalf("thinking leaked into the .delta (analysis) channel: %q", ev.Delta)
+			}
 		}
-		b, _ := json.Marshal(ev)
-		if strings.Contains(string(b), "hidden internal reasoning") {
-			t.Fatalf("thinking_delta leaked into event data: %s", string(b))
+		if ev.Type == "dialogue.route.thinking" {
+			sawThinking = true
+			if !strings.Contains(ev.Delta, "hidden internal reasoning") {
+				t.Fatalf(".thinking channel must carry the raw reasoning, got %q", ev.Delta)
+			}
 		}
+	}
+	if !sawDelta {
+		t.Fatalf("no dialogue.route.delta emitted for the safe output")
+	}
+	if !sawThinking {
+		t.Fatalf("no dialogue.route.thinking emitted for thinking_delta (conversation surface streams thinking)")
 	}
 }
 
