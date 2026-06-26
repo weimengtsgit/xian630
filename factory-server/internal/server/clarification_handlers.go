@@ -225,12 +225,16 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 		Data:      sess,
 	})
 
-	// Run round 1 synchronously. Events stream live to any pre-subscribed SSE
-	// client via publishClarificationEvent during the request. On failure the
-	// session is marked failed (no job) and we still return 200 with the session.
-	updated, _, ok := s.runRoundAndPersist(ctx, sessID, 1)
-	if !ok {
-		// Failure path already set status=failed + published clarification.failed.
+	// Run round 1 outside the request path. Events stream live to any
+	// pre-subscribed SSE client; on failure the session is marked failed (no job).
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runRoundAndPersist(asyncCtx, sessID, 1)
+	})
+	updated, _ := s.store.GetClarificationSession(ctx, sessID)
+	if updated == nil {
+		updated = &sess
+	}
+	if updated.Status == model.ClarificationStatusFailed {
 		writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 		return
 	}
@@ -344,7 +348,7 @@ func (s *Server) listClarificationMessages(w http.ResponseWriter, r *http.Reques
 // addClarificationMessage handles POST /api/clarifications/:id/messages. It
 // appends a user message then runs the next round (round = current+1, capped at
 // max_rounds; at the cap the session transitions to ready_to_confirm instead of
-// running again).
+// running again). The next model round is scheduled outside the request path.
 func (s *Server) addClarificationMessage(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	sess, err := s.store.GetClarificationSession(r.Context(), id)
@@ -384,13 +388,12 @@ func (s *Server) addClarificationMessage(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx := r.Context()
-	updated, ok := s.advanceAfterUserTurn(ctx, id, sess)
+	_ = s.store.SetClarificationStatus(ctx, id, model.ClarificationStatusActive, "", "")
+	s.runAsync(func(asyncCtx context.Context) {
+		s.advanceAfterUserTurn(asyncCtx, id, sess)
+	})
+	updated, _ := s.store.GetClarificationSession(ctx, id)
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
-	if !ok {
-		// Round failed: the view already carries status=failed. Nothing else to
-		// do — a job is never created on this path.
-		return
-	}
 }
 
 // answerClarification handles POST /api/clarifications/:id/answers. It persists
@@ -449,12 +452,12 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 	// answer + merged requirement must be visible to the next clarifier round,
 	// otherwise the conversation stalls before ready_to_confirm.
 	ctx := r.Context()
-	advanced, ok := s.advanceAfterUserTurn(ctx, id, updated)
-	writeJSON(w, http.StatusOK, s.viewFromSession(advanced))
-	if !ok {
-		// Round failed: the view already carries status=failed.
-		return
-	}
+	_ = s.store.SetClarificationStatus(ctx, id, model.ClarificationStatusActive, "", "")
+	s.runAsync(func(asyncCtx context.Context) {
+		s.advanceAfterUserTurn(asyncCtx, id, updated)
+	})
+	fresh, _ := s.store.GetClarificationSession(ctx, id)
+	writeJSON(w, http.StatusOK, s.viewFromSession(fresh))
 }
 
 // answerClarificationBatch handles POST /api/clarifications/:id/answers/batch.
@@ -520,11 +523,12 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 		Data:      clarification.PublicRequirement(req),
 	})
 
-	advanced, ok := s.advanceAfterUserTurn(r.Context(), id, updated)
-	writeJSON(w, http.StatusOK, s.viewFromSession(advanced))
-	if !ok {
-		return
-	}
+	_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusActive, "", "")
+	s.runAsync(func(asyncCtx context.Context) {
+		s.advanceAfterUserTurn(asyncCtx, id, updated)
+	})
+	fresh, _ := s.store.GetClarificationSession(r.Context(), id)
+	writeJSON(w, http.StatusOK, s.viewFromSession(fresh))
 }
 
 // patchClarificationRequirement handles PATCH /api/clarifications/:id/requirement.
@@ -657,11 +661,10 @@ func (s *Server) retryClarificationRound(w http.ResponseWriter, r *http.Request)
 		retryRound = 1
 	}
 
-	updated, _, ok := s.runRoundAndPersist(r.Context(), id, retryRound)
-	if !ok {
-		writeJSON(w, http.StatusOK, s.viewFromSession(updated))
-		return
-	}
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runRoundAndPersist(asyncCtx, id, retryRound)
+	})
+	updated, _ := s.store.GetClarificationSession(r.Context(), id)
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 }
 
@@ -866,10 +869,9 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 // round that was attempted, sets status=failed, records the error code/message,
 // and publishes clarification.failed; NO job is created.
 //
-// The round is run SYNCHRONOUSLY: the request blocks until the round completes
-// (fast with the test fake, ~seconds with the real CLI). Events are published to
-// the hub DURING the request, so any SSE client already subscribed to
-// /api/events receives them live. This matches the plan's testable shape.
+// Callers may run this from a background task so HTTP requests are not held open
+// while the model is queued or rate-limited. Events are published to the hub
+// during the round, so any SSE client already subscribed receives them live.
 //
 // Round persistence: the `round` column is advanced (via
 // Store.UpdateClarificationRound) to the round that actually ran, so the

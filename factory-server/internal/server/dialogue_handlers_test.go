@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,32 @@ func (f *fakeDialogueRunner) Run(ctx context.Context, dir, name string, args ...
 	return runner.CommandResult{ExitCode: 0, Stdout: out}, nil
 }
 
+type blockingDialogueRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingDialogueRunner() *blockingDialogueRunner {
+	return &blockingDialogueRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (f *blockingDialogueRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	select {
+	case <-f.started:
+	default:
+		close(f.started)
+	}
+	select {
+	case <-ctx.Done():
+		return runner.CommandResult{ExitCode: 1, Stderr: ctx.Err().Error()}, ctx.Err()
+	case <-f.release:
+		return runner.CommandResult{ExitCode: 0, Stdout: routeAmbiguousOutput}, nil
+	}
+}
+
 // canned route outputs ---------------------------------------------------
 
 const routeExistingAppHighConfidenceOutput = `{
@@ -88,6 +115,15 @@ const routeBusinessAgentOutput = `{
   "existingApplicationSlugs": [],
   "internalBlueprintSlug": "",
   "userFacingReason": "将配置一个业务处理智能体。",
+  "needsRouteConfirmation": false
+}`
+
+const routeManagedAgentOutput = `{
+  "intent": "existing_application",
+  "confidence": "high",
+  "existingApplicationSlugs": ["ops-copilot"],
+  "internalBlueprintSlug": "",
+  "userFacingReason": "运维智能体与部署和告警排查需求最相似，可直接打开使用。",
   "needsRouteConfirmation": false
 }`
 
@@ -202,6 +238,7 @@ func newDialogueTestServer(t *testing.T, dlgRunner runner.CommandRunner) (*Serve
 		}
 	}
 	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: root}, st, scanner.Scanner{})
+	srv.async = func(fn func(context.Context)) { fn(context.Background()) }
 	// Override clarification + dialogue runners with fakes. Both use the same
 	// underlying runner.CommandRunner type; clarification is driven by the
 	// clar-specific fake stdout constants.
@@ -230,7 +267,8 @@ func mustWriteCatalog(t *testing.T, root string) {
 	cat := `{"version":1,"scenes":{
   "carrier-formation-replay": {"surface":"application","order":1},
   "aircraft-carrier-track": {"surface":"application","order":2},
-  "carrier-homeport-tide-window": {"surface":"blueprint"}
+  "carrier-homeport-tide-window": {"surface":"blueprint"},
+  "ops-copilot": {"surface":"managed_agent","order":1,"name":"运维智能体","description":"排查部署、告警和服务健康问题","url":"https://example.com/ops","keywords":["运维","部署","告警"]}
 }}`
 	dir := root + "/.factory"
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -336,6 +374,69 @@ func TestCreateDialoguePersistsMessageAndRoutes(t *testing.T) {
 	}
 	if !sawIntent {
 		t.Fatalf("did not see dialogue.intent.updated event; got %#v", eventTypes(events))
+	}
+}
+
+func TestCreateDialogueCanRecommendManagedAgent(t *testing.T) {
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeManagedAgentOutput})
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "帮我排查部署告警"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Route.Intent != dialogue.IntentExistingApplication {
+		t.Fatalf("route intent = %q, want existing_application", view.Route.Intent)
+	}
+	if len(view.Recommendations) != 1 {
+		t.Fatalf("recommendations = %d, want 1: %+v", len(view.Recommendations), view.Recommendations)
+	}
+	got := view.Recommendations[0]
+	if got.Kind != "managed_agent" {
+		t.Fatalf("recommendation kind = %q, want managed_agent: %+v", got.Kind, got)
+	}
+	if got.Slug != "ops-copilot" || got.RuntimeURL != "https://example.com/ops" {
+		t.Fatalf("unexpected managed recommendation: %+v", got)
+	}
+}
+
+func TestCreateDialogueReturnsBeforeSlowRoutingCompletes(t *testing.T) {
+	blocking := newBlockingDialogueRunner()
+	srv, r, _ := newDialogueTestServer(t, blocking)
+	srv.async = func(fn func(context.Context)) { go fn(context.Background()) }
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	start := time.Now()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "慢模型也不能卡住前端"})
+	}()
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-done:
+	case <-time.After(150 * time.Millisecond):
+		close(blocking.release)
+		t.Fatalf("create blocked waiting on routing model")
+	}
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if elapsed > 150*time.Millisecond {
+		t.Fatalf("create blocked for %s waiting on routing model", elapsed)
+	}
+	select {
+	case <-blocking.started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("routing model was not started asynchronously")
+	}
+	close(blocking.release)
+	if !waitForEventType(ch, "dialogue.intent.updated") {
+		t.Fatalf("routing did not complete after releasing the model")
 	}
 }
 
@@ -1671,11 +1772,14 @@ func TestMessagesWhileUnlockedRepeatsRouting(t *testing.T) {
 	_ = drainClarificationHub(ch)
 
 	msgRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/messages", map[string]string{"content": "帮我看看已有的"})
-	if msgRec.Code != http.StatusOK {
+	if msgRec.Code != http.StatusAccepted {
 		t.Fatalf("messages status = %d body=%s", msgRec.Code, msgRec.Body.String())
 	}
-	var view dialogueView
-	json.NewDecoder(msgRec.Body).Decode(&view)
+	var ack struct {
+		View dialogueView `json:"view"`
+	}
+	json.NewDecoder(msgRec.Body).Decode(&ack)
+	view := ack.View
 	if view.Route.Intent == "" {
 		t.Fatalf("re-route did not produce a route payload")
 	}

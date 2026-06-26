@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { ApplicationsPanel } from './components/ApplicationsPanel'
@@ -6,6 +7,7 @@ import { AgentsPanel } from './components/AgentsPanel'
 import { JobCenter } from './components/JobCenter'
 import { ConversationWorkbench } from './components/ConversationWorkbench'
 import { useApplications } from './hooks/useApplications'
+import { useManagedAgents } from './hooks/useManagedAgents'
 import { useAgents } from './hooks/useAgents'
 import { useJobs } from './hooks/useJobs'
 import { useDialogueSessions } from './hooks/useDialogueSessions'
@@ -18,9 +20,17 @@ const factoryApiGetArtifactContent = id => factoryApi.getArtifactContent(id)
 
 function App() {
   const apps = useApplications()
+  const managedAgents = useManagedAgents()
   const agents = useAgents()
   const jobs = useJobs()
   const dialogue = useDialogueSessions()
+  const [leftPanelHidden, setLeftPanelHidden] = useState(false)
+  const [rightPanelHidden, setRightPanelHidden] = useState(false)
+  const workbenchClass = [
+    'workbench',
+    leftPanelHidden ? 'left-hidden' : '',
+    rightPanelHidden ? 'right-hidden' : '',
+  ].filter(Boolean).join(' ')
 
   // Feed the live job list into the dialogue hook so it can select a dialogue-
   // scoped focus task (Constraint #10). The hook filters by dialogue_id
@@ -51,21 +61,40 @@ function App() {
     <main className="portal-shell">
       <TopBar />
       <LeftToolbar />
-      <div className="workbench">
-        <div className="wb-col wb-left">
-          <ApplicationsPanel
-            apps={apps.apps}
-            loading={apps.loading}
-            error={apps.error}
-            actionById={apps.actionById}
-            onStart={apps.startApplication}
-            onStop={apps.stopApplication}
-            onRebuild={apps.restartApplication}
-            onRegenerate={regenerateApplication}
-            onDelete={apps.deleteApplication}
-            onRefresh={apps.refresh}
-          />
-        </div>
+      <div className={workbenchClass}>
+        {leftPanelHidden ? (
+          <button
+            type="button"
+            className="side-rail-toggle side-rail-toggle-left"
+            onClick={() => setLeftPanelHidden(false)}
+            title="显示左侧智能体"
+            aria-label="显示左侧智能体"
+          >
+            <ChevronRight size={16} />
+          </button>
+        ) : null}
+
+        {!leftPanelHidden ? (
+          <div className="wb-col wb-left">
+            <ApplicationsPanel
+              apps={apps.apps}
+              loading={apps.loading}
+              error={apps.error}
+              actionById={apps.actionById}
+              onStart={apps.startApplication}
+              onStop={apps.stopApplication}
+              onRebuild={apps.restartApplication}
+              onRegenerate={regenerateApplication}
+              onDelete={apps.deleteApplication}
+              onRefresh={apps.refresh}
+              managedAgents={managedAgents.managedAgents}
+              managedAgentsLoading={managedAgents.loading}
+              managedAgentsError={managedAgents.error}
+              onRefreshManagedAgents={managedAgents.refresh}
+              onHidePanel={() => setLeftPanelHidden(true)}
+            />
+          </div>
+        ) : null}
 
         <div className="wb-col wb-center">
           <ConversationWorkbench
@@ -126,16 +155,31 @@ function App() {
           />
         </div>
 
-        <div className="wb-col wb-right">
-          <AgentsPanel
-            agents={agents.agents}
-            loading={agents.loading}
-            error={agents.error}
-            onCreateAgent={agents.createAgent}
-            onDeleteAgent={agents.deleteAgent}
-            deletingAgentId={agents.deletingAgentId}
-          />
-        </div>
+        {!rightPanelHidden ? (
+          <div className="wb-col wb-right">
+            <AgentsPanel
+              agents={agents.agents}
+              loading={agents.loading}
+              error={agents.error}
+              onCreateAgent={agents.createAgent}
+              onDeleteAgent={agents.deleteAgent}
+              deletingAgentId={agents.deletingAgentId}
+              onHidePanel={() => setRightPanelHidden(true)}
+            />
+          </div>
+        ) : null}
+
+        {rightPanelHidden ? (
+          <button
+            type="button"
+            className="side-rail-toggle side-rail-toggle-right"
+            onClick={() => setRightPanelHidden(false)}
+            title="显示右侧智能体"
+            aria-label="显示右侧智能体"
+          >
+            <ChevronLeft size={16} />
+          </button>
+        ) : null}
       </div>
     </main>
   )

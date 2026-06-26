@@ -31,6 +31,7 @@ type Server struct {
 	scanner scanner.Scanner
 	hub     *Hub
 	srv     *http.Server
+	async   func(func(context.Context))
 
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
@@ -266,6 +267,18 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	if runner.LLMConsoleEnabled() {
 		log.Printf("FACTORY_LLM_CONSOLE=1: claude request/response traces stream to stderr")
 	}
+	asyncLimit := cfg.MaxConcurrentJobs
+	if asyncLimit < 1 {
+		asyncLimit = 1
+	}
+	asyncSem := make(chan struct{}, asyncLimit)
+	async := func(fn func(context.Context)) {
+		go func() {
+			asyncSem <- struct{}{}
+			defer func() { <-asyncSem }()
+			fn(context.Background())
+		}()
+	}
 	dispatch := executor.NewDispatcher(factory, claude)
 	s.exec = executor.NewExecutor(st, dispatch, cfg.MaxConcurrentJobs)
 	s.exec.RunLog = runLogger
@@ -294,6 +307,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	s.exec.OnTrace = func(ctx context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
 		return s.recordAndPublishWorkTrace(ctx, ev)
 	}
+	s.async = async
 	return s
 }
 
@@ -400,6 +414,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/healthz", s.health)
 
 	r.Handle("GET", "/api/apps", s.listApps)
+	r.Handle("GET", "/api/managed-agents", s.listManagedAgents)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)

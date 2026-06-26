@@ -1,0 +1,4 @@
+interface:
+  display_name: "Historical AIS Density Data"
+  short_description: "Aggregate merchant-density grids from free historical AIS archives (no real-time API)."
+  default_prompt: "Use $ais-density-data-skill to download/process historical AIS archives and compute merchant-density grids over a date range."

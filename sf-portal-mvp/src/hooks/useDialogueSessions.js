@@ -45,6 +45,7 @@ const DIALOGUE_TYPES = new Set([
   'dialogue.route.thinking',
   'dialogue.draft.thinking',
   'dialogue.resolved',
+  'dialogue.failed',
   'dialogue.abandoned',
   'dialogue.deleted',
   'dialogue.message.accepted',

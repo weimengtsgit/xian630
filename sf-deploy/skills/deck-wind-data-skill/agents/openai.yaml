@@ -1,0 +1,4 @@
+interface:
+  display_name: "Real Deck Wind Data"
+  short_description: "Select real wind sources by region, fetch 10 m wind, and normalize fields."
+  default_prompt: "Use $deck-wind-data-skill to fetch and normalize real 10 m wind data for the requested regions."

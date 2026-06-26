@@ -254,6 +254,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       type: 'app_recommendation',
       cards: recs.slice(0, 3).map(card => ({
         applicationId: safeString(card.applicationId),
+        kind: safeString(card.kind),
         slug: safeString(card.slug),
         name: safeString(card.name),
         appType: safeString(card.appType),
