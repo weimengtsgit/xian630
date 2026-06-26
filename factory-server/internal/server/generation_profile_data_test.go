@@ -7,17 +7,6 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
 )
 
-// containsSkill reports whether the data-skill list contains key. Order is not
-// part of the contract; only presence matters.
-func containsSkill(skills []string, key string) bool {
-	for _, s := range skills {
-		if s == key {
-			return true
-		}
-	}
-	return false
-}
-
 // TestDeriveDataSkillsLiveTide proves the real-data-default derivation: a
 // live_api requirement whose scenario mentions the tide domain MUST surface the
 // tide-data-skill, even though the model never put one in the profile.

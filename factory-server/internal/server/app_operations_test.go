@@ -196,6 +196,58 @@ func TestStartUsesConfiguredContainerRuntime(t *testing.T) {
 	}
 }
 
+func TestSanitizeGeneratedAppNginxFixesOntologyVariableProxyPassWithPortInProxyPass(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "ontology.env"), []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+    location /api/ontology/ {
+        set $upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeGeneratedAppNginx(conf, dir); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	for _, want := range []string{
+		"rewrite ^/api/ontology/(.*)$ /$1 break;",
+		"proxy_pass http://ceshi.projects.bingosoft.net:8081;",
+		`proxy_set_header Authorization "Bearer real-token";`,
+		`proxy_set_header Spaceid "real-space";`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sanitized nginx missing %q;\ngot:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "$upstream") || strings.Contains(got, "<ONTOLOGY_AUTH_TOKEN>") || strings.Contains(got, "SPACE_123") {
+		t.Fatalf("variable upstream or placeholders should not remain;\ngot:\n%s", got)
+	}
+	if err := sanitizeGeneratedAppNginx(conf, dir); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
 func TestStartPublishesAppAndDeploymentEvents(t *testing.T) {
 	fr := &srvRunner{failIdx: -1}
 	srv, r := newOpsServer(t, fr)

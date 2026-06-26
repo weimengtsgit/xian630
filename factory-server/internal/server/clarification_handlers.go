@@ -1698,6 +1698,17 @@ func withoutSkill(skills []string, key string) []string {
 	return out
 }
 
+// containsSkill reports whether the data-skill list contains key. Order is not
+// part of the contract; only presence matters.
+func containsSkill(skills []string, key string) bool {
+	for _, skill := range skills {
+		if skill == key {
+			return true
+		}
+	}
+	return false
+}
+
 // recomputeGenerationProfile is the single server-side entrypoint for deriving a
 // requirement's generationProfile. It builds base/domain/pattern from appType +
 // blueprint refs (via generationProfileForRequirement, preserving any existing

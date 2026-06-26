@@ -432,7 +432,9 @@ func (s *Server) prepareGeneratedStaticViteBuild(ctx context.Context, app model.
 }
 
 var serverNginxVariableUpstreamSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+:\d+);\s*$`)
+var serverNginxVariableHostSetRe = regexp.MustCompile(`(?m)^(\s*)set\s+(\$[A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z0-9.\-]+);\s*$`)
 var serverNginxVariableProxyPassRe = regexp.MustCompile(`(?m)^\s*proxy_pass\s+https?://\$[A-Za-z_][A-Za-z0-9_]*`)
+var serverNginxOntologyLocationBlockRe = regexp.MustCompile(`(?ms)location\s+/api/ontology/\s*\{.*?\n\s*\}`)
 
 func sanitizeGeneratedAppNginx(path, workspace string) error {
 	raw, err := os.ReadFile(path)
@@ -449,9 +451,9 @@ func sanitizeGeneratedAppNginx(path, workspace string) error {
 }
 
 func collapseExternalVariableUpstreams(src string) string {
-	out := src
+	out := rewriteServerOntologyVariablePortProxyPasses(src)
 	converted := false
-	for _, m := range serverNginxVariableUpstreamSetRe.FindAllStringSubmatch(src, -1) {
+	for _, m := range serverNginxVariableUpstreamSetRe.FindAllStringSubmatch(out, -1) {
 		indent, variable, upstream := m[1], m[2], m[3]
 		host, _, _ := strings.Cut(upstream, ":")
 		if !strings.Contains(host, ".") && !serverIsIPv4(host) {
@@ -472,6 +474,41 @@ func collapseExternalVariableUpstreams(src string) string {
 	}
 	if converted && !serverNginxVariableProxyPassRe.MatchString(out) {
 		out = removeDockerResolver(out)
+	}
+	return out
+}
+
+func rewriteServerOntologyVariablePortProxyPasses(src string) string {
+	if !strings.Contains(src, "/api/ontology/") {
+		return src
+	}
+	out := serverNginxOntologyLocationBlockRe.ReplaceAllStringFunc(src, rewriteServerOntologyVariablePortProxyPassBlock)
+	if out != src && !serverNginxVariableProxyPassRe.MatchString(out) {
+		out = removeDockerResolver(out)
+	}
+	return out
+}
+
+func rewriteServerOntologyVariablePortProxyPassBlock(block string) string {
+	out := block
+	for _, m := range serverNginxVariableHostSetRe.FindAllStringSubmatch(block, -1) {
+		indent, variable, host := m[1], m[2], m[3]
+		if !strings.Contains(host, ".") && !serverIsIPv4(host) {
+			continue
+		}
+		proxyRe := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(indent) + `proxy_pass\s+http://` + regexp.QuoteMeta(variable) + `:(\d+)([^\s;]*);\s*$`)
+		proxyMatch := proxyRe.FindStringSubmatch(out)
+		if proxyMatch == nil {
+			continue
+		}
+		port, uri := proxyMatch[1], proxyMatch[2]
+		if uri != "" && uri != "/" {
+			continue
+		}
+		replacement := indent + "rewrite ^/api/ontology/(.*)$ /$1 break;\n" +
+			indent + "proxy_pass http://" + host + ":" + port + ";"
+		out = strings.Replace(out, m[0]+"\n"+proxyMatch[0], replacement, 1)
+		out = strings.Replace(out, m[0]+"\r\n"+proxyMatch[0], replacement, 1)
 	}
 	return out
 }
