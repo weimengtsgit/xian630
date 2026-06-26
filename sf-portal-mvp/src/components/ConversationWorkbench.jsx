@@ -698,7 +698,7 @@ function deploymentStatusInfo({ view, focusTask, steps, traceItems }) {
   const deploymentStep = (Array.isArray(steps) ? steps : []).find(step => {
     const kind = step && step.kind
     const agentKey = step && (step.agentKey || step.agent_key)
-    return kind === 'deployment' && step.status === 'running' && (!agentKey || agentKey === 'deployer')
+    return kind === 'deployment' && (step.status === 'running' || step.status === 'succeeded') && (!agentKey || agentKey === 'deployer')
   })
   if (!deploymentStep) return null
   const requirement = (view && view.child && view.child.requirement) || requirementFromJob(focusTask) || {}
