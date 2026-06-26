@@ -70,6 +70,28 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.confirmed_requirement_json: %w", err)
 	}
+	// Added by the application-version-lineage task. Left unused by
+	// CreateJob/scanJob until Job gains these fields.
+	if err := s.ensureColumn(ctx, "jobs", "dialogue_id",
+		`ALTER TABLE jobs ADD COLUMN dialogue_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.dialogue_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "application_id",
+		`ALTER TABLE jobs ADD COLUMN application_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.application_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "base_version_id",
+		`ALTER TABLE jobs ADD COLUMN base_version_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.base_version_id: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "jobs", "kind",
+		`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.kind: %w", err)
+	}
 	if err := s.ensureColumn(ctx, "applications", "display_order",
 		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
 		db.Close()
@@ -86,6 +108,33 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE agents ADD COLUMN prompt TEXT NOT NULL DEFAULT ''`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate agents.prompt: %w", err)
+	}
+	// agents.created_at: when the agent was generated (seeded or created from a
+	// dialogue). Existing rows backfill to 0; the UI renders 0 as no time.
+	if err := s.ensureColumn(ctx, "agents", "created_at",
+		`ALTER TABLE agents ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agents.created_at: %w", err)
+	}
+	// clarification_sessions.open_high_impact_json: persisted snapshot of the
+	// currently-open high-impact confirmation items (D3 / ADR 0006). The
+	// non-model readiness sites (advanceAfterUserTurn round-cap promotion and
+	// normalizeClarificationReadiness on read) re-check this WITHOUT a model
+	// turn so a session with open high-impact items stays question/active even
+	// at the MaxRounds cap, and is never auto-promoted to ready_to_confirm.
+	if err := s.ensureColumn(ctx, "clarification_sessions", "open_high_impact_json",
+		`ALTER TABLE clarification_sessions ADD COLUMN open_high_impact_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate clarification_sessions.open_high_impact_json: %w", err)
+	}
+	// job_steps.pending_questions: JSON-encoded clarifying questions a step asked
+	// when it paused for user input (waiting_user). Surfaced via the job detail so
+	// the task card/conversation can show WHAT the user must answer, not just that
+	// input is needed. Empty for steps that never paused.
+	if err := s.ensureColumn(ctx, "job_steps", "pending_questions",
+		`ALTER TABLE job_steps ADD COLUMN pending_questions TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job_steps.pending_questions: %w", err)
 	}
 	return s, nil
 }

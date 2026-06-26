@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   Loader2,
   Clock,
@@ -70,19 +71,31 @@ function formatDuration(ms) {
   return s > 0 ? `${m}m${s}s` : `${m}m`
 }
 
-// Excerpt of the latest record summary for the step (plain text, single line).
-function excerpt(text, max = 60) {
-  if (!text) return null
-  const flat = String(text).replace(/\s+/g, ' ').trim()
-  return flat.length > max ? flat.slice(0, max) + '…' : flat
+// stepDurationMs returns the elapsed run time (ms) for a step, derived from its
+// own started_at / ended_at timestamps (the backend StepExecutionSummary carries
+// no duration field). Ended steps return their fixed duration; a RUNNING step
+// returns the live elapsed time against `now` (StepCard re-renders each second
+// so it counts up). null when the step has not started.
+function stepDurationMs(step, status, now) {
+  if (!step) return null
+  const startedRaw = step.started_at || step.startedAt
+  if (!startedRaw) return null
+  const start = Date.parse(startedRaw)
+  if (!Number.isFinite(start)) return null
+  const endedRaw = step.ended_at || step.endedAt
+  if (endedRaw) {
+    const end = Date.parse(endedRaw)
+    if (Number.isFinite(end)) return Math.max(0, end - start)
+  }
+  if (status === 'running') return Math.max(0, now - start)
+  return null
 }
 
 /**
  * One card in the 3x2 step matrix. Renders a single fixed stage with:
  *   - Lucide status icon + status text label (color is never the sole signal)
- *   - stage name (e.g. 需求分析)
- *   - agent role / key
- *   - duration, latest-summary excerpt, attempt label
+ *   - stage name (e.g. 需求分析) with the attempt index inline (第 N 次)
+ *   - duration (when present)
  *   - unread badge (counts ONLY the live SSE tail — see useJobs.getUnreadCount)
  *
  * The card is a <button> with aria-pressed (selected) + aria-label so keyboard
@@ -99,25 +112,23 @@ export function StepCard({
 }) {
   const status = (step && (step.status || step.state)) || 'pending'
   const displayName = label || STAGE_LABELS[kind] || kind
-  const agentRole = (step && (step.agent_key || step.agent)) || STAGE_AGENT_ROLE[kind] || kind
   const attempt =
     (summary && (summary.attempt ?? summary.latest_attempt)) ??
     (step && (step.attempt ?? step.latest_attempt)) ??
     null
-  const durationMs =
-    (summary && (summary.duration_ms ?? summary.durationMs)) ||
-    (step && (step.duration_ms ?? step.durationMs)) ||
-    null
-  // Excerpt text: backend Task 4 summary shape exposes the latest record at
-  // summary.latest_record.content (there is NO summary.summary string). Mirror
-  // the drawer's record-renderer fallback chain so any record kind shows text.
-  const summaryText =
-    (summary &&
-      summary.latest_record &&
-      (summary.latest_record.content ||
-        summary.latest_record.text ||
-        summary.latest_record.message)) ||
-    null
+  // Elapsed run time for this step. Ended steps show their fixed duration
+  // (ended_at − started_at); a RUNNING step shows the live elapsed time, which
+  // the tick below re-renders every second so the value counts up in real time.
+  // The backend StepExecutionSummary has no duration field, so we derive it from
+  // the step's own started_at / ended_at timestamps.
+  const startedAt = step && (step.started_at || step.startedAt)
+  const [, setDurationTick] = useState(0)
+  useEffect(() => {
+    if (status !== 'running' || !startedAt) return undefined
+    const id = setInterval(() => setDurationTick(v => v + 1), 1000)
+    return () => clearInterval(id)
+  }, [status, startedAt])
+  const durationMs = stepDurationMs(step, status, Date.now())
 
   const unread = Number.isFinite(unreadCount) ? unreadCount : 0
 
@@ -143,22 +154,15 @@ export function StepCard({
 
       <div className="sc-card-title">
         <span className="sc-stage-name">{displayName}</span>
+        {attempt != null ? <span className="sc-attempt">第 {attempt} 次</span> : null}
         <ChevronRight size={14} className="sc-chevron" />
       </div>
 
-      <div className="sc-card-meta">
-        <span className="sc-agent" title={agentRole}>
-          {agentRole}
-        </span>
-        {attempt != null ? (
-          <span className="sc-attempt">第 {attempt} 次</span>
-        ) : null}
-        {formatDuration(durationMs) ? (
+      {formatDuration(durationMs) ? (
+        <div className="sc-card-meta">
           <span className="sc-duration">{formatDuration(durationMs)}</span>
-        ) : null}
-      </div>
-
-      {excerpt(summaryText) ? <p className="sc-summary">{excerpt(summaryText)}</p> : null}
+        </div>
+      ) : null}
     </button>
   )
 }

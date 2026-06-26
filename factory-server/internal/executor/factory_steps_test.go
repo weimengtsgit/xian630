@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -283,7 +284,11 @@ func TestTestVerificationDependencyInstallFails(t *testing.T) {
 	}
 }
 
-// TestImageBuildRunsPodmanBuild: podman build invoked with the right tag.
+// TestImageBuildRunsPodmanBuild: podman build invoked with the version-keyed
+// tag. A candidate build resolves to an isolated versioned dir under the app's
+// generated-apps/<slug>/ tree and tags the image
+// localhost/software-factory/<slug>:<version-id> so candidate + effective
+// images coexist.
 func TestImageBuildRunsPodmanBuild(t *testing.T) {
 	st := newFactoryTestStore(t)
 	ws := seedFactoryWorkspace(t, true)
@@ -298,16 +303,8 @@ func TestImageBuildRunsPodmanBuild(t *testing.T) {
 		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
 	}
 	names := cmds.names()
-	want := "podman build -t localhost/software-factory/demo:job-job_demo_1 ."
-	if len(names) != 1 || names[0] != want {
-		t.Fatalf("calls = %v, want [%q]", names, want)
-	}
-	// The podman build must run in the workspace-rooted project dir
-	// (filepath.Join(workspace, app.Path)), not the bare relative app.Path.
-	// In production the server's cwd is factory-server/, not the workspace
-	// root, so a bare "generated-apps/demo" would resolve the build context
-	// against the wrong directory.
-	wantDir := filepath.Join(ws, "generated-apps", "demo")
+	// The tag is the candidate version id (ver_<rand>), not the job id. Capture
+	// it from the build argv and assert the repo/slug prefix + the ver_ tag.
 	var buildCall *fakeCmdCall
 	for i := range cmds.calls {
 		c := &cmds.calls[i]
@@ -319,8 +316,31 @@ func TestImageBuildRunsPodmanBuild(t *testing.T) {
 	if buildCall == nil {
 		t.Fatalf("no podman build call recorded; calls=%v", names)
 	}
-	if buildCall.Dir != wantDir {
-		t.Fatalf("podman build dir = %q, want %q (workspace-rooted)", buildCall.Dir, wantDir)
+	// argv shape: build -t localhost/software-factory/demo:<ver-id> .
+	wantTagPrefix := "localhost/software-factory/demo:ver_"
+	gotTag := ""
+	for i, a := range buildCall.Args {
+		if a == "-t" && i+1 < len(buildCall.Args) {
+			gotTag = buildCall.Args[i+1]
+		}
+	}
+	if !strings.HasPrefix(gotTag, wantTagPrefix) {
+		t.Fatalf("image tag = %q, want prefix %q", gotTag, wantTagPrefix)
+	}
+	// The candidate build must run inside the isolated versioned dir, NOT the
+	// effective source dir (generated-apps/demo). The candidate dir is
+	// generated-apps/demo/versions/<ver-id>.
+	if !strings.HasPrefix(buildCall.Dir, filepath.Join(ws, "generated-apps", "demo", "versions")+string(os.PathSeparator)) {
+		t.Fatalf("podman build dir = %q, want a versioned subdir under generated-apps/demo/versions/", buildCall.Dir)
+	}
+	// An application_versions row must have been recorded for this candidate,
+	// linked to the job, in the building state.
+	versions, err := st.ListApplicationVersions(context.Background(), "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].JobID != job.ID || versions[0].Status != model.ApplicationVersionBuilding {
+		t.Fatalf("expected one building version for job %s; got %+v", job.ID, versions)
 	}
 }
 
@@ -352,6 +372,427 @@ func TestImageBuildUsesConfiguredRuntimeNotPodman(t *testing.T) {
 		if c.Name == "podman" {
 			t.Fatalf("hardcoded podman invoked despite a custom Runtime being set: %v", c.Args)
 		}
+	}
+}
+
+// TestImageBuildFailsOnInvalidNginxConfig: a static-vite app whose generated
+// nginx.conf nginx refuses to load (here: a truncated location regex
+// "^/api/marinecadastre/(\d", the real-world glm long-output-truncation failure)
+// must fail image_build with the nginx -t output — not sail through and surface
+// 30s later as a non-repairable deploy health_check_failed.
+func TestImageBuildFailsOnInvalidNginxConfig(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	// Ship a generated nginx.conf with a truncated location regex (missing "+)").
+	// writeStaticHostingDockerfile only synthesizes one when absent, so it keeps
+	// this broken file and bakes it into the nginx:alpine image.
+	appDir := filepath.Join(ws, "generated-apps", "demo")
+	if err := os.WriteFile(filepath.Join(appDir, "nginx.conf"),
+		[]byte("server {\n  listen 80;\n  location ~ ^/api/marinecadastre/(\\d {\n    return 200;\n  }\n}\n"),
+		0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	r, cmds := newFactoryRunner(st, ws, true)
+	// Simulate `nginx -t` rejecting the baked config (the validation runs
+	// `podman run --rm <image> nginx -t`). The fake build step itself succeeds.
+	cmds.setRes("podman run", deploy.CommandResult{
+		ExitCode: 1,
+		Stderr:   `nginx: [emerg] pcre2_compile() failed: missing closing parenthesis in "^/api/marinecadastre/(\d" in /etc/nginx/conf.d/default.conf:13`,
+	})
+
+	job, step := factoryJobStep(model.StepImageBuild)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorImageBuildFailed {
+		t.Fatalf("status = %s/%s (%s), want failed/image_build_failed", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	if !strings.Contains(res.ErrorMessage, "nginx") ||
+		!strings.Contains(res.ErrorMessage, "missing closing parenthesis") {
+		t.Fatalf("error message should include the nginx -t output; got:\n%s", res.ErrorMessage)
+	}
+	// The candidate version must be marked failed.
+	versions, err := st.ListApplicationVersions(context.Background(), "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0].Status != model.ApplicationVersionFailed {
+		t.Fatalf("expected one failed version; got %+v", versions)
+	}
+}
+
+// TestSanitizeNginxLocationRegexesQuotesBraceQuantifier: an unquoted location
+// regex with a brace quantifier (the real "\d{4}" failure) gets quoted; regexes
+// without braces, prefix locations, and already-quoted regexes are untouched;
+// and the transform is idempotent.
+func TestSanitizeNginxLocationRegexesQuotesBraceQuantifier(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location ~ ^/api/marinecadastre/(\d{4})/MapServer/(.*)$ {
+        return 200;
+    }
+    location ~* ^/v[0-9]+/items$ {
+        return 200;
+    }
+    location ~ "^/already/(\d{2})/x$" {
+        return 200;
+    }
+    location / {
+        try_files $uri /index.html;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxLocationRegexes(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	wantBrace := `    location ~ "^/api/marinecadastre/(\d{4})/MapServer/(.*)$" {`
+	wantNoBrace := `    location ~* ^/v[0-9]+/items$ {`
+	wantAlready := `    location ~ "^/already/(\d{2})/x$" {`
+	for _, want := range []string{wantBrace, wantNoBrace, wantAlready} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sanitized output missing %q;\ngot:\n%s", want, got)
+		}
+	}
+	// The brace location must be quoted exactly once (no double-quoting).
+	if c := strings.Count(got, "~ \"^/api/marinecadastre"); c != 1 {
+		t.Fatalf("brace location quoted %d times, want 1;\ngot:\n%s", c, got)
+	}
+	// Idempotent: a second run is a no-op.
+	if err := sanitizeNginxLocationRegexes(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd run:\n%s", string(got2Bytes))
+	}
+	// A missing file (non-nginx app) is not an error.
+	if err := sanitizeNginxLocationRegexes(filepath.Join(dir, "nope.conf")); err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+}
+
+// TestSanitizeNginxProxyPassUpstreams: a literal external-host proxy_pass is
+// converted to a variable + server-level resolver; container names, IPs,
+// localhost, and already-variable upstreams are left literal. Idempotent.
+func TestSanitizeNginxProxyPassUpstreams(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    root /usr/share/nginx/html;
+    location /api/wind/ {
+        proxy_pass https://api.open-meteo.com/;
+    }
+    location /api/internal/ {
+        proxy_pass http://factory:8787/;
+    }
+    location /api/local/ {
+        proxy_pass http://127.0.0.1:3000/;
+    }
+    location /api/var/ {
+        set $backend "api.example.com";
+        proxy_pass https://$backend/path;
+    }
+    location / { try_files $uri /index.html; }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+
+	wantConv := "        set $sf_upstream \"api.open-meteo.com\";\n        proxy_pass https://$sf_upstream/;"
+	if !strings.Contains(got, wantConv) {
+		t.Fatalf("external host not converted to variable;\ngot:\n%s", got)
+	}
+	// Container name, IP, and localhost literals left as-is.
+	for _, want := range []string{
+		"proxy_pass http://factory:8787/;",
+		"proxy_pass http://127.0.0.1:3000/;",
+		"proxy_pass https://$backend/path;",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected literal left untouched %q;\ngot:\n%s", want, got)
+		}
+	}
+	// Server-level resolver injected exactly once, after the (single) listen.
+	if c := strings.Count(got, "resolver 8.8.8.8"); c != 1 {
+		t.Fatalf("resolver injected %d times, want 1;\ngot:\n%s", c, got)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(strings.Split(got, "resolver 8.8.8.8")[0]), "listen 80;") {
+		// sanity: resolver comes right after the listen line (allow for the
+		// trailing newline + indent we injected)
+	}
+	listenIdx := strings.Index(got, "listen 80;")
+	resolverIdx := strings.Index(got, "resolver 8.8.8.8")
+	if listenIdx < 0 || resolverIdx < 0 || resolverIdx < listenIdx {
+		t.Fatalf("resolver should come after listen;\ngot:\n%s", got)
+	}
+	// Idempotent.
+	if err := sanitizeNginxProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2, _ := os.ReadFile(conf)
+	if string(got2) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2))
+	}
+	// Missing file is not an error.
+	if err := sanitizeNginxProxyPassUpstreams(filepath.Join(dir, "nope.conf")); err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+}
+
+func TestSanitizeNginxVariableProxyPassWithPort(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+        proxy_pass http://$ontology_upstream/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "127.0.0.11") {
+		t.Fatalf("Docker-only resolver should be removed from generated app config;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$ontology_upstream") {
+		t.Fatalf("variable upstream should be collapsed to literal host:port;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081/;") {
+		t.Fatalf("literal upstream proxy_pass missing;\ngot:\n%s", got)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
+func TestSanitizeNginxVariableProxyPassWithPortAndURI(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net:8081;
+        proxy_pass http://$ontology_upstream/daasDMS/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "127.0.0.11") {
+		t.Fatalf("Docker-only resolver should be removed from generated app config;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$ontology_upstream") {
+		t.Fatalf("variable upstream should be collapsed to literal host:port with URI;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081/daasDMS/;") {
+		t.Fatalf("literal upstream proxy_pass with URI missing;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyVariableProxyPassWithPortInProxyPass(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 8.8.8.8 1.1.1.1 valid=300s ipv6=off;
+    location /api/ontology/ {
+        set $upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if !strings.Contains(got, "rewrite ^/api/ontology/(.*)$ /$1 break;") {
+		t.Fatalf("ontology proxy should rewrite the app proxy prefix before forwarding;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081;") {
+		t.Fatalf("ontology upstream should collapse to literal host:port without trailing URI;\ngot:\n%s", got)
+	}
+	if strings.Contains(got, "$upstream") {
+		t.Fatalf("external variable upstream should be collapsed;\ngot:\n%s", got)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize 2nd: %v", err)
+	}
+	got2Bytes, _ := os.ReadFile(conf)
+	if string(got2Bytes) != got {
+		t.Fatalf("sanitize not idempotent;\n2nd:\n%s", string(got2Bytes))
+	}
+}
+
+func TestSanitizeOntologyVariableProxyPassDoesNotRewriteOtherLocations(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /api/weather/ {
+        set $upstream api.open-meteo.com;
+        proxy_pass http://$upstream:8080/;
+    }
+    location /api/ontology/ {
+        set $ontology_upstream ceshi.projects.bingosoft.net;
+        proxy_pass http://$ontology_upstream:8081/;
+        proxy_set_header Host ceshi.projects.bingosoft.net;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if !strings.Contains(got, "proxy_pass http://$upstream:8080/;") {
+		t.Fatalf("non-ontology proxy should not be rewritten;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "proxy_pass http://ceshi.projects.bingosoft.net:8081;") {
+		t.Fatalf("ontology proxy should be rewritten;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyNginxProxyCredentialsReplacesPlaceholders(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	envFile := filepath.Join(envDir, "ontology.env")
+	if err := os.WriteFile(envFile, []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /api/ontology/ {
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeOntologyNginxProxyCredentials(conf, dir); err != nil {
+		t.Fatalf("sanitize credentials: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	for _, bad := range []string{"<ONTOLOGY_AUTH_TOKEN>", "SPACE_123"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("placeholder %q still present;\ngot:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, `proxy_set_header Authorization "Bearer real-token";`) ||
+		!strings.Contains(got, `proxy_set_header Spaceid "real-space";`) {
+		t.Fatalf("real ontology credentials not injected;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeOntologyNginxProxyCredentialsSupportsOntologyLocation(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	envFile := filepath.Join(envDir, "ontology.env")
+	if err := os.WriteFile(envFile, []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /ontology/ {
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeOntologyNginxProxyCredentials(conf, dir); err != nil {
+		t.Fatalf("sanitize credentials: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "<ONTOLOGY_AUTH_TOKEN>") || strings.Contains(got, "SPACE_123") {
+		t.Fatalf("ontology location credentials were not injected;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, `proxy_set_header Authorization "Bearer real-token";`) ||
+		!strings.Contains(got, `proxy_set_header Spaceid "real-space";`) {
+		t.Fatalf("real ontology credentials not injected for /ontology/ location;\ngot:\n%s", got)
+	}
+}
+
+func TestSanitizeNginxVariableProxyPassKeepsInternalServiceName(t *testing.T) {
+	dir := t.TempDir()
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    resolver 127.0.0.11 8.8.8.8 114.114.114.114 valid=30s ipv6=off;
+    location /api/ontology/ {
+        set $ontology_upstream ontology-server:8081;
+        proxy_pass http://$ontology_upstream/;
+        proxy_set_header Host $host;
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := sanitizeNginxVariableProxyPassUpstreams(conf); err != nil {
+		t.Fatalf("sanitize: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "proxy_pass http://ontology-server:8081/;") {
+		t.Fatalf("internal service name should not be collapsed to a static upstream;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "set $ontology_upstream ontology-server:8081;") ||
+		!strings.Contains(got, "proxy_pass http://$ontology_upstream/;") {
+		t.Fatalf("internal service variable upstream should be preserved;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, "resolver 127.0.0.11") {
+		t.Fatalf("resolver line should be preserved when no collapse is performed;\ngot:\n%s", got)
 	}
 }
 
@@ -651,6 +1092,244 @@ func TestDeploymentHealthFailCleansUp(t *testing.T) {
 	}
 	if app.Status != model.AppStatusError {
 		t.Fatalf("app status = %s, want error", app.Status)
+	}
+}
+
+// TestCandidateBuildDoesNotMutateEffectiveSource (Task 6): a candidate build's
+// npm install + build output land ONLY in the isolated versioned candidate dir,
+// never in the effective source dir generated-apps/demo/. The effective source
+// must be byte-for-byte untouched (no dist/, no node_modules leak).
+func TestCandidateBuildDoesNotMutateEffectiveSource(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	// Snapshot the effective source tree BEFORE the candidate run.
+	effSrc := filepath.Join(ws, "generated-apps", "demo")
+	before := dirListing(t, effSrc)
+	r, _ := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepTestVerification)
+	if res, err := r.Run(context.Background(), job, step, runner.NopEmitter{}); err != nil || res.Status != model.StepStatusSucceeded {
+		t.Fatalf("Run: %v %#v", err, res)
+	}
+
+	// The candidate build wrote its outputs (e.g. a fresh dist from the fake
+	// npm run build) into versions/<ver>/, NOT into the effective source.
+	after := dirListing(t, effSrc)
+	if !equalListing(before, after) {
+		t.Fatalf("effective source dir was mutated by candidate build\nbefore=%v\nafter =%v", before, after)
+	}
+	// The versions subtree must exist under the effective source.
+	versionsDir := filepath.Join(effSrc, "versions")
+	if entries, err := os.ReadDir(versionsDir); err != nil || len(entries) == 0 {
+		t.Fatalf("candidate versions dir missing/empty: %v", err)
+	}
+}
+
+// dirListing returns the sorted set of relative paths under root (recursive),
+// excluding any "versions" subtree (that is the candidate workspace, not the
+// effective source content).
+func dirListing(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		if rel == "." || strings.HasPrefix(rel, "versions") {
+			if d.IsDir() && rel == "versions" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out
+}
+
+func equalListing(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// seedEffectiveVersion seeds app-demo with an already-effective v1 (status
+// effective, promoted) plus its running deployment, then returns the version id
+// and deployment. This is the baseline the Task-6 retain-on-failure path must
+// preserve when a candidate v2 fails its health check.
+func seedEffectiveVersion(t *testing.T, st *store.Store) (string, model.Deployment) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	depV1 := model.Deployment{
+		ID:            "dep_v1",
+		AppID:         "app-demo",
+		ImageName:     "localhost/software-factory/demo",
+		ImageTag:      "ver_v1",
+		ContainerName: "sf-demo-v1",
+		HostPort:      18000,
+		ContainerPort: 8080,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}
+	if err := st.CreateDeployment(ctx, depV1); err != nil {
+		t.Fatalf("seed v1 deployment: %v", err)
+	}
+	if err := st.SetAppRuntime(ctx, "app-demo", string(model.AppStatusRunning), depV1.URL); err != nil {
+		t.Fatalf("seed app running: %v", err)
+	}
+	promoted := now
+	v1, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID:            "ver_v1",
+		ApplicationID: "app-demo",
+		JobID:         "job_v1",
+		Status:        model.ApplicationVersionEffective,
+		DeploymentID:  depV1.ID,
+		SourcePath:    "generated-apps/demo",
+		CreatedAt:     now,
+		PromotedAt:    &promoted,
+	})
+	if err != nil {
+		t.Fatalf("seed effective v1: %v", err)
+	}
+	return v1.ID, depV1
+}
+
+// TestFailedDeploymentLeavesPreviousEffectiveVersionRunning (Task 6): when a
+// candidate v2 fails its health check AND a prior effective version v1 exists,
+// v1 must remain effective with its deployment still running, v2 is marked
+// failed, and the app must NOT be flipped to error.
+func TestFailedDeploymentLeavesPreviousEffectiveVersionRunning(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	v1ID, depV1 := seedEffectiveVersion(t, st)
+	// Failing health check for the candidate.
+	r, cmds := newFactoryRunner(st, ws, false)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorHealthCheckFailed {
+		t.Fatalf("result = %s/%s, want failed/health_check_failed", res.Status, res.ErrorCode)
+	}
+
+	ctx := context.Background()
+	// v1 must STILL be the effective version.
+	eff, err := st.GetEffectiveApplicationVersion(ctx, "app-demo")
+	if err != nil {
+		t.Fatalf("GetEffectiveApplicationVersion: %v", err)
+	}
+	if eff == nil || eff.ID != v1ID {
+		t.Fatalf("effective version = %+v, want v1 %s (retained)", eff, v1ID)
+	}
+	// v1's deployment must still be running — the candidate's health failure
+	// must not stop the prior effective container.
+	gotDepV1, err := st.GetDeployment(ctx, depV1.ID)
+	if err != nil || gotDepV1 == nil {
+		t.Fatalf("get v1 deployment: %#v %v", gotDepV1, err)
+	}
+	if gotDepV1.Status != "running" {
+		t.Fatalf("v1 deployment status = %q, want running (prior service retained)", gotDepV1.Status)
+	}
+	// The candidate v2 must be marked failed.
+	versions, err := st.ListApplicationVersions(ctx, "app-demo")
+	if err != nil {
+		t.Fatalf("ListApplicationVersions: %v", err)
+	}
+	var failed int
+	for _, v := range versions {
+		if v.JobID == job.ID && v.Status == model.ApplicationVersionFailed {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("expected candidate v2 failed; versions=%+v", versions)
+	}
+	// The app must remain RUNNING (not error) because the prior effective
+	// version is still serving.
+	app, err := st.GetApplication(ctx, "app-demo")
+	if err != nil {
+		t.Fatalf("GetApplication: %v", err)
+	}
+	if app.Status != model.AppStatusRunning {
+		t.Fatalf("app status = %s, want running (prior effective retained)", app.Status)
+	}
+	if app.RuntimeURL != depV1.URL {
+		t.Fatalf("app runtime_url = %q, want %q (prior effective URL retained)", app.RuntimeURL, depV1.URL)
+	}
+	// The prior effective container (sf-demo-v1) must NOT have been stopped.
+	for _, n := range cmds.names() {
+		if strings.Contains(n, "sf-demo-v1") {
+			t.Fatalf("prior effective container was touched on candidate failure: %s", n)
+		}
+	}
+}
+
+// TestSuccessfulDeploymentPromotesCandidateVersion (Task 6): a candidate v2
+// that passes its health check becomes the effective version, v1 is superseded,
+// the app is running on the new URL, and the old effective container is stopped.
+func TestSuccessfulDeploymentPromotesCandidateVersion(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	v1ID, depV1 := seedEffectiveVersion(t, st)
+	r, cmds := newFactoryRunner(st, ws, true)
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+
+	ctx := context.Background()
+	// v2 is now effective; v1 superseded.
+	eff, err := st.GetEffectiveApplicationVersion(ctx, "app-demo")
+	if err != nil || eff == nil {
+		t.Fatalf("effective version: %#v %v", eff, err)
+	}
+	if eff.JobID != job.ID {
+		t.Fatalf("effective version job = %q, want %q (candidate promoted)", eff.JobID, job.ID)
+	}
+	if eff.DeploymentID == "" {
+		t.Fatalf("promoted version has no deployment_id")
+	}
+	v1, err := st.GetApplicationVersionByID(ctx, v1ID)
+	if err != nil {
+		t.Fatalf("get v1: %v", err)
+	}
+	if v1.Status != model.ApplicationVersionSuperseded {
+		t.Fatalf("v1 status = %s, want superseded", v1.Status)
+	}
+	// The old effective container was stopped.
+	if !containsCommand(cmds.names(), "podman stop sf-demo-v1") {
+		t.Fatalf("old effective container should be stopped; calls=%v", cmds.names())
+	}
+	gotDepV1, _ := st.GetDeployment(ctx, depV1.ID)
+	if gotDepV1.Status != "stopped" {
+		t.Fatalf("old deployment status = %q, want stopped", gotDepV1.Status)
+	}
+	// New active deployment exists and app is running on the new URL.
+	active, err := st.GetActiveDeployment(ctx, "app-demo")
+	if err != nil || active == nil || active.ID == depV1.ID {
+		t.Fatalf("active deployment = %#v %v", active, err)
+	}
+	app, _ := st.GetApplication(ctx, "app-demo")
+	if app.Status != model.AppStatusRunning || app.RuntimeURL != active.URL {
+		t.Fatalf("app = %s/%q, want running/%q", app.Status, app.RuntimeURL, active.URL)
 	}
 }
 
@@ -1068,6 +1747,77 @@ func TestFactoryStepStreamingStillRedactsSecretInArtifact(t *testing.T) {
 	// TestStepEmitterEmitRedactsBeforePersistAndPublish.
 	if !strings.Contains(emit.joined(model.ExecutionRecordCommandStdout), "built ok") {
 		t.Errorf("command_stdout record not streamed; got:\n%s", emit.joined(model.ExecutionRecordCommandStdout))
+	}
+}
+
+func TestIsFullNginxConfig(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"bare server block", "server { listen 80; }\n", false},
+		{"full config with events", "events { worker_connections 1024; }\nhttp { server { listen 80; } }\n", true},
+		{"full config with http only", "http { server { listen 80; } }\n", true},
+		{"comments ignored", "# events {\nserver { listen 80; }\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.name+".conf")
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+			if got := isFullNginxConfig(path); got != tc.want {
+				t.Fatalf("isFullNginxConfig(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesFullConfigToMainPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("events { worker_connections 1024; }\nhttp { server { listen 80; } }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/nginx.conf") {
+		t.Fatalf("full nginx config should be copied to /etc/nginx/nginx.conf; got:\n%s", dockerfile)
+	}
+}
+
+func TestWriteStaticHostingDockerfileCopiesServerBlockToConfD(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "index.html"), []byte("<!doctype html>"), 0o644); err != nil {
+		t.Fatalf("write index.html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nginx.conf"), []byte("server { listen 80; }\n"), 0o644); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	if err := writeStaticHostingDockerfile(dir); err != nil {
+		t.Fatalf("writeStaticHostingDockerfile: %v", err)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY nginx.conf /etc/nginx/conf.d/default.conf") {
+		t.Fatalf("bare server block should be copied to /etc/nginx/conf.d/default.conf; got:\n%s", dockerfile)
 	}
 }
 

@@ -324,7 +324,53 @@ func TestGetJob(t *testing.T) {
 // cc-status availability flag.
 type getJobResponse struct {
 	model.Job
-	CCStatusAvailable bool `json:"cc_status_available"`
+	CCStatusAvailable bool        `json:"cc_status_available"`
+	PendingQuestions  []getJobQ   `json:"pending_questions"`
+}
+
+// getJobQ is the minimal shape of a persisted clarifying question.
+type getJobQ struct {
+	ID       string `json:"id"`
+	Question string `json:"question"`
+}
+
+// TestGetJobSurfacesWaitingQuestions verifies that when a job is waiting_user,
+// GET /api/jobs/:id returns the persisted clarifying questions so the UI can
+// show WHAT the user must answer (not just that input is needed).
+func TestGetJobSurfacesWaitingQuestions(t *testing.T) {
+	srv, r, st := newJobsTestServer(t, config.Config{})
+	srv.cc = nil
+
+	create := createJobViaAPI(t, r, "p")
+	var created model.Job
+	_ = json.NewDecoder(create.Body).Decode(&created)
+
+	step, err := st.GetStepByKind(context.Background(), created.ID, model.StepRequirementAnalysis)
+	if err != nil || step == nil {
+		t.Fatalf("get step: %v", err)
+	}
+	qs := `[{"id":"data-source","question":"用演示数据还是真实API？"}]`
+	if err := st.MarkStepWaitingUser(context.Background(), step.ID, qs); err != nil {
+		t.Fatalf("mark step waiting: %v", err)
+	}
+	if err := st.MarkJobWaitingUser(context.Background(), created.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodGet, "/api/jobs/"+created.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status = %d", rec.Code)
+	}
+	var resp getJobResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.PendingQuestions) != 1 {
+		t.Fatalf("pending_questions = %+v, want 1 entry", resp.PendingQuestions)
+	}
+	if resp.PendingQuestions[0].ID != "data-source" {
+		t.Fatalf("question id = %q, want data-source", resp.PendingQuestions[0].ID)
+	}
 }
 
 // TestGetJobCCStatusAvailable verifies that GET /api/jobs/:id reports
@@ -421,7 +467,7 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if err != nil || step == nil {
 		t.Fatalf("get step: %#v %v", step, err)
 	}
-	if err := st.MarkStepWaitingUser(context.Background(), step.ID); err != nil {
+	if err := st.MarkStepWaitingUser(context.Background(), step.ID, ""); err != nil {
 		t.Fatalf("mark step waiting: %v", err)
 	}
 	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
@@ -445,6 +491,12 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	}
 	if updatedStep.Status != model.StepStatusPending || updatedStep.NeedsUserInput {
 		t.Fatalf("step after answer = %#v, want pending without needs_user_input", updatedStep)
+	}
+	// The user's answer MUST be persisted on step.UserPrompt so the re-run can
+	// read it (generative-step prompts append it as [user_input]). Without this
+	// the step re-runs blind and re-asks the same clarification.
+	if updatedStep.UserPrompt != "确认按近一个月" {
+		t.Fatalf("step.UserPrompt after answer = %q, want the user's answer", updatedStep.UserPrompt)
 	}
 }
 
@@ -581,6 +633,60 @@ func TestRetryCurrentStep(t *testing.T) {
 	}
 	if updated.Status != model.JobStatusQueued {
 		t.Fatalf("retried job status = %s, want queued", updated.Status)
+	}
+}
+
+func TestRepairFromFailure(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+
+	miss := doJSON(t, r, http.MethodPost, "/api/jobs/missing/repair-from-failure", nil)
+	if miss.Code != http.StatusNotFound {
+		t.Fatalf("miss status = %d, want 404", miss.Code)
+	}
+
+	job := createQueuedJob(t, st)
+	queued := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/repair-from-failure", nil)
+	if queued.Code != http.StatusConflict {
+		t.Fatalf("queued repair status = %d, want 409", queued.Code)
+	}
+
+	if err := st.AdvanceJobStep(context.Background(), job.ID, model.StepTestVerification); err != nil {
+		t.Fatalf("advance job: %v", err)
+	}
+	testStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepTestVerification)
+	if err != nil || testStep == nil {
+		t.Fatalf("get test step: %v", err)
+	}
+	if err := st.IncrementStepAttempt(context.Background(), testStep.ID); err != nil {
+		t.Fatalf("increment attempt: %v", err)
+	}
+	if err := st.MarkStepFailed(context.Background(), testStep.ID, model.ErrorBuildFailed, "build command failed"); err != nil {
+		t.Fatalf("mark step failed: %v", err)
+	}
+	if err := st.MarkJobFailed(context.Background(), job.ID); err != nil {
+		t.Fatalf("mark job failed: %v", err)
+	}
+
+	ok := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/repair-from-failure", nil)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("repair status = %d, want 200, body=%s", ok.Code, ok.Body.String())
+	}
+	var updated model.Job
+	if err := json.Unmarshal(ok.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued {
+		t.Fatalf("repaired job status = %s, want queued", updated.Status)
+	}
+	if updated.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("current step = %s, want code_generation", updated.CurrentStepKind)
+	}
+	codeStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepCodeGeneration)
+	if err != nil || codeStep == nil {
+		t.Fatalf("get code step: %v", err)
+	}
+	if !strings.Contains(codeStep.UserPrompt, "build command failed") {
+		t.Fatalf("code repair prompt missing failure context: %q", codeStep.UserPrompt)
 	}
 }
 

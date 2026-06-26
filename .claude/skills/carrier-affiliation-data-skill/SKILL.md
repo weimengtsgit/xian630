@@ -1,6 +1,6 @@
 ---
 name: carrier-affiliation-data-skill
-description: Use when a requirement needs carrier-air-wing affiliation data, ADS-B tracks, carrier positions, carrier aircraft master data, land/sea classification, ontology/DaaS carrier entities, or public fallback sources for carrier-aircraft association analysis. Use real data by default; skip this skill only when the user explicitly requests mock or demo data.
+description: Use when a requirement needs carrier-air-wing affiliation data, ADS-B tracks, carrier positions, carrier aircraft master data, land/sea classification, ontology/DaaS carrier entities, or public fallback sources for carrier-aircraft association analysis. ALSO the home for ANY military-vessel AIS — carriers, warships, destroyers, cruisers, frigates, amphibious ships, navy/naval vessels and their AIS tracks come from the ontology RawAISData entity here, NOT from ais-density-data-skill (which is merchant-only). Use real data by default; skip this skill only when the user explicitly requests mock or demo data.
 ---
 
 # Carrier Affiliation Data Skill
@@ -12,9 +12,34 @@ inference. It supplies the raw data boundaries needed by
 `affiliation-inference-dashboard`: ADS-B tracks, known carrier positions,
 aircraft master data, land/sea classification, and judgement parameters.
 
+It is ALSO the data capability for **military-vessel AIS tracks** (see
+"Military vessel AIS tracks" below) — carriers, warships, and any navy vessel
+are served by the ontology `RawAISData` entity via this skill.
+
 This skill is independent from `tide-data-skill`, `deck-wind-data-skill`, and
 `ais-density-data-skill`. Consumers select one or more data skills according to
-their scenario; there is no cross-skill priority relationship.
+their scenario; there is no cross-skill priority relationship — EXCEPT the
+merchant/military AIS split in the next section, which is a hard routing rule.
+
+## Merchant vs Military AIS — hard routing rule
+
+AIS data has TWO unrelated sources in this factory, picked by the TARGET FLEET,
+never by the word "AIS" alone:
+
+| Target fleet | Source | Skill |
+|---|---|---|
+| **Merchant / commercial shipping** (商船, cargo, tankers — aggregate density per 50-NM cell) | NOAA MarineCadastre transit-count raster (US EEZ, annual) | `ais-density-data-skill` |
+| **Military vessels** — carriers, warships, destroyers, cruisers, frigates, amphibious ships, supply ships, ANY navy/naval vessel, per-vessel tracks by MMSI | Ontology `RawAISData` entity (this skill) | `carrier-affiliation-data-skill` |
+
+**If the AIS request is about a military vessel in any way (航母 / 舰船 / 军舰 /
+舰艇 / 驱逐舰 / 巡洋舰 / 护卫舰 / 两栖舰 / 舰队 / 军队 / warship / naval / navy /
+destroyer / cruiser / frigate …), use this skill's `RawAISData` adapter — do NOT
+use `ais-density-data-skill`.** MarineCadastre carries only merchant traffic and
+would show ~0 military vessels. Conversely, a merchant-density request must NOT
+be served by `RawAISData` — that entity holds only ~48 military vessels and would
+misrepresent commercial shipping density. The server-side `deriveDataSkills`
+router maps the military terms above to this skill; `ais-density-data-skill`
+remains merchant-only.
 
 ## Default Rule
 
@@ -73,6 +98,7 @@ Rules:
 - Prefer a server-side proxy for production. For an internal static-only demo,
   `VITE_ONTOLOGY_AUTH_TOKEN` may be used only when the environment is trusted
   and the UI clearly marks the data source as internal authenticated data.
+
 ## Source Tiering
 
 Read `references/source-tiering.md` when deciding how to obtain data.
@@ -92,37 +118,253 @@ skills:
 ## Ontology API
 
 Read `references/ontology-api.md` before implementing the DaaS adapter.
+The original catalog is available at
+`http://ceshi.projects.bingosoft.net:8081/ontology_docs/?doc=catalog`; use the
+linked Swagger/Markdown entity docs as the source of truth for request columns.
 
-All list endpoints use the same request shape:
+### Hard DaaS Field Contract
+
+Request columns MUST be raw DaaS entity fields from the Swagger/Markdown docs.
+Do NOT request UI-normalized field names. Normalize only after records are
+returned.
+
+For `AviationCarrier`, request `curHeading`, `curSpeed`, and
+`homeportStation`; map them after fetch to UI fields `heading`, `speed`, and
+`homeport`. Never request `heading`, `speed`, or `homeport` from
+`AviationCarrier` because those columns do not exist and the API returns HTTP
+400 `Unknown column`.
+
+For `RawADSData`, request `lat`, `lon`, `groundspeed`, and `startTime`; map
+them after fetch to `lat`, `lon`, `speed_kt`, and `time`. Never request
+`longitude`, `latitude`, `speed`, or `recordTime` from `RawADSData`.
+
+Generated adapters MUST use `pageParam: { pageIndex, limit }`,
+`rowType: "map"`, `resultCode === 200`, and `details.rows`. Do not use
+`pageNum`, `pageSize`, `result.data.records`, or `data.resultCode`.
+
+### Data Flow (three entities, not two)
+
+```
+Step 1: AviationCarrier     Step 2: AircraftCarrier       Step 3: MaritimeBaseCombatPlatform
+ (航母 master, 11 rows)       (CSG 打击群, 11 rows)         (海基作战平台, 655 rows total)
+        │                            │                              │
+        │ refHMId = carrier.id        │ filter: AircraftCarrier.id   │
+        └────────────────────────────┘──────────────────────────────┘
+                 Carrier→CSG                    CSG→Platforms
+```
+
+**Correct data fetch sequence:**
+
+1. Fetch `AviationCarrier` → get 11 carriers (id, name, lat, lon, airWing, ...)
+2. Fetch `AircraftCarrier` → get 11 CSGs with `refHMId` linking to carrier.id
+3. For EACH CSG, fetch `MaritimeBaseCombatPlatform` filtered by `AircraftCarrier.id = CSG-XX`
+   → get all aircraft/ships/platforms of that strike group (the ONLY correct
+   aircraft path; carrier-direct queries are incomplete)
+4. Fetch `AircraftCarrierTrackLog` → carrier track points (48 rows)
+5. Fetch `RawAISData` per ship `mmsi` (from MaritimeBaseCombatPlatform.mmsi) → ship AIS tracks (joinable!)
+6. Fetch `RawADSData` filtered by `icao is not null` → ADS-B aircraft tracks (191 rows, mostly unusable — see Modes)
+
+**Critical entity name corrections (verified 2026-06-25):**
+
+| Correct (use these) | Wrong (do NOT use) | Why |
+|---|---|---|
+| `AircraftCarrier` | — | CSG entity (打击群) |
+| `MaritimeBaseCombatPlatform` | `CarrierAviationPlatform` | Platform has CSG link via `AircraftCarrier.id`; CAP carrier-direct is incomplete |
+| — | `platform-BT`, `ads_b_track-BT`, `carrier_track_log-BT` | Do not exist |
+
+**Association rule (provider-confirmed):** carrier → aircraft is NEVER direct.
+Always go carrier → CSG (`AircraftCarrier.refHMId`) → platforms
+(`MaritimeBaseCombatPlatform` filtered by `AircraftCarrier.id`).
+
+**CSG→Platform filter pattern:**
 
 ```json
 {
-  "columns": ["id", "name"],
-  "pageParam": {"pageIndex": 1, "limit": 200},
-  "rowType": "map",
-  "filters": [{"column": "id", "logic": "=", "condition": "value"}]
+  "filters": [
+    { "column": "AircraftCarrier.id", "logic": "=", "condition": "CSG-10" }
+  ]
 }
 ```
 
-All list responses normalize from:
+This is the ONLY reliable way to associate platforms to carriers.
+Do NOT parse carrier codes from platform IDs.
 
-```text
-details.columnNames + details.rows
+### Required request headers
+
+**scopeType is MANDATORY.** Without `scopeType: Space` the API returns `resultCode 10001`.
+
+```http
+Authorization: Bearer ${ONTOLOGY_AUTH_TOKEN}
+Spaceid: ${ONTOLOGY_SPACE_ID}
+scopeType: Space
+Content-Type: application/json
 ```
 
-into object arrays keyed by `columnNames`.
+### resultCode
+
+Success is `200`, NOT `10000`. Check `data.resultCode !== 200`.
+
+### nginx CORS proxy
+
+The ontology API has no CORS headers (OPTIONS → 500). All requests MUST go
+through the app's nginx reverse proxy. See `references/ontology-api.md` for
+the exact nginx config block.
+
+## Affiliation Inference Modes (归属推断模式)
+
+The ideal affiliation inference (detect ADS-B sea takeoff/landing → bind to
+nearest carrier → count associations → judge) REQUIRES a join between
+ADS-B tracks and the aircraft master list on `icao`. **That join is currently
+broken** because `MaritimeBaseCombatPlatform` has NO `icao` field and
+`RawADSData` has very few usable rows (191 non-null icao, altitude mostly 0).
+
+Therefore the adapter MUST support TWO modes and pick based on data
+availability:
+
+### Mode A — Event-based inference (理想模式, matches the three-step rule)
+
+Use ONLY when `MaritimeBaseCombatPlatform.icao` is populated AND `RawADSData`
+has enough altitude-bearing rows to detect takeoff/landing.
+
+1. Detect sea takeoff/landing events from ADS-B altitude transitions.
+2. Bind each event to the nearest-in-time carrier position within 200 NM.
+3. Count per-aircraft (`icao`) carrier associations; judge by the 60% threshold.
+
+### Mode B — Establishment-based affiliation (实际可用模式, the CURRENT fallback)
+
+When ADS-B data is insufficient (the verified case as of 2026-06-25), fall
+back to the **structured CSG association**: each platform in
+`MaritimeBaseCombatPlatform` is already linked to a CSG (and thus a carrier)
+via the `AircraftCarrier.id` filter. Treat that as the affiliation directly.
+
+- `confidence` = 1.0 (structured, not inferred)
+- `status` = `high_confidence` for platforms with a CSG link
+- `sourceNote` = "CSG establishment-linked (ADS-B event inference unavailable)"
+- Do NOT fabricate takeoff/landing events or ICAO counts that the data does not support.
+
+### Mode selection in the adapter
+
+```js
+// Detect capability: does any platform have an icao, and are ADS-B altitudes usable?
+const hasPlatformIcao = aircraft.some(a => a.icao);
+const adsbAltitudeUsable = adsbTracks.filter(t => t.alt_ft > 0).length > 10;
+
+if (hasPlatformIcao && adsbAltitudeUsable) {
+  // Mode A: event-based three-step inference
+} else {
+  // Mode B: establishment-based affiliation (current reality)
+}
+```
+
+### Data gaps to report to the ontology provider (as warnings)
+
+- `CarrierAviationPlatform` and `MaritimeBaseCombatPlatform` lack populated
+  `icao` → cannot join to `RawADSData` for aircraft event inference.
+- `RawADSData.altitude` is mostly `0.0`/null → takeoff/landing detection yields near-zero events.
+- `RawADSData.icao` is null for ~99.99% of 21.8M rows.
+
+When the provider populates `icao` on platforms and/or backfills ADS-B
+altitude, the adapter switches to Mode A automatically.
+
+### Working join: ship AND carrier tracks via AIS (use this)
+
+While aircraft event inference is blocked, **ship and carrier track rendering
+works** — get tracks from `RawAISData` joined by `mmsi`:
+
+```
+AviationCarrier.mmsi            →  RawAISData.mmsi  →  CARRIER sailing track
+MaritimeBaseCombatPlatform.mmsi →  RawAISData.mmsi  →  escort-ship AIS track
+```
+
+**4,834,856 AIS rows** (verified live 2026-06-26), `mmsi` populated. **Carriers
+themselves are in this entity** by name + mmsi (e.g. "尼米兹号航空母舰" `303981000`
+= 44,711 verified track points, "卡尔·文森号航空母舰" `369970409`). 11 of 14
+carriers have a populated mmsi.
+
+⚠️ Use this for carrier tracks INSTEAD of `AircraftCarrierTrackLog` (whose
+lat/lon are mostly null — only 48 rows). Escort ships (DDG/CG/supply: "普林斯顿",
+"钟云号", "丹尼尔·井上号") join via their platform `mmsi`. This is also the AIS
+source for any military-vessel track request — see the "Military vessel AIS
+tracks" section for the full contract. Note many AIS rows have
+`startTime: null`, so plot tracks as a route/operating-area polyline, not a
+time-sequenced animation. Aircraft remain on establishment-based affiliation
+(Mode B) until `icao` is populated. See `references/ontology-api.md`
+`fetchAisTrackByMmsi`.
+
+## Military vessel AIS tracks (RawAISData)
+
+`RawAISData` is the ontology's real AIS feed and the **only** correct source when
+a request needs positions/tracks of military vessels (carriers, warships, navy).
+Verified live 2026-06-26 by querying the endpoint directly.
+
+**Data nature (verified):**
+- **4,834,856 position pings** across **~48 distinct vessels — all military**:
+  US Navy carriers (Nimitz/Ford/Truman/Ike/Lincoln/Carl Vinson/Reagan/Kennedy/
+  Bush, CVN-68..79), DDG destroyers (Chung-Hoon/Decatur/Ralph Johnson/Daniel
+  Inouye/…), CG cruisers (Mobile Bay/Princeton/Chosin), amphibious ships
+  (Wasp/Tripoli/Portland/Ashland), USNS supply (Comfort/Bruce Heezen/Mary Sears),
+  one JDS allied vessel, plus several "US GOV VESSEL".
+- **It is NOT merchant shipping** — there are no commercial cargo/tanker vessels
+  here. Do not use it for merchant density (use `ais-density-data-skill`).
+- **Freshness:** `startTime`/`dataUpdateTime` range 2014-10-20 → ~12 days ago
+  (latest observed 2026-06-14). Report this lag in the UI — it is near-real-time
+  for a historical military feed, not a live 3-minute commercial tracker.
+- **Coverage:** global wherever the fleet sails (lon -178→139, lat 1→48: Pearl
+  Harbor / San Diego / Bremerton / Yokosuka / Guam approaches). Lat/lon are
+  FULLY populated (unlike most ontology entities).
+- **typeCode** is mostly `"1"`; treat the vessel set as the fixed military fleet,
+  not a representative merchant sample.
+
+**Verified fetchable columns** (send these raw names in `columns`; do NOT invent):
+
+```
+mmsi, latitude, longitude, sog, courseOverGround, trueHeading, shipName,
+callsign, navigationalStatus, typeCode, startTime, dataUpdateTime
+```
+
+`latitude`/`longitude` (NOT `lat`/`lon` — those are `RawADSData`), `sog`
+(speed over ground, knots), `startTime` (AIS message time). Filter by `mmsi` to
+get one vessel's full track:
+
+```json
+{ "filters": [{ "column": "mmsi", "logic": "=", "condition": "369952000" }] }
+```
+
+**Endpoint, headers, response shape, and the nginx `/api/ontology/` CORS proxy are
+identical to the other DaaS entities** — see `references/ontology-api.md` (the
+"Entity: RawAISData" section has the verified column list and the join path to
+`MaritimeBaseCombatPlatform.mmsi`). `scopeType: Space` is mandatory; success is
+`details.resultCode === 200`; `recordTotal` lives at `details.pageParam.recordTotal`.
 
 ## Output Contract
 
 Read `references/output-contract.md` before wiring generated UI data providers.
 The normalized output must provide:
 
-- `adsbTracks`: `{ icao, aircraftType, time, lat, lon, altFt, speedKt, callsign }`
-- `carrierPositions`: `{ carrierId, name, track: [{ time, lat, lon }] }`
-- `aircraft`: `{ icao, name, aircraftType, callsign, mmsi }`
-- `surfaceClassifier`: callable or declared source for `sea | land | unknown`
-- `judgementParameters`: association distance, confidence threshold, departed
-  days, near-ground altitude, and minimum bound associations.
+- `strikeGroups`: `{ id, name, carrierId, typeCode, status, lat, lon }` — from AircraftCarrier
+- `carriers`: `{ id, name, lat, lon, status, heading, speed, airWing, aircraftCarried, homeport, csgId, csgName, track: [{ time, lat, lon }] }` — from AviationCarrier + track enrichment
+- `aircraft`: `{ id, name, icao, typeCode, mmsi, status, lat, lon, maxSpeed, cruiseRange, carrierId, csgId, csgName, callsign }` — from MaritimeBaseCombatPlatform per CSG
+- `adsbTracks`: `{ icao, callsign, lat, lon, alt_ft, speed_kt, track_deg, heading_deg, time }` — from RawADSData (icao is not null)
+- `surface_classifier`: callable or declared source for `sea | land | unknown`
+- `judgement_parameters`: association distance, confidence threshold, departed days, near-ground altitude, and minimum bound associations.
+
+### MaritimeBaseCombatPlatform per-CSG fetch pattern (REQUIRED)
+
+```js
+// For EACH CSG, fetch its platforms
+for (const csg of strikeGroups) {
+  const platforms = await fetchEntity('MaritimeBaseCombatPlatform',
+    ['id', 'name', 'typeCode', 'mmsi', 'longitude', 'latitude', 'curStatus', 'maxSpeed'],
+    [{ column: 'AircraftCarrier.id', logic: '=', condition: csg.id }]
+  );
+  // Each platform gets carrierId = csg.carrierId, csgId = csg.id
+  allAircraft.push(...platforms.map(p => ({ ...p, carrierId: csg.carrierId, csgId: csg.id })));
+}
+```
+
+Do NOT fetch all platforms without the CSG filter and then try to match by
+parsing carrier codes from platform IDs — many platforms lack an embedded
+carrier code.
 
 ## Generated App Requirements
 
@@ -163,3 +405,9 @@ approximate and marked low confidence.
 - Do not use recent OpenSky REST state vectors as a three-year historical data
   source.
 - Do not silently fall back to mock data when `dataPolicy` requires real data.
+- Do not omit `scopeType: Space` from ontology requests — without it the API
+  returns `10001` for every entity and the app will look data-less despite valid
+  credentials.
+- Do not call the ontology API directly from browser JS — the API has no CORS
+  headers and returns HTTP 500 on OPTIONS preflight. Always route through the
+  app's nginx reverse proxy (`/api/ontology/` → ontology server).

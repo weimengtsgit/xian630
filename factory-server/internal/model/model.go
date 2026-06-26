@@ -19,6 +19,48 @@ const (
 	AppStatusMissing  AppStatus = "missing"
 )
 
+// ApplicationVersionStatus is the lifecycle state of a single application
+// version in its lineage. The string value is persisted verbatim into the
+// application_versions.status column.
+type ApplicationVersionStatus string
+
+const (
+	// ApplicationVersionQueued is the initial state of a version whose build
+	// job has not started yet.
+	ApplicationVersionQueued ApplicationVersionStatus = "queued"
+	// ApplicationVersionBuilding is a version whose job is currently running.
+	ApplicationVersionBuilding ApplicationVersionStatus = "building"
+	// ApplicationVersionFailed is a version whose job ended without producing
+	// a deployable result; it is never promoted.
+	ApplicationVersionFailed ApplicationVersionStatus = "failed"
+	// ApplicationVersionEffective is the single currently-served version of an
+	// application; at most one version per app is effective at a time.
+	ApplicationVersionEffective ApplicationVersionStatus = "effective"
+	// ApplicationVersionSuperseded is a formerly-effective version that a newer
+	// promotion has replaced.
+	ApplicationVersionSuperseded ApplicationVersionStatus = "superseded"
+)
+
+// ApplicationVersion is one immutable entry in an application's version
+// lineage: the job that produced it, the parent version it was built from, the
+// artifact path it serves, and (once promoted) the deployment it resolved to.
+// The lineage is strictly ordered by CreatedAt; ParentVersionID links each
+// version to its baseline. The UNIQUE(job_id) constraint enforces one version
+// per job.
+type ApplicationVersion struct {
+	ID              string                   `json:"id"`
+	ApplicationID   string                   `json:"application_id"`
+	ParentVersionID string                   `json:"parent_version_id,omitempty"`
+	JobID           string                   `json:"job_id"`
+	Status          ApplicationVersionStatus `json:"status"`
+	SourcePath      string                   `json:"source_path,omitempty"`
+	DeploymentID    string                   `json:"deployment_id,omitempty"`
+	CreatedAt       time.Time                `json:"created_at"`
+	// PromotedAt is set when (and only when) the version becomes Effective; it
+	// is nil for queued/building/failed/superseded versions.
+	PromotedAt *time.Time `json:"promoted_at,omitempty"`
+}
+
 type JobStatus string
 
 const (
@@ -88,10 +130,13 @@ const (
 	ExecutionRecordCommandStdout ExecutionRecordKind = "command_stdout"
 	ExecutionRecordCommandStderr ExecutionRecordKind = "command_stderr"
 	ExecutionRecordError         ExecutionRecordKind = "error"
-	// ExecutionRecordThinking carries the model's reasoning/thinking (方案 B:
-	// constraint #5 is relaxed so hidden reasoning IS shown). It still passes
-	// through the stepEmitter redaction chokepoint, so any credential echoed in
-	// a thought is masked before persist+SSE. Chunked to ≤4 KiB per record.
+	// ExecutionRecordThinking carried the model's reasoning/thinking under the
+	// earlier 方案 B policy. As of Task 4 it is RETAINED as a const for backward
+	// compatibility but is NEVER produced: stream.go:emitStreamLine drops thinking
+	// blocks at the source (Constraint #9 HARD SECURITY), so no thinking record is
+	// ever emitted, persisted, or published over SSE. It remains defined only so
+	// the string value stays stable for any historical consumer; no producer in
+	// the runner or executor calls Emit with this kind.
 	ExecutionRecordThinking ExecutionRecordKind = "thinking"
 	// ExecutionRecordFileDelta carries a single file's generation delta during
 	// code_generation: which file was Written/Edited and the +added/-removed line
@@ -177,6 +222,10 @@ type Agent struct {
 	Prompt    string `json:"prompt"`
 	Enabled   bool   `json:"enabled"`
 	SortOrder int    `json:"sort_order"`
+	// CreatedAt is when the agent was generated (registry-seeded or created
+	// from a dialogue). INTEGER unix ms at the store boundary; 0 for rows that
+	// predate the column (the UI renders those as no time).
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Job struct {
@@ -197,11 +246,28 @@ type Job struct {
 	// ConfirmedRequirementJSON is the frozen, server-finalized requirement the
 	// requirement_analysis step audits (it no longer clarifies). Empty for legacy
 	// jobs; the requirement_analysis step guards the empty case by substituting {}.
-	ConfirmedRequirementJSON string     `json:"confirmed_requirement_json,omitempty"`
-	CreatedAt                time.Time  `json:"created_at"`
-	StartedAt                *time.Time `json:"started_at,omitempty"`
-	EndedAt                  *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt                time.Time  `json:"updated_at"`
+	ConfirmedRequirementJSON string `json:"confirmed_requirement_json,omitempty"`
+	// DialogueID links the job to the dialogue whose work-trace its safe agent
+	// activity is surfaced under (Task 4). It is the sequence-partition key for
+	// work_trace_events: every trace the executor emits is stamped with this id
+	// so the dialogue-scoped SSE stream can filter it. Empty for legacy/direct
+	// jobs with no dialogue link; the stepEmitter drops traces with an empty
+	// dialogue id (no partition key) rather than emit an unattributable row.
+	// Task 1 added the column; Task 4 surfaces it through the model + store.
+	DialogueID string `json:"dialogue_id,omitempty"`
+	// ApplicationID links the job to the application it produces (Task 5 wires
+	// the value; Task 4 surfaces the field so CreateJob/scanJob read/write it).
+	ApplicationID string `json:"application_id,omitempty"`
+	// BaseVersionID is the version this job's application forks from, when it is
+	// a revise/rebuild (Task 6). Empty for a fresh generation.
+	BaseVersionID string `json:"base_version_id,omitempty"`
+	// Kind is the job kind (e.g. "generate", "revise"). Reserved for later tasks;
+	// surfaced now so the column is read/written rather than orphaned.
+	Kind      string     `json:"kind,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type JobStep struct {
@@ -216,6 +282,7 @@ type JobStep struct {
 	EndedAt           *time.Time `json:"ended_at,omitempty"`
 	NeedsUserInput    bool       `json:"needs_user_input"`
 	UserPrompt        string     `json:"user_prompt,omitempty"`
+	PendingQuestions  string     `json:"pending_questions,omitempty"`
 	ErrorCode         ErrorCode  `json:"error_code,omitempty"`
 	ErrorMessage      string     `json:"error_message,omitempty"`
 	ClaudeSessionID   string     `json:"claude_session_id,omitempty"`
@@ -284,19 +351,20 @@ const (
 // that runs before a Job is created. RequirementJSON holds the evolving
 // structured requirement; CreatedJobID is set once the session produces a Job.
 type ClarificationSession struct {
-	ID              string              `json:"id"`
-	Status          ClarificationStatus `json:"status"`
-	InitialPrompt   string              `json:"initial_prompt"`
-	Round           int                 `json:"round"`
-	MaxRounds       int                 `json:"max_rounds"`
-	RequirementJSON string              `json:"requirement_json"`
-	CreatedJobID    string              `json:"created_job_id,omitempty"`
-	ErrorCode       string              `json:"error_code,omitempty"`
-	ErrorMessage    string              `json:"error_message,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	ConfirmedAt     *time.Time          `json:"confirmed_at,omitempty"`
-	AbandonedAt     *time.Time          `json:"abandoned_at,omitempty"`
+	ID                 string              `json:"id"`
+	Status             ClarificationStatus `json:"status"`
+	InitialPrompt      string              `json:"initial_prompt"`
+	Round              int                 `json:"round"`
+	MaxRounds          int                 `json:"max_rounds"`
+	RequirementJSON    string              `json:"requirement_json"`
+	OpenHighImpactJSON string              `json:"open_high_impact_json,omitempty"`
+	CreatedJobID       string              `json:"created_job_id,omitempty"`
+	ErrorCode          string              `json:"error_code,omitempty"`
+	ErrorMessage       string              `json:"error_message,omitempty"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+	ConfirmedAt        *time.Time          `json:"confirmed_at,omitempty"`
+	AbandonedAt        *time.Time          `json:"abandoned_at,omitempty"`
 }
 
 // ClarificationMessage is one entry in a clarification session's message
@@ -325,9 +393,13 @@ const (
 	DialogueIntentBusinessProcessingAgent DialogueIntent = "business_processing_agent"
 )
 
-// DialogueStatus is the lifecycle state of a dialogue session. It moves
-// routing -> recommending -> drafting_application|drafting_business_agent ->
-// resolved|failed|abandoned.
+// DialogueStatus is the lifecycle state of a dialogue session. A fresh dialogue
+// starts in routing, then transitions through the route/clarification/drafting
+// phases. Once its first application is resolved (or an existing app is opened)
+// it becomes a CONTINUING session that stays open for follow-up turns: active,
+// analyzing, waiting_user, change_confirmation, task_running, and (eventually)
+// archived. The terminal-only states resolved/failed/abandoned are retained for
+// legacy rows and the dormant business-agent flow.
 type DialogueStatus string
 
 const (
@@ -338,7 +410,32 @@ const (
 	DialogueStatusResolved              DialogueStatus = "resolved"
 	DialogueStatusFailed                DialogueStatus = "failed"
 	DialogueStatusAbandoned             DialogueStatus = "abandoned"
+	// Continuing-session phases (Task 2). A resolved/opened dialogue backfills to
+	// active and stays open so the user can send follow-up messages; each message
+	// is analyzed as a turn rather than re-routing the whole session.
+	DialogueStatusActive             DialogueStatus = "active"
+	DialogueStatusAnalyzing          DialogueStatus = "analyzing"
+	DialogueStatusWaitingUser        DialogueStatus = "waiting_user"
+	DialogueStatusChangeConfirmation DialogueStatus = "change_confirmation"
+	DialogueStatusTaskRunning        DialogueStatus = "task_running"
+	DialogueStatusArchived           DialogueStatus = "archived"
 )
+
+// IsContinuingDialogueStatus reports whether a status belongs to a continuing
+// (open) dialogue session — one whose session route is already established and
+// that accepts follow-up turns via POST .../messages. The pre-route routing
+// status and the legacy terminal states are NOT continuing.
+func IsContinuingDialogueStatus(s DialogueStatus) bool {
+	switch s {
+	case DialogueStatusActive,
+		DialogueStatusAnalyzing,
+		DialogueStatusWaitingUser,
+		DialogueStatusChangeConfirmation,
+		DialogueStatusTaskRunning:
+		return true
+	}
+	return false
+}
 
 // DialogueSession is the durable parent of a multi-turn dialogue that routes a
 // user request to one of the three Factory outcomes (existing app, generated
@@ -376,3 +473,125 @@ type DialogueMessage struct {
 	MetadataJSON string    `json:"metadata_json,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 }
+
+// TurnIntent is the per-message user need inferred for one turn of a CONTINUING
+// dialogue session (distinct from the one-time session route). It is exactly one
+// of the five values below; anything else is rejected.
+type TurnIntent string
+
+const (
+	// TurnIntentApplicationModification is a change to an application already
+	// linked to the dialogue. The turn produces a change summary; after
+	// confirmation a new application version is generated.
+	TurnIntentApplicationModification TurnIntent = "application_modification"
+	// TurnIntentNewApplication is a request for a distinct application. The turn
+	// forks the dialogue: a new dialogue draft is created and dialogue.forked is
+	// emitted.
+	TurnIntentNewApplication TurnIntent = "new_application"
+	// TurnIntentApplicationInquiry is a question about an existing application
+	// that needs no generation job.
+	TurnIntentApplicationInquiry TurnIntent = "application_inquiry"
+	// TurnIntentTaskControl controls an in-flight generation task (cancel, retry).
+	// It produces no new job.
+	TurnIntentTaskControl TurnIntent = "task_control"
+	// TurnIntentGeneralDialogue is conversational follow-up that needs no job.
+	TurnIntentGeneralDialogue TurnIntent = "general_dialogue"
+)
+
+// ValidTurnIntent reports whether s is one of the five allowed turn intents.
+func ValidTurnIntent(s string) bool {
+	switch TurnIntent(s) {
+	case TurnIntentApplicationModification,
+		TurnIntentNewApplication,
+		TurnIntentApplicationInquiry,
+		TurnIntentTaskControl,
+		TurnIntentGeneralDialogue:
+		return true
+	}
+	return false
+}
+
+// TurnStatus is the lifecycle state of one analysis turn. A turn starts pending
+// (queued behind an in-flight turn for the same dialogue), becomes running while
+// the model analyzes it, and ends in a terminal state (completed/canceled/
+// failed). At most one turn per dialogue is running at a time.
+type TurnStatus string
+
+const (
+	TurnStatusPending   TurnStatus = "pending"
+	TurnStatusRunning   TurnStatus = "running"
+	TurnStatusCompleted TurnStatus = "completed"
+	TurnStatusCanceled  TurnStatus = "canceled"
+	TurnStatusFailed    TurnStatus = "failed"
+)
+
+// DialogueTurn is one per-message analysis round within a continuing dialogue
+// session. It links the triggering user message to the inferred turn intent and
+// its lifecycle. Created at message-accept time; the turn worker claims the
+// oldest pending turn per dialogue, runs the turn-intent round, and marks it
+// terminal before the next turn begins.
+type DialogueTurn struct {
+	ID          string     `json:"id"`
+	DialogueID  string     `json:"dialogue_id"`
+	MessageID   string     `json:"message_id"`
+	Intent      TurnIntent `json:"intent"`
+	Status      TurnStatus `json:"status"`
+	SummaryJSON string     `json:"summary_json,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+}
+
+// WorkTraceEvent is one durable, immutable, VISIBLE line of a dialogue's
+// activity audit trail: an intent recognized, a tool used, data gathered, a
+// validation result, a task status change, a warning/error. Sequence is per
+// dialogue_id and assigned by the store (MAX+1 in one transaction, enforced by
+// UNIQUE(dialogue_id, sequence)); the first event for a dialogue is sequence 1.
+//
+// SECURITY contract (Constraint #9): only allowlisted Type values may persist
+// here, and the payload gate in the store rejects provider thinking/thinking
+// deltas, raw request/response bodies, headers, credentials, and uncapped
+// command output. PayloadJSON holds a producer-supplied, already-summarized/
+// redacted JSON document (Task 4 produces safe payloads); the store enforces a
+// byte cap and structural sensitive-key stripping as a defense-in-depth gate.
+// NEVER reach this table with raw hidden reasoning — that must never leave the
+// producer, and the gate rejects it if it does.
+type WorkTraceEvent struct {
+	ID            string    `json:"id"`
+	DialogueID    string    `json:"dialogue_id"`
+	Sequence      int64     `json:"sequence"`
+	TaskID        string    `json:"task_id,omitempty"`
+	ApplicationID string    `json:"application_id,omitempty"`
+	VersionID     string    `json:"version_id,omitempty"`
+	StepID        string    `json:"step_id,omitempty"`
+	Attempt       int       `json:"attempt,omitempty"`
+	Type          string    `json:"type"`
+	PayloadJSON   string    `json:"payload_json"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// WorkTraceType is the category of a visible work-trace event. Only values in
+// the allowlist (see store.AllowedWorkTraceTypes) may persist or stream. The
+// categories are the "what is happening the user may see" surface: reasoning
+// surfacing (intent/approach/assumption/clarification), actions (tool/data),
+// checks (validation), decisions (change confirmation), lifecycle (task/version/
+// deployment), and signals (warning/error). Provider thinking and raw bodies are
+// deliberately NOT categories — they are rejected before reaching the type.
+type WorkTraceType string
+
+const (
+	WorkTraceIntent        WorkTraceType = "intent"              // recognized user intent surfaced
+	WorkTraceApproach      WorkTraceType = "approach"            // chosen approach/plan surfaced
+	WorkTraceAssumption    WorkTraceType = "assumption"          // stated assumption surfaced
+	WorkTraceClarification WorkTraceType = "clarification"       // clarification question/answer
+	WorkTraceTool          WorkTraceType = "tool"                // tool action summary (not raw I/O)
+	WorkTraceData          WorkTraceType = "data"                // data gathered/produced summary
+	WorkTraceValidation    WorkTraceType = "validation"          // validation/check result
+	WorkTraceChangeConfirm WorkTraceType = "change_confirmation" // proposed change awaiting user confirm
+	WorkTraceTask          WorkTraceType = "task"                // task status transition
+	WorkTraceVersion       WorkTraceType = "version"             // application version transition
+	WorkTraceDeployment    WorkTraceType = "deployment"          // deployment transition
+	WorkTraceWarning       WorkTraceType = "warning"             // non-fatal warning surfaced
+	WorkTraceError         WorkTraceType = "error"               // error surfaced
+	WorkTraceAssistant     WorkTraceType = "assistant_output"    // assistant text output
+)

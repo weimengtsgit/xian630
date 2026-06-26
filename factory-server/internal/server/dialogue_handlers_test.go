@@ -215,6 +215,11 @@ func newDialogueTestServer(t *testing.T, dlgRunner runner.CommandRunner) (*Serve
 		WorkspaceRoot: root,
 		ArtifactRoot:  t.TempDir(),
 	}
+	// The turn worker defaults to the production CLI classifier. Tests that drive
+	// the async turn contract override srv.turnClassifier (and rebuild the
+	// worker) — see newDialogueTurnTestServer below.
+	srv.turnClassifier = srv.dialogueRouter
+	srv.turnWorker = NewTurnWorker(srv, st, srv.turnClassifier)
 	return srv, srv.routes(), st
 }
 
@@ -340,6 +345,187 @@ func eventTypes(events []Event) []string {
 		out = append(out, e.Type)
 	}
 	return out
+}
+
+// TestDialogueClarificationStreamsDeltaWithDialogueID is the D2 regression: in
+// the application-generation dialogue flow, the child clarification round's
+// work-log deltas MUST be mirrored as a dialogue-attributed
+// dialogue.clarification.delta carrying the PARENT dialogue_id (not just the
+// bare clarification.message.delta carrying the child session id). Without this
+// mirroring the portal dispatcher drops the deltas and the bulk of a generation
+// conversation degrades to completion-reload. The test subscribes to the hub
+// BEFORE the route confirm runs child round 1 (which streams the work-log delta)
+// and asserts the dialogue-attributed delta arrives with the parent id.
+func TestDialogueClarificationStreamsDeltaWithDialogueID(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	// Subscribe BEFORE routing so the round-1 streaming deltas are captured.
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	_ = drainClarificationHub(ch)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	childID := ""
+	var routed dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&routed); err == nil {
+		childID = routed.Session.ClarificationSessionID
+	}
+	if childID == "" {
+		// Fall back to the store (some test fakes do not echo the link on the view).
+		d, _ := st.GetDialogueSession(context.Background(), dlgID)
+		if d != nil {
+			childID = d.ClarificationSessionID
+		}
+	}
+	if childID == "" {
+		t.Fatalf("no child clarification linked to dialogue %s", dlgID)
+	}
+
+	events := drainClarificationHub(ch)
+
+	// 1. The dialogue-attributed delta is emitted and carries the PARENT
+	//    dialogue_id (not the child session id).
+	var sawDialogueDelta bool
+	for _, ev := range events {
+		if ev.Type != "dialogue.clarification.delta" {
+			continue
+		}
+		sawDialogueDelta = true
+		// The hub publishes the dialogue.StreamEvent struct directly as Data.
+		se, ok := ev.Data.(dialogue.StreamEvent)
+		if !ok {
+			t.Fatalf("dialogue.clarification.delta data is not a dialogue.StreamEvent: %#v", ev.Data)
+		}
+		if se.DialogueID != dlgID {
+			t.Fatalf("dialogue.clarification.delta must carry the PARENT dialogue_id %s, got %q", dlgID, se.DialogueID)
+		}
+		if strings.TrimSpace(se.Delta) == "" {
+			t.Fatalf("dialogue.clarification.delta must carry non-empty safe work-log delta, got %q", se.Delta)
+		}
+		// Security #9: the mirrored delta carries only the safe `delta` text.
+		// The clarification runner never emits thinking_delta as a
+		// clarification.message.delta, and dialogue.StreamEvent has no
+		// thinking field, so raw reasoning cannot ride along.
+	}
+	if !sawDialogueDelta {
+		t.Fatalf("dialogue child round did not emit dialogue.clarification.delta; events=%#v", eventTypes(events))
+	}
+
+	// 2. The legacy bare clarification.message.delta is STILL emitted (the
+	//    standalone clarification surface depends on it) — regression guard
+	//    against breaking the legacy path.
+	sawBare := false
+	for _, ev := range events {
+		if ev.Type == "clarification.message.delta" {
+			sawBare = true
+			break
+		}
+	}
+	if !sawBare {
+		t.Fatalf("legacy bare clarification.message.delta must still be emitted for the standalone surface; events=%#v", eventTypes(events))
+	}
+}
+
+// TestDialogueClarificationPublishesReloadOnRound verifies B1: when a child
+// clarification round completes in the dialogue flow, the server publishes a
+// non-delta dialogue.clarification.updated carrying the PARENT dialogue_id. The
+// conversation workbench reloads the composed view only on a non-delta dialogue.*
+// event; a round otherwise mirrors just its analysis delta, which does not
+// trigger a reload. Without this signal the high-impact question card never
+// renders even though the question is persisted.
+func TestDialogueClarificationPublishesReloadOnRound(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	_ = drainClarificationHub(ch)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	events := drainClarificationHub(ch)
+	var sawReload bool
+	for _, ev := range events {
+		if ev.Type != "dialogue.clarification.updated" {
+			continue
+		}
+		data, ok := ev.Data.(map[string]any)
+		if !ok {
+			t.Fatalf("dialogue.clarification.updated data is not a map: %#v", ev.Data)
+		}
+		if data["dialogue_id"] != dlgID {
+			t.Fatalf("dialogue.clarification.updated must carry the PARENT dialogue_id %s, got %#v", dlgID, data["dialogue_id"])
+		}
+		sawReload = true
+	}
+	if !sawReload {
+		t.Fatalf("round did not emit dialogue.clarification.updated reload signal; events=%#v", eventTypes(events))
+	}
+}
+
+// TestDialogueViewChildExposesQuestionMessages verifies B2: the composed
+// dialogue view's child carries the persisted clarification message thread,
+// including the open high-impact question. The workbench's openChildQuestions
+// reads child.messages role/kind/metadata_json to render the question card;
+// before this fix child.messages was always empty, so only the requirement
+// summary showed and the user could never answer / reach ready_to_confirm.
+func TestDialogueViewChildExposesQuestionMessages(t *testing.T) {
+	seq := &clarSequenceRunner{outputs: []string{roundOutputOneQuestion(1, "appType")}}
+	srv, r, _ := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	dlgID := created.Session.ID
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/route", map[string]any{"intent": "application_generation"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	view, err := srv.composeDialogueView(context.Background(), dlgID)
+	if err != nil || view == nil {
+		t.Fatalf("composeDialogueView: err=%v view=%v", err, view != nil)
+	}
+	if view.Child == nil {
+		t.Fatalf("composed view has no child clarification")
+	}
+	var sawQuestion bool
+	for _, m := range view.Child.Messages {
+		if m.Role == "agent" && m.Kind == "question" && strings.Contains(m.MetadataJSON, "appType") {
+			sawQuestion = true
+			break
+		}
+	}
+	if !sawQuestion {
+		t.Fatalf("child view messages do not expose the open question; messages=%#v", view.Child.Messages)
+	}
 }
 
 // TestCreateDialogueRejectsInventedSlug verifies the server validates the
@@ -994,8 +1180,8 @@ func TestApplicationClarificationFullSixRounds(t *testing.T) {
 	}
 	var confirmView dialogueView
 	json.NewDecoder(confirmRec.Body).Decode(&confirmView)
-	if confirmView.Session.Status != model.DialogueStatusResolved {
-		t.Fatalf("status = %q, want resolved", confirmView.Session.Status)
+	if confirmView.Session.Status != model.DialogueStatusTaskRunning {
+		t.Fatalf("status = %q, want task_running", confirmView.Session.Status)
 	}
 	if confirmView.SeededJob == nil {
 		t.Fatalf("no seeded job in confirm response")
@@ -1070,6 +1256,119 @@ func TestApplicationClarificationAcceptConsolidation(t *testing.T) {
 	// No 7th model round — accept-all does not invoke the model.
 	if seq.calls > 5 {
 		t.Fatalf("model invoked %d times, want <= 5 (accept-all adds no round)", seq.calls)
+	}
+}
+
+// TestApplicationClarificationConsolidationGateHonorsOpenHighImpact is the D3
+// regression: a round-5 output can carry BOTH a consolidation list AND a
+// non-empty openHighImpact list (independent RoundOutput fields). Accepting the
+// recommendations (接受推荐) must NOT promote the child to ready_to_confirm while
+// openHighImpact is still open — the consolidation-apply path (no model turn)
+// must honor the same gate as advanceAfterUserTurn / normalizeClarificationReadiness.
+// With openHighImpact empty, accept-all must still reach ready_to_confirm.
+func TestApplicationClarificationConsolidationGateHonorsOpenHighImpact(t *testing.T) {
+	// round-5: consolidation present AND a non-empty openHighImpact list.
+	round5WithHighImpact := func() string {
+		out := clarification.RoundOutput{
+			Status: "waiting_user", Round: 5,
+			WorkLog: []clarification.WorkLog{{Type: "consolidation", Content: "收敛推荐 + 高影响项"}},
+			Requirement: clarification.Requirement{
+				AppType: "situation_replay", AppName: "航母编队复盘应用",
+				TargetUsers: []string{"作战参谋"}, PrimaryView: "地图 + 时间轴", DataPolicy: "mock_data",
+				GenerationProfile: map[string][]string{"base": {"software-factory-app"}, "domain": {"defense-operations-ui"}, "pattern": {"map-timeline-replay"}},
+			},
+			Consolidation: []clarification.ConsolidationEntry{
+				{Field: "coreScenario", RecommendedValue: json.RawMessage(`"复盘近 1 个月航迹"`), Reason: "推荐", Alternatives: []string{}},
+				{Field: "mainEntities", RecommendedValue: json.RawMessage(`["编队","事件"]`), Reason: "推荐"},
+				{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["轨迹联动"]`), Reason: "推荐"},
+			},
+			OpenHighImpact: []clarification.HighImpactItem{
+				{ID: "data_policy", Label: "数据来源策略", Recommendation: "mock_data", Options: []clarification.Option{{Value: "mock_data", Label: "Mock"}, {Value: "api_first", Label: "接口"}}},
+			},
+		}
+		b, _ := json.Marshal(out)
+		return string(b)
+	}()
+
+	setupChild := func(t *testing.T) (*Server, *Router, *store.Store, string, string) {
+		seq := &clarSequenceRunner{
+			outputs: []string{
+				roundOutputOneQuestion(1, "appType"),
+				roundOutputOneQuestion(2, "primaryView"),
+				roundOutputOneQuestion(3, "dataPolicy"),
+				roundOutputOneQuestion(4, "targetUsers"),
+				round5WithHighImpact,
+			},
+		}
+		srv, r, st := newDialogueTestServer(t, seq)
+		srv.dialogueRouter = dialogue.Runner{
+			Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+		}
+		create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+		var created dialogueView
+		json.NewDecoder(create.Body).Decode(&created)
+		_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+		var routed dialogueView
+		_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+		childID := routed.Session.ClarificationSessionID
+		if childID == "" {
+			t.Fatalf("no child clarification linked")
+		}
+		answerRound := func(questionID, value string) {
+			rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+				"questionId": questionID, "value": value,
+			})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+			}
+		}
+		answerRound("appType", "situation_replay")
+		answerRound("primaryView", "地图 + 时间轴")
+		answerRound("dataPolicy", "mock_data")
+		answerRound("targetUsers", "作战参谋")
+		// round 5 has now run; assert openHighImpact is persisted on the child.
+		child, _ := st.GetClarificationSession(context.Background(), childID)
+		if child == nil || strings.TrimSpace(child.OpenHighImpactJSON) == "" {
+			t.Fatalf("round-5 must persist openHighImpact: %+v", child)
+		}
+		return srv, r, st, created.Session.ID, childID
+	}
+
+	// --- Case A: openHighImpact open → accept-all must NOT promote ---
+	_, r, st, dlgID, childID := setupChild(t)
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	child, _ := st.GetClarificationSession(context.Background(), childID)
+	if child == nil {
+		t.Fatalf("child gone after accept")
+	}
+	if child.Status == model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("child status = ready_to_confirm, want non-ready (openHighImpact still open blocks consolidation-apply promotion)")
+	}
+	// The 确认并生成/confirm path must remain blocked while high-impact is open.
+	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/clarification/confirm", nil)
+	if confirmRec.Code == http.StatusOK {
+		t.Fatalf("confirm must be blocked while consolidation left openHighImpact open, got %d", confirmRec.Code)
+	}
+
+	// --- Case B: openHighImpact cleared → accept-all promotes to ready_to_confirm ---
+	_, r2, st2, dlgID2, childID2 := setupChild(t)
+	if err := st2.UpdateClarificationOpenHighImpact(context.Background(), childID2, ""); err != nil {
+		t.Fatalf("clear openHighImpact: %v", err)
+	}
+	accept2 := doJSON(t, r2, http.MethodPost, "/api/dialogues/"+dlgID2+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if accept2.Code != http.StatusOK {
+		t.Fatalf("accept (cleared) status = %d body=%s", accept2.Code, accept2.Body.String())
+	}
+	child2, _ := st2.GetClarificationSession(context.Background(), childID2)
+	if child2 == nil || child2.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("persisted child status = %+v, want ready_to_confirm once openHighImpact empty", child2)
 	}
 }
 
@@ -1332,6 +1631,29 @@ func TestListAndDeleteDialogue(t *testing.T) {
 	del := doJSON(t, r, http.MethodDelete, "/api/dialogues/"+created.Session.ID, nil)
 	if del.Code != http.StatusOK {
 		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
+}
+
+// TestDeleteDialogueAllowsDraftingStatus verifies a dialogue in an in-flight
+// drafting status can now be deleted (the old behavior refused with 409). This
+// unblocks "zombie" dialogues stuck in drafting that the user otherwise could
+// never remove.
+func TestDeleteDialogueAllowsDraftingStatus(t *testing.T) {
+	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: "dlg_draft", Status: model.DialogueStatusDraftingApplication, InitialPrompt: "x",
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	del := doJSON(t, r, http.MethodDelete, "/api/dialogues/dlg_draft", nil)
+	if del.Code != http.StatusOK {
+		t.Fatalf("delete drafting status = %d, want 200 (body=%s)", del.Code, del.Body.String())
+	}
+	if got, _ := st.GetDialogueSession(ctx, "dlg_draft"); got != nil {
+		t.Fatalf("drafting dialogue still exists after delete")
 	}
 }
 
@@ -1642,5 +1964,859 @@ func TestBusinessAgentContinueEnforcesSixRoundCap(t *testing.T) {
 	}
 	if seq.draftCalls != 6 {
 		t.Fatalf("draftCalls = %d, want 6 (no 7th round must run)", seq.draftCalls)
+	}
+}
+
+// --- Task 2: continuing dialogues + ordered turns ---------------------------
+
+// controllableTurnClassifier is a fake dialogue.TurnClassifier whose ClassifyTurn
+// blocks on a release channel until the test releases it. This makes the
+// background turn worker DETERMINISTIC: a test can hold turn 1 in-flight, assert
+// message 2's turn is pending, then release to assert drain/complete behavior.
+// It returns a configured canned TurnOutput per release.
+type controllableTurnClassifier struct {
+	// outputs is a queue of canned TurnOutputs, one per ClassifyTurn call.
+	outputs []dialogue.TurnOutput
+	// release is closed (or sent on) to unblock one waiting ClassifyTurn.
+	release chan struct{}
+	// calls counts ClassifyTurn invocations (after release).
+	calls int
+}
+
+func newControllableTurnClassifier(outputs ...dialogue.TurnOutput) *controllableTurnClassifier {
+	return &controllableTurnClassifier{
+		outputs: outputs,
+		release: make(chan struct{}, 1),
+	}
+}
+
+func (c *controllableTurnClassifier) ClassifyTurn(ctx context.Context, input dialogue.TurnInput, emit func(dialogue.StreamEvent)) (dialogue.TurnOutput, error) {
+	// Block until the test releases this turn.
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return dialogue.TurnOutput{}, ctx.Err()
+	}
+	idx := c.calls
+	c.calls++
+	out := dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue}
+	if idx < len(c.outputs) {
+		out = c.outputs[idx]
+	}
+	if emit != nil {
+		emit(dialogue.StreamEvent{Type: "dialogue.turn.delta", DialogueID: input.DialogueID})
+	}
+	return out, nil
+}
+
+// releaseOne unblocks exactly one waiting ClassifyTurn.
+func (c *controllableTurnClassifier) releaseOne() {
+	c.release <- struct{}{}
+}
+
+// newDialogueTurnTestServer builds a test server whose turn classifier is the
+// controllable fake, and starts the turn worker's drain loop on a cancellable
+// context. It returns the server, router, store, the classifier, and a cancel
+// func to stop the worker at the end of the test (registered via t.Cleanup).
+func newDialogueTurnTestServer(t *testing.T, classifier *controllableTurnClassifier) (*Server, *Router, *store.Store, *controllableTurnClassifier) {
+	t.Helper()
+	root := t.TempDir()
+	mustWriteCatalog(t, root)
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	now := time.Now()
+	for _, app := range []model.Application{
+		{ID: "app-carrier-formation-replay", Slug: "carrier-formation-replay", Name: "航母编队月度航迹复盘", Type: "situation_replay", Source: model.AppSourcePreset, Status: model.AppStatusRunning, Path: "scene/carrier-formation-replay", DisplayOrder: 1, CreatedAt: now, UpdatedAt: now, RuntimeURL: "http://localhost:5173"},
+		{ID: "app-carrier-homeport-tide-window", Slug: "carrier-homeport-tide-window", Name: "航母母港潮汐窗口计算器", Type: "command_dashboard", Source: model.AppSourcePreset, Status: model.AppStatusStopped, Path: "scene/carrier-homeport-tide-window", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := st.SyncApplications(context.Background(), []model.Application{app}); err != nil {
+			t.Fatalf("seed app %s: %v", app.Slug, err)
+		}
+	}
+	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: root}, st, scanner.Scanner{})
+	srv.clarifier = clarification.Runner{Cmd: &fakeDialogueRunner{}, WorkspaceRoot: root, ArtifactRoot: t.TempDir()}
+	srv.dialogueRouter = dialogue.Runner{Cmd: &fakeDialogueRunner{}, WorkspaceRoot: root, ArtifactRoot: t.TempDir()}
+	srv.turnClassifier = classifier
+	srv.turnWorker = NewTurnWorker(srv, st, classifier)
+	// Start the worker drain loop on a cancellable context.
+	wctx, cancel := context.WithCancel(context.Background())
+	srv.turnWorker.Start(wctx)
+	t.Cleanup(cancel)
+	return srv, srv.routes(), st, classifier
+}
+
+// seedContinuingDialogue creates a dialogue session in the continuing ACTIVE
+// phase with a linked (resolved) application, simulating a dialogue whose first
+// application has already been deployed. It is the precondition for the async
+// turn contract tests. The seeded app/agent ids let modification/inquiry turns
+// target a known application.
+func seedContinuingDialogue(t *testing.T, st *store.Store, dlgID, appID, versionID string) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	dlg := model.DialogueSession{
+		ID:                    dlgID,
+		InitialPrompt:         "做一个航母编队航迹复盘应用",
+		Status:                model.DialogueStatusActive,
+		Intent:                model.DialogueIntentApplicationGeneration,
+		RouteLocked:           true,
+		ResolvedApplicationID: appID,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("seed continuing dialogue: %v", err)
+	}
+	// Seed the linked application row so composeDialogueView / fork can resolve it.
+	apps, _ := st.ListApplications(ctx)
+	found := false
+	for _, a := range apps {
+		if a.ID == appID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		app := model.Application{
+			ID: appID, Slug: appID, Name: "已部署的复盘应用", Type: "situation_replay",
+			Source: model.AppSourceGenerated, Status: model.AppStatusRunning,
+			Path: "scene/" + appID, CreatedAt: now, UpdatedAt: now, RuntimeURL: "http://localhost:5173",
+		}
+		if err := st.SyncApplications(ctx, []model.Application{app}); err != nil {
+			t.Fatalf("seed linked app: %v", err)
+		}
+	}
+}
+
+// acceptMessage posts a message on a continuing dialogue and asserts the 202
+// async contract, returning the parsed {dialogueId, turnId, acceptedAt} body.
+func acceptMessage(t *testing.T, r *Router, dlgID, content string) map[string]string {
+	t.Helper()
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/messages", map[string]string{"content": content})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode 202 body: %v", err)
+	}
+	if body["turnId"] == "" {
+		t.Fatalf("202 body missing turnId: %#v", body)
+	}
+	return body
+}
+
+// waitForTurnStatus polls the store until the turn with the given id reaches the
+// wanted status, or fails the test after a timeout. It is the deterministic
+// bridge between the async worker and synchronous assertions: a test releases a
+// turn then waits for the completed/canceled transition.
+func waitForTurnStatus(t *testing.T, st *store.Store, turnID string, want model.TurnStatus) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		turn, err := st.GetDialogueTurn(ctx, turnID)
+		if err != nil {
+			t.Fatalf("get turn %s: %v", turnID, err)
+		}
+		if turn != nil && turn.Status == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	turn, _ := st.GetDialogueTurn(ctx, turnID)
+	got := model.TurnStatus("")
+	if turn != nil {
+		got = turn.Status
+	}
+	t.Fatalf("turn %s status = %q, want %q (timed out)", turnID, got, want)
+}
+
+// TestDialogueAcceptsModificationAfterDeployment verifies a continuing (active)
+// dialogue accepts a follow-up modification message asynchronously: it returns
+// 202 with {dialogueId, turnId, acceptedAt} and persists a pending turn.
+func TestDialogueAcceptsModificationAfterDeployment(t *testing.T) {
+	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent: model.TurnIntentApplicationModification,
+		Summary: dialogue.TurnSummary{
+			UserFacingText:    "将告警阈值修改为 150 海里",
+			ChangeDescription: "将告警阈值从默认值修改为 150 海里",
+		},
+	}))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	body := acceptMessage(t, r, "dlg_1", "把告警阈值改成 150 海里")
+
+	if body["dialogueId"] != "dlg_1" {
+		t.Fatalf("dialogueId = %q, want dlg_1", body["dialogueId"])
+	}
+	if body["acceptedAt"] == "" {
+		t.Fatalf("202 body missing acceptedAt: %#v", body)
+	}
+	// A turn row was persisted and is still in-flight (the worker may already have
+	// claimed it to running, but it must NOT be terminal — the round is async).
+	// The pending-vs-running distinction is asserted deterministically by the
+	// queueing test below using the controllable classifier.
+	ctx := context.Background()
+	turn, err := st.GetDialogueTurn(ctx, body["turnId"])
+	if err != nil || turn == nil {
+		t.Fatalf("in-flight turn not persisted: %v", err)
+	}
+	switch turn.Status {
+	case model.TurnStatusPending, model.TurnStatusRunning:
+		// ok: accepted and being processed asynchronously
+	default:
+		t.Fatalf("turn status = %q, want pending or running (must not be terminal right after accept)", turn.Status)
+	}
+}
+
+// TestConfirmDialogueChangeRollsBackRevisionSeedFailure protects the continuing
+// modification path: a failed revision-step insert must not leave an orphaned
+// revision job behind. Initial-generation confirmation already has this
+// transaction guarantee; revisions must have the identical guarantee.
+func TestConfirmDialogueChangeRollsBackRevisionSeedFailure(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent:  model.TurnIntentApplicationModification,
+		Summary: dialogue.TurnSummary{ChangeDescription: "将告警阈值改为 150 海里"},
+	}))
+	ctx := context.Background()
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+	now := time.Now()
+	if err := st.CreateJob(ctx, model.Job{
+		ID: "job_v1", AppSlug: "app_1", AppName: "已部署的复盘应用", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, ApplicationID: "app_1", DialogueID: "dlg_1",
+		ConfirmedRequirementJSON: `{"coreScenario":"航迹复盘"}`, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed source job: %v", err)
+	}
+	if _, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: "ver_1", ApplicationID: "app_1", JobID: "job_v1", Status: model.ApplicationVersionEffective,
+		CreatedAt: now, PromotedAt: &now,
+	}); err != nil {
+		t.Fatalf("seed effective version: %v", err)
+	}
+
+	accepted := acceptMessage(t, r, "dlg_1", "把告警阈值改成 150 海里")
+	clf.releaseOne()
+	waitForTurnStatus(t, st, accepted["turnId"], model.TurnStatusCompleted)
+	if dlg, _ := st.GetDialogueSession(ctx, "dlg_1"); dlg == nil || dlg.Status != model.DialogueStatusChangeConfirmation {
+		t.Fatalf("dialogue status = %+v, want change_confirmation", dlg)
+	}
+	jobsBefore, _ := st.ListJobs(ctx, "")
+	st.SetJobStepSeedHook(func(step model.JobStep) error {
+		if step.Seq == 3 {
+			return errors.New("inject revision seed failure")
+		}
+		return nil
+	})
+	defer st.SetJobStepSeedHook(nil)
+
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_1/changes/confirm", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("confirm revision = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	jobsAfter, _ := st.ListJobs(ctx, "")
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Fatalf("revision seed left orphan job: before=%d after=%d", len(jobsBefore), len(jobsAfter))
+	}
+
+	// Retrying the same confirmed proposal after the transient seed error creates
+	// one complete revision job with lineage derived on the server.
+	st.SetJobStepSeedHook(nil)
+	rec = doPost(t, r, http.MethodPost, "/api/dialogues/dlg_1/changes/confirm", nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry confirm revision = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	jobsAfter, _ = st.ListJobs(ctx, "")
+	if len(jobsAfter) != len(jobsBefore)+1 {
+		t.Fatalf("revision job count = %d, want %d", len(jobsAfter), len(jobsBefore)+1)
+	}
+	var revision *model.Job
+	for i := range jobsAfter {
+		if jobsAfter[i].Kind == "revise" {
+			revision = &jobsAfter[i]
+			break
+		}
+	}
+	if revision == nil || revision.DialogueID != "dlg_1" || revision.ApplicationID != "app_1" || revision.BaseVersionID != "ver_1" {
+		t.Fatalf("revision lineage = %+v", revision)
+	}
+	version, err := st.GetApplicationVersionByJob(ctx, revision.ID)
+	if err != nil || version == nil || version.ApplicationID != "app_1" || version.ParentVersionID != "ver_1" || version.Status != model.ApplicationVersionQueued {
+		t.Fatalf("revision version = %+v err=%v", version, err)
+	}
+	steps, err := st.ListJobSteps(ctx, revision.ID)
+	if err != nil || len(steps) != len(stepPlan) {
+		t.Fatalf("revision steps = %d err=%v, want %d", len(steps), err, len(stepPlan))
+	}
+}
+
+// TestDialogueQueuesSecondAnalysisTurn verifies at-most-one-analysis-turn-per-
+// session ordering: while turn 1 is in-flight, a second message persists a turn
+// that stays pending; only after turn 1 completes does turn 2 begin.
+func TestDialogueQueuesSecondAnalysisTurn(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "ok1"}},
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "ok2"}},
+	))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	// Turn 1: the worker claims it and blocks inside the classifier (waiting on
+	// release). Signal the worker to start draining.
+	first := acceptMessage(t, r, "dlg_1", "first message")
+	// Give the worker a moment to claim turn 1 (it blocks on release). Poll until
+	// turn 1 is running.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+		if t1 != nil && t1.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// While turn 1 is in-flight (claimed + blocked on release), submit message 2.
+	// Its turn must stay pending — at most one analysis turn runs per session.
+	second := acceptMessage(t, r, "dlg_1", "second message")
+	t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+	if t1 == nil || t1.Status != model.TurnStatusRunning {
+		t.Fatalf("turn 1 status = %v, want running (must be in-flight before asserting turn 2 queues)", t1)
+	}
+	t2, _ := st.GetDialogueTurn(context.Background(), second["turnId"])
+	if t2 == nil {
+		t.Fatalf("second turn not persisted")
+	}
+	if t2.Status != model.TurnStatusPending {
+		t.Fatalf("second turn status = %q, want pending while turn 1 is in-flight", t2.Status)
+	}
+	if clf.calls != 0 {
+		t.Fatalf("classifier calls = %d, want 0 (turn 2 must not be analyzed until turn 1 ends)", clf.calls)
+	}
+
+	// Release turn 1: it completes, then the worker drains turn 2 (which blocks
+	// on release again).
+	clf.releaseOne()
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCompleted)
+
+	// Turn 2 now starts (running, blocked on release).
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t2b, _ := st.GetDialogueTurn(context.Background(), second["turnId"])
+		if t2b != nil && t2b.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// Release turn 2 and confirm it completes.
+	clf.releaseOne()
+	waitForTurnStatus(t, st, second["turnId"], model.TurnStatusCompleted)
+}
+
+// TestNewApplicationTurnForksDialogue verifies a new_application turn forks the
+// dialogue: it creates a new dialogue draft (in routing) and emits
+// dialogue.forked carrying the source + new dialogue ids.
+func TestNewApplicationTurnForksDialogue(t *testing.T) {
+	srv, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent: model.TurnIntentNewApplication,
+		Summary: dialogue.TurnSummary{
+			ForkTargetInitialPrompt: "做一个排班管理应用",
+		},
+	}))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	first := acceptMessage(t, r, "dlg_1", "我想做一个排班应用")
+	// Release the turn so it completes and performs the fork side effect.
+	if clf, ok := srv.turnClassifier.(*controllableTurnClassifier); ok {
+		clf.releaseOne()
+	}
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCompleted)
+
+	// A new dialogue draft was created in routing.
+	sessions, err := st.ListDialogueSessions(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	var forkID string
+	for _, s := range sessions {
+		if s.ID != "dlg_1" && s.Status == model.DialogueStatusRouting {
+			forkID = s.ID
+			break
+		}
+	}
+	if forkID == "" {
+		t.Fatalf("expected a forked dialogue in routing; got %#v", sessions)
+	}
+
+	// dialogue.forked was emitted with the source + new dialogue ids.
+	events := drainClarificationHub(ch)
+	sawForked := false
+	for _, ev := range events {
+		if ev.Type == "dialogue.forked" {
+			sawForked = true
+			data, _ := json.Marshal(ev.Data)
+			if !strings.Contains(string(data), "\"source_dialogue_id\":\"dlg_1\"") {
+				t.Fatalf("forked event missing source_dialogue_id=dlg_1: %s", data)
+			}
+			if !strings.Contains(string(data), "\"new_dialogue_id\":\""+forkID+"\"") {
+				t.Fatalf("forked event missing new_dialogue_id=%s: %s", forkID, data)
+			}
+		}
+	}
+	if !sawForked {
+		t.Fatalf("did not see dialogue.forked; got %#v", eventTypes(events))
+	}
+}
+
+// TestInquiryDoesNotCreateJob verifies an inquiry turn (and by the same code
+// path, task_control / general_dialogue) produces NO job: it completes the turn
+// without seeding a generation job. An application_modification turn that has not
+// been confirmed also produces no job, but the cleanest assertion is the inquiry
+// intent.
+func TestInquiryDoesNotCreateJob(t *testing.T) {
+	srv, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent:  model.TurnIntentApplicationInquiry,
+		Summary: dialogue.TurnSummary{Reply: "这个应用支持 200 海里阈值。"},
+	}))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	jobsBefore, _ := st.ListJobs(context.Background(), "")
+
+	first := acceptMessage(t, r, "dlg_1", "这个应用支持多大阈值？")
+	if clf, ok := srv.turnClassifier.(*controllableTurnClassifier); ok {
+		clf.releaseOne()
+	}
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCompleted)
+
+	jobsAfter, _ := st.ListJobs(context.Background(), "")
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Fatalf("inquiry turn created a job: before=%d after=%d", len(jobsBefore), len(jobsAfter))
+	}
+	// The turn completed and carries the inquiry intent.
+	turn, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+	if turn == nil {
+		t.Fatalf("turn not found")
+	}
+	if turn.Intent != model.TurnIntentApplicationInquiry {
+		t.Fatalf("turn intent = %q, want application_inquiry", turn.Intent)
+	}
+	msgs, err := st.LatestDialogueMessages(context.Background(), "dlg_1", 100)
+	if err != nil {
+		t.Fatalf("list dialogue messages: %v", err)
+	}
+	var reply *model.DialogueMessage
+	for i := range msgs {
+		if msgs[i].Role == "agent" && msgs[i].Kind == "reply" {
+			reply = &msgs[i]
+			break
+		}
+	}
+	if reply == nil {
+		t.Fatalf("inquiry reply was not persisted as an agent message: %#v", msgs)
+	}
+	if reply.Content != "这个应用支持 200 海里阈值。" {
+		t.Fatalf("reply content = %q", reply.Content)
+	}
+}
+
+// TestCancelRunningTurnEndToEnd verifies the end-to-end cancel contract (review
+// Fix 1): while turn 1 is in-flight (blocked in the classifier), POST cancel
+// flips it to canceled, the in-flight model round actually aborts (the
+// classifier's ctx is cancelled), and a later queued turn then proceeds. This is
+// deterministic — no arbitrary sleeps: the controllable classifier holds turn 1
+// in-flight on a release channel, the cancel POST cancels the round's ctx, and
+// waitForTurnStatus bridges the async worker.
+func TestCancelRunningTurnEndToEnd(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "canceled-should-not-return"}},
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue, Summary: dialogue.TurnSummary{Reply: "second-ok"}},
+	))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+
+	// Turn 1: the worker claims it and blocks inside the classifier (on release).
+	first := acceptMessage(t, r, "dlg_1", "first message")
+	// Poll until turn 1 is running (claimed + blocked on release) — deterministic.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+		if t1 != nil && t1.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t1, _ := st.GetDialogueTurn(context.Background(), first["turnId"])
+	if t1 == nil || t1.Status != model.TurnStatusRunning {
+		t.Fatalf("turn 1 status = %v, want running before cancel", t1)
+	}
+
+	// While turn 1 is in-flight, submit message 2 -> a pending turn queued behind it.
+	second := acceptMessage(t, r, "dlg_1", "second message")
+
+	// POST cancel on turn 1. This flips the row to canceled AND cancels the
+	// in-flight round's ctx (so the classifier returns ctx.Err() rather than
+	// blocking forever on release).
+	cancelRec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_1/turns/"+first["turnId"]+"/cancel", nil)
+	if cancelRec.Code != http.StatusAccepted {
+		t.Fatalf("cancel status = %d, want 202; body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+
+	// Turn 1 must reach the terminal canceled state (the worker aborts the round
+	// and finalizes as canceled). The classifier must NOT have returned turn 1's
+	// output (calls stays 0 — the release was never sent).
+	waitForTurnStatus(t, st, first["turnId"], model.TurnStatusCanceled)
+	if clf.calls != 0 {
+		t.Fatalf("classifier calls = %d, want 0 (turn 1 round was cancelled before the model returned)", clf.calls)
+	}
+
+	// A later queued turn then proceeds: turn 2 is now claimable, the worker
+	// drains it (blocks on release again). Release it so it completes.
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		t2, _ := st.GetDialogueTurn(context.Background(), second["turnId"])
+		if t2 != nil && t2.Status == model.TurnStatusRunning {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	clf.releaseOne()
+	waitForTurnStatus(t, st, second["turnId"], model.TurnStatusCompleted)
+}
+
+// TestCancelTurnRejectsWrongDialogue verifies the cancel handler 404s when the
+// turn id exists but does not belong to the path dialogue (defensive boundary).
+func TestCancelTurnRejectsWrongDialogue(t *testing.T) {
+	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentGeneralDialogue},
+	))
+	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
+	seedContinuingDialogue(t, st, "dlg_2", "app_1", "ver_1")
+
+	// Create a turn on dlg_1, then try to cancel it via dlg_2's path.
+	now := time.Now()
+	err := st.CreateDialogueTurn(context.Background(), model.DialogueTurn{
+		ID: "dturn_x", DialogueID: "dlg_1", MessageID: "dmsg_1",
+		Status: model.TurnStatusRunning, CreatedAt: now, StartedAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_2/turns/dturn_x/cancel", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cancel turn via wrong dialogue = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Task 8: archive endpoint + regression ---------------------------------
+
+// waitForEventType drains a hub subscriber channel until an event with the
+// given type arrives (1s deadline). It is the deterministic bridge between an
+// async hub publish and a synchronous assertion.
+func waitForEventType(ch <-chan Event, want string) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return false
+			}
+			if ev.Type == want {
+				return true
+			}
+		case <-time.After(time.Until(deadline)):
+			return false
+		}
+	}
+	return false
+}
+
+// TestArchiveDialogueTransitionsStatusAndEmitsEvent verifies the
+// POST /api/dialogues/:id/archive endpoint flips a continuing dialogue to the
+// archived phase, emits dialogue.archived, and is idempotent (re-archiving an
+// already-archived dialogue returns 200 and leaves status unchanged).
+func TestArchiveDialogueTransitionsStatusAndEmitsEvent(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	seedContinuingDialogue(t, st, "dlg_a", "app_a", "ver_a")
+
+	// Subscribe to the hub BEFORE archiving so the event is captured (the hub
+	// drops events for slow subscribers, but our buffered channel is drained).
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_a/archive", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	dlg, err := st.GetDialogueSession(context.Background(), "dlg_a")
+	if err != nil || dlg == nil {
+		t.Fatalf("get dialogue after archive: %v", err)
+	}
+	if dlg.Status != model.DialogueStatusArchived {
+		t.Fatalf("status = %q, want archived", dlg.Status)
+	}
+
+	// dialogue.archived must be published.
+	if !waitForEventType(ch, "dialogue.archived") {
+		t.Fatalf("dialogue.archived event not observed")
+	}
+
+	// Idempotent: archiving an already-archived dialogue is a 200 no-op.
+	rec = doPost(t, r, http.MethodPost, "/api/dialogues/dlg_a/archive", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("idempotent archive status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	dlg, _ = st.GetDialogueSession(context.Background(), "dlg_a")
+	if dlg.Status != model.DialogueStatusArchived {
+		t.Fatalf("status after re-archive = %q, want archived", dlg.Status)
+	}
+}
+
+// TestArchiveDialogueRejectsUnknown returns 404 for a missing dialogue.
+func TestArchiveDialogueRejectsUnknown(t *testing.T) {
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{})
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/dlg_missing/archive", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("archive unknown = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Task 8: deterministic end-to-end scenario arc -------------------------
+//
+// The full Workbench arc (concurrent scheduling, same-app serialization,
+// promote, retain-on-failure, archive, explicit-delete retention) is split into
+// focused sub-tests so each phase is deterministic. The scheduler concurrency
+// (A/v1+B/v1 concurrent, A/v2 held) and retain-on-failure mechanics are proven
+// at the store/executor level (TestClaimNextRunnableJobSerializesByAppSlug,
+// TestFailedDeploymentLeavesPreviousEffectiveVersionRunning); these tests cover
+// the cross-cutting behavior that lives at the server/dialogue boundary and the
+// retention contract that spans app + dialogue deletion.
+
+// scenarioSeedVersions seeds an effective v1 (running deployment) and a queued
+// candidate v2 for appID. It returns the v1/v2 version ids. It mirrors what a
+// successful first deployment (v1) and an in-flight second generation (v2) look
+// like, without invoking the real executor.
+func scenarioSeedVersions(t *testing.T, st *store.Store, appID, v1ID, v2ID, depV1ID string) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	promoted := now
+	// v1: effective, running deployment, app on v1's runtime URL.
+	depV1 := model.Deployment{
+		ID: depV1ID, AppID: appID, JobID: "job_v1", ImageName: "img", ImageTag: v1ID,
+		ContainerName: "sf-" + v1ID, HostPort: 18001, ContainerPort: 8080,
+		URL: "http://127.0.0.1:18001", Status: "running", CreatedAt: now, StartedAt: &now,
+	}
+	if err := st.CreateDeployment(ctx, depV1); err != nil {
+		t.Fatalf("seed dep v1: %v", err)
+	}
+	if err := st.SetAppRuntime(ctx, appID, string(model.AppStatusRunning), depV1.URL); err != nil {
+		t.Fatalf("seed app running: %v", err)
+	}
+	if _, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: v1ID, ApplicationID: appID, JobID: "job_v1", Status: model.ApplicationVersionEffective,
+		DeploymentID: depV1ID, SourcePath: "generated-apps/scenario", CreatedAt: now, PromotedAt: &promoted,
+	}); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	// v2: queued candidate (a second generation in flight for the same app).
+	if _, err := st.CreateApplicationVersion(ctx, model.ApplicationVersion{
+		ID: v2ID, ApplicationID: appID, JobID: "job_v2", Status: model.ApplicationVersionQueued,
+		SourcePath: "generated-apps/scenario2", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+}
+
+// TestScenarioWorkTraceIsolationAcrossDialogues asserts the REST work-trace
+// endpoint only returns a dialogue's own events: streaming A never surfaces B's
+// trace rows. This is the REST-side counterpart to the SSE isolation test in
+// events_test.go.
+func TestScenarioWorkTraceIsolationAcrossDialogues(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	seedContinuingDialogue(t, st, "dlg_A", "app_A", "ver_A")
+	seedContinuingDialogue(t, st, "dlg_B", "app_B", "ver_B")
+	ctx := context.Background()
+
+	// Append trace events to BOTH dialogues.
+	if _, err := srv.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+		DialogueID: "dlg_A", Type: string(model.WorkTraceApproach), PayloadJSON: `{"v":"A1"}`,
+	}); err != nil {
+		t.Fatalf("append A: %v", err)
+	}
+	if _, err := srv.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+		DialogueID: "dlg_B", Type: string(model.WorkTraceApproach), PayloadJSON: `{"v":"B1"}`,
+	}); err != nil {
+		t.Fatalf("append B: %v", err)
+	}
+
+	// A's REST trace must contain A's event and NOT B's.
+	rec := doPost(t, r, http.MethodGet, "/api/dialogues/dlg_A/work-trace", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("A trace status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"dlg_A"`) || strings.Contains(body, `"dlg_B"`) {
+		t.Fatalf("A trace isolation failed (B leaked or A missing): %s", body)
+	}
+	// Symmetrically for B.
+	rec = doPost(t, r, http.MethodGet, "/api/dialogues/dlg_B/work-trace", nil)
+	body = rec.Body.String()
+	if !strings.Contains(body, `"dlg_B"`) || strings.Contains(body, `"dlg_A"`) {
+		t.Fatalf("B trace isolation failed (A leaked or B missing): %s", body)
+	}
+}
+
+// TestScenarioAcceptModificationReturnsTurn asserts a continuing dialogue
+// accepts a follow-up modification asynchronously: 202 + {dialogueId, turnId,
+// acceptedAt} and a persisted turn. (The 202 contract is also covered by the
+// Task 2 tests; this re-asserts it within the scenario arc.)
+func TestScenarioAcceptModificationReturnsTurn(t *testing.T) {
+	_, r, st, _ := newDialogueTurnTestServer(t, newControllableTurnClassifier(
+		dialogue.TurnOutput{Intent: model.TurnIntentApplicationModification,
+			Summary: dialogue.TurnSummary{UserFacingText: "增加一个筛选器"}},
+	))
+	seedContinuingDialogue(t, st, "dlg_A", "app_A", "ver_A")
+
+	body := acceptMessage(t, r, "dlg_A", "增加一个按时间的筛选器")
+	if body["dialogueId"] != "dlg_A" {
+		t.Fatalf("dialogueId = %q, want dlg_A", body["dialogueId"])
+	}
+	turn, _ := st.GetDialogueTurn(context.Background(), body["turnId"])
+	if turn == nil || turn.DialogueID != "dlg_A" {
+		t.Fatalf("modification turn not persisted for dlg_A: %+v", turn)
+	}
+}
+
+// TestScenarioPromoteEffectiveThenRetainOnFailure covers the version lifecycle
+// through the store API (the deterministic equivalent of the executor-driven
+// deployment): seed an effective v1 + queued v2; promote v1 (already effective,
+// no-op-safe) is the steady state; then simulate v2's health-check failure by
+// marking it failed and assert v1 STAYS effective/running (retain-on-failure).
+func TestScenarioPromoteEffectiveThenRetainOnFailure(t *testing.T) {
+	_, _, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	// Seed the base preset app so SetAppRuntime targets a real row.
+	const appID = "app-carrier-formation-replay"
+	scenarioSeedVersions(t, st, appID, "ver_v1", "ver_v2", "dep_v1")
+
+	// v1 is the effective version.
+	eff, err := st.GetEffectiveApplicationVersion(ctx, appID)
+	if err != nil || eff == nil || eff.ID != "ver_v1" {
+		t.Fatalf("effective before failure = %+v, want ver_v1", eff)
+	}
+
+	// Simulate v2's deployment health-check failing: the executor marks the
+	// candidate version failed. The prior effective version is RETAINED.
+	if err := st.MarkApplicationVersionStatus(ctx, "ver_v2", model.ApplicationVersionFailed); err != nil {
+		t.Fatalf("mark v2 failed: %v", err)
+	}
+
+	// v1 must STILL be effective (retain-on-failure, Task 6).
+	eff2, err := st.GetEffectiveApplicationVersion(ctx, appID)
+	if err != nil || eff2 == nil || eff2.ID != "ver_v1" {
+		t.Fatalf("effective after v2 failure = %+v, want ver_v1 (retained)", eff2)
+	}
+	// v1's deployment stays running; the app stays running on v1's URL.
+	dep, err := st.GetDeployment(ctx, "dep_v1")
+	if err != nil || dep == nil || dep.Status != "running" {
+		t.Fatalf("v1 deployment not retained on failure: %+v", dep)
+	}
+	app, err := st.GetApplication(ctx, appID)
+	if err != nil || app == nil || app.Status != model.AppStatusRunning || app.RuntimeURL != dep.URL {
+		t.Fatalf("app not retained running on v1: %+v", app)
+	}
+	// The candidate v2 is recorded as failed in the lineage for audit.
+	versions, err := st.ListApplicationVersions(ctx, appID)
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	var failedFound bool
+	for _, v := range versions {
+		if v.ID == "ver_v2" && v.Status == model.ApplicationVersionFailed {
+			failedFound = true
+		}
+	}
+	if !failedFound {
+		t.Fatalf("failed candidate v2 not retained in lineage: %+v", versions)
+	}
+}
+
+// TestScenarioArchiveThenExplicitDeletePreservesAudit covers the retention
+// contract end-to-end at the server boundary: archive a dialogue, then
+// explicitly DELETE it, and assert the dialogue is gone while the application
+// deletion path preserves jobs/steps/version/trace audit history.
+func TestScenarioArchiveThenExplicitDeletePreservesAudit(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	const (
+		dlgID = "dlg_arc"
+		appID = "app-carrier-formation-replay"
+		jobID = "job_arc"
+	)
+	ctx := context.Background()
+	seedContinuingDialogue(t, st, dlgID, appID, "ver_arc")
+	now := time.Now()
+
+	// Audit rows linked to the dialogue/app: a job with lineage + a trace event.
+	if err := st.CreateJob(ctx, model.Job{
+		ID: jobID, AppSlug: appID, Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAppID: appID, DialogueID: dlgID,
+		ApplicationID: appID, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if _, err := srv.recordAndPublishWorkTrace(ctx, model.WorkTraceEvent{
+		DialogueID: dlgID, ApplicationID: appID, Type: string(model.WorkTraceDeployment),
+		PayloadJSON: `{"deployed":true}`,
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	// 1. Archive the dialogue → status=archived, dialogue.archived emitted.
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+	rec := doPost(t, r, http.MethodPost, "/api/dialogues/"+dlgID+"/archive", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("archive = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !waitForEventType(ch, "dialogue.archived") {
+		t.Fatalf("dialogue.archived not observed")
+	}
+	dlg, _ := st.GetDialogueSession(ctx, dlgID)
+	if dlg == nil || dlg.Status != model.DialogueStatusArchived {
+		t.Fatalf("status after archive = %+v, want archived", dlg)
+	}
+
+	// 2. Explicitly DELETE the dialogue → it is removed.
+	rec = doPost(t, r, http.MethodDelete, "/api/dialogues/"+dlgID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := st.GetDialogueSession(ctx, dlgID); got != nil {
+		t.Fatalf("dialogue not deleted: %+v", got)
+	}
+
+	// 3. Application deletion (the production store path deleteApp uses) removes
+	// the app + its deployments but PRESERVES audit history: the job, the trace
+	// event, and any application_version rows remain readable. This is the
+	// explicit-delete retention contract — semantic records persist until the
+	// dialogue itself is gone, and even then app-level lineage is not purged.
+	if err := st.DeleteApplicationWithDeployments(ctx, appID); err != nil {
+		t.Fatalf("delete app: %v", err)
+	}
+	if got, _ := st.GetApplication(ctx, appID); got != nil {
+		t.Fatalf("app not deleted: %+v", got)
+	}
+	// The job survives app deletion (audit preserved).
+	if job, _ := st.GetJob(ctx, jobID); job == nil || job.ID != jobID {
+		t.Fatalf("job lost on app deletion (audit violated): %+v", job)
+	}
+	// The trace event survives app deletion (audit preserved).
+	trace, err := st.ListDialogueTrace(ctx, dlgID, 0, 0)
+	if err != nil || len(trace) != 1 {
+		t.Fatalf("trace lost on app deletion (audit violated): err=%v len=%d", err, len(trace))
 	}
 }

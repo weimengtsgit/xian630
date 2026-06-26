@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test:logic": "node scripts/check-job-selection.mjs && node scripts/check-application-ordering.mjs && node scripts/check-agent-creation.mjs && node scripts/check-clarification.mjs && node scripts/check-chat-input-sizing.mjs && node scripts/check-clarification-layout.mjs && node scripts/check-execution-record-state.mjs && node scripts/check-task-observability-layout.mjs && node scripts/check-conversation-workbench.mjs && node scripts/check-dialogue-workbench.mjs",
+    "test:logic": "node scripts/check-job-selection.mjs && node scripts/check-application-ordering.mjs && node scripts/check-agent-creation.mjs && node scripts/check-agent-panel-layout.mjs && node scripts/check-clarification.mjs && node scripts/check-chat-input-sizing.mjs && node scripts/check-clarification-layout.mjs && node scripts/check-execution-record-state.mjs && node scripts/check-task-observability-layout.mjs && node scripts/check-conversation-workbench.mjs && node scripts/check-dialogue-workbench.mjs && node scripts/check-visible-work-trace.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

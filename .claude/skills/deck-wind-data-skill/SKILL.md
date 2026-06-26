@@ -11,6 +11,22 @@ description: Fetch and normalize real 10 m wind data for carrier operating regio
 - Skip this skill only when the user explicitly asks for `mock`, `demo data`, or `sample data`.
 - Return failure when every real source fails. Do not synthesize wind values.
 
+## Fallback tiers — 公网兜底（主源取不到时按序降级，绝不编造）
+
+Fetch in this order; descend only when the higher tier fails (network error, CORS
+block, non-2xx, or empty). Tag every value with the source that produced it.
+1. **Primary**: Open-Meteo GFS `api.open-meteo.com/v1/gfs` (no key, CORS `*`).
+2. **Alternate public APIs** (no-key, CORS): Open-Meteo other models
+   (`&models=best_match` or `ecmwf`); U.S. points `api.weather.gov/gridpoints/<office>/<x,y>`
+   (CORS, U.S. only).
+3. **Public-web last resort**: a CORS-enabled open endpoint that exposes the value
+   or a usable summary — Wikipedia REST (`/w/api.php?...&origin=*`), DuckDuckGo
+   Instant Answer (`https://api.duckduckgo.com/?q=...&format=json`). "百度/Bing 公网
+   搜索" is the documented intent, but a browser cannot directly fetch baidu.com etc.
+   (CORS-blocked) — use only CORS-enabled endpoints here.
+4. **All public sources failed**: render `SOURCE_ALL_FAILED` listing the sources
+   tried — never substitute synthetic wind.
+
 ## Real Data Is MANDATORY in the generated app
 
 When `dataPolicy` is `live_api` or `mock_then_api`, the generated application MUST
@@ -20,6 +36,12 @@ case is a **generation failure**, not a safe default — even if it "makes the
 build pass". If a real fetch fails at runtime, show an explicit error/empty state
 and log it in `output.json` warnings; never silently substitute fake wind.
 Mock data is permitted ONLY when `dataPolicy=mock_data` or `useMock=true`.
+
+**诚实数据审计约束**：`src/data/`（及 `src/providers/` `src/services/` `src/api/` `src/store/`
+等数据层目录，或文件名以 data/provider/service/store 结尾）下的文件**禁止出现
+`Math.sin`/`Math.cos`/`Math.random`** —— 诚实数据审计会据此判定为"合成数据系列"并判
+生成失败。需要三角/几何/随机（风向矢量分解、甲板风合成、坐标/距离）时，把运算放进
+`src/utils/` 或 `src/lib/`（非数据层），数据层文件只做取数与归一化。
 
 ## Fetch Adapter — Open-Meteo GFS (public, no key, CORS `*`, browser-fetchable)
 
@@ -60,9 +82,9 @@ launch/recovery wind threshold the caller supplies.
 
 Use sources in this order unless the caller overrides `sourcePriority`:
 
-1. `gfs-nomads`
-2. `shipxy`
-3. `nmc-or-marine-page`
+1. `open-meteo-gfs` — `api.open-meteo.com/v1/gfs` (the Fetch Adapter above; no key, CORS `*`).
+2. `gfs-nomads` — NOAA NOMADS direct (no key; CORS varies by endpoint).
+3. `weather-gov` — `api.weather.gov/gridpoints/<office>/<x,y>` (U.S. only, CORS).
 4. fail
 
 Rules:

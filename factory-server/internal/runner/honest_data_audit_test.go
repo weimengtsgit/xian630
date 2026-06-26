@@ -67,14 +67,15 @@ func TestAuditHonestDataFlagsMockIdentifier(t *testing.T) {
 	}
 }
 
-// TestAuditHonestDataFlagsMathSinTide proves a Math.sin tide synthesizer in a
-// data-layer file is caught when a numeric data skill is declared.
-func TestAuditHonestDataFlagsMathSinTide(t *testing.T) {
+// TestAuditHonestDataMathSinPasses proves Math.sin/cos in a data-layer file is
+// NOT flagged: the numeric-synthesis rule was removed because it could not tell
+// synthetic series apart from legitimate geometry/distance math (haversine,
+// projections), which falsely blocked real data-science apps.
+func TestAuditHonestDataMathSinPasses(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export function series(h){ return Math.sin(h/12*Math.PI); }\n")
-	err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"})
-	if !errors.Is(err, ErrSchemaValidationFailed) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed for Math.sin tide synth", err)
+	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil (Math.sin is not a reliable synthetic signal)", err)
 	}
 }
 
@@ -127,8 +128,95 @@ func TestAuditHonestDataSkipsNodeModulesAndDeps(t *testing.T) {
 func TestAuditHonestDataCleanRealApp(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export async function fetchTide(){ const r = await fetch(url); return r.json(); }\n")
+	writeAppFile(t, dir, "src/components/DataUnavailable.jsx", "export function DataUnavailable({onRetry}){ return <section><div>数据源不可用</div><button onClick={onRetry}>重试</button><a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a><table><thead><tr><th>时间</th><th>潮位</th></tr></thead><tbody><tr><td>—</td><td>—</td></tr></tbody></table><p>数据恢复后此处将显示潮汐序列。</p></section>; }\n")
 	writeAppFile(t, dir, "src/components/Card.jsx", "export const Card = ({h}) => <div>{Math.round(h)}</div>;\n")
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill", "deck-wind-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil for clean real-data app", err)
+	}
+}
+
+// TestAuditHonestDataRejectsBareDataErrorState proves a real-data generated app
+// cannot pass by rendering only a bare "数据异常" style message. It must include a
+// shippable degraded state so data acquisition failure does not look like page
+// generation failure.
+func TestAuditHonestDataRejectsBareDataErrorState(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/tideProvider.js", "export async function fetchTideSeries(){ const res = await fetch('/api/data/tide'); if (!res.ok) throw new Error('source failed'); return res.json(); }\n")
+	writeAppFile(t, dir, "src/App.jsx", "export default function App(){ return <main><h1>潮汐态势</h1><div>数据异常</div></main>; }\n")
+	err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"})
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed for bare data error state", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractFlagsInventedFields(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `
+export async function fetchCarrier() {
+  return fetch('/api/ontology/entity/AviationCarrier/list', {
+    method: 'POST',
+    body: JSON.stringify({
+      columns: ['id', 'name', 'curLongitude', 'curLatitude', 'curHeading', 'curSpeed']
+    })
+  })
+}
+`)
+	err := AuditCarrierOntologyContract(dir, "live_api", []string{"carrier-affiliation-data-skill"})
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed for invented carrier fields", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractFlagsInvalidCarrierEntityFields(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `
+async function fetchEntity(entityName, columns, filters) {
+  return fetch('/api/ontology/entity/' + entityName + '/list', {
+    method: 'POST',
+    body: JSON.stringify({ columns, filters })
+  })
+}
+
+export async function load() {
+  await fetchEntity('MaritimeBaseCombatPlatform', ['id', 'name', 'callsign'])
+  await fetchEntity('AircraftCarrierTrackLog', ['id', 'refHMId', 'recordTime', 'speed', 'heading'])
+  await fetchEntity('RawADSData', ['id', 'icao'], [{ column: 'icao', logic: 'is not', condition: null }])
+}
+`)
+	err := AuditCarrierOntologyContract(dir, "live_api", []string{"carrier-affiliation-data-skill"})
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed for invalid carrier entity fields", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractAllowsDocumentedFields(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `
+export async function fetchCarrier() {
+  return fetch('/api/ontology/daasDMS/entity/AviationCarrier/list', {
+    method: 'POST',
+    body: JSON.stringify({
+      columnNames: ['id', 'name', 'longitude', 'latitude', 'curHeading', 'curSpeed', 'homeportStation']
+    })
+  })
+}
+
+export async function fetchDocumentedRelatedEntities() {
+  await fetchEntity('AircraftCarrier', ['id', 'name', 'refHMId', 'typeCode', 'curStatus', 'longitude', 'latitude'])
+  await fetchEntity('MaritimeBaseCombatPlatform', ['id', 'name', 'typeCode', 'mmsi', 'longitude', 'latitude', 'curStatus', 'maxSpeed', 'cruiseRange'])
+  await fetchEntity('AircraftCarrierTrackLog', ['id', 'refAviationCarrier', 'longitude', 'latitude', 'trackInitTime', 'trackStatusCode'])
+  await fetchEntity('RawADSData', ['id', 'icao', 'callsign', 'lat', 'lon', 'altitude', 'groundspeed', 'track', 'heading', 'startTime'], [])
+}
+`)
+	if err := AuditCarrierOntologyContract(dir, "live_api", []string{"carrier-affiliation-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil for documented carrier fields", err)
+	}
+}
+
+func TestAuditCarrierOntologyContractSkipsNonCarrierApps(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/other.ts", "export const fields = ['curLongitude', 'curLatitude'];\n")
+	if err := AuditCarrierOntologyContract(dir, "live_api", []string{"tide-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil when carrier skill is absent", err)
 	}
 }

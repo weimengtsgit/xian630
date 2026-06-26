@@ -54,6 +54,7 @@ func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(Str
 	if err := json.Unmarshal([]byte(out), &routeOut); err != nil {
 		return RouteOutput{}, fmt.Errorf("decode route output: %v: %w", err, runner.ErrOutputInvalidJSON)
 	}
+	routeOut = adaptLegacyRouteOutput(routeOut, out)
 	routeOut = normalizeRouteOutput(routeOut)
 	if err := validateRouteOutput(routeOut, input); err != nil {
 		return RouteOutput{}, err
@@ -120,7 +121,10 @@ func (r Runner) RunBusinessDraftRound(ctx context.Context, input BusinessDraftIn
 // It writes input.json + prompt.md, runs claude in plan mode with
 // Read/Grep/Glob only, captures stdout/stderr/stream, extracts the JSON object,
 // and returns the raw JSON string for the caller to decode into its contract.
-// It NEVER surfaces thinking_delta — only text_delta text is streamed.
+// It streams BOTH text_delta (safe output → *.delta) and thinking_delta (the
+// model's raw reasoning → *.thinking); the conversation surface shows the
+// thinking live as a 思考过程 block. (#9 still applies to the executor/trace
+// pipeline, which is a different surface.)
 func (r Runner) runModel(ctx context.Context, dir, dialogueID, op string, input any, promptFn func(string) string, emit func(StreamEvent), startedType string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -177,28 +181,44 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dia
 		Data:       WorkLog{Type: "analysis_work_log", Content: "已连接 Claude Code 流式输出。"},
 	})
 	var assistantText strings.Builder
+	var assistantThinking strings.Builder
 	var resultText string
 	var lastVisible string
+	var lastVisibleThinking string
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
-		delta, result := parseClaudeStreamLine(line)
+		delta, thinking, result := parseClaudeStreamLine(line)
 		if result != "" {
 			resultText = result
 		}
-		if delta == "" {
-			return
+		if delta != "" {
+			assistantText.WriteString(delta)
+			visible := assistantText.String()
+			if visible != "" && visible != lastVisible {
+				lastVisible = visible
+				emit(StreamEvent{
+					Type:       startedType + ".delta",
+					DialogueID: dialogueID,
+					MessageID:  messageID,
+					Delta:      visible,
+				})
+			}
 		}
-		assistantText.WriteString(delta)
-		visible := assistantText.String()
-		if visible == "" || visible == lastVisible {
-			return
+		// Surface the model's raw reasoning (thinking_delta) as a parallel
+		// *.thinking stream so the workbench renders a live 思考过程 block. Set,
+		// not append (full-so-far), mirroring the .delta emit above.
+		if thinking != "" {
+			assistantThinking.WriteString(thinking)
+			visibleThinking := assistantThinking.String()
+			if visibleThinking != "" && visibleThinking != lastVisibleThinking {
+				lastVisibleThinking = visibleThinking
+				emit(StreamEvent{
+					Type:       startedType + ".thinking",
+					DialogueID: dialogueID,
+					MessageID:  messageID,
+					Delta:      visibleThinking,
+				})
+			}
 		}
-		lastVisible = visible
-		emit(StreamEvent{
-			Type:       startedType + ".delta",
-			DialogueID: dialogueID,
-			MessageID:  messageID,
-			Delta:      visible,
-		})
 	},
 		"--print", prompt,
 		"--output-format", "stream-json",
@@ -221,9 +241,12 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dia
 }
 
 func (r Runner) routePrompt(inputPath string) string {
-	return "Use .claude/skills/dialogue-intent-routing/SKILL.md. " +
+	skillPath := filepath.Join(r.workspaceRoot(), ".claude", "skills", "dialogue-intent-routing", "SKILL.md")
+	return fmt.Sprintf("Use %s. ", skillPath) +
 		fmt.Sprintf("The route input is at the absolute path %s — read it with the Read tool. ", inputPath) +
-		"Output ONLY valid JSON matching the route output contract. " +
+		"Output ONLY valid JSON matching this exact route output contract, with no markdown fences and no prose: " +
+		`{"intent":"existing_application | application_generation","confidence":"high | ambiguous","existingApplicationSlugs":["candidate-application-slug"],"internalBlueprintSlug":"candidate-blueprint-slug-or-empty","userFacingReason":"concise positive user-facing explanation","needsRouteConfirmation":true}. ` +
+		"Do not output action, blueprint, app, recommendation, or any other wrapper object. " +
 		"Use only the candidate applications and blueprints supplied in the input; never invent slugs or resource names, never state nothing is reusable, never describe a blueprint as a template, never expose hidden reasoning. " +
 		"Do not emit business_processing_agent in the current phase. If the user asks to create an agent or assistant and no existing app is a strong fit, route to application_generation as a runnable assistant application."
 }
@@ -263,6 +286,60 @@ func validateRouteOutput(out RouteOutput, input RouteInput) error {
 		}
 	}
 	return nil
+}
+
+// adaptLegacyRouteOutput accepts one historical model shape seen in real route
+// artifacts: {"action":"application_generation","blueprint":{"slug":"..."}}.
+// The canonical contract is still preferred and validated below; this adapter
+// only prevents a harmless schema drift from failing the whole dialogue.
+func adaptLegacyRouteOutput(out RouteOutput, raw string) RouteOutput {
+	if out.Intent != "" {
+		return out
+	}
+	var legacy struct {
+		Action    string `json:"action"`
+		Blueprint struct {
+			Slug string `json:"slug"`
+		} `json:"blueprint"`
+		Application struct {
+			Slug string `json:"slug"`
+		} `json:"application"`
+		App struct {
+			Slug string `json:"slug"`
+		} `json:"app"`
+		UserFacingReason string `json:"userFacingReason"`
+		Reason           string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return out
+	}
+	switch Intent(strings.TrimSpace(legacy.Action)) {
+	case IntentApplicationGeneration:
+		out.Intent = IntentApplicationGeneration
+		out.InternalBlueprintSlug = strings.TrimSpace(legacy.Blueprint.Slug)
+		out.NeedsRouteConfirmation = true
+	case IntentExistingApplication:
+		out.Intent = IntentExistingApplication
+		for _, slug := range []string{legacy.Application.Slug, legacy.App.Slug} {
+			if strings.TrimSpace(slug) != "" {
+				out.ExistingApplicationSlugs = []string{strings.TrimSpace(slug)}
+				break
+			}
+		}
+	default:
+		return out
+	}
+	if out.Confidence == "" {
+		out.Confidence = ConfidenceHigh
+	}
+	out.UserFacingReason = strings.TrimSpace(legacy.UserFacingReason)
+	if out.UserFacingReason == "" {
+		out.UserFacingReason = strings.TrimSpace(legacy.Reason)
+	}
+	if out.UserFacingReason == "" && out.Intent == IntentApplicationGeneration {
+		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
+	}
+	return out
 }
 
 // normalizeRouteOutput defensively normalizes the dormant
@@ -347,38 +424,49 @@ func writeStream(path string, events []StreamEvent) error {
 	return w.Flush()
 }
 
-// parseClaudeStreamLine is the thinking_delta filter (mirrors clarification):
-// only content_block_delta/text_delta text is surfaced. thinking_delta and all
-// other hidden provider fields are dropped.
-func parseClaudeStreamLine(line string) (textDelta string, result string) {
+// parseClaudeStreamLine surfaces the Claude stream's delta text for the
+// conversation flow. text_delta (the model's output) is returned as textDelta;
+// thinking_delta (the model's raw reasoning, carried under delta.thinking) is
+// returned as thinkingDelta so the workbench can stream it live as a 思考过程
+// block. Other stream data is dropped. (The executor/trace pipeline still
+// hard-drops thinking — security #9 applies THERE, not to this conversation
+// surface.)
+func parseClaudeStreamLine(line string) (textDelta, thinkingDelta, result string) {
 	var top struct {
 		Type   string          `json:"type"`
 		Event  json.RawMessage `json:"event"`
 		Result string          `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(line), &top); err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	if top.Type == "result" {
-		return "", top.Result
+		return "", "", top.Result
 	}
 	if top.Type != "stream_event" || len(top.Event) == 0 {
-		return "", ""
+		return "", "", ""
 	}
 	var ev struct {
 		Type  string `json:"type"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Thinking string `json:"thinking"`
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(top.Event, &ev); err != nil {
-		return "", ""
+		return "", "", ""
 	}
-	if ev.Type != "content_block_delta" || ev.Delta.Type != "text_delta" {
-		return "", ""
+	if ev.Type != "content_block_delta" {
+		return "", "", ""
 	}
-	return ev.Delta.Text, ""
+	if ev.Delta.Type == "thinking_delta" {
+		return "", ev.Delta.Thinking, ""
+	}
+	if ev.Delta.Type == "text_delta" {
+		return ev.Delta.Text, "", ""
+	}
+	return "", "", ""
 }
 
 // extractJSONObject mirrors the clarification tolerant JSON extractor.

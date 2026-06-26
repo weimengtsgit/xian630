@@ -64,6 +64,68 @@ for (const card of appItem.cards) {
   assert.equal(card.blueprint, undefined, 'card must not leak blueprint field')
 }
 
+// Continuing-session inquiry replies are persisted as ordinary agent replies and
+// must remain visible in the dialogue thread, not be dropped as unknown metadata.
+const inquiryTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_inquiry', status: 'active', intent: 'application_generation', route_locked: true },
+  messages: [
+    { id: 'u_q', role: 'user', kind: 'message', content: '为什么 AviationCarrier 401？' },
+    { id: 'a_reply', role: 'agent', kind: 'reply', content: 'HTTP 401 表示认证失败。' },
+  ],
+  route: {},
+})
+assert.deepEqual(
+  inquiryTimeline.map(item => item.type),
+  ['user_message', 'agent_message'],
+  'continuing-session agent replies must render as visible agent_message items',
+)
+assert.equal(inquiryTimeline[1].content, 'HTTP 401 表示认证失败。')
+
+// ---- job-step clarification surfaces as a structured conversation card -------
+
+// When a pipeline step (solution_design / code_generation) pauses for user
+// input, the backend emits a clarification work trace. buildDialogueTimeline
+// must turn it into a visible clarification_prompt card in the conversation
+// flow (not just the folded trace panel), carrying the question text AND the
+// structured options so the UI can render pickable choices.
+const clarTimeline = buildDialogueTimeline(
+  {
+    session: { id: 'dlg_clar', status: 'active', intent: 'application_generation', route_locked: true },
+    messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '做一个请假审批系统' }],
+    route: {},
+  },
+  null, null, null,
+  [
+    { type: 'assistant_output', sequence: 1, payload: { text: '分析中' }, dialogueId: 'dlg_clar', id: 't1' },
+    {
+      type: 'clarification',
+      sequence: 2,
+      payload: {
+        questions: [{
+          id: 'data-source',
+          // Agents emit the prompt under `text` OR `question`; honor both.
+          text: '用演示数据还是真实API？',
+          defaultAnswer: '演示数据',
+          options: [
+            // Options may use `id` OR `value`; the mapper must fall back.
+            { id: 'use-mock-data', label: '使用演示数据模式', recommended: true },
+            { id: 'provide-real-api', label: '提供真实后端API' },
+          ],
+        }],
+      },
+      dialogueId: 'dlg_clar',
+      id: 't2',
+    },
+  ],
+)
+const clarCard = clarTimeline.find(it => it.type === 'clarification_prompt')
+assert.ok(clarCard, 'a clarification work trace must surface as a clarification_prompt card')
+assert.equal(clarCard.questions.length, 1, 'card carries one question')
+assert.equal(clarCard.questions[0].question, '用演示数据还是真实API？')
+assert.equal(clarCard.questions[0].options.length, 2, 'card carries the structured options')
+assert.equal(clarCard.questions[0].options[0].value, 'use-mock-data')
+assert.equal(clarCard.questions[0].options[0].recommended, true, 'recommended flag is preserved')
+
 // ---- no blueprint text in rendered timeline items ---------------------------
 
 // The requirement summary must not surface BlueprintRefs even if the raw child
@@ -310,7 +372,7 @@ assert.equal(state.needsRefresh, 'dlg_1', 'wrapped clarification event must requ
 
 assert.equal(titleForDialogue(recommendingView.session), '我想看航母编队态势')
 assert.equal(statusText('routing'), '识别需求中')
-assert.equal(statusText('recommending'), '推荐应用中')
+assert.equal(statusText('recommending'), '推荐智能体中')
 assert.equal(statusText('drafting_application'), '需求澄清中')
 assert.equal(statusText('drafting_business_agent'), '配置 Agent 中')
 assert.equal(statusText('resolved'), '已完成')
@@ -373,8 +435,8 @@ assert.ok(
   'composer must be gated (disabled or suppressed) when locked',
 )
 
-// App recommendation cards: running => 打开应用; stopped => 启动并打开.
-assert.match(workbenchJsx, /打开应用/, 'running recommendation card must offer 打开应用')
+// App recommendation cards: running => 打开智能体; stopped => 启动并打开.
+assert.match(workbenchJsx, /打开智能体/, 'running recommendation card must offer 打开智能体')
 assert.match(workbenchJsx, /启动并打开/, 'stopped recommendation card must offer 启动并打开')
 
 // Route cards render when intent is ambiguous.
@@ -393,8 +455,8 @@ assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation
 assert.doesNotMatch(workbenchJsx, /onSelectRoute\('business_processing_agent'\)/, 'route choices must not expose business_processing_agent')
 assert.doesNotMatch(workbenchJsx, /配置业务 Agent/, 'route choices must not show 配置业务 Agent')
 assert.doesNotMatch(workbenchJsx, /创建一个业务处理 Agent/, 'route choices must not show 创建一个业务处理 Agent')
-assert.match(workbenchJsx, /复用已有应用/, 'route choices must still offer existing-app reuse')
-assert.match(workbenchJsx, /生成新应用/, 'route choices must still offer app generation')
+assert.match(workbenchJsx, /复用已有智能体/, 'route choices must still offer existing-agent reuse')
+assert.match(workbenchJsx, /生成新智能体/, 'route choices must still offer agent generation')
 assert.match(workbenchJsx, /canReuseExistingApplication/, 'route choices must hide reuse when no application is recommended')
 
 const genericReasonRule = routingSkill.match(/- `userFacingReason`[\s\S]*?- `needsRouteConfirmation`/)
@@ -408,5 +470,95 @@ assert.match(workbenchJsx, /onSend=\{onSend\}/, 'TimelineItem must receive onSen
 
 // Resolved state non-editable with a clear 新建会话 action (already present, re-assert).
 assert.match(workbenchJsx, /新建会话/, 'resolved state must keep a clear 新建会话 action')
+
+// ---- Task 1 (D5): optimistic user-message insert + faster send ---------------
+
+// buildDialogueTimeline must accept an optional optimistic user message and
+// PREPEND it as a user_message item, so the user sees their own message
+// immediately (before any server round-trip).
+const baseSendView = {
+  session: { id: 'dlg_opt', status: 'drafting_application', intent: 'application_generation', route_locked: true, initial_prompt: 'gen' },
+  messages: [{ id: 'a1', role: 'agent', kind: 'analysis_work_log', content: '正在分析...' }],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+}
+const optimisticTimeline = buildDialogueTimeline(baseSendView, { id: 'opt_1', content: '帮我做一个排班应用' })
+const optTypes = optimisticTimeline.map(item => item.type)
+assert.equal(optTypes[0], 'user_message', `optimistic message must be prepended as a user_message; got ${JSON.stringify(optTypes)}`)
+assert.equal(optimisticTimeline[0].id, 'opt_1', 'optimistic user_message must keep its client id')
+assert.equal(optimisticTimeline[0].content, '帮我做一个排班应用', 'optimistic user_message must carry the typed content')
+assert.equal(optimisticTimeline[0].optimistic, true, 'optimistic user_message must be flagged so the UI can style/rollback it')
+
+// When the reloaded persisted view ALREADY contains a user message with identical
+// content for this turn, the optimistic message must be DEDUPED (not rendered
+// twice) — the persisted message is authoritative.
+const reloadedView = {
+  ...baseSendView,
+  messages: [
+    { id: 'u_real', role: 'user', kind: 'prompt', content: '帮我做一个排班应用' },
+    { id: 'a1', role: 'agent', kind: 'analysis_work_log', content: '正在分析...' },
+  ],
+}
+const dedupedTimeline = buildDialogueTimeline(reloadedView, { id: 'opt_1', content: '帮我做一个排班应用' })
+const userMsgItems = dedupedTimeline.filter(item => item.type === 'user_message')
+assert.equal(userMsgItems.length, 1, `persisted+identical optimistic must dedupe to one user_message; got ${userMsgItems.length}`)
+assert.equal(userMsgItems[0].id, 'u_real', 'deduped user_message must keep the PERSISTED id (authoritative)')
+
+// A DIFFERENT content optimistic message is NOT deduped (it is a distinct turn's
+// in-flight message), so it still prepends.
+const distinctTimeline = buildDialogueTimeline(reloadedView, { id: 'opt_2', content: '另一个问题' })
+const distinctUserMsgs = distinctTimeline.filter(item => item.type === 'user_message')
+assert.equal(distinctUserMsgs.length, 2, 'a distinct-content optimistic message must NOT be deduped')
+assert.equal(distinctUserMsgs[0].id, 'opt_2', 'distinct optimistic message prepends first')
+
+// A null/empty optimistic message must be a no-op (no phantom user_message item).
+const nullOptTimeline = buildDialogueTimeline(reloadedView, null)
+assert.equal(nullOptTimeline.filter(item => item.type === 'user_message').length, 1, 'null optimistic message must not add a phantom item')
+
+// ---- Static checks on the send path in useDialogueSessions.js ----------------
+
+// The send path must set the optimistic message SYNCHRONOUSLY before the first
+// network await (so the user message renders before any round-trip).
+assert.match(dialogueHookJs, /optimisticUserMessage/, 'send must reference optimisticUserMessage state')
+// Extract ONLY the send function body so the refresh-ordering assertion does not
+// trip on the other mutating actions (selectRoute/openApp/...) which legitimately
+// await refreshSessions before loadView.
+const sendFnMatch = dialogueHookJs.match(/const send = useCallback\(async content => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+assert.ok(sendFnMatch, 'could not locate the send useCallback body for static checks')
+const sendBody = sendFnMatch[0]
+assert.ok(
+  /setOptimisticUserMessage\([^)]*\)[\s\S]*?await\s+factoryApi/.test(sendBody),
+  'send must set the optimistic message BEFORE the first factoryApi await',
+)
+// refreshSessions must NOT be awaited before loadView in the send happy path —
+// the history list refresh must not block the selected-view load. The hook still
+// kicks the refresh (fire-and-forget) so the list updates on its own.
+assert.doesNotMatch(
+  sendBody,
+  /await refreshSessions\(\)[\s\S]{0,120}await loadView\(/,
+  'send must NOT await refreshSessions() before loadView() — the history refresh must not block the view load',
+)
+assert.match(
+  sendBody,
+  /refreshSessions\(\)\.catch/,
+  'send must still kick the history refresh (fire-and-forget) so the list updates',
+)
+// On error the optimistic message must be rolled back (cleared). A finally block
+// clearing it guarantees both the success and failure paths reconcile.
+assert.match(
+  dialogueHookJs,
+  /setOptimisticUserMessage\(null\)/,
+  'send must clear the optimistic message (rollback) — on error and once the persisted view loads',
+)
+
+// A failed parent dialogue may have NO child clarification (for example a route
+// runner failure). In that case "重试本轮" must not call the child clarification
+// retry endpoint, because the backend correctly 409s with "dialogue has no active
+// clarification child". The hook falls back to creating a fresh dialogue from the
+// original prompt; child clarification failures still use retryDialogueRound.
+const retryFnMatch = dialogueHookJs.match(/const retry = useCallback\(async \(\) => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static checks')
+const retryBody = retryFnMatch[0]
+assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
+assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
 
 console.log('check-dialogue-workbench: OK')
