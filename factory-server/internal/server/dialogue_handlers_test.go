@@ -118,6 +118,15 @@ const routeBusinessAgentOutput = `{
   "needsRouteConfirmation": false
 }`
 
+const routeManagedAgentOutput = `{
+  "intent": "existing_application",
+  "confidence": "high",
+  "existingApplicationSlugs": ["ops-copilot"],
+  "internalBlueprintSlug": "",
+  "userFacingReason": "运维智能体与部署和告警排查需求最相似，可直接打开使用。",
+  "needsRouteConfirmation": false
+}`
+
 // canned draft output (business agent ready_to_confirm) -----------------
 
 const businessDraftReadyOutput = `{
@@ -258,7 +267,8 @@ func mustWriteCatalog(t *testing.T, root string) {
 	cat := `{"version":1,"scenes":{
   "carrier-formation-replay": {"surface":"application","order":1},
   "aircraft-carrier-track": {"surface":"application","order":2},
-  "carrier-homeport-tide-window": {"surface":"blueprint"}
+  "carrier-homeport-tide-window": {"surface":"blueprint"},
+  "ops-copilot": {"surface":"managed_agent","order":1,"name":"运维智能体","description":"排查部署、告警和服务健康问题","url":"https://example.com/ops","keywords":["运维","部署","告警"]}
 }}`
 	dir := root + "/.factory"
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -364,6 +374,32 @@ func TestCreateDialoguePersistsMessageAndRoutes(t *testing.T) {
 	}
 	if !sawIntent {
 		t.Fatalf("did not see dialogue.intent.updated event; got %#v", eventTypes(events))
+	}
+}
+
+func TestCreateDialogueCanRecommendManagedAgent(t *testing.T) {
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeManagedAgentOutput})
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "帮我排查部署告警"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Route.Intent != dialogue.IntentExistingApplication {
+		t.Fatalf("route intent = %q, want existing_application", view.Route.Intent)
+	}
+	if len(view.Recommendations) != 1 {
+		t.Fatalf("recommendations = %d, want 1: %+v", len(view.Recommendations), view.Recommendations)
+	}
+	got := view.Recommendations[0]
+	if got.Kind != "managed_agent" {
+		t.Fatalf("recommendation kind = %q, want managed_agent: %+v", got.Kind, got)
+	}
+	if got.Slug != "ops-copilot" || got.RuntimeURL != "https://example.com/ops" {
+		t.Fatalf("unexpected managed recommendation: %+v", got)
 	}
 }
 

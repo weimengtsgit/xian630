@@ -66,7 +66,7 @@ header `Content-Type`), so the portal (Vite, `localhost:3001`) can call
 factory-server directly from the browser.
 
 - `GET /healthz`
-- `GET /api/apps` · `GET /api/apps/:id` · `POST /api/apps/:id/{start,stop,rebuild}`
+- `GET /api/apps` · `GET /api/managed-agents` · `GET /api/apps/:id` · `POST /api/apps/:id/{start,stop,rebuild}`
 - `GET /api/agents` · `PATCH /api/agents/:id` · `GET /api/agents/:id/runs`
 - `POST /api/jobs` · `GET /api/jobs` · `GET /api/jobs/:id`
 - `GET /api/jobs/:id/steps` · `GET /api/jobs/:id/artifacts`

@@ -78,6 +78,7 @@ type dialoguePatchRequirementBody struct {
 // internal blueprint slug.
 type recommendationCard struct {
 	ApplicationID string `json:"applicationId"`
+	Kind          string `json:"kind,omitempty"`
 	Slug          string `json:"slug"`
 	Name          string `json:"name"`
 	AppType       string `json:"appType"`
@@ -206,7 +207,46 @@ func (s *Server) routingAppCandidates(ctx context.Context, catalog scanner.Scene
 			IsGenerated: app.Source == model.AppSourceGenerated,
 		})
 	}
+	for _, ma := range catalog.ManagedAgents() {
+		app := model.Application{
+			ID:          managedAgentID(ma.Slug),
+			Slug:        ma.Slug,
+			Name:        ma.Name,
+			Type:        "managed_agent",
+			Source:      model.AppSourcePreset,
+			Description: managedAgentSummary(ma),
+			Status:      model.AppStatusRunning,
+			RuntimeURL:  ma.URL,
+		}
+		bySlug[ma.Slug] = &app
+		out = append(out, dialogue.AppSummary{
+			Slug:        ma.Slug,
+			Name:        ma.Name,
+			AppType:     "managed_agent",
+			Summary:     app.Description,
+			IsGenerated: false,
+		})
+	}
 	return out, bySlug
+}
+
+func managedAgentID(slug string) string {
+	return "managed-agent-" + slug
+}
+
+func managedAgentSummary(ma scanner.ManagedAgent) string {
+	parts := []string{ma.Description}
+	if len(ma.Keywords) > 0 {
+		parts = append(parts, strings.Join(ma.Keywords, " "))
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func recommendationKind(app *model.Application) string {
+	if app != nil && strings.HasPrefix(app.ID, "managed-agent-") {
+		return "managed_agent"
+	}
+	return "application"
 }
 
 // blueprintCandidates builds the internal blueprint summaries from the catalog
@@ -340,6 +380,7 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		}
 		cards = append(cards, recommendationCard{
 			ApplicationID: app.ID,
+			Kind:          recommendationKind(app),
 			Slug:          app.Slug,
 			Name:          app.Name,
 			AppType:       app.Type,
@@ -447,7 +488,26 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 // the current app store state (so runtime URLs/status are fresh).
 func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []recommendationCard {
 	cards := make([]recommendationCard, 0, len(route.ExistingApplicationSlugs))
+	catalog := s.loadSceneCatalog(ctx)
+	managedBySlug := make(map[string]scanner.ManagedAgent)
+	for _, ma := range catalog.ManagedAgents() {
+		managedBySlug[ma.Slug] = ma
+	}
 	for i, slug := range route.ExistingApplicationSlugs {
+		if ma, ok := managedBySlug[slug]; ok {
+			cards = append(cards, recommendationCard{
+				ApplicationID: managedAgentID(ma.Slug),
+				Kind:          "managed_agent",
+				Slug:          ma.Slug,
+				Name:          ma.Name,
+				AppType:       "managed_agent",
+				MatchReason:   route.UserFacingReason,
+				Status:        string(model.AppStatusRunning),
+				RuntimeURL:    ma.URL,
+				Primary:       i == 0,
+			})
+			continue
+		}
 		apps, err := s.store.ListApplications(ctx)
 		if err != nil {
 			break
@@ -459,6 +519,7 @@ func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []rec
 			app := apps[j]
 			cards = append(cards, recommendationCard{
 				ApplicationID: app.ID,
+				Kind:          recommendationKind(&app),
 				Slug:          app.Slug,
 				Name:          app.Name,
 				AppType:       app.Type,

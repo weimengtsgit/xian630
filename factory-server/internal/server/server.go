@@ -414,6 +414,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/healthz", s.health)
 
 	r.Handle("GET", "/api/apps", s.listApps)
+	r.Handle("GET", "/api/managed-agents", s.listManagedAgents)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)

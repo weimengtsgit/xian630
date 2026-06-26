@@ -85,6 +85,7 @@ async function requestText(path, options = {}) {
 
 export const factoryApi = {
   listApps: () => request('/api/apps'),
+  listManagedAgents: () => request('/api/managed-agents'),
   startApp: id => request(`/api/apps/${id}/start`, { method: 'POST' }),
   stopApp: id => request(`/api/apps/${id}/stop`, { method: 'POST' }),
   rebuildApp: id => request(`/api/apps/${id}/rebuild`, { method: 'POST' }),

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Real Tide Data"
+  short_description: "Select real tide sources by port, fetch forecasts, and normalize outputs."
+  default_prompt: "Use $tide-data-skill to fetch and normalize real tide forecast data for the requested ports."
