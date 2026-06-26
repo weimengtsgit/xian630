@@ -1,6 +1,6 @@
 ---
 name: carrier-affiliation-data-skill
-description: Use when a requirement needs carrier-air-wing affiliation data, ADS-B tracks, carrier positions, carrier aircraft master data, land/sea classification, ontology/DaaS carrier entities, or public fallback sources for carrier-aircraft association analysis. Use real data by default; skip this skill only when the user explicitly requests mock or demo data.
+description: Use when a requirement needs carrier-air-wing affiliation data, ADS-B tracks, carrier positions, carrier aircraft master data, land/sea classification, ontology/DaaS carrier entities, or public fallback sources for carrier-aircraft association analysis. ALSO the home for ANY military-vessel AIS — carriers, warships, destroyers, cruisers, frigates, amphibious ships, navy/naval vessels and their AIS tracks come from the ontology RawAISData entity here, NOT from ais-density-data-skill (which is merchant-only). Use real data by default; skip this skill only when the user explicitly requests mock or demo data.
 ---
 
 # Carrier Affiliation Data Skill
@@ -12,9 +12,34 @@ inference. It supplies the raw data boundaries needed by
 `affiliation-inference-dashboard`: ADS-B tracks, known carrier positions,
 aircraft master data, land/sea classification, and judgement parameters.
 
+It is ALSO the data capability for **military-vessel AIS tracks** (see
+"Military vessel AIS tracks" below) — carriers, warships, and any navy vessel
+are served by the ontology `RawAISData` entity via this skill.
+
 This skill is independent from `tide-data-skill`, `deck-wind-data-skill`, and
 `ais-density-data-skill`. Consumers select one or more data skills according to
-their scenario; there is no cross-skill priority relationship.
+their scenario; there is no cross-skill priority relationship — EXCEPT the
+merchant/military AIS split in the next section, which is a hard routing rule.
+
+## Merchant vs Military AIS — hard routing rule
+
+AIS data has TWO unrelated sources in this factory, picked by the TARGET FLEET,
+never by the word "AIS" alone:
+
+| Target fleet | Source | Skill |
+|---|---|---|
+| **Merchant / commercial shipping** (商船, cargo, tankers — aggregate density per 50-NM cell) | NOAA MarineCadastre transit-count raster (US EEZ, annual) | `ais-density-data-skill` |
+| **Military vessels** — carriers, warships, destroyers, cruisers, frigates, amphibious ships, supply ships, ANY navy/naval vessel, per-vessel tracks by MMSI | Ontology `RawAISData` entity (this skill) | `carrier-affiliation-data-skill` |
+
+**If the AIS request is about a military vessel in any way (航母 / 舰船 / 军舰 /
+舰艇 / 驱逐舰 / 巡洋舰 / 护卫舰 / 两栖舰 / 舰队 / 军队 / warship / naval / navy /
+destroyer / cruiser / frigate …), use this skill's `RawAISData` adapter — do NOT
+use `ais-density-data-skill`.** MarineCadastre carries only merchant traffic and
+would show ~0 military vessels. Conversely, a merchant-density request must NOT
+be served by `RawAISData` — that entity holds only ~48 military vessels and would
+misrepresent commercial shipping density. The server-side `deriveDataSkills`
+router maps the military terms above to this skill; `ais-density-data-skill`
+remains merchant-only.
 
 ## Default Rule
 
@@ -241,18 +266,75 @@ if (hasPlatformIcao && adsbAltitudeUsable) {
 When the provider populates `icao` on platforms and/or backfills ADS-B
 altitude, the adapter switches to Mode A automatically.
 
-### Working join: ship tracks via AIS (use this for ships)
+### Working join: ship AND carrier tracks via AIS (use this)
 
-While aircraft event inference is blocked, **ship track inference works**:
+While aircraft event inference is blocked, **ship and carrier track rendering
+works** — get tracks from `RawAISData` joined by `mmsi`:
 
 ```
-MaritimeBaseCombatPlatform.mmsi  →  RawAISData.mmsi  →  ship AIS track
+AviationCarrier.mmsi            →  RawAISData.mmsi  →  CARRIER sailing track
+MaritimeBaseCombatPlatform.mmsi →  RawAISData.mmsi  →  escort-ship AIS track
 ```
 
-4.69M AIS rows, `mmsi` populated, ship names present (e.g. "普林斯顿", "钟云号").
-Use this to show CSG escort ships (DDG/CG/supply) with real tracks, joined
-through the platform `mmsi` field. Aircraft remain on establishment-based
-affiliation (Mode B) until `icao` is populated.
+**4,834,856 AIS rows** (verified live 2026-06-26), `mmsi` populated. **Carriers
+themselves are in this entity** by name + mmsi (e.g. "尼米兹号航空母舰" `303981000`
+= 44,711 verified track points, "卡尔·文森号航空母舰" `369970409`). 11 of 14
+carriers have a populated mmsi.
+
+⚠️ Use this for carrier tracks INSTEAD of `AircraftCarrierTrackLog` (whose
+lat/lon are mostly null — only 48 rows). Escort ships (DDG/CG/supply: "普林斯顿",
+"钟云号", "丹尼尔·井上号") join via their platform `mmsi`. This is also the AIS
+source for any military-vessel track request — see the "Military vessel AIS
+tracks" section for the full contract. Note many AIS rows have
+`startTime: null`, so plot tracks as a route/operating-area polyline, not a
+time-sequenced animation. Aircraft remain on establishment-based affiliation
+(Mode B) until `icao` is populated. See `references/ontology-api.md`
+`fetchAisTrackByMmsi`.
+
+## Military vessel AIS tracks (RawAISData)
+
+`RawAISData` is the ontology's real AIS feed and the **only** correct source when
+a request needs positions/tracks of military vessels (carriers, warships, navy).
+Verified live 2026-06-26 by querying the endpoint directly.
+
+**Data nature (verified):**
+- **4,834,856 position pings** across **~48 distinct vessels — all military**:
+  US Navy carriers (Nimitz/Ford/Truman/Ike/Lincoln/Carl Vinson/Reagan/Kennedy/
+  Bush, CVN-68..79), DDG destroyers (Chung-Hoon/Decatur/Ralph Johnson/Daniel
+  Inouye/…), CG cruisers (Mobile Bay/Princeton/Chosin), amphibious ships
+  (Wasp/Tripoli/Portland/Ashland), USNS supply (Comfort/Bruce Heezen/Mary Sears),
+  one JDS allied vessel, plus several "US GOV VESSEL".
+- **It is NOT merchant shipping** — there are no commercial cargo/tanker vessels
+  here. Do not use it for merchant density (use `ais-density-data-skill`).
+- **Freshness:** `startTime`/`dataUpdateTime` range 2014-10-20 → ~12 days ago
+  (latest observed 2026-06-14). Report this lag in the UI — it is near-real-time
+  for a historical military feed, not a live 3-minute commercial tracker.
+- **Coverage:** global wherever the fleet sails (lon -178→139, lat 1→48: Pearl
+  Harbor / San Diego / Bremerton / Yokosuka / Guam approaches). Lat/lon are
+  FULLY populated (unlike most ontology entities).
+- **typeCode** is mostly `"1"`; treat the vessel set as the fixed military fleet,
+  not a representative merchant sample.
+
+**Verified fetchable columns** (send these raw names in `columns`; do NOT invent):
+
+```
+mmsi, latitude, longitude, sog, courseOverGround, trueHeading, shipName,
+callsign, navigationalStatus, typeCode, startTime, dataUpdateTime
+```
+
+`latitude`/`longitude` (NOT `lat`/`lon` — those are `RawADSData`), `sog`
+(speed over ground, knots), `startTime` (AIS message time). Filter by `mmsi` to
+get one vessel's full track:
+
+```json
+{ "filters": [{ "column": "mmsi", "logic": "=", "condition": "369952000" }] }
+```
+
+**Endpoint, headers, response shape, and the nginx `/api/ontology/` CORS proxy are
+identical to the other DaaS entities** — see `references/ontology-api.md` (the
+"Entity: RawAISData" section has the verified column list and the join path to
+`MaritimeBaseCombatPlatform.mmsi`). `scopeType: Space` is mandatory; success is
+`details.resultCode === 200`; `recordTotal` lives at `details.pageParam.recordTotal`.
 
 ## Output Contract
 

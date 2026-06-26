@@ -659,6 +659,42 @@ func TestSanitizeOntologyNginxProxyCredentialsReplacesPlaceholders(t *testing.T)
 	}
 }
 
+func TestSanitizeOntologyNginxProxyCredentialsSupportsOntologyLocation(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, ".claude", "skills", "carrier-affiliation-data-skill", "config")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env dir: %v", err)
+	}
+	envFile := filepath.Join(envDir, "ontology.env")
+	if err := os.WriteFile(envFile, []byte("ONTOLOGY_AUTH_TOKEN=real-token\nONTOLOGY_SPACE_ID=real-space\nONTOLOGY_SCOPE_TYPE=Space\n"), 0o644); err != nil {
+		t.Fatalf("write env: %v", err)
+	}
+	conf := filepath.Join(dir, "nginx.conf")
+	in := `server {
+    listen 80;
+    location /ontology/ {
+        proxy_set_header Authorization "Bearer <ONTOLOGY_AUTH_TOKEN>";
+        proxy_set_header Spaceid "SPACE_123";
+        proxy_set_header scopeType "Space";
+    }
+}`
+	if err := os.WriteFile(conf, []byte(in), 0o644); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := sanitizeOntologyNginxProxyCredentials(conf, dir); err != nil {
+		t.Fatalf("sanitize credentials: %v", err)
+	}
+	gotBytes, _ := os.ReadFile(conf)
+	got := string(gotBytes)
+	if strings.Contains(got, "<ONTOLOGY_AUTH_TOKEN>") || strings.Contains(got, "SPACE_123") {
+		t.Fatalf("ontology location credentials were not injected;\ngot:\n%s", got)
+	}
+	if !strings.Contains(got, `proxy_set_header Authorization "Bearer real-token";`) ||
+		!strings.Contains(got, `proxy_set_header Spaceid "real-space";`) {
+		t.Fatalf("real ontology credentials not injected for /ontology/ location;\ngot:\n%s", got)
+	}
+}
+
 func TestSanitizeNginxVariableProxyPassKeepsInternalServiceName(t *testing.T) {
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "nginx.conf")

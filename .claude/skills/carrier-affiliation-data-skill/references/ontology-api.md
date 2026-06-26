@@ -23,7 +23,7 @@ same-origin path and nginx forwards the request to the ontology server.
 ### Required nginx reverse proxy (in app's nginx.conf)
 
 ```nginx
-location /ontology/ {
+location /api/ontology/ {
     proxy_pass http://ceshi.projects.bingosoft.net:8081/;
     proxy_http_version 1.1;
     proxy_set_header Host ceshi.projects.bingosoft.net;
@@ -42,7 +42,7 @@ Token NEVER reaches the browser. CORS is automatically avoided.
 
 ```js
 // CORRECT: same-origin through nginx proxy
-const url = `/ontology/daasDMS/entity/${entityName}/list`;
+const url = `/api/ontology/daasDMS/entity/${entityName}/list`;
 
 // WRONG: direct external URL — will fail with CORS in browser
 const url = `http://ceshi.projects.bingosoft.net:8081/daasDMS/entity/${entityName}/list`;
@@ -233,16 +233,22 @@ The entity also supports `carrierStrikeGroupRefFormationRelationshipList` as a n
 
 ---
 
-## Entity: AircraftCarrierTrackLog (航母轨迹)
+## Entity: AircraftCarrierTrackLog (航母轨迹) — DO NOT use for carrier tracks
 
-48 track points for carriers.
+⚠️ **This entity is NOT the carrier-track source.** It has only 48 rows and
+`longitude`/`latitude` are mostly null — carrier track lines will NOT render
+from it.
+
+**For carrier sailing tracks, use `RawAISData` filtered by the carrier's mmsi**
+(see next section). Verified 2026-06-26: `AviationCarrier.mmsi`
+(e.g. `303981000` for USS Nimitz CVN-68) → `RawAISData` returns **44,711 track
+points** with populated lat/lon/sog. That is the real carrier-track source;
+`AircraftCarrierTrackLog` is effectively empty — do not build on it.
 
 | Endpoint | `POST /daasDMS/entity/AircraftCarrierTrackLog/list` |
 |---|---|
 
-Key columns: `refAviationCarrier` (link to AviationCarrier.id), `trackInitTime`, `longitude`, `latitude`, `trackStatusCode`, `trackUniqueId`, `trackSource`, `dataUpdateTime`
-
-Note: `latitude` is null for many records currently.
+Key columns (for reference only): `refAviationCarrier` (link to AviationCarrier.id), `trackInitTime`, `longitude`, `latitude`, `trackStatusCode`, `trackUniqueId`, `trackSource`, `dataUpdateTime`
 
 ---
 
@@ -268,15 +274,27 @@ aircraft event inference — see SKILL.md "Affiliation Inference Modes".
 
 ---
 
-## Entity: RawAISData (AIS raw data — SHIP tracks, joinable!)
+## Entity: RawAISData (AIS raw data — MILITARY ship tracks, joinable)
 
-4.69M rows. **Joinable to platforms via `mmsi`** — this is the working track
-source for ships (destroyers, cruisers, supply ships), unlike ADS-B for aircraft.
+**4,834,856 rows** (verified live 2026-06-26). **Joinable to platforms via
+`mmsi`** — this is the working track source for the carrier strike group's ships
+(destroyers, cruisers, supply ships), unlike ADS-B for aircraft.
+
+> **Merchant vs military AIS (hard rule):** `RawAISData` holds ONLY ~48 distinct
+> MILITARY vessels (US Navy carriers DDG/CG/amphibs/USNS + one allied) — it is
+> the AIS source for carriers/warships/navy and is owned by
+> `carrier-affiliation-data-skill`. It is NOT merchant shipping and must NOT be
+> used for merchant density (that is `ais-density-data-skill` → MarineCadastre).
+> `startTime`/`dataUpdateTime` range 2014-10-20 → ~12 days ago (latest observed
+> 2026-06-14); lat/lon FULLY populated; `typeCode` mostly `"1"`.
 
 | Endpoint | `POST /daasDMS/entity/RawAISData/list` |
 |---|---|
 
-Key columns: `mmsi`, `latitude`, `longitude`, `sog` (speed over ground), `courseOverGround`, `trueHeading`, `shipName`, `callsign`, `startTime`, `dataUpdateTime`
+Key columns (verified fetchable — note `latitude`/`longitude`, NOT `lat`/`lon`):
+`mmsi`, `latitude`, `longitude`, `sog` (speed over ground, kn),
+`courseOverGround`, `trueHeading`, `shipName`, `callsign`,
+`navigationalStatus`, `typeCode`, `startTime`, `dataUpdateTime`
 
 Filter by mmsi to get one vessel's track:
 
@@ -284,8 +302,27 @@ Filter by mmsi to get one vessel's track:
 { "filters": [{ "column": "mmsi", "logic": "=", "condition": "369952000" }] }
 ```
 
-**Join path (working):** `MaritimeBaseCombatPlatform.mmsi` → `RawAISData.mmsi`
-gives per-ship AIS tracks. Ship names confirmed present (e.g. "普林斯顿", "钟云号").
+**Response shape note:** `resultCode`/`resultDesc` are nested INSIDE `details`
+(`details.resultCode === 200`), while the top level carries `resultCode`/
+`message`/`logStack`. `recordTotal`/`pageTotal` live at
+`details.pageParam.recordTotal` / `.pageTotal`.
+
+**Carrier-track join (PRIMARY source for carrier tracks):**
+`AviationCarrier.mmsi` → `RawAISData.mmsi`. Carriers themselves are IN this
+entity by name + mmsi (e.g. "尼米兹号航空母舰" `303981000`, "卡尔·文森号航空母舰"
+`369970409`). Verified 2026-06-26: filtering `mmsi=303981000` returns **44,711
+points** with populated lat/lon/sog — use this INSTEAD of the empty
+`AircraftCarrierTrackLog`. 11 of 14 carriers have a populated mmsi (戴高乐 /
+库兹涅佐夫 / one duplicate Nimitz row have null mmsi — French/Russian, no US AIS).
+
+**Escort-ship join (also working):** `MaritimeBaseCombatPlatform.mmsi` →
+`RawAISData.mmsi` gives per-escort tracks. Ship names confirmed present (e.g.
+"普林斯顿", "钟云号", "丹尼尔·井上号", "黄蜂").
+
+**Caveat — `startTime` frequently null:** many rows (e.g. all 44k Nimitz points)
+have `startTime: null`, so points CANNOT be time-sequenced into an animated
+track. Plot them as a polyline/scatter (operating area + route) — do not rely on
+time ordering. Request `startTime` backfill from the provider for time-series.
 
 ---
 
@@ -319,7 +356,7 @@ DaaS entity docs). Full inventory verified 2026-06-25:
 | `AircraftCarrierTrackLog` | 48 | 航母相关情报 | carrier track points |
 | `CarrierRoutineDynamicEvents` | 2133 | 航母相关数据 | dynamic events, `refAviationCarrier` |
 | `RawADSData` | 21.8M | 航母相关情报 | ADS-B, join broken (no platform icao) |
-| `RawAISData` | 4.69M | 航母相关情报 | AIS, **joinable via `mmsi`** |
+| `RawAISData` | 4.83M | 航母相关情报 | AIS, **joinable via `mmsi`**, MILITARY vessels only (~48 US-Navy ships) |
 | `MediaReport` | 76 | 航母相关情报 | OSINT 开源情报 |
 | `CarrierStrikeGroupOperationalBehaviorLaws` | — | 航母规律 | behavior laws, `refAviationCarrier`, has `/list` + `/save` |
 | `Personnel` | — | 人员 | personnel master |
@@ -340,8 +377,9 @@ and must NOT assume a field is always present:
 |--------|-------|-----------|--------|
 | `AviationCarrier` | longitude/latitude/curStatus | ✅ full | carrier positions render |
 | `AviationCarrier` | airWing/aircraftCarried | ⚠️ partial, text-only | descriptive only |
-| `AircraftCarrierTrackLog` | longitude/latitude | ❌ mostly null | carrier track lines CANNOT render |
-| `AircraftCarrierTrackLog` | trackInitTime/refAviationCarrier | ✅ present | time + carrier link ok |
+| `AircraftCarrierTrackLog` | longitude/latitude | ❌ mostly null | DO NOT use — get carrier tracks from `RawAISData` via mmsi instead |
+| `RawAISData` (by carrier mmsi) | latitude/longitude/sog | ✅ full | carrier sailing tracks DO render (Nimitz = 44,711 pts) |
+| `RawAISData` | startTime | ⚠️ often null | points can't be time-sequenced; plot as route/area, not animation |
 | `MaritimeBaseCombatPlatform` | longitude/latitude/mmsi | ❌ mostly null | platform positions & AIS join broken |
 | `MaritimeBaseCombatPlatform` | name/typeCode | ✅ full | list/cards work |
 | `RawADSData` | altitude | ❌ ~all 0.0 or negative | takeoff/landing detection impossible |
@@ -351,10 +389,15 @@ and must NOT assume a field is always present:
 - ADS-B event-based inference (the ideal three-step flow) CANNOT run: no
   altitude transitions + no platform `icao` to join. Show `mode: establishment_based`
   and `takeoffLandingCount: 0` honestly — do not fabricate events.
-- Carrier track lines and platform positions will be largely empty on the map.
-  Render carrier current-position markers (from AviationCarrier) instead of
-  track polylines when track coordinates are null.
-- Report these gaps to the provider; when backfilled, Mode A activates.
+- Carrier sailing tracks DO render — fetch them from `RawAISData` by carrier
+  mmsi (NOT the empty `AircraftCarrierTrackLog`). Escort-ship tracks render too
+  when the platform's `mmsi` is populated.
+- Platform/aircraft positions are still largely empty
+  (MaritimeBaseCombatPlatform lat/lon null); show the platform list/cards and
+  the CSG affiliation (Mode B).
+- Still blocked on the provider: aircraft `icao` + ADS-B `altitude` (for Mode A
+  takeoff/landing), platform `mmsi` backfill (for more escort tracks), AIS
+  `startTime` (for time-sequenced tracks).
 
 ## Request Shape
 
@@ -447,6 +490,23 @@ async function fetchEntity(entity: string, columns: string[], filters: any[] = [
 //   (filter by { column: 'icao', logic: 'is not null', condition: null })
 // RawAISData:           mmsi, latitude, longitude, sog, shipName, startTime
 //   (filter by { column: 'mmsi', logic: '=', condition: '<mmsi>' })
+
+// Carrier sailing track — use THIS, not AircraftCarrierTrackLog (which is empty).
+// AviationCarrier.mmsi (e.g. "303981000" = USS Nimitz) → tens of thousands of AIS points.
+async function fetchAisTrackByMmsi(mmsi: string, limit = 2000) {
+  return fetchEntity('RawAISData',
+    ['mmsi', 'latitude', 'longitude', 'sog', 'shipName', 'startTime'],
+    [{ column: 'mmsi', logic: '=', condition: String(mmsi) }])
+    .then(rows => rows
+      .filter(r => r.latitude != null && r.longitude != null)
+      .map(r => ({ lat: Number(r.latitude), lon: Number(r.longitude), sog: Number(r.sog) || 0 })));
+    // NOTE: startTime is often null — do NOT sort by time; plot as route/area.
+}
+
+// Build carrier tracks for every carrier that has an mmsi:
+//   const carriers = await fetchEntity('AviationCarrier',
+//     ['id','name','mmsi','longitude','latitude','curStatus']);
+//   for (const c of carriers.filter(c => c.mmsi)) c.track = await fetchAisTrackByMmsi(c.mmsi);
 ```
 
 **Common mistakes to avoid** (all observed in generated code):

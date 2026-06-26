@@ -834,7 +834,7 @@ func sanitizeOntologyNginxProxyCredentials(path, workspace string) error {
 		return nil
 	}
 	src := string(raw)
-	if !strings.Contains(src, "/api/ontology/") {
+	if !strings.Contains(src, "/api/ontology/") && !strings.Contains(src, "/ontology/") {
 		return nil
 	}
 	env, err := readOntologyEnv(workspace)
