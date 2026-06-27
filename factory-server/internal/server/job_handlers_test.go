@@ -186,8 +186,11 @@ func doJSON(t *testing.T, r *Router, method, path string, body any) *httptest.Re
 	return rec
 }
 
-// TestCreateJobCreatesFixedSteps verifies that POST /api/jobs seeds the six
-// fixed pipeline steps in the canonical order and leaves them all pending.
+// TestCreateJobCreatesFixedSteps verifies that POST /api/jobs seeds the default
+// collaboration plan's agent steps (the testConfirmedRequirement carries no
+// public-web/security trigger, so exactly the 12 base agents) in plan order,
+// each with the right agent key, all pending. The first step is the plan head
+// (collaboration_orchestration) and the job points its current_step_kind at it.
 func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})
 
@@ -202,8 +205,8 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	if job.Status != model.JobStatusQueued {
 		t.Fatalf("status = %q, want queued", job.Status)
 	}
-	if job.CurrentStepKind != model.StepRequirementAnalysis {
-		t.Fatalf("current_step_kind = %q, want requirement_analysis", job.CurrentStepKind)
+	if job.CurrentStepKind != model.StepKind("collaboration_orchestration") {
+		t.Fatalf("current_step_kind = %q, want collaboration_orchestration", job.CurrentStepKind)
 	}
 	if job.UserPrompt != "生成航母编队月度航迹复盘" {
 		t.Fatalf("user_prompt = %q", job.UserPrompt)
@@ -218,20 +221,42 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 		t.Fatalf("decode steps: %v", err)
 	}
 
-	want := []model.StepKind{
-		model.StepRequirementAnalysis,
-		model.StepSolutionDesign,
-		model.StepCodeGeneration,
-		model.StepTestVerification,
-		model.StepImageBuild,
-		model.StepDeployment,
+	// The default plan's agent roles in order (no security reviewer: the test
+	// confirmed requirement has no public_web / auth / upload trigger).
+	wantKinds := []model.StepKind{
+		model.StepKind("collaboration_orchestration"),
+		model.StepKind("requirement_analysis"),
+		model.StepKind("domain_analysis"),
+		model.StepKind("design_contract"),
+		model.StepKind("data_integration"),
+		model.StepKind("solution_design"),
+		model.StepKind("code_generation"),
+		model.StepKind("code_review"),
+		model.StepKind("test_verification"),
+		model.StepKind("product_acceptance"),
+		model.StepKind("image_build"),
+		model.StepKind("deployment"),
 	}
-	if len(steps) != len(want) {
-		t.Fatalf("len(steps) = %d, want %d", len(steps), len(want))
+	if len(steps) != len(wantKinds) {
+		t.Fatalf("len(steps) = %d, want %d", len(steps), len(wantKinds))
+	}
+	wantAgents := map[model.StepKind]string{
+		model.StepKind("collaboration_orchestration"): "collaboration-orchestrator",
+		model.StepKind("requirement_analysis"):        "requirement-analyst",
+		model.StepKind("domain_analysis"):             "domain-analyst",
+		model.StepKind("design_contract"):             "designer",
+		model.StepKind("data_integration"):            "data-integration",
+		model.StepKind("solution_design"):             "solution-designer",
+		model.StepKind("code_generation"):             "code-generator",
+		model.StepKind("code_review"):                 "code-reviewer",
+		model.StepKind("test_verification"):           "tester",
+		model.StepKind("product_acceptance"):          "product-acceptance",
+		model.StepKind("image_build"):                 "image-builder",
+		model.StepKind("deployment"):                  "deployer",
 	}
 	for i, s := range steps {
-		if s.Kind != want[i] {
-			t.Fatalf("step[%d].kind = %q, want %q", i, s.Kind, want[i])
+		if s.Kind != wantKinds[i] {
+			t.Fatalf("step[%d].kind = %q, want %q", i, s.Kind, wantKinds[i])
 		}
 		if s.Seq != i+1 {
 			t.Fatalf("step[%d].seq = %d, want %d", i, s.Seq, i+1)
@@ -239,20 +264,46 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 		if s.Status != model.StepStatusPending {
 			t.Fatalf("step[%d].status = %q, want pending", i, s.Status)
 		}
-	}
-
-	wantAgents := map[model.StepKind]string{
-		model.StepRequirementAnalysis: "requirement-analyst",
-		model.StepSolutionDesign:      "solution-designer",
-		model.StepCodeGeneration:      "code-generator",
-		model.StepTestVerification:    "tester",
-		model.StepImageBuild:          "image-builder",
-		model.StepDeployment:          "deployer",
-	}
-	for _, s := range steps {
 		if got := wantAgents[s.Kind]; s.AgentKey != got {
 			t.Fatalf("step %q agent_key = %q, want %q", s.Kind, s.AgentKey, got)
 		}
+	}
+}
+
+// TestCreateJobSeedsCollaborationPlanSteps verifies that POST /api/jobs now
+// seeds the dynamic collaboration plan (12 agents, 13 with security reviewer)
+// instead of the legacy fixed 6 steps: the job carries a CollaborationPlanJSON,
+// its steps carry agent snapshots, and the plan's dependency edges persist.
+func TestCreateJobSeedsCollaborationPlanSteps(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+
+	rec := createJobViaAPI(t, r, "生成公网数据研判智能体")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	if job.CollaborationPlanJSON == "" {
+		t.Fatalf("CollaborationPlanJSON empty")
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	if len(steps) < 12 {
+		t.Fatalf("steps = %d, want collaboration plan steps", len(steps))
+	}
+	if steps[0].AgentKey != "collaboration-orchestrator" || steps[0].SnapshotJSON == "" {
+		t.Fatalf("first step = %+v, want collaboration orchestrator with snapshot", steps[0])
+	}
+	edges, err := st.ListJobStepEdges(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobStepEdges: %v", err)
+	}
+	if len(edges) == 0 {
+		t.Fatalf("expected dependency edges")
 	}
 }
 
@@ -345,7 +396,9 @@ func TestGetJobSurfacesWaitingQuestions(t *testing.T) {
 	var created model.Job
 	_ = json.NewDecoder(create.Body).Decode(&created)
 
-	step, err := st.GetStepByKind(context.Background(), created.ID, model.StepRequirementAnalysis)
+	// Mark the job's CURRENT step (whatever the seeded plan head is) waiting so
+	// the pending-questions surface path exercises the real current_step_kind.
+	step, err := st.GetStepByKind(context.Background(), created.ID, created.CurrentStepKind)
 	if err != nil || step == nil {
 		t.Fatalf("get step: %v", err)
 	}
@@ -463,7 +516,7 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
 		t.Fatalf("decode job: %v", err)
 	}
-	step, err := st.GetStepByKind(context.Background(), job.ID, model.StepRequirementAnalysis)
+	step, err := st.GetStepByKind(context.Background(), job.ID, job.CurrentStepKind)
 	if err != nil || step == nil {
 		t.Fatalf("get step: %#v %v", step, err)
 	}
@@ -485,7 +538,7 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if updated.Status != model.JobStatusQueued {
 		t.Fatalf("job status = %s, want queued", updated.Status)
 	}
-	updatedStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepRequirementAnalysis)
+	updatedStep, err := st.GetStepByKind(context.Background(), job.ID, job.CurrentStepKind)
 	if err != nil || updatedStep == nil {
 		t.Fatalf("get updated step: %#v %v", updatedStep, err)
 	}
@@ -553,13 +606,13 @@ func TestCancelJob(t *testing.T) {
 		t.Fatalf("ended_at not set")
 	}
 
-	// The in-flight step (requirement_analysis) must also be canceled.
+	// The in-flight step (the seeded plan head) must also be canceled.
 	stepsRec := doJSON(t, r, http.MethodGet, "/api/jobs/"+job.ID+"/steps", nil)
 	var steps []model.JobStep
 	_ = json.NewDecoder(stepsRec.Body).Decode(&steps)
 	var cur model.JobStep
 	for _, s := range steps {
-		if s.Kind == model.StepRequirementAnalysis {
+		if s.Kind == job.CurrentStepKind {
 			cur = s
 		}
 	}

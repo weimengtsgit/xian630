@@ -59,7 +59,10 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	return err
 }
 
-func (s *Store) seedJobInTx(ctx context.Context, tx *sql.Tx, job model.Job, steps []model.JobStep) error {
+// seedJobInTx inserts the job row, then each step (invoking the optional
+// jobOnCreateStepHook test seam), then each dependency edge, all inside the
+// caller's transaction. The job, its steps, and its edges commit together.
+func (s *Store) seedJobInTx(ctx context.Context, tx *sql.Tx, job model.Job, steps []model.JobStep, edges []model.JobStepEdge) error {
 	if err := createJobInTx(ctx, tx, job); err != nil {
 		return err
 	}
@@ -70,6 +73,11 @@ func (s *Store) seedJobInTx(ctx context.Context, tx *sql.Tx, job model.Job, step
 			}
 		}
 		if err := createJobStepInTx(ctx, tx, step); err != nil {
+			return err
+		}
+	}
+	for _, edge := range edges {
+		if err := createJobStepEdgeInTx(ctx, tx, edge); err != nil {
 			return err
 		}
 	}
@@ -85,7 +93,23 @@ func (s *Store) SeedJob(ctx context.Context, job model.Job, steps []model.JobSte
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+	if err := s.seedJobInTx(ctx, tx, job, steps, nil); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SeedJobWithEdges atomically creates a job, its steps, AND its dependency edges
+// in a SINGLE transaction: the job, its steps, and its edges commit together, so
+// a freshly created collaboration-plan job is never left with steps but no edges
+// (or vice versa). On failure nothing is committed.
+func (s *Store) SeedJobWithEdges(ctx context.Context, job model.Job, steps []model.JobStep, edges []model.JobStepEdge) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.seedJobInTx(ctx, tx, job, steps, edges); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -100,7 +124,7 @@ func (s *Store) SeedJobWithApplicationVersion(ctx context.Context, job model.Job
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+	if err := s.seedJobInTx(ctx, tx, job, steps, nil); err != nil {
 		return err
 	}
 	if version.CreatedAt.IsZero() {
@@ -120,13 +144,22 @@ func (s *Store) SeedJobWithApplicationVersion(ctx context.Context, job model.Job
 // non-nil, is invoked once per step insert and lets tests inject a mid-seed
 // failure to verify rollback.
 func (s *Store) SeedClarificationJob(ctx context.Context, job model.Job, steps []model.JobStep, clarificationID string) error {
+	return s.SeedClarificationJobWithEdges(ctx, job, steps, nil, clarificationID)
+}
+
+// SeedClarificationJobWithEdges atomically creates a confirmed clarification's
+// generation job WITH its collaboration-plan dependency edges: the job, its
+// steps, its edges, AND the clarification-session link all commit in a SINGLE
+// transaction. On failure the whole transaction rolls back, so a confirmation
+// failure leaves NO orphaned job and the caller marks the clarification failed.
+func (s *Store) SeedClarificationJobWithEdges(ctx context.Context, job model.Job, steps []model.JobStep, edges []model.JobStepEdge, clarificationID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := s.seedJobInTx(ctx, tx, job, steps); err != nil {
+	if err := s.seedJobInTx(ctx, tx, job, steps, edges); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `

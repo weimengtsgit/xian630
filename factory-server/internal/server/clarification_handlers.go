@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
+	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -793,33 +794,43 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 	if displayName == "" {
 		displayName = deriveJobDisplayName(sess.InitialPrompt)
 	}
+
+	// Build the default collaboration plan from the confirmed requirement and
+	// materialize it into job_steps + job_step_edges. The plan is persisted onto
+	// the job row so the UI and executor can drive it. CurrentStepKind points at
+	// the FIRST plan agent's role so the job is executable from its plan head.
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: string(reqBytes)})
+	planJSON, err := plan.JSON()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration plan")
+		return
+	}
+	steps, edges, err := collaborationSteps(jobID, plan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration steps")
+		return
+	}
+	currentStep := model.StepRequirementAnalysis
+	if len(plan.Agents) > 0 {
+		currentStep = model.StepKind(plan.Agents[0].Role)
+	}
+
 	job := model.Job{
 		ID:                       jobID,
 		UserPrompt:               sess.InitialPrompt,
 		AppName:                  displayName,
 		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          model.StepRequirementAnalysis,
+		CurrentStepKind:          currentStep,
 		ClarificationSessionID:   id,
 		ConfirmedRequirementJSON: string(reqBytes),
+		CollaborationPlanJSON:    planJSON,
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	steps := make([]model.JobStep, 0, len(stepPlan))
-	for i, sp := range stepPlan {
-		steps = append(steps, model.JobStep{
-			ID:       "step_" + idpkg.New(),
-			JobID:    jobID,
-			Kind:     sp.kind,
-			Seq:      i + 1,
-			AgentKey: sp.agentKey,
-			Status:   model.StepStatusPending,
-			Attempt:  0,
-		})
-	}
-	// Seed the job + steps + clarification link in ONE transaction: on failure
-	// there is NO orphaned job and the session is moved to a diagnosable failed
-	// state (never left ready_to_confirm with no linked job).
-	if err := s.store.SeedClarificationJob(r.Context(), job, steps, id); err != nil {
+	// Seed the job + steps + edges + clarification link in ONE transaction: on
+	// failure there is NO orphaned job and the session is moved to a diagnosable
+	// failed state (never left ready_to_confirm with no linked job).
+	if err := s.store.SeedClarificationJobWithEdges(r.Context(), job, steps, edges, id); err != nil {
 		_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return

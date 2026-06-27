@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
+	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -1818,21 +1819,42 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 	factoryName := normalizedName + "-" + suffix
 	factorySlug := factoryAppSlug(normalizedName, req.AppType, suffix)
 
-	// Seed the fixed 6-step job, mirroring confirmClarification. The job carries
-	// the CONFIRMED requirement + child session id. The job + steps + child link
-	// are committed in a SINGLE transaction: on failure there is NO orphaned job
-	// and the child is moved to a diagnosable failed state.
+	// Seed the collaboration-plan job, mirroring confirmClarification. The job
+	// carries the CONFIRMED requirement + child session id. The job + steps +
+	// edges + child link are committed in a SINGLE transaction: on failure there
+	// is NO orphaned job and the child is moved to a diagnosable failed state.
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
+
+	// Build the default collaboration plan from the confirmed requirement and
+	// materialize it into job_steps + job_step_edges. CurrentStepKind points at
+	// the FIRST plan agent's role so the job is executable from its plan head.
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: string(reqBytes)})
+	planJSON, err := plan.JSON()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration plan")
+		return
+	}
+	steps, edges, err := collaborationSteps(jobID, plan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration steps")
+		return
+	}
+	currentStep := model.StepRequirementAnalysis
+	if len(plan.Agents) > 0 {
+		currentStep = model.StepKind(plan.Agents[0].Role)
+	}
+
 	job := model.Job{
 		ID:                       jobID,
 		UserPrompt:               sess.InitialPrompt,
 		AppName:                  factoryName,
 		AppSlug:                  factorySlug,
 		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          model.StepRequirementAnalysis,
+		CurrentStepKind:          currentStep,
 		ClarificationSessionID:   childID,
 		ConfirmedRequirementJSON: string(reqBytes),
+		CollaborationPlanJSON:    planJSON,
 		// DialogueID links the job to the dialogue its safe agent activity is
 		// surfaced under (Task 4). It is the work_trace_events sequence-
 		// partition key: the executor stamps it onto every trace the runner
@@ -1841,14 +1863,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	steps := make([]model.JobStep, 0, len(stepPlan))
-	for i, sp := range stepPlan {
-		steps = append(steps, model.JobStep{
-			ID: "step_" + idpkg.New(), JobID: jobID, Kind: sp.kind, Seq: i + 1,
-			AgentKey: sp.agentKey, Status: model.StepStatusPending, Attempt: 0,
-		})
-	}
-	if err := s.store.SeedClarificationJob(ctx, job, steps, childID); err != nil {
+	if err := s.store.SeedClarificationJobWithEdges(ctx, job, steps, edges, childID); err != nil {
 		// Atomic rollback already discarded any half-seeded job/steps. Move the
 		// child to a diagnosable failed state so the session is never left in
 		// ready_to_confirm with no linked job.

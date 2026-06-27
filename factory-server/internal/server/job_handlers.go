@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -25,6 +27,41 @@ var stepPlan = []struct {
 	{model.StepTestVerification, "tester"},
 	{model.StepImageBuild, "image-builder"},
 	{model.StepDeployment, "deployer"},
+}
+
+// collaborationSteps builds the job_steps + job_step_edges that materialize a
+// collaboration plan into runnable rows. Each plan agent becomes one pending
+// JobStep (Kind = the agent's role, AgentKey = the agent key, SnapshotJSON = the
+// frozen agent configuration); each plan edge becomes one JobStepEdge keyed by
+// the materialized step ids. The first step's role is returned implicitly via
+// plan.Agents[0].Role — callers set CurrentStepKind from it so a freshly seeded
+// job points at the executable head of the plan.
+func collaborationSteps(jobID string, plan collaboration.Plan) ([]model.JobStep, []model.JobStepEdge, error) {
+	keyToStepID := make(map[string]string, len(plan.Agents))
+	steps := make([]model.JobStep, 0, len(plan.Agents))
+	for i, agent := range plan.Agents {
+		stepID := "step_" + idpkg.New()
+		keyToStepID[agent.Key] = stepID
+		snapshotBytes, err := json.Marshal(agent.Snapshot)
+		if err != nil {
+			return nil, nil, err
+		}
+		steps = append(steps, model.JobStep{
+			ID: stepID, JobID: jobID, Kind: model.StepKind(agent.Role), Seq: i + 1,
+			AgentKey: agent.Key, Status: model.StepStatusPending, Attempt: 0,
+			SnapshotJSON: string(snapshotBytes),
+		})
+	}
+	edges := make([]model.JobStepEdge, 0, len(plan.Edges))
+	for _, edge := range plan.Edges {
+		fromID := keyToStepID[edge.From]
+		toID := keyToStepID[edge.To]
+		if fromID == "" || toID == "" {
+			return nil, nil, fmt.Errorf("unknown collaboration edge %s -> %s", edge.From, edge.To)
+		}
+		edges = append(edges, model.JobStepEdge{JobID: jobID, FromStepID: fromID, ToStepID: toID})
+	}
+	return steps, edges, nil
 }
 
 // createJobBody is the request body accepted by POST /api/jobs. As of Task 5,
@@ -64,36 +101,45 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
+
+	// Build the default collaboration plan from the confirmed requirement, then
+	// materialize it into job_steps + job_step_edges. The plan is persisted onto
+	// the job row (CollaborationPlanJSON) so the UI can render the lane/card view
+	// (Task 4) and the executor can drive it (Task 6). CurrentStepKind points at
+	// the FIRST plan agent's role so the job is executable from its plan head.
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: body.ConfirmedRequirementJSON})
+	planJSON, err := plan.JSON()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration plan")
+		return
+	}
+	steps, edges, err := collaborationSteps(jobID, plan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration steps")
+		return
+	}
+	currentStep := model.StepRequirementAnalysis
+	if len(plan.Agents) > 0 {
+		currentStep = model.StepKind(plan.Agents[0].Role)
+	}
+
 	job := model.Job{
 		ID:                       jobID,
 		UserPrompt:               body.Prompt,
 		AppName:                  deriveJobDisplayName(body.Prompt),
 		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          model.StepRequirementAnalysis,
+		CurrentStepKind:          currentStep,
 		ClarificationSessionID:   body.ClarificationSessionID,
 		ConfirmedRequirementJSON: body.ConfirmedRequirementJSON,
+		CollaborationPlanJSON:    planJSON,
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	if err := s.store.CreateJob(r.Context(), job); err != nil {
+	// Seed the job, its steps, AND its edges in ONE transaction so a freshly
+	// created collaboration-plan job is never left with steps but no edges.
+	if err := s.store.SeedJobWithEdges(r.Context(), job, steps, edges); err != nil {
 		writeError(w, http.StatusInternalServerError, "create job")
 		return
-	}
-
-	for i, sp := range stepPlan {
-		step := model.JobStep{
-			ID:       "step_" + idpkg.New(),
-			JobID:    jobID,
-			Kind:     sp.kind,
-			Seq:      i + 1,
-			AgentKey: sp.agentKey,
-			Status:   model.StepStatusPending,
-			Attempt:  0,
-		}
-		if err := s.store.CreateJobStep(r.Context(), step); err != nil {
-			writeError(w, http.StatusInternalServerError, "create step")
-			return
-		}
 	}
 
 	msg := model.ConversationMessage{

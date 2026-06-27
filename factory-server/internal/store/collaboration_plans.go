@@ -2,12 +2,25 @@ package store
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
 func (s *Store) CreateJobStepEdge(ctx context.Context, edge model.JobStepEdge) error {
 	_, err := s.db.ExecContext(ctx, `
+INSERT INTO job_step_edges(job_id, from_step_id, to_step_id)
+VALUES(?,?,?)`,
+		edge.JobID, edge.FromStepID, edge.ToStepID)
+	return err
+}
+
+// createJobStepEdgeInTx inserts a job-step dependency edge inside an already-open
+// transaction. It is the building block SeedJobWithEdges /
+// SeedClarificationJobWithEdges use so a job, its steps, AND its edges commit
+// atomically.
+func createJobStepEdgeInTx(ctx context.Context, tx *sql.Tx, edge model.JobStepEdge) error {
+	_, err := tx.ExecContext(ctx, `
 INSERT INTO job_step_edges(job_id, from_step_id, to_step_id)
 VALUES(?,?,?)`,
 		edge.JobID, edge.FromStepID, edge.ToStepID)
