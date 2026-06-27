@@ -563,3 +563,53 @@ func (s *Server) repairFromFailure(w http.ResponseWriter, r *http.Request) {
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)
 }
+
+// patchJobStepSnapshot handles PATCH
+// /api/jobs/:id/steps/:stepID/snapshot — overwrites the per-task snapshot
+// (job_steps.snapshot_json) for one step. This edits ONLY this generation
+// task's copy; it never writes back to the global agents/skills registry.
+// Response contract: 200 {step_id, snapshot}, 400 invalid/empty JSON,
+// 404 step not found, 500 store error.
+func (s *Server) patchJobStepSnapshot(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+	stepID := Param(r, "stepID")
+
+	var body struct {
+		Snapshot json.RawMessage `json:"snapshot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if len(body.Snapshot) == 0 || !json.Valid(body.Snapshot) {
+		writeError(w, http.StatusBadRequest, "snapshot must be valid json")
+		return
+	}
+
+	// Validate the step exists AND belongs to this job. ListJobSteps is the
+	// existing API that returns the job's steps; matching by id confirms both
+	// existence and ownership in one call.
+	steps, err := s.store.ListJobSteps(r.Context(), jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list steps")
+		return
+	}
+	found := false
+	for _, step := range steps {
+		if step.ID == stepID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "step not found")
+		return
+	}
+
+	if err := s.store.SetStepSnapshot(r.Context(), stepID, string(body.Snapshot)); err != nil {
+		writeError(w, http.StatusInternalServerError, "update snapshot")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"step_id": stepID, "snapshot": json.RawMessage(body.Snapshot)})
+}

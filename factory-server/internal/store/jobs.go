@@ -697,6 +697,17 @@ WHERE id = ?`, prompt, stepID)
 	return err
 }
 
+// SetStepSnapshot overwrites the per-task snapshot (job_steps.snapshot_json)
+// for a step. This is the editable copy that affects ONLY this generation task;
+// it never writes back to the global agents/skills registry.
+func (s *Store) SetStepSnapshot(ctx context.Context, stepID, snapshotJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps
+SET snapshot_json = ?
+WHERE id = ?`, snapshotJSON, stepID)
+	return err
+}
+
 // AddConversation inserts a conversation message row.
 func (s *Store) AddConversation(ctx context.Context, msg model.ConversationMessage) error {
 	var jobID any

@@ -220,6 +220,11 @@ export function StepExecutionDrawer({
   onCancel,
   onRetry,
   onRepairFromFailure,
+  // Per-task snapshot editor (Task 5): saves an edited snapshot to
+  // job_steps.snapshot_json — the editable copy that affects ONLY this
+  // generation task. Bound by JobCenter as
+  // (stepId, snapshotObj) => factoryApi.patchJobStepSnapshot(activeJob.id, ...).
+  onSaveSnapshot,
   // Artifacts
   artifacts,
   getArtifactContent,
@@ -240,6 +245,15 @@ export function StepExecutionDrawer({
   const lastSeqRef = useRef(0)
   const recordCountRef = useRef(0)
 
+  // --- Per-task snapshot editor (Task 5) ---------------------------------
+  // snapshotDraft holds the editable text for the step's per-task snapshot
+  // (job_steps.snapshot_json). It is seeded from the existing snapshot (pretty-
+  // printed) whenever the step changes, so the user edits a readable copy.
+  // snapshotError surfaces a JSON parse failure without crashing the drawer.
+  const [snapshotDraft, setSnapshotDraft] = useState('')
+  const [snapshotError, setSnapshotError] = useState(null)
+  const [snapshotSaving, setSnapshotSaving] = useState(false)
+
   const status = (step && (step.status || step.state)) || 'pending'
 
   // Reset follow state when switching step or attempt (new view = fresh tail).
@@ -252,6 +266,26 @@ export function StepExecutionDrawer({
     setArtifactContent(null)
     setArtifactError(null)
   }, [step && step.id, selectedAttempt])
+
+  // Seed the snapshot editor from the step's existing per-task snapshot
+  // (pretty-printed so the user edits readable JSON). Re-seeds whenever the
+  // step or its snapshot changes (e.g. after a save + refresh). Clears the
+  // draft when there is no snapshot so the editor section stays hidden.
+  useEffect(() => {
+    setSnapshotError(null)
+    const raw = step && step.snapshot_json
+    if (!raw) {
+      setSnapshotDraft('')
+      return
+    }
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+      setSnapshotDraft(JSON.stringify(parsed, null, 2))
+    } catch {
+      // Store-backed snapshot is malformed; let the user edit the raw text.
+      setSnapshotDraft(typeof raw === 'string' ? raw : JSON.stringify(raw))
+    }
+  }, [step && step.id, step && step.snapshot_json])
 
   // Follow logic: when records grow AND we are following, pin to bottom. When
   // records grow but we are NOT following, bump the missed-count badge.
@@ -343,6 +377,29 @@ export function StepExecutionDrawer({
       setArtifactError(err && (err.message || String(err)))
     } finally {
       setArtifactLoading(false)
+    }
+  }
+
+  // saveSnapshot parses the draft as JSON, then persists it to the step's
+  // per-task snapshot via the onSaveSnapshot closure (which carries the job
+  // id). A malformed draft surfaces an inline error instead of crashing.
+  const saveSnapshot = async () => {
+    setSnapshotError(null)
+    let parsed
+    try {
+      parsed = JSON.parse(snapshotDraft)
+    } catch (err) {
+      setSnapshotError('JSON 格式无效：' + (err && err.message ? err.message : String(err)))
+      return
+    }
+    if (!step || !onSaveSnapshot) return
+    setSnapshotSaving(true)
+    try {
+      await onSaveSnapshot(step.id, parsed)
+    } catch (err) {
+      setSnapshotError(err && (err.message || String(err)))
+    } finally {
+      setSnapshotSaving(false)
     }
   }
 
@@ -462,6 +519,34 @@ export function StepExecutionDrawer({
                 <section className="sed-error-block">
                   <h4>错误信息</h4>
                   <pre className="sed-error-text">{step.error_message}</pre>
+                </section>
+              ) : null}
+
+              {step && step.snapshot_json ? (
+                <section className="sed-snapshot">
+                  <h4>本次配置快照</h4>
+                  <p className="sed-snapshot-hint">
+                    编辑仅影响本次生成任务，不会改动全局代理/技能配置。
+                  </p>
+                  <textarea
+                    className="sed-snapshot-editor"
+                    value={snapshotDraft}
+                    onChange={event => setSnapshotDraft(event.target.value)}
+                    spellCheck={false}
+                    rows={12}
+                  />
+                  {snapshotError ? (
+                    <p className="sed-snapshot-error">{snapshotError}</p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="sed-action sed-snapshot-save"
+                    onClick={saveSnapshot}
+                    disabled={snapshotSaving}
+                  >
+                    {snapshotSaving ? <Loader2 size={14} className="spin" /> : null}
+                    保存到本次任务
+                  </button>
                 </section>
               ) : null}
 

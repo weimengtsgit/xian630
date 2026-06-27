@@ -1073,3 +1073,41 @@ func TestStepRecordEventPublishedOnRecordCallback(t *testing.T) {
 		t.Fatal("no event received within 1s")
 	}
 }
+
+// TestPatchJobStepSnapshotUpdatesOnlyTaskSnapshot verifies PATCH
+// /api/jobs/:id/steps/:stepID/snapshot persists an edited snapshot to
+// job_steps.snapshot_json (the per-task copy) without touching anything else.
+func TestPatchJobStepSnapshotUpdatesOnlyTaskSnapshot(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	rec := createJobViaAPI(t, r, "生成复盘智能体")
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil || len(steps) == 0 {
+		t.Fatalf("steps err=%v len=%d", err, len(steps))
+	}
+	body := map[string]any{
+		"snapshot": map[string]any{
+			"agentKey":        steps[0].AgentKey,
+			"name":            "协作编排（本次调整）",
+			"description":     "只影响本次任务",
+			"lane":            "analysis",
+			"instructions":    "本次任务使用调整后的说明",
+			"selectedSkills":  []string{},
+			"skillOverrides":  []map[string]string{},
+		},
+	}
+	patch := doJSON(t, r, http.MethodPatch, "/api/jobs/"+job.ID+"/steps/"+steps[0].ID+"/snapshot", body)
+	if patch.Code != http.StatusOK {
+		t.Fatalf("patch status = %d, body=%s", patch.Code, patch.Body.String())
+	}
+	updated, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	if !strings.Contains(updated[0].SnapshotJSON, "本次调整") {
+		t.Fatalf("snapshot not updated: %s", updated[0].SnapshotJSON)
+	}
+}

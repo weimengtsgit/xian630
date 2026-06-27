@@ -279,6 +279,24 @@ export function useJobs() {
     [refresh],
   )
 
+  // saveStepSnapshot overwrites the per-task snapshot (job_steps.snapshot_json)
+  // for ONE step. Edits ONLY this generation task's copy; the global
+  // agents/skills registry is never touched. refresh() re-reads steps so the
+  // drawer reflects the persisted snapshot.
+  const saveStepSnapshot = useCallback(
+    async (jobId, stepId, snapshot) => {
+      setError(null)
+      try {
+        await factoryApi.patchJobStepSnapshot(jobId, stepId, snapshot)
+        await refresh()
+      } catch (err) {
+        setError(err.message || String(err))
+        throw err
+      }
+    },
+    [refresh],
+  )
+
   const answerJob = useCallback(
     async (id, answer) => {
       setError(null)
@@ -400,6 +418,7 @@ export function useJobs() {
     answerJob,
     retryCurrentStep,
     repairFromFailure,
+    saveStepSnapshot,
     // New (Task 5):
     selectedStepId,
     selectedAttempt,

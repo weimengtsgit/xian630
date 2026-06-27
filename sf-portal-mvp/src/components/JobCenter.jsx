@@ -59,6 +59,7 @@ export function JobCenter({
   onCancel,
   onRetry,
   onRepairFromFailure,
+  onSaveSnapshot,
   loading,
   // Task 6 state surface from useJobs:
   summary,
@@ -374,6 +375,9 @@ export function JobCenter({
         onCancel={() => onCancel && onCancel(activeJob.id)}
         onRetry={() => onRetry && onRetry(activeJob.id)}
         onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
+        onSaveSnapshot={(stepId, snapshot) =>
+          onSaveSnapshot && onSaveSnapshot(activeJob.id, stepId, snapshot)
+        }
         artifacts={artifacts || []}
         getArtifactContent={getArtifactContent}
       />

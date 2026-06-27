@@ -97,6 +97,14 @@ export const factoryApi = {
   getJob: id => request(`/api/jobs/${id}`),
   getJobSteps: id => request(`/api/jobs/${id}/steps`),
   getJobCollaborationPlan: id => request(`/api/jobs/${id}/collaboration-plan`),
+  // patchJobStepSnapshot overwrites the per-task snapshot
+  // (job_steps.snapshot_json) for ONE step. Edits ONLY this generation task's
+  // copy; never writes back to the global agents/skills registry.
+  patchJobStepSnapshot: (jobId, stepId, snapshot) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/snapshot`, {
+      method: 'PATCH',
+      body: JSON.stringify({ snapshot }),
+    }),
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
