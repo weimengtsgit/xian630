@@ -1,56 +1,54 @@
-// Verifies the portal application ordering is driven by the server-supplied
-// display_order (from .factory/scene-catalog.json) rather than a hard-coded slug
-// list. Preset application-surface apps sort by display_order ascending; then
-// generated apps by newest updated_at; slug is a tie-breaker only.
+// Verifies the portal business-agent ordering is driven by created_at descending
+// so the newest created business agent appears first. Slug is a tie-breaker only.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { orderApplicationsForDisplay } from '../src/hooks/applicationOrdering.js'
 
-// Preset application-surface apps carry their catalog display_order. The three
-// application surfaces per the catalog are carrier-formation-replay(1),
-// aircraft-carrier-track(2), east-sea-situation(3). The four blueprint presets
-// (display_order 0) are not returned by GET /api/apps so they are omitted here.
-const presetApps = [
-  { slug: 'east-sea-situation', name: '东海目标态势演示', source: 'preset', display_order: 3 },
-  { slug: 'aircraft-carrier-track', name: '航母轨迹分析', source: 'preset', display_order: 2 },
-  { slug: 'carrier-formation-replay', name: '航母编队月度航迹复盘', source: 'preset', display_order: 1 },
+const appsPanel = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
+const appsPanelCss = readFileSync(new URL('../src/components/ApplicationsPanel.css', import.meta.url), 'utf8')
+assert.match(appsPanel, /创建时间/, 'business agent cards must render a 创建时间 label')
+assert.match(appsPanel, /formatCreatedAt/, 'business agent cards must format created_at')
+assert.match(appsPanel, /formatAppType/, 'business agent cards must format app type labels')
+assert.match(appsPanel, /command_dashboard:\s*'指挥仪表盘'/, 'command_dashboard must display as 指挥仪表盘')
+assert.match(appsPanel, /situation_replay:\s*'态势复盘'/, 'situation_replay must display as 态势复盘')
+assert.match(appsPanel, /operations_management:\s*'运营管理'/, 'operations_management must display as 运营管理')
+assert.match(appsPanel, /'command-dashboard':\s*'指挥仪表盘'/, 'command-dashboard must display as 指挥仪表盘')
+assert.match(appsPanel, /'affiliation-inference-dashboard':\s*'归属推断仪表盘'/, 'affiliation-inference-dashboard must display as 归属推断仪表盘')
+assert.doesNotMatch(appsPanel, /<span className="meta-label">来源<\/span>/, 'business agent cards must hide the 来源 field')
+assert.match(appsPanelCss, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/, 'business agent action buttons should render as a 2-column grid')
+assert.match(appsPanel, /app-sub-tooltip/, 'business agent detail text must include a hover tooltip for full details')
+assert.match(appsPanelCss, /\.app-sub:hover \.app-sub-tooltip/, 'business agent detail tooltip must appear on hover')
+assert.match(appsPanelCss, /\.app-card\s*\{[^}]*overflow:\s*visible/s, 'card must not clip the hover detail tooltip')
+
+const apps = [
+  { slug: 'old-preset', name: '旧预置智能体', source: 'preset', display_order: 1, created_at: '2026-06-01T00:00:00Z' },
+  { slug: 'new-generated', name: '新生成智能体', source: 'generated', updated_at: '2026-06-20T00:00:00Z', created_at: '2026-06-23T00:00:00Z' },
+  { slug: 'newer-preset', name: '新预置智能体', source: 'preset', display_order: 2, created_at: '2026-06-24T00:00:00Z' },
+  { slug: 'old-generated', name: '旧生成智能体', source: 'generated', updated_at: '2026-06-25T00:00:00Z', created_at: '2026-06-02T00:00:00Z' },
 ]
 
-// Generated apps are ordered by newest updated_at, slug as tie-breaker.
-const generatedApps = [
-  { slug: 'gen-old', name: '旧生成应用', source: 'generated', updated_at: '2026-06-01T00:00:00Z' },
-  { slug: 'gen-new', name: '新生成应用', source: 'generated', updated_at: '2026-06-23T00:00:00Z' },
-]
-
-const ordered = orderApplicationsForDisplay([...presetApps, ...generatedApps])
+const ordered = orderApplicationsForDisplay(apps)
 
 assert.deepEqual(
   ordered.map(app => app.slug),
   [
-    'carrier-formation-replay', // display_order 1
-    'aircraft-carrier-track',   // display_order 2
-    'east-sea-situation',       // display_order 3
-    'gen-new',                  // newest generated
-    'gen-old',                  // older generated
+    'newer-preset',   // newest created_at
+    'new-generated',  // next newest created_at, despite older updated_at
+    'old-generated',  // newer updated_at must not outrank created_at
+    'old-preset',
   ],
 )
 
-assert.notEqual(ordered, presetApps)
+assert.notEqual(ordered, apps)
 
-// Tie-breaker: equal display_order resolves by slug only.
+// Tie-breaker: equal created_at resolves by slug only.
 const tied = orderApplicationsForDisplay([
-  { slug: 'zebra', source: 'preset', display_order: 1 },
-  { slug: 'alpha', source: 'preset', display_order: 1 },
+  { slug: 'zebra', source: 'preset', created_at: '2026-06-01T00:00:00Z' },
+  { slug: 'alpha', source: 'generated', created_at: '2026-06-01T00:00:00Z' },
 ])
 assert.deepEqual(
   tied.map(app => app.slug),
   ['alpha', 'zebra'],
-)
-
-// The social scene carries the corrected display name (asserted here so the
-// catalog metadata fix stays in lockstep with ordering).
-assert.equal(
-  presetApps[0].name,
-  '东海目标态势演示',
 )
 
 console.log('application ordering check passed')

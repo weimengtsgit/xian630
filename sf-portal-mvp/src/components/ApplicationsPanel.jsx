@@ -35,6 +35,34 @@ function isGenerated(app) {
   return app.source === 'generated' || app.source === 'generated-apps'
 }
 
+function formatCreatedAt(app) {
+  const raw = app && (app.created_at || app.createdAt)
+  if (!raw) return '-'
+  const date = new Date(raw)
+  if (Number.isNaN(date.getTime())) return String(raw)
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+function formatAppType(type) {
+  const map = {
+    command_dashboard: '指挥仪表盘',
+    situation_replay: '态势复盘',
+    operations_management: '运营管理',
+    managed_agent: '纳管智能体',
+    'command-dashboard': '指挥仪表盘',
+    'affiliation-inference-dashboard': '归属推断仪表盘',
+    'timeline-replay': '态势复盘',
+    'map-dashboard': '地图态势',
+  }
+  return map[type] || type || '-'
+}
+
 function orderManagedAgents(agents) {
   const list = Array.isArray(agents) ? agents : []
   return [...list].sort((a, b) => {
@@ -164,15 +192,20 @@ function ApplicationCard({ app, action, onStart, onStop, onRebuild, onRegenerate
         <h3 className="app-name" title={app.name || app.slug}>
           {app.name || app.slug || app.id}
         </h3>
-        {app.description || app.slug ? <p className="app-sub" title={app.description || app.slug}>{app.description || app.slug}</p> : null}
+        {app.description || app.slug ? (
+          <p className="app-sub" title={app.description || app.slug}>
+            <span className="app-sub-text">{app.description || app.slug}</span>
+            <span className="app-sub-tooltip">{app.description || app.slug}</span>
+          </p>
+        ) : null}
         <div className="app-meta">
           <span className="meta-item">
             <span className="meta-label">类型</span>
-            <span className="meta-value">{app.type || '-'}</span>
+            <span className="meta-value">{formatAppType(app.type)}</span>
           </span>
           <span className="meta-item">
-            <span className="meta-label">来源</span>
-            <span className="meta-value">{app.source || '-'}</span>
+            <span className="meta-label">创建时间</span>
+            <span className="meta-value">{formatCreatedAt(app)}</span>
           </span>
         </div>
       </div>
@@ -237,13 +270,18 @@ function ManagedAgentList({ agents }) {
             <div className="app-icon">
               <Link size={18} />
             </div>
-            <div className="managed-agent-badge">纳管</div>
+            <div className="managed-agent-badge">纳管中</div>
           </div>
           <div className="app-card-body">
             <h3 className="app-name" title={agent.name || agent.slug}>
               {agent.name || agent.slug}
             </h3>
-            {agent.description ? <p className="app-sub" title={agent.description}>{agent.description}</p> : null}
+            {agent.description ? (
+              <p className="app-sub" title={agent.description}>
+                <span className="app-sub-text">{agent.description}</span>
+                <span className="app-sub-tooltip">{agent.description}</span>
+              </p>
+            ) : null}
             {Array.isArray(agent.keywords) && agent.keywords.length > 0 ? (
               <div className="managed-agent-tags">
                 {agent.keywords.slice(0, 4).map(keyword => <span key={keyword}>{keyword}</span>)}
