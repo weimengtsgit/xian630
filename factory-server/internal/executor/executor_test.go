@@ -1273,6 +1273,36 @@ func TestExecutorAutoRepairFromBlockingReviewOnce(t *testing.T) {
 	}
 }
 
+func TestExecutorAutoRepairPassesBlockingReasonToCodeGeneration(t *testing.T) {
+	blockingMsg := "数据接入契约未被代码使用"
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepCodeReview: {
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorBlockingReview,
+			ErrorMessage: blockingMsg,
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedCollaborationJob(t, st)
+
+	job := runUntil(t, context.Background(), e, id, 20, func(j model.Job) bool {
+		if j.Status != model.JobStatusQueued || j.CurrentStepKind != model.StepCodeGeneration {
+			return false
+		}
+		cr := stepByKindOrNil(st, id, model.StepCodeReview)
+		return cr.Status == model.StepStatusPending && cr.Attempt >= 1
+	})
+	if job.Status != model.JobStatusQueued || job.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("job after blocking review = %s/%s, want queued/code_generation", job.Status, job.CurrentStepKind)
+	}
+	code := stepByKind(t, mustSteps(t, st, id), model.StepCodeGeneration)
+	for _, want := range []string{"repair_from_failure", "failed_step: code_review", "error_code: blocking_review", blockingMsg} {
+		if !strings.Contains(code.UserPrompt, want) {
+			t.Fatalf("code_generation repair prompt missing %q:\n%s", want, code.UserPrompt)
+		}
+	}
+}
+
 // stepByKindOrNil returns the step for kind, or a zero JobStep if absent. Unlike
 // stepByKind it does not fatal on a miss — used for conditional observation.
 func stepByKindOrNil(st *store.Store, id string, k model.StepKind) model.JobStep {

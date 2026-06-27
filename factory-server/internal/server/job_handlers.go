@@ -5,14 +5,33 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
+
+const maxSkillSnapshotContentBytes = 64 * 1024
+
+var safeSnapshotSkillKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+type skillSnapshotCredentialRule struct {
+	pattern     *regexp.Regexp
+	replacement string
+}
+
+var skillSnapshotCredentialRules = []skillSnapshotCredentialRule{
+	{regexp.MustCompile(`(?i)(authorization)\s*:\s*([^"\r\n][^\r\n]*)`), `${1}: [REDACTED]`},
+	{regexp.MustCompile(`(?i)(authorization)\s*[:=]?\s*bearer\s+([^\s,]+)`), `${1}: Bearer [REDACTED]`},
+	{regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|authorization)(\s*[:=]\s*|"\s*:\s*"|'\s*:\s*')("([^"]*)"|'([^']*)'|([^\s,"']+))`), `${1}${2}[REDACTED]`},
+}
 
 // stepPlan is the fixed six-step pipeline seeded for every new job, in order.
 // kind → agent_key follows design §4. Both code-generator/requirement-analyst
@@ -36,13 +55,14 @@ var stepPlan = []struct {
 // the materialized step ids. The first step's role is returned implicitly via
 // plan.Agents[0].Role — callers set CurrentStepKind from it so a freshly seeded
 // job points at the executable head of the plan.
-func collaborationSteps(jobID string, plan collaboration.Plan) ([]model.JobStep, []model.JobStepEdge, error) {
+func collaborationSteps(jobID string, plan collaboration.Plan, workspaceRoot string) ([]model.JobStep, []model.JobStepEdge, error) {
 	keyToStepID := make(map[string]string, len(plan.Agents))
 	steps := make([]model.JobStep, 0, len(plan.Agents))
 	for i, agent := range plan.Agents {
 		stepID := "step_" + idpkg.New()
 		keyToStepID[agent.Key] = stepID
-		snapshotBytes, err := json.Marshal(agent.Snapshot)
+		snapshot := hydrateSnapshotSkillContents(agent.Snapshot, workspaceRoot)
+		snapshotBytes, err := json.Marshal(snapshot)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -62,6 +82,73 @@ func collaborationSteps(jobID string, plan collaboration.Plan) ([]model.JobStep,
 		edges = append(edges, model.JobStepEdge{JobID: jobID, FromStepID: fromID, ToStepID: toID})
 	}
 	return steps, edges, nil
+}
+
+func hydrateSnapshotSkillContents(snapshot collaboration.Snapshot, workspaceRoot string) collaboration.Snapshot {
+	if len(snapshot.SelectedSkills) == 0 {
+		return snapshot
+	}
+	root := workspaceRoot
+	if strings.TrimSpace(root) == "" {
+		root = "."
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	seen := map[string]bool{}
+	for _, override := range snapshot.SkillOverrides {
+		seen[filepath.ToSlash(override.Path)] = true
+	}
+	for _, skill := range snapshot.SelectedSkills {
+		key := strings.TrimSpace(skill)
+		if !safeSnapshotSkillKey.MatchString(key) {
+			continue
+		}
+		skillsRoot := filepath.Join(root, ".claude", "skills")
+		rel := filepath.ToSlash(filepath.Join(".claude", "skills", key, "SKILL.md"))
+		if seen[rel] {
+			continue
+		}
+		fullPath := filepath.Clean(filepath.Join(skillsRoot, key, "SKILL.md"))
+		rootRel, err := filepath.Rel(skillsRoot, fullPath)
+		if err != nil || rootRel == ".." || strings.HasPrefix(rootRel, ".."+string(filepath.Separator)) || filepath.IsAbs(rootRel) {
+			continue
+		}
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+		snapshot.SkillOverrides = append(snapshot.SkillOverrides, collaboration.SkillOverride{
+			Path:    rel,
+			Content: limitSkillSnapshotContent(redactSkillSnapshotContent(string(content))),
+			Scope:   "task",
+		})
+		seen[rel] = true
+	}
+	return snapshot
+}
+
+func redactSkillSnapshotContent(content string) string {
+	for _, rule := range skillSnapshotCredentialRules {
+		content = rule.pattern.ReplaceAllString(content, rule.replacement)
+	}
+	return content
+}
+
+func limitSkillSnapshotContent(content string) string {
+	if len(content) <= maxSkillSnapshotContentBytes {
+		return content
+	}
+	const marker = "\n[TRUNCATED: skill content exceeds snapshot cap]\n"
+	keep := maxSkillSnapshotContentBytes - len(marker)
+	if keep <= 0 {
+		return marker
+	}
+	out := content[:keep]
+	for !utf8.ValidString(out) && len(out) > 0 {
+		out = out[:len(out)-1]
+	}
+	return out + marker
 }
 
 // createJobBody is the request body accepted by POST /api/jobs. As of Task 5,
@@ -113,7 +200,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "build collaboration plan")
 		return
 	}
-	steps, edges, err := collaborationSteps(jobID, plan)
+	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "build collaboration steps")
 		return

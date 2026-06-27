@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Archive,
+  ArrowRight,
   Ban,
   Check,
   CheckCircle2,
@@ -126,6 +127,43 @@ export function ConversationWorkbench({
   const changeProposal = traceItems.find(
     it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
   )
+  const collaborationPreview = view && view.collaborationPlanPreview
+  const collaborationPreviewAgents = collaborationPreview && Array.isArray(collaborationPreview.agents)
+    ? collaborationPreview.agents
+    : []
+  const collaborationPreviewEdges = view && view.collaborationPlanPreview && Array.isArray(view.collaborationPlanPreview.edges)
+    ? view.collaborationPlanPreview.edges
+    : []
+  const collaborationPreviewAdjustments = collaborationPreview && Array.isArray(collaborationPreview.adjustments)
+    ? collaborationPreview.adjustments
+    : []
+  const collaborationPreviewLanes = collaborationPreview && Array.isArray(collaborationPreview.lanes)
+    ? collaborationPreview.lanes
+    : []
+  const collaborationPreviewEdgeKeys = new Set()
+  const collaborationPreviewUniqueEdges = collaborationPreviewEdges.filter(edge => {
+    if (!edge || !edge.from || !edge.to) return false
+    const key = `${edge.from}->${edge.to}`
+    if (collaborationPreviewEdgeKeys.has(key)) return false
+    collaborationPreviewEdgeKeys.add(key)
+    return true
+  })
+  const collaborationPreviewAgentOrder = Object.fromEntries(
+    collaborationPreviewAgents.filter(agent => agent && agent.key).map((agent, index) => [agent.key, index + 1]),
+  )
+  const collaborationPreviewLaneRows = collaborationPreviewLanes.map(lane => ({
+    lane,
+    agents: collaborationPreviewAgents.filter(agent => agent && agent.lane === lane.id),
+  })).filter(row => row.agents.length > 0)
+  const collaborationPreviewLooseAgents = collaborationPreviewAgents.filter(
+    agent => agent && !collaborationPreviewLanes.some(lane => lane.id === agent.lane),
+  )
+  if (collaborationPreviewLooseAgents.length > 0) {
+    collaborationPreviewLaneRows.push({
+      lane: { id: 'unassigned', label: '其他' },
+      agents: collaborationPreviewLooseAgents,
+    })
+  }
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -237,21 +275,58 @@ export function ConversationWorkbench({
             collaboration plan that WOULD run on confirm. Render it above the confirm
             button so the user can see the participating agents (grouped by lane)
             before generation starts. No job is created yet. */}
-        {view && view.collaborationPlanPreview ? (
+        {collaborationPreview ? (
           <section className="cw-collaboration-preview">
-            <h3>协作智能体参与计划</h3>
-            {(Array.isArray(view.collaborationPlanPreview.lanes) ? view.collaborationPlanPreview.lanes : []).map(lane => (
-              <div key={lane.id} className="cw-collaboration-lane">
-                <strong>{lane.label}</strong>
+            <div className="cw-collaboration-preview-head">
+              <h3>协作智能体参与计划</h3>
+              <div className="cw-collaboration-stats">
+                <span>{collaborationPreviewAgents.length} 个智能体</span>
+                <span>{collaborationPreviewUniqueEdges.length} 条依赖</span>
+              </div>
+            </div>
+            {collaborationPreviewLaneRows.length > 0 ? (
+              <div className="cw-collaboration-graph cw-collaboration-flow" aria-label="协作智能体执行关系图">
+                {collaborationPreviewLaneRows.map(row => (
+                  <div className="cw-collaboration-stage" key={row.lane.id}>
+                    <div className="cw-collaboration-stage-label">
+                      <strong>{row.lane.label}</strong>
+                      <span>{row.agents.length} 个</span>
+                    </div>
+                    <div className="cw-collaboration-rail">
+                      {row.agents.map((agent, index) => (
+                        <div className="cw-collaboration-node-wrap" key={agent.key || `${row.lane.id}-${index}`}>
+                          <div className="cw-collaboration-node">
+                            <span className="cw-collaboration-node-index">
+                              {String(collaborationPreviewAgentOrder[agent.key] || index + 1).padStart(2, '0')}
+                            </span>
+                            <span className="cw-collaboration-node-main">
+                              <strong>{agent.name || agent.key}</strong>
+                              <small>{agent.role || agent.key}</small>
+                            </span>
+                            {agent.highImpact ? <em>门禁</em> : null}
+                          </div>
+                          {index < row.agents.length - 1 ? (
+                            <ArrowRight size={13} className="cw-collaboration-node-arrow" />
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {collaborationPreviewAdjustments.length > 0 ? (
+              <div className="cw-collaboration-adjustments">
+                <AlertTriangle size={13} />
                 <ul>
-                  {(Array.isArray(view.collaborationPlanPreview.agents) ? view.collaborationPlanPreview.agents : [])
-                    .filter(agent => agent && agent.lane === lane.id)
-                    .map(agent => (
-                      <li key={agent.key}>{agent.name}</li>
-                    ))}
+                  {collaborationPreviewAdjustments.map((adjustment, index) => (
+                    <li key={`${adjustment.message || 'adjustment'}-${index}`}>
+                      {adjustment.message || adjustment.action || '协作计划已调整'}
+                    </li>
+                  ))}
                 </ul>
               </div>
-            ))}
+            ) : null}
           </section>
         ) : null}
       </div>

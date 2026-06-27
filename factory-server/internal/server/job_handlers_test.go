@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/ccstatus"
+	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -167,6 +168,17 @@ func createJobViaAPI(t *testing.T, r *Router, prompt string) *httptest.ResponseR
 	})
 }
 
+func stepByKindForTest(t *testing.T, steps []model.JobStep, kind model.StepKind) model.JobStep {
+	t.Helper()
+	for _, step := range steps {
+		if step.Kind == kind {
+			return step
+		}
+	}
+	t.Fatalf("missing step %s in %+v", kind, steps)
+	return model.JobStep{}
+}
+
 func doJSON(t *testing.T, r *Router, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var rd *bytes.Reader
@@ -307,6 +319,108 @@ func TestCreateJobSeedsCollaborationPlanSteps(t *testing.T) {
 	}
 }
 
+func TestCreateJobSeedsSnapshotsWithSelectedSkillFileContents(t *testing.T) {
+	workspace := t.TempDir()
+	skillPath := filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte("# software factory app\n本次任务可查看的技能内容"), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+	_, r, st := newJobsTestServer(t, config.Config{WorkspaceRoot: workspace})
+
+	rec := createJobViaAPI(t, r, "生成复盘智能体")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	codeStep := stepByKindForTest(t, steps, model.StepCodeGeneration)
+	for _, want := range []string{"\"name\":\"代码生成\"", "\"description\":\"写入应用代码并生成 manifest。\"", ".claude/skills/software-factory-app/SKILL.md", "本次任务可查看的技能内容"} {
+		if !strings.Contains(codeStep.SnapshotJSON, want) {
+			t.Fatalf("code-generator snapshot missing %q:\n%s", want, codeStep.SnapshotJSON)
+		}
+	}
+}
+
+func TestCreateJobRedactsAndCapsSelectedSkillFileContents(t *testing.T) {
+	workspace := t.TempDir()
+	skillPath := filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	content := "# software factory app\n" +
+		"ANTHROPIC_API_KEY=sk-live-secret\n" +
+		"Authorization: Bearer bearer-secret\n" +
+		"password: hunter2\n" +
+		strings.Repeat("界", maxSkillSnapshotContentBytes)
+	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+	_, r, st := newJobsTestServer(t, config.Config{WorkspaceRoot: workspace})
+
+	rec := createJobViaAPI(t, r, "生成复盘智能体")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	codeStep := stepByKindForTest(t, steps, model.StepCodeGeneration)
+	for _, leak := range []string{"sk-live-secret", "bearer-secret", "hunter2"} {
+		if strings.Contains(codeStep.SnapshotJSON, leak) {
+			t.Fatalf("snapshot leaked secret %q:\n%s", leak, codeStep.SnapshotJSON)
+		}
+	}
+	for _, want := range []string{"ANTHROPIC_API_KEY=[REDACTED]", "Authorization: [REDACTED]", "password: [REDACTED]", "[TRUNCATED: skill content exceeds snapshot cap]"} {
+		if !strings.Contains(codeStep.SnapshotJSON, want) {
+			t.Fatalf("snapshot missing %q:\n%s", want, codeStep.SnapshotJSON)
+		}
+	}
+}
+
+func TestHydrateSnapshotSkillContentsRejectsUnsafeSkillKeys(t *testing.T) {
+	workspace := t.TempDir()
+	validPath := filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")
+	driveLikePath := filepath.Join(workspace, ".claude", "skills", "C:escape", "SKILL.md")
+	for _, path := range []string{validPath, driveLikePath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir skill %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(validPath, []byte("valid skill content"), 0o644); err != nil {
+		t.Fatalf("write valid skill: %v", err)
+	}
+	if err := os.WriteFile(driveLikePath, []byte("drive-like skill key must not load"), 0o644); err != nil {
+		t.Fatalf("write drive-like skill: %v", err)
+	}
+
+	got := hydrateSnapshotSkillContents(collaboration.Snapshot{
+		SelectedSkills: []string{"software-factory-app", "C:escape", "../secret", "nested/key", `nested\key`},
+	}, workspace)
+	if len(got.SkillOverrides) != 1 {
+		t.Fatalf("skill overrides = %+v, want only the safe single-segment skill", got.SkillOverrides)
+	}
+	if got.SkillOverrides[0].Path != ".claude/skills/software-factory-app/SKILL.md" {
+		t.Fatalf("skill override path = %q", got.SkillOverrides[0].Path)
+	}
+	if strings.Contains(got.SkillOverrides[0].Content, "drive-like") {
+		t.Fatalf("unsafe drive-like skill content loaded: %+v", got.SkillOverrides)
+	}
+}
+
 func TestGetJobCollaborationPlan(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})
 	rec := createJobViaAPI(t, r, "生成公网数据研判智能体")
@@ -411,8 +525,8 @@ func TestGetJob(t *testing.T) {
 // cc-status availability flag.
 type getJobResponse struct {
 	model.Job
-	CCStatusAvailable bool        `json:"cc_status_available"`
-	PendingQuestions  []getJobQ   `json:"pending_questions"`
+	CCStatusAvailable bool      `json:"cc_status_available"`
+	PendingQuestions  []getJobQ `json:"pending_questions"`
 }
 
 // getJobQ is the minimal shape of a persisted clarifying question.
@@ -1090,13 +1204,13 @@ func TestPatchJobStepSnapshotUpdatesOnlyTaskSnapshot(t *testing.T) {
 	}
 	body := map[string]any{
 		"snapshot": map[string]any{
-			"agentKey":        steps[0].AgentKey,
-			"name":            "协作编排（本次调整）",
-			"description":     "只影响本次任务",
-			"lane":            "analysis",
-			"instructions":    "本次任务使用调整后的说明",
-			"selectedSkills":  []string{},
-			"skillOverrides":  []map[string]string{},
+			"agentKey":       steps[0].AgentKey,
+			"name":           "协作编排（本次调整）",
+			"description":    "只影响本次任务",
+			"lane":           "analysis",
+			"instructions":   "本次任务使用调整后的说明",
+			"selectedSkills": []string{},
+			"skillOverrides": []map[string]string{},
 		},
 	}
 	patch := doJSON(t, r, http.MethodPatch, "/api/jobs/"+job.ID+"/steps/"+steps[0].ID+"/snapshot", body)

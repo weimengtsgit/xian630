@@ -10,14 +10,14 @@ type RequirementContext struct {
 }
 
 type Plan struct {
-	SchemaVersion           int                 `json:"schemaVersion"`
-	Mode                    string              `json:"mode"`
-	Lanes                   []Lane              `json:"lanes"`
-	RepairPolicy            RepairPolicy        `json:"repairPolicy"`
-	Agents                  []Agent             `json:"agents"`
-	Edges                   []Edge              `json:"edges"`
-	HighImpactConfirmations []HighImpactRecord  `json:"highImpactConfirmations,omitempty"`
-	Adjustments             []Adjustment        `json:"adjustments,omitempty"`
+	SchemaVersion           int                `json:"schemaVersion"`
+	Mode                    string             `json:"mode"`
+	Lanes                   []Lane             `json:"lanes"`
+	RepairPolicy            RepairPolicy       `json:"repairPolicy"`
+	Agents                  []Agent            `json:"agents"`
+	Edges                   []Edge             `json:"edges"`
+	HighImpactConfirmations []HighImpactRecord `json:"highImpactConfirmations,omitempty"`
+	Adjustments             []Adjustment       `json:"adjustments,omitempty"`
 }
 
 type Lane struct {
@@ -42,6 +42,10 @@ type Agent struct {
 }
 
 type Snapshot struct {
+	AgentKey       string          `json:"agentKey,omitempty"`
+	Name           string          `json:"name,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Lane           string          `json:"lane,omitempty"`
 	Instructions   string          `json:"instructions"`
 	SelectedSkills []string        `json:"selectedSkills"`
 	SkillOverrides []SkillOverride `json:"skillOverrides"`
@@ -69,6 +73,13 @@ type Adjustment struct {
 	Source    string `json:"source"`
 	Message   string `json:"message"`
 	AppliedAt string `json:"appliedAt"`
+}
+
+type AdjustmentRequest struct {
+	Action     string `json:"action"`
+	AgentKey   string `json:"agentKey"`
+	HighImpact bool   `json:"highImpact,omitempty"`
+	Warning    string `json:"warning,omitempty"`
 }
 
 func DefaultPlan(ctx RequirementContext) Plan {
@@ -102,13 +113,10 @@ func DefaultPlan(ctx RequirementContext) Plan {
 		{"image-builder", "deployer"},
 	}
 	if needsSecurityReview(ctx.ConfirmedRequirementJSON) {
-		agents = append(agents, agent("security-reviewer", "安全审查", "security_review", "generation", true, "检查安全和权限风险。", "检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。", nil))
-		edges = replaceEdge(edges, "code-reviewer", "tester", []Edge{
-			{"code-reviewer", "security-reviewer"},
-			{"security-reviewer", "tester"},
-		})
+		agents = insertAgentAfter(agents, "code-reviewer", securityReviewerAgent())
+		edges = insertBetween(edges, "code-reviewer", "security-reviewer", "tester")
 	}
-	return Plan{
+	plan := Plan{
 		SchemaVersion: 1,
 		Mode:          "topological_serial",
 		Lanes: []Lane{
@@ -120,6 +128,7 @@ func DefaultPlan(ctx RequirementContext) Plan {
 		Agents:       agents,
 		Edges:        edges,
 	}
+	return applyAdjustments(plan, adjustmentsFromRequirement(ctx.ConfirmedRequirementJSON))
 }
 
 func agent(key, name, role, lane string, highImpact bool, desc, instructions string, skills []string) Agent {
@@ -129,7 +138,10 @@ func agent(key, name, role, lane string, highImpact bool, desc, instructions str
 	return Agent{
 		Key: key, Name: name, Role: role, Lane: lane, HighImpact: highImpact,
 		DefaultParticipation: "required", Description: desc,
-		Snapshot: Snapshot{Instructions: instructions, SelectedSkills: skills, SkillOverrides: []SkillOverride{}},
+		Snapshot: Snapshot{
+			AgentKey: key, Name: name, Description: desc, Lane: lane,
+			Instructions: instructions, SelectedSkills: skills, SkillOverrides: []SkillOverride{},
+		},
 	}
 }
 
@@ -150,6 +162,138 @@ func replaceEdge(edges []Edge, from, to string, replacement []Edge) []Edge {
 			out = append(out, replacement...)
 			continue
 		}
+		out = append(out, edge)
+	}
+	return out
+}
+
+func adjustmentsFromRequirement(raw string) []AdjustmentRequest {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var doc struct {
+		CollaborationAdjustments []AdjustmentRequest `json:"collaborationAdjustments"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil
+	}
+	return doc.CollaborationAdjustments
+}
+
+func applyAdjustments(plan Plan, requests []AdjustmentRequest) Plan {
+	for _, req := range requests {
+		action := strings.ToLower(strings.TrimSpace(req.Action))
+		key := strings.TrimSpace(req.AgentKey)
+		if key == "" {
+			continue
+		}
+		switch action {
+		case "remove_agent", "remove":
+			if plan.AgentKeys()[key] {
+				plan = removeAgent(plan, key)
+				plan.Adjustments = append(plan.Adjustments, Adjustment{Source: "requirement", Message: adjustmentMessage("remove_agent", key, req.Warning), AppliedAt: "plan_build"})
+			}
+		case "add_agent", "add":
+			if plan.AgentKeys()[key] {
+				continue
+			}
+			if key == "security-reviewer" {
+				plan.Agents = insertAgentAfter(plan.Agents, "code-reviewer", securityReviewerAgent())
+				plan.Edges = insertBetween(plan.Edges, "code-reviewer", "security-reviewer", "tester")
+				plan.Adjustments = append(plan.Adjustments, Adjustment{Source: "requirement", Message: adjustmentMessage("add_agent", key, req.Warning), AppliedAt: "plan_build"})
+				continue
+			}
+			plan.Adjustments = append(plan.Adjustments, Adjustment{Source: "requirement", Message: adjustmentMessage("unsupported_add_agent", key, req.Warning), AppliedAt: "plan_build"})
+		}
+	}
+	return plan
+}
+
+func adjustmentMessage(action, key, warning string) string {
+	if strings.TrimSpace(warning) != "" {
+		return action + ":" + key + ":" + strings.TrimSpace(warning)
+	}
+	return action + ":" + key
+}
+
+func securityReviewerAgent() Agent {
+	return agent("security-reviewer", "安全审查", "security_review", "generation", true, "检查安全和权限风险。", "检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。", nil)
+}
+
+func insertAgentAfter(agents []Agent, afterKey string, newAgent Agent) []Agent {
+	for _, a := range agents {
+		if a.Key == newAgent.Key {
+			return agents
+		}
+	}
+	out := make([]Agent, 0, len(agents)+1)
+	inserted := false
+	for _, a := range agents {
+		out = append(out, a)
+		if a.Key == afterKey {
+			out = append(out, newAgent)
+			inserted = true
+		}
+	}
+	if !inserted {
+		out = append(out, newAgent)
+	}
+	return out
+}
+
+func insertBetween(edges []Edge, from, middle, to string) []Edge {
+	return dedupeEdges(replaceEdge(edges, from, to, []Edge{{from, middle}, {middle, to}}))
+}
+
+func removeAgent(plan Plan, key string) Plan {
+	preds := make([]string, 0)
+	succs := make([]string, 0)
+	for _, edge := range plan.Edges {
+		if edge.To == key {
+			preds = append(preds, edge.From)
+		}
+		if edge.From == key {
+			succs = append(succs, edge.To)
+		}
+	}
+
+	agents := make([]Agent, 0, len(plan.Agents))
+	for _, a := range plan.Agents {
+		if a.Key != key {
+			agents = append(agents, a)
+		}
+	}
+	plan.Agents = agents
+
+	live := plan.AgentKeys()
+	edges := make([]Edge, 0, len(plan.Edges)+len(preds)*len(succs))
+	for _, edge := range plan.Edges {
+		if edge.From == key || edge.To == key {
+			continue
+		}
+		if live[edge.From] && live[edge.To] {
+			edges = append(edges, edge)
+		}
+	}
+	for _, pred := range preds {
+		for _, succ := range succs {
+			if pred != succ && live[pred] && live[succ] {
+				edges = append(edges, Edge{From: pred, To: succ})
+			}
+		}
+	}
+	plan.Edges = dedupeEdges(edges)
+	return plan
+}
+
+func dedupeEdges(edges []Edge) []Edge {
+	out := make([]Edge, 0, len(edges))
+	seen := map[Edge]bool{}
+	for _, edge := range edges {
+		if edge.From == "" || edge.To == "" || seen[edge] {
+			continue
+		}
+		seen[edge] = true
 		out = append(out, edge)
 	}
 	return out

@@ -86,6 +86,27 @@ const readyToConfirmOutput = `{
   }
 }`
 
+const readyToConfirmWithoutCodeReviewOutput = `{
+  "status": "ready_to_confirm",
+  "round": 2,
+  "workLog": [{"type":"analysis","content":"需求已收敛，用户要求跳过代码审查"}],
+  "questions": [],
+  "requirement": {
+    "appType": "situation_replay",
+    "appName": "航母编队复盘应用",
+    "targetUsers": ["作战参谋"],
+    "coreScenario": "复盘近 1 个月航迹",
+    "primaryView": "地图 + 时间轴",
+    "mainEntities": ["编队","事件"],
+    "dataPolicy": "mock_data",
+    "acceptanceFocus": ["轨迹联动"],
+    "generationProfile": {"base":["software-factory-app"],"domain":["defense-operations-ui"],"pattern":["map-timeline-replay"]}
+  },
+  "collaborationAdjustments": [
+    {"action":"remove_agent","agentKey":"code-reviewer","highImpact":true,"warning":"用户确认本次不需要代码审查"}
+  ]
+}`
+
 const llmConfirmedOutput = `{
   "status": "confirmed",
   "round": 1,
@@ -314,6 +335,47 @@ func TestCreateClarificationAllowsMultipleActiveSessions(t *testing.T) {
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("sessions = %#v, want 2", sessions)
+	}
+}
+
+func TestClarificationCollaborationAdjustmentsPersistIntoConfirmedPlan(t *testing.T) {
+	_, r, st := newClarTestServer(t, fakeClarRunner{stdout: readyToConfirmWithoutCodeReviewOutput})
+
+	create := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成复盘应用，不需要代码审查"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(create.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	persisted, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("get persisted session: %v", err)
+	}
+	if !strings.Contains(persisted.RequirementJSON, `"collaborationAdjustments"`) {
+		t.Fatalf("requirement_json should persist collaboration adjustments: %s", persisted.RequirementJSON)
+	}
+
+	confirm := doPost(t, r, http.MethodPost, "/api/clarifications/"+sess.ID+"/confirm", nil)
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d body=%s", confirm.Code, confirm.Body.String())
+	}
+	confirmed, err := st.GetClarificationSession(context.Background(), sess.ID)
+	if err != nil || confirmed == nil {
+		t.Fatalf("get confirmed session: %v", err)
+	}
+	if confirmed.CreatedJobID == "" {
+		t.Fatalf("expected created job id")
+	}
+	steps, err := st.ListJobSteps(context.Background(), confirmed.CreatedJobID)
+	if err != nil {
+		t.Fatalf("list job steps: %v", err)
+	}
+	for _, step := range steps {
+		if step.AgentKey == "code-reviewer" {
+			t.Fatalf("code-reviewer should be removed from confirmed job steps: %+v", steps)
+		}
 	}
 }
 

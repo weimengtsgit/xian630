@@ -805,7 +805,7 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "build collaboration plan")
 		return
 	}
-	steps, edges, err := collaborationSteps(jobID, plan)
+	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "build collaboration steps")
 		return
@@ -1006,6 +1006,9 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	// not fail: a single bad slug should not abort the round; the executor drops
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
+	if len(out.CollaborationAdjustments) > 0 {
+		out.Requirement.CollaborationAdjustments = append([]clarification.CollaborationAdjustment(nil), out.CollaborationAdjustments...)
+	}
 	out.Requirement.BlueprintRefs = s.sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
 	// The LLM may suggest business fields and safe blueprint refs, but the skill
 	// profile is always Factory-derived from those refs, while preserving the
@@ -1342,6 +1345,9 @@ func mergeRequirementDefaults(next, current clarification.Requirement) clarifica
 	}
 	if len(next.BlueprintRefs) == 0 {
 		next.BlueprintRefs = append([]string(nil), current.BlueprintRefs...)
+	}
+	if len(next.CollaborationAdjustments) == 0 {
+		next.CollaborationAdjustments = append([]clarification.CollaborationAdjustment(nil), current.CollaborationAdjustments...)
 	}
 	return next
 }

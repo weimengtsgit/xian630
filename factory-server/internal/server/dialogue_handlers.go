@@ -130,18 +130,18 @@ type businessDraftRecord struct {
 
 // dialogueView is the composed response shape returned by every dialogue route.
 type dialogueView struct {
-	Session                   model.DialogueSession         `json:"session"`
-	Messages                  []model.DialogueMessage       `json:"messages"`
-	Route                     routePayload                  `json:"route"`
-	Recommendations           []recommendationCard          `json:"recommendations,omitempty"`
-	AgentDraft                dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
-	AgentDraftStatus          string                        `json:"agentDraftStatus,omitempty"`
-	AgentConsolidation        []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
-	Child                     *clarificationView            `json:"child,omitempty"`
-	CollaborationPlanPreview  *collaborationPlanPreview     `json:"collaborationPlanPreview,omitempty"`
-	ResolvedApplication       *model.Application            `json:"resolvedApplication,omitempty"`
-	CreatedAgent              *model.Agent                  `json:"createdAgent,omitempty"`
-	SeededJob                 *model.Job                    `json:"seededJob,omitempty"`
+	Session                  model.DialogueSession         `json:"session"`
+	Messages                 []model.DialogueMessage       `json:"messages"`
+	Route                    routePayload                  `json:"route"`
+	Recommendations          []recommendationCard          `json:"recommendations,omitempty"`
+	AgentDraft               dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
+	AgentDraftStatus         string                        `json:"agentDraftStatus,omitempty"`
+	AgentConsolidation       []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
+	Child                    *clarificationView            `json:"child,omitempty"`
+	CollaborationPlanPreview *collaborationPlanPreview     `json:"collaborationPlanPreview,omitempty"`
+	ResolvedApplication      *model.Application            `json:"resolvedApplication,omitempty"`
+	CreatedAgent             *model.Agent                  `json:"createdAgent,omitempty"`
+	SeededJob                *model.Job                    `json:"seededJob,omitempty"`
 }
 
 // collaborationPlanPreview is the confirm-summary preview of the collaboration
@@ -151,11 +151,11 @@ type dialogueView struct {
 // task/job is created — so the user can see and (later) adjust the participating
 // agents before generation starts. No job is seeded in this path.
 type collaborationPlanPreview struct {
-	SchemaVersion      int                           `json:"schemaVersion"`
-	Mode               string                        `json:"mode"`
-	Lanes              []collaboration.Lane          `json:"lanes"`
-	Agents             []collaboration.Agent         `json:"agents"`
-	Edges              []collaboration.Edge          `json:"edges"`
+	SchemaVersion      int                              `json:"schemaVersion"`
+	Mode               string                           `json:"mode"`
+	Lanes              []collaboration.Lane             `json:"lanes"`
+	Agents             []collaboration.Agent            `json:"agents"`
+	Edges              []collaboration.Edge             `json:"edges"`
 	HighImpactWarnings []collaborationHighImpactWarning `json:"highImpactWarnings,omitempty"`
 }
 
@@ -1897,7 +1897,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "build collaboration plan")
 		return
 	}
-	steps, edges, err := collaborationSteps(jobID, plan)
+	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "build collaboration steps")
 		return

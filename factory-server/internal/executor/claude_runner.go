@@ -43,6 +43,22 @@ type codeGenerationStepOutput struct {
 	Warnings       []string          `json:"warnings,omitempty"`
 }
 
+type collaborationStepSnapshot struct {
+	AgentKey       string                  `json:"agentKey"`
+	Name           string                  `json:"name"`
+	Description    string                  `json:"description"`
+	Lane           string                  `json:"lane"`
+	Instructions   string                  `json:"instructions"`
+	SelectedSkills []string                `json:"selectedSkills"`
+	SkillOverrides []collaborationSkillDoc `json:"skillOverrides"`
+}
+
+type collaborationSkillDoc struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Scope   string `json:"scope"`
+}
+
 func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	if emit == nil {
 		emit = runner.NopEmitter{}
@@ -88,16 +104,18 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	dataPolicy := parseDataPolicy(confirmedReq)
 	skillPaths := selectedSkillPaths(c.workspace(), profile)
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
+	collaborationSnapshot := parseCollaborationStepSnapshot(step.SnapshotJSON)
 
 	input, err := json.MarshalIndent(map[string]any{
-		"job":                  job,
-		"step":                 step,
-		"confirmedRequirement": confirmedReq,
-		"generationProfile":    profile,
-		"blueprintRefs":        blueprintRefs,
-		"skills":               skillPaths,
-		"blueprintDocs":        blueprintPaths,
-		"repairContext":        step.UserPrompt,
+		"job":                   job,
+		"step":                  step,
+		"confirmedRequirement":  confirmedReq,
+		"generationProfile":     profile,
+		"blueprintRefs":         blueprintRefs,
+		"skills":                skillPaths,
+		"blueprintDocs":         blueprintPaths,
+		"repairContext":         step.UserPrompt,
+		"collaborationSnapshot": collaborationSnapshot,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -111,13 +129,16 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// code_generation's audit.
 	baseline := c.Claude.BaselineStatus(ctx, c.AuditRunner)
 	prompt := c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy)
+	if block := collaborationSnapshotPromptBlock(collaborationSnapshot); block != "" {
+		prompt += block
+	}
 	// step.UserPrompt carries the user's answer when a step is re-run after
 	// pausing for clarification (waiting_user → answerJob → SetStepUserPrompt),
 	// OR a repair-from-failure instruction. For generative steps we surface it
 	// so the agent incorporates the answer instead of re-asking the same
 	// question. Without this the re-run is blind (identical input).
 	if strings.TrimSpace(step.UserPrompt) != "" &&
-		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration) {
+		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration || isCollaborationProducerKind(step.Kind)) {
 		prompt += "\n\n[user_input]\n" + step.UserPrompt + "\n"
 	}
 	if err := c.Claude.Run(ctx, ws, prompt, input, step.Kind == model.StepCodeGeneration, emit); err != nil {
@@ -155,16 +176,93 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	default:
 		// The remaining admitted gate kinds (collaboration_orchestration,
 		// domain_analysis, design_contract, data_integration) are analysis/
-		// contract producers with no executor-side validation beyond a parseable
-		// output.json. Succeed when output exists; fail output_invalid_json
-		// otherwise. They are NOT blocking gates, so they never carry
-		// ErrorBlockingReview and never trigger auto-repair.
-		var raw map[string]any
-		if err := runner.ReadAndDecode(ws.OutputPath(), &raw); err != nil {
-			return c.failureFromError(err), nil
-		}
-		return StepResult{Status: model.StepStatusSucceeded}, nil
+		// contract producers. They share the normal needsUserInput/questions
+		// contract so domain-level uncertainty can pause for user clarification
+		// instead of leaking prose into output.json and failing as invalid JSON.
+		out, err := validateCollaborationProducer(ws.OutputPath())
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
 	}
+}
+
+func validateCollaborationProducer(outputPath string) (runner.StepOutput, error) {
+	var raw struct {
+		Status         string            `json:"status"`
+		NeedsUserInput bool              `json:"needsUserInput"`
+		Questions      []runner.Question `json:"questions"`
+	}
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return runner.StepOutput{}, err
+	}
+	needsUserInput := raw.NeedsUserInput || strings.EqualFold(strings.TrimSpace(raw.Status), "needs_input")
+	if needsUserInput && len(raw.Questions) == 0 {
+		return runner.StepOutput{}, fmt.Errorf("questions required when collaboration step needs input: %w", runner.ErrSchemaValidationFailed)
+	}
+	return runner.StepOutput{NeedsUserInput: needsUserInput, Questions: raw.Questions}, nil
+}
+
+func parseCollaborationStepSnapshot(raw string) collaborationStepSnapshot {
+	var snapshot collaborationStepSnapshot
+	if strings.TrimSpace(raw) == "" {
+		return snapshot
+	}
+	_ = json.Unmarshal([]byte(raw), &snapshot)
+	return snapshot
+}
+
+func collaborationSnapshotPromptBlock(snapshot collaborationStepSnapshot) string {
+	if strings.TrimSpace(snapshot.Instructions) == "" && len(snapshot.SelectedSkills) == 0 && len(snapshot.SkillOverrides) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[collaboration_agent_snapshot]\n")
+	b.WriteString("这是本次生成任务的协作智能体配置快照，只影响当前任务，不写回全局 .claude/skills。执行本阶段时必须优先遵循本快照。\n")
+	if strings.TrimSpace(snapshot.Name) != "" {
+		b.WriteString("name: ")
+		b.WriteString(snapshot.Name)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(snapshot.Description) != "" {
+		b.WriteString("description: ")
+		b.WriteString(snapshot.Description)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(snapshot.Instructions) != "" {
+		b.WriteString("instructions:\n")
+		b.WriteString(snapshot.Instructions)
+		b.WriteString("\n")
+	}
+	if len(snapshot.SelectedSkills) > 0 {
+		b.WriteString("selectedSkills:\n")
+		for _, skill := range snapshot.SelectedSkills {
+			if strings.TrimSpace(skill) == "" {
+				continue
+			}
+			b.WriteString("- ")
+			b.WriteString(skill)
+			b.WriteString("\n")
+		}
+	}
+	if len(snapshot.SkillOverrides) > 0 {
+		b.WriteString("skillOverrides:\n")
+		for _, override := range snapshot.SkillOverrides {
+			path := strings.TrimSpace(override.Path)
+			content := strings.TrimSpace(override.Content)
+			if path == "" && content == "" {
+				continue
+			}
+			b.WriteString("--- skill: ")
+			b.WriteString(path)
+			if strings.TrimSpace(override.Scope) != "" {
+				b.WriteString(" scope: ")
+				b.WriteString(override.Scope)
+			}
+			b.WriteString(" ---\n")
+			b.WriteString(limitRepairContext(content, 12000))
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // emitWorkLog decodes the PUBLIC workLog array from the step's output.json and
@@ -546,6 +644,9 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
+	if isCollaborationProducerKind(step.Kind) {
+		return collaborationProducerPrompt(job, step, ws)
+	}
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
@@ -573,6 +674,44 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "你是软件工厂的安全审查智能体。检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
 	default:
 		return job.UserPrompt
+	}
+}
+
+func isCollaborationProducerKind(kind model.StepKind) bool {
+	switch kind {
+	case model.StepCollaborationOrchestration, model.StepDomainAnalysis, model.StepDesignContract, model.StepDataIntegration:
+		return true
+	default:
+		return false
+	}
+}
+
+func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
+		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
+		"output.json 路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、workLog、warnings。" +
+		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
+		"如果发现必须由用户确认才能避免错误实现，则 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮协作澄清的回答，必须据此推进，不要重复提出已回答过的问题。" +
+		"workLog 必须是面向用户的简短过程摘要数组，每项包含 title 和 summary；warnings 用于记录非阻塞风险。" +
+		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。" +
+		"用户需求：" + job.UserPrompt
+}
+
+func collaborationProducerName(kind model.StepKind) string {
+	switch kind {
+	case model.StepCollaborationOrchestration:
+		return "协作编排"
+	case model.StepDomainAnalysis:
+		return "领域分析"
+	case model.StepDesignContract:
+		return "设计契约"
+	case model.StepDataIntegration:
+		return "数据接入"
+	default:
+		return string(kind)
 	}
 }
 

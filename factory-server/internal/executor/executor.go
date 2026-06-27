@@ -877,6 +877,12 @@ func (e *Executor) maybeAutoRepair(ctx context.Context, jobID, failedStepID stri
 		return false
 	}
 
+	codeStep, err := e.store.GetStepByKind(ctx, jobID, model.StepCodeGeneration)
+	if err != nil || codeStep == nil {
+		return false
+	}
+	repairPrompt := e.buildRepairPrompt(ctx, *job, *failedStep)
+
 	// Under the caps: increment, persist, rewind, re-queue.
 	state.totalAutomaticRepairs++
 	state.byReason[reasonKey]++
@@ -885,6 +891,9 @@ func (e *Executor) maybeAutoRepair(ctx context.Context, jobID, failedStepID stri
 		return false
 	}
 	if err := e.store.SetJobCollaborationPlan(ctx, jobID, newPlan); err != nil {
+		return false
+	}
+	if err := e.store.SetStepUserPrompt(ctx, codeStep.ID, repairPrompt); err != nil {
 		return false
 	}
 	if err := e.rewindToCodeGeneration(ctx, jobID, *failedStep); err != nil {

@@ -255,6 +255,18 @@ export function StepExecutionDrawer({
   const [snapshotSaving, setSnapshotSaving] = useState(false)
 
   const status = (step && (step.status || step.state)) || 'pending'
+  const snapshotPreview = useMemo(() => {
+    if (!snapshotDraft.trim()) return null
+    try {
+      const parsed = JSON.parse(snapshotDraft)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }, [snapshotDraft])
+  const snapshotSkillFiles = snapshotPreview && Array.isArray(snapshotPreview.skillOverrides)
+    ? snapshotPreview.skillOverrides.filter(item => item && (item.path || item.content))
+    : []
 
   // Reset follow state when switching step or attempt (new view = fresh tail).
   useEffect(() => {
@@ -528,6 +540,29 @@ export function StepExecutionDrawer({
                   <p className="sed-snapshot-hint">
                     编辑仅影响本次生成任务，不会改动全局代理/技能配置。
                   </p>
+                  {snapshotPreview ? (
+                    <div className="sed-snapshot-meta">
+                      {snapshotPreview.name ? <strong>{snapshotPreview.name}</strong> : null}
+                      {snapshotPreview.description ? <p>{snapshotPreview.description}</p> : null}
+                      {Array.isArray(snapshotPreview.selectedSkills) && snapshotPreview.selectedSkills.length > 0 ? (
+                        <div className="sed-snapshot-skills">
+                          {snapshotPreview.selectedSkills.map(skill => (
+                            <span key={skill}>{skill}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {snapshotSkillFiles.length > 0 ? (
+                        <ul className="sed-snapshot-skill-files">
+                          {snapshotSkillFiles.map((file, index) => (
+                            <li key={`${file.path || 'inline'}-${index}`}>
+                              <FileText size={12} />
+                              <span>{file.path || `inline-${index + 1}`}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <textarea
                     className="sed-snapshot-editor"
                     value={snapshotDraft}

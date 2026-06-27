@@ -667,6 +667,20 @@
 .sed-clarification-options li { font-size: 12px; color: #d7eef8; line-height: 1.6; }
 .sed-clarification-rec { margin-left: 6px; padding: 0 5px; border-radius: 999px; background: rgba(126, 231, 135, 0.16); border: 1px solid rgba(126, 231, 135, 0.42); color: #9df3a6; font-style: normal; font-size: 10px; }
 .sed-clarification-default { display: block; margin-top: 4px; font-size: 11px; color: rgba(243, 234, 210, 0.55); }
+.sed-snapshot { display: flex; flex-direction: column; gap: 8px; border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 7px; padding: 10px; background: rgba(9, 24, 38, 0.5); }
+.sed-snapshot h4 { margin: 0; color: #d7eef8; font-size: 12px; }
+.sed-snapshot-hint { margin: 0; color: rgba(215, 238, 248, 0.62); font-size: 11px; line-height: 1.45; }
+.sed-snapshot-meta { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 6px; background: rgba(6, 18, 29, 0.46); }
+.sed-snapshot-meta strong { color: #edfaff; font-size: 13px; }
+.sed-snapshot-meta p { margin: 0; color: rgba(215, 238, 248, 0.76); font-size: 12px; line-height: 1.45; }
+.sed-snapshot-skills { display: flex; flex-wrap: wrap; gap: 5px; }
+.sed-snapshot-skills span { padding: 2px 6px; border-radius: 5px; background: rgba(104, 221, 255, 0.1); border: 1px solid rgba(104, 221, 255, 0.24); color: #d7eef8; font-size: 11px; }
+.sed-snapshot-skill-files { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.sed-snapshot-skill-files li { min-width: 0; display: flex; align-items: center; gap: 5px; color: rgba(215, 238, 248, 0.8); font-size: 11px; }
+.sed-snapshot-skill-files span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sed-snapshot-editor { width: 100%; min-height: 180px; resize: vertical; border: 1px solid rgba(111, 218, 255, 0.22); border-radius: 6px; padding: 8px; background: rgba(3, 12, 20, 0.72); color: #d7eef8; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; box-sizing: border-box; }
+.sed-snapshot-error { margin: 0; color: #ffb1aa; font-size: 11px; line-height: 1.45; }
+.sed-snapshot-save { align-self: flex-start; }
 .sed-summary-text,
 .sed-error-text,
 .sed-artifact-text {

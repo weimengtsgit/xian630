@@ -198,6 +198,242 @@ func TestClaudeStepRunnerPassesRepairContextToCodeGeneration(t *testing.T) {
 	}
 }
 
+func TestClaudeStepRunnerPassesCollaborationSnapshotToPromptAndInput(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"workLog": []any{},
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDomainAnalysis)
+	step.SnapshotJSON = `{
+	  "instructions":"本次领域分析必须采用用户编辑后的规则。",
+	  "selectedSkills":["software-factory-app"],
+	  "skillOverrides":[{"path":".claude/skills/software-factory-app/SKILL.md","content":"# Skill\\n本次任务覆盖后的技能内容","scope":"task"}]
+	}`
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s, want succeeded: %s", res.Status, res.ErrorMessage)
+	}
+	attemptDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "domain_analysis", "attempt-1")
+	prompt, err := os.ReadFile(filepath.Join(attemptDir, "prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	for _, want := range []string{"本次领域分析必须采用用户编辑后的规则", ".claude/skills/software-factory-app/SKILL.md", "本次任务覆盖后的技能内容"} {
+		if !bytes.Contains(prompt, []byte(want)) {
+			t.Fatalf("prompt missing snapshot content %q:\n%s", want, prompt)
+		}
+	}
+	input, err := os.ReadFile(filepath.Join(attemptDir, "input.json"))
+	if err != nil {
+		t.Fatalf("read input: %v", err)
+	}
+	for _, want := range []string{`"collaborationSnapshot"`, "本次领域分析必须采用用户编辑后的规则", "本次任务覆盖后的技能内容"} {
+		if !bytes.Contains(input, []byte(want)) {
+			t.Fatalf("input missing snapshot content %q:\n%s", want, input)
+		}
+	}
+}
+
+func TestCollaborationProducerPromptsForceJSONContract(t *testing.T) {
+	r := &ClaudeStepRunner{Workspace: t.TempDir()}
+	for _, kind := range []model.StepKind{
+		model.StepCollaborationOrchestration,
+		model.StepDomainAnalysis,
+		model.StepDesignContract,
+		model.StepDataIntegration,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			ws := runner.AttemptWorkspace{
+				Root:     filepath.Join(t.TempDir(), ".factory-runs"),
+				JobID:    "job_prompt_contract",
+				StepKind: kind,
+				Attempt:  1,
+			}
+			prompt := r.prompt(model.Job{UserPrompt: "生成潮汐仪表盘"}, model.JobStep{Kind: kind}, ws, nil, nil, "")
+			for _, want := range []string{
+				"最终回答必须只包含一个 JSON 对象",
+				"needsUserInput",
+				"questions",
+				"workLog",
+				"不要 Markdown",
+				"Factory 会把 stdout 保存为 output.json",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("%s prompt missing %q:\n%s", kind, want, prompt)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeStepRunnerCollaborationProducerNeedsUserInputWaits(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "needs_input",
+			"summary":        "潮汐基准面需要用户确认",
+			"needsUserInput": true,
+			"questions": []map[string]any{
+				{
+					"id":       "tide-depth-reference",
+					"question": "请确认 12.8 米吃水阈值如何与 MLLW 潮高比较。",
+					"options": []map[string]any{
+						{"value": "chart_depth", "label": "提供各港口航道水深"},
+						{"value": "direct_threshold", "label": "直接按用户阈值比较并显示基准面警告"},
+					},
+				},
+			},
+			"workLog": []map[string]string{{"title": "发现领域决策点", "summary": "MLLW 潮高不能直接和吃水阈值比较"}},
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepCollaborationOrchestration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	trace := &captureTraceEmitter{}
+
+	res, err := r.Run(context.Background(), job, step, trace)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser {
+		t.Fatalf("status = %s, want waiting_user: %#v", res.Status, res)
+	}
+	if !res.NeedsUserInput || len(res.Questions) != 1 {
+		t.Fatalf("needs user input not preserved: %#v", res)
+	}
+	if !trace.hasType(string(model.WorkTraceClarification)) {
+		t.Fatalf("no clarification trace emitted: %#v", trace.events)
+	}
+	if !trace.payloadContaining("MLLW") {
+		t.Fatalf("clarification trace missing question detail: %#v", trace.events)
+	}
+}
+
+func TestValidateCollaborationProducerTreatsNeedsInputStatusAsWaiting(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "output.json")
+	raw := []byte(`{
+  "status": "needs_input",
+  "summary": "需要确认潮汐阈值",
+  "questions": [
+    {
+      "id": "tide-threshold",
+      "question": "请确认吃水阈值的比较方式。",
+      "options": [
+        {"value": "chart_depth", "label": "使用航道水深"},
+        {"value": "direct_threshold", "label": "直接比较并展示基准面警告"}
+      ]
+    }
+  ],
+  "workLog": []
+}`)
+	if err := os.WriteFile(outputPath, raw, 0o644); err != nil {
+		t.Fatalf("write output.json: %v", err)
+	}
+
+	out, err := validateCollaborationProducer(outputPath)
+	if err != nil {
+		t.Fatalf("validateCollaborationProducer: %v", err)
+	}
+	if !out.NeedsUserInput || len(out.Questions) != 1 {
+		t.Fatalf("output = %#v, want waiting with one question", out)
+	}
+}
+
+func TestValidateCollaborationProducerRequiresQuestionsWhenWaiting(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "output.json")
+	raw := []byte(`{
+  "status": "needs_input",
+  "summary": "需要确认潮汐阈值",
+  "needsUserInput": true,
+  "questions": []
+}`)
+	if err := os.WriteFile(outputPath, raw, 0o644); err != nil {
+		t.Fatalf("write output.json: %v", err)
+	}
+
+	_, err := validateCollaborationProducer(outputPath)
+	if err == nil || !strings.Contains(err.Error(), string(model.ErrorSchemaValidationFailed)) {
+		t.Fatalf("error = %v, want schema_validation_failed", err)
+	}
+}
+
+func TestClaudeStepRunnerPassesUserInputToCollaborationProducer(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"summary":        "用户已确认潮汐阈值解释",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepCollaborationOrchestration)
+	step.UserPrompt = "用户选择 direct_threshold：直接按用户阈值比较并显示基准面警告"
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s, want succeeded: %#v", res.Status, res)
+	}
+	attemptDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "collaboration_orchestration", "attempt-1")
+	prompt, err := os.ReadFile(filepath.Join(attemptDir, "prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	if !bytes.Contains(prompt, []byte("[user_input]")) || !bytes.Contains(prompt, []byte("direct_threshold")) {
+		t.Fatalf("prompt missing collaboration user input:\n%s", prompt)
+	}
+}
+
 func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T) {
 	workspace := t.TempDir()
 	artifactRoot := filepath.Join(t.TempDir(), ".factory-runs")

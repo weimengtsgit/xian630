@@ -210,15 +210,15 @@ type Application struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// AgentCategory partitions agents by how they are produced: the six fixed
-// software-development pipeline agents (registry-seeded, kind-driven) versus
-// business-processing agents created from a confirmed dialogue.
+// AgentCategory partitions agents by how they are produced: the registry-seeded
+// software-development pipeline agents (kind-driven) versus business-processing
+// agents created from a confirmed dialogue.
 type AgentCategory string
 
 const (
-	// AgentCategorySoftwareDevelopment is the category for the six pipeline
-	// agents (requirement_analysis … deployment). They are registry-seeded and
-	// dispatched by StepKind; a manually-created agent cannot claim it.
+	// AgentCategorySoftwareDevelopment is the category for collaboration
+	// pipeline agents. They are registry-seeded and dispatched by StepKind; a
+	// manually-created agent cannot claim it.
 	AgentCategorySoftwareDevelopment AgentCategory = "software_development"
 	// AgentCategoryBusinessProcessing is the category for agents produced from
 	// a confirmed business-processing dialogue. They carry a non-empty Prompt.
@@ -237,7 +237,7 @@ type Agent struct {
 	// (dialogue-created). See AgentCategory.
 	Category AgentCategory `json:"category"`
 	// Prompt is the system prompt for a business_processing agent. Empty for
-	// the six software-development pipeline agents.
+	// software-development pipeline agents.
 	Prompt    string `json:"prompt"`
 	Enabled   bool   `json:"enabled"`
 	SortOrder int    `json:"sort_order"`
