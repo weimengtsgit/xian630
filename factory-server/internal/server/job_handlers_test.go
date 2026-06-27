@@ -324,8 +324,8 @@ func TestGetJob(t *testing.T) {
 // cc-status availability flag.
 type getJobResponse struct {
 	model.Job
-	CCStatusAvailable bool        `json:"cc_status_available"`
-	PendingQuestions  []getJobQ   `json:"pending_questions"`
+	CCStatusAvailable bool      `json:"cc_status_available"`
+	PendingQuestions  []getJobQ `json:"pending_questions"`
 }
 
 // getJobQ is the minimal shape of a persisted clarifying question.

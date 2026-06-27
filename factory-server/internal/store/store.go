@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -32,6 +33,9 @@ type Store struct {
 	// so the atomic rollback contract can be verified; it is always nil in
 	// production.
 	jobOnCreateStepHook func(model.JobStep) error
+
+	debugJobStepCallsMu sync.Mutex
+	debugJobStepCalls   map[string]int
 }
 
 // Open opens (and migrates) the database at path. For an in-memory database

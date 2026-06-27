@@ -204,3 +204,81 @@ func TestCountRunningJobsByAppSlug(t *testing.T) {
 		t.Fatalf("running app-z = %d, want 0", n)
 	}
 }
+
+func TestListJobStepsDebugProgressesEveryTwoCalls(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	seedQueuedJobWithSlug(t, st, "job_debug", "app-debug", time.UnixMilli(1000))
+
+	wantByCall := [][]model.StepStatus{
+		{model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning, model.StepStatusPending},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusRunning},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded},
+		{model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded, model.StepStatusSucceeded},
+	}
+
+	for i, want := range wantByCall {
+		steps, err := st.ListJobSteps(context.Background(), "job_debug")
+		if err != nil {
+			t.Fatalf("call %d list steps: %v", i+1, err)
+		}
+		if len(steps) != len(want) {
+			t.Fatalf("call %d got %d steps, want %d", i+1, len(steps), len(want))
+		}
+		for j, status := range want {
+			if steps[j].Status != status {
+				t.Fatalf("call %d step %d status = %s, want %s", i+1, j+1, steps[j].Status, status)
+			}
+		}
+	}
+}
+func TestUpdateJobConfirmedRequirementSyncsClarificationRequirement(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.CreateClarificationSession(ctx, model.ClarificationSession{
+		ID: "clar_revision", InitialPrompt: "生成应用", Status: model.ClarificationStatusConfirmed,
+		RequirementJSON: `{"coreScenario":"旧摘要"}`, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create clarification: %v", err)
+	}
+	if err := st.CreateJob(ctx, model.Job{
+		ID: "job_revision", UserPrompt: "修改应用", Status: model.JobStatusRunning,
+		CurrentStepKind: model.StepRequirementAnalysis, ClarificationSessionID: "clar_revision",
+		ConfirmedRequirementJSON: `{"coreScenario":"旧摘要"}`, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	latest := `{"coreScenario":"新摘要","appName":"修订应用"}`
+	if err := st.UpdateJobConfirmedRequirement(ctx, "job_revision", latest); err != nil {
+		t.Fatalf("update confirmed requirement: %v", err)
+	}
+	job, err := st.GetJob(ctx, "job_revision")
+	if err != nil || job == nil || job.ConfirmedRequirementJSON != latest {
+		t.Fatalf("job requirement = %+v err=%v", job, err)
+	}
+	clar, err := st.GetClarificationSession(ctx, "clar_revision")
+	if err != nil || clar == nil || clar.RequirementJSON != latest {
+		t.Fatalf("clarification requirement = %+v err=%v", clar, err)
+	}
+}

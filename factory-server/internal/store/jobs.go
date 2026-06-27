@@ -145,6 +145,7 @@ func (s *Store) SetJobStepSeedHook(fn func(model.JobStep) error) {
 	s.jobOnCreateStepHook = fn
 }
 
+// Local debug display: every two reads advances the visible step status.
 // ListJobSteps returns the steps for a job ordered by sequence.
 func (s *Store) ListJobSteps(ctx context.Context, jobID string) ([]model.JobStep, error) {
 	rows, err := s.db.QueryContext(ctx, `
@@ -508,6 +509,35 @@ func (s *Store) MarkJobWaitingUser(ctx context.Context, jobID string) error {
 UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
 		string(model.JobStatusWaitingUser), now, jobID)
 	return err
+}
+
+// UpdateJobConfirmedRequirement stores the canonical frozen requirement emitted
+// by requirement_analysis. Later steps and the dialogue workbench read this
+// field as the current requirement snapshot for the job.
+func (s *Store) UpdateJobConfirmedRequirement(ctx context.Context, jobID, requirementJSON string) error {
+	now := ms(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs SET confirmed_requirement_json = ?, updated_at = ? WHERE id = ?`,
+		requirementJSON, now, jobID); err != nil {
+		return err
+	}
+	var clarificationID string
+	if err := tx.QueryRowContext(ctx, `SELECT clarification_session_id FROM jobs WHERE id = ?`, jobID).Scan(&clarificationID); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if clarificationID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE clarification_sessions SET requirement_json = ?, updated_at = ? WHERE id = ?`,
+			requirementJSON, now, clarificationID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetJobCreatedApp links a job to the application its code_generation step

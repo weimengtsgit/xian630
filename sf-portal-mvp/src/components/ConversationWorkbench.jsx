@@ -126,6 +126,7 @@ export function ConversationWorkbench({
     it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
   )
   const currentDeployment = deploymentStatusInfo({ view, focusTask, steps: traceSteps, traceItems })
+  const focusRequirement = requirementFromJob(focusTask)
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -179,6 +180,7 @@ export function ConversationWorkbench({
             draftAnswers={draftAnswers}
             setDraftAnswers={setDraftAnswers}
             submitting={submitting}
+            focusRequirement={focusRequirement}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
@@ -325,7 +327,7 @@ export function ConversationWorkbench({
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
   if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
   if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
   if (item.type === 'clarification_prompt') {
@@ -389,7 +391,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
+  if (item.type === 'requirement_summary') return <RequirementSummary requirement={focusRequirement || item.requirement} />
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
@@ -713,7 +715,8 @@ function requirementFromJob(job) {
   const raw = job && (job.confirmed_requirement_json || job.confirmedRequirementJSON)
   if (!raw) return null
   try {
-    return JSON.parse(raw)
+    const parsed = JSON.parse(raw)
+    return parsed && (parsed.appType || parsed.appName || parsed.coreScenario || parsed.primaryView || parsed.dataPolicy) ? parsed : null
   } catch (_) {
     return null
   }
