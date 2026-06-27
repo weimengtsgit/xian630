@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -1090,4 +1091,241 @@ func (c *capturingAppender) AppendStepExecutionRecord(_ context.Context, rec mod
 	c.records = append(c.records, rec)
 	c.mu.Unlock()
 	return nil
+}
+
+// minimalCollaborationPlanJSON is a minimal valid collaboration plan carrying
+// the repair policy {2,1}. seedCollaborationJob persists it on the job so the
+// executor's plan-aware traversal + bounded-repair policy activate.
+func minimalCollaborationPlanJSON() string {
+	plan := map[string]any{
+		"schemaVersion": 1,
+		"mode":          "topological_serial",
+		"repairPolicy": map[string]any{
+			"maxAutomaticRepairs":                  2,
+			"maxAutomaticRepairsPerBlockingReason": 1,
+		},
+		"lanes": []map[string]any{
+			{"id": "generation", "label": "生成"},
+			{"id": "delivery", "label": "交付"},
+		},
+		"agents": []map[string]any{},
+		"edges":  []map[string]any{},
+	}
+	b, _ := json.Marshal(plan)
+	return string(b)
+}
+
+// seedCollaborationJob seeds a queued job whose CollaborationPlanJSON is set (so
+// the plan-aware traversal path activates) with a representative topological
+// step sequence INCLUDING code_review right after code_generation:
+//
+//	1 requirement_analysis → 2 code_generation → 3 code_review →
+//	4 test_verification → 5 image_build → 6 deployment
+//
+// It does NOT use the legacy six FixedSteps (there is no solution_design, and
+// code_review is inserted) — this is the collaboration-plan topology. The first
+// step is the CurrentStepKind so the executor starts at the head. This helper is
+// used ONLY by the collaboration-gate tests; the legacy seedJob (used by dozens
+// of executor tests) is unchanged.
+func seedCollaborationJob(t *testing.T, st *store.Store) string {
+	t.Helper()
+	now := time.Now()
+	jobID := "job_collab_" + itoa(int(randCounter.Add(1)))
+	job := model.Job{
+		ID:                    jobID,
+		UserPrompt:            "build me a collaboration thing",
+		Status:                model.JobStatusQueued,
+		CurrentStepKind:       model.StepRequirementAnalysis,
+		CollaborationPlanJSON: minimalCollaborationPlanJSON(),
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create collaboration job: %v", err)
+	}
+	defs := []struct {
+		kind     model.StepKind
+		seq      int
+		agentKey string
+	}{
+		{model.StepRequirementAnalysis, 1, "requirement-analyst"},
+		{model.StepCodeGeneration, 2, "code-generator"},
+		{model.StepCodeReview, 3, "code-reviewer"},
+		{model.StepTestVerification, 4, "tester"},
+		{model.StepImageBuild, 5, "image-builder"},
+		{model.StepDeployment, 6, "deployer"},
+	}
+	for _, def := range defs {
+		step := model.JobStep{
+			ID:       "step_collab_" + string(def.kind) + "_" + itoa(int(randCounter.Add(1))),
+			JobID:    jobID,
+			Kind:     def.kind,
+			Seq:      def.seq,
+			AgentKey: def.agentKey,
+			Status:   model.StepStatusPending,
+			Attempt:  0,
+		}
+		if err := st.CreateJobStep(context.Background(), step); err != nil {
+			t.Fatalf("create step %s: %v", def.kind, err)
+		}
+	}
+	return jobID
+}
+
+// repairStateJSON is the executor's repairState projection persisted inside the
+// job's CollaborationPlanJSON. It is decoded here only by the collaboration-gate
+// tests to assert the bounded-repair counters.
+type repairStateJSON struct {
+	TotalAutomaticRepairs int            `json:"totalAutomaticRepairs"`
+	ByReason              map[string]int `json:"byReason"`
+}
+
+func decodeRepairState(t *testing.T, planJSON string) repairStateJSON {
+	t.Helper()
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(planJSON), &doc); err != nil {
+		t.Fatalf("unmarshal collaboration_plan_json: %v", err)
+	}
+	var rs repairStateJSON
+	if raw, ok := doc["repairState"]; ok {
+		if err := json.Unmarshal(raw, &rs); err != nil {
+			t.Fatalf("unmarshal repairState: %v", err)
+		}
+	}
+	return rs
+}
+
+// runUntil blocks drive the executor one RunOnce at a time until cond(job)
+// returns true or attempts is exhausted. Unlike drain (which only stops when NO
+// queued job remains), runUntil lets a test observe a NON-terminal intermediate
+// state — e.g. the post-repair "queued/code_generation" state that a looping
+// drain would skip past by immediately re-running the repaired step. This is the
+// exact mechanic the dispatch asked for: drive step-by-step and snapshot mustJob
+// at the observation point rather than rely on drain's terminal-only stopping.
+func runUntil(t *testing.T, ctx context.Context, e *Executor, id string, maxAttempts int, cond func(model.Job) bool) model.Job {
+	t.Helper()
+	for i := 0; i < maxAttempts; i++ {
+		if err := e.RunOnce(ctx); err != nil {
+			t.Fatalf("RunOnce[%d]: %v", i, err)
+		}
+		job := mustJob(t, e.store, id)
+		if cond(job) {
+			return job
+		}
+	}
+	return mustJob(t, e.store, id)
+}
+
+// TestExecutorAutoRepairFromBlockingReviewOnce proves the bounded-repair policy
+// allows EXACTLY ONE auto-repair for a repairable blocking-review failure. The
+// fake runner blocks code_review with ErrorBlockingReview and succeeds every
+// other step. We expect: when code_review fails, the executor (instead of
+// MarkJobFailed) rewinds to code_generation, re-queues the job, and persists
+// repairState.totalAutomaticRepairs==1 with byReason keyed on the blocking
+// reason.
+//
+// MECHANIC (adapted from the brief's literal drain-count form): the brief's
+// tests called drain and asserted "queued/code_generation after 1 drain." But a
+// looping drain re-runs the rewound code_generation → code_review within the
+// SAME drain and hits the per-reason limit, so the literal "1 drain → queued"
+// assertion is impossible. Instead we drive the executor step-by-step with
+// runUntil and stop at the FIRST time the job is observed re-queued at
+// code_generation after a repair — the unambiguous post-repair checkpoint. This
+// isolates the "one repair allowed" property from the "repeated reason stops"
+// property proven by the next test.
+func TestExecutorAutoRepairFromBlockingReviewOnce(t *testing.T) {
+	blockingMsg := "数据接入契约未被代码使用"
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepCodeReview: {
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorBlockingReview,
+			ErrorMessage: blockingMsg,
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedCollaborationJob(t, st)
+
+	ctx := context.Background()
+	// Drive until the job has been repaired back to code_generation (the first
+	// re-queue), or until it terminates. 20 RunOnce steps is more than enough to
+	// reach code_review from requirement_analysis even with a repair rewind.
+	job := runUntil(t, ctx, e, id, 20, func(j model.Job) bool {
+		// Stop at the post-repair checkpoint: re-queued at code_generation AFTER
+		// the code_review step has already run at least once (so the failure was
+		// observed and repaired, not the initial seed state).
+		if j.Status != model.JobStatusQueued || j.CurrentStepKind != model.StepCodeGeneration {
+			return false
+		}
+		cr := stepByKindOrNil(st, id, model.StepCodeReview)
+		return cr.Status == model.StepStatusPending && cr.Attempt >= 1
+	})
+
+	if job.Status != model.JobStatusQueued || job.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("job after blocking review = %s/%s, want queued/code_generation", job.Status, job.CurrentStepKind)
+	}
+	rs := decodeRepairState(t, job.CollaborationPlanJSON)
+	if rs.TotalAutomaticRepairs != 1 {
+		t.Fatalf("repairState.totalAutomaticRepairs = %d, want 1", rs.TotalAutomaticRepairs)
+	}
+	wantKey := "code_review:blocking_review:" + blockingMsg
+	if got := rs.ByReason[wantKey]; got != 1 {
+		t.Fatalf("byReason[%q] = %d, want 1", wantKey, got)
+	}
+}
+
+// stepByKindOrNil returns the step for kind, or a zero JobStep if absent. Unlike
+// stepByKind it does not fatal on a miss — used for conditional observation.
+func stepByKindOrNil(st *store.Store, id string, k model.StepKind) model.JobStep {
+	steps, err := st.ListJobSteps(context.Background(), id)
+	if err != nil {
+		return model.JobStep{}
+	}
+	for _, s := range steps {
+		if s.Kind == k {
+			return s
+		}
+	}
+	return model.JobStep{}
+}
+
+// TestExecutorStopsAfterRepeatedBlockingReason proves that when the SAME
+// blocking reason recurs (byReason already at the per-reason limit of 1), the
+// job is NOT repaired again and ends Failed. The fake runner always blocks
+// code_review with the identical reason, so after the first repair the second
+// code_review failure must trip the per-reason cap and fail the job terminally.
+// We also assert totalAutomaticRepairs never exceeds the policy cap (2).
+func TestExecutorStopsAfterRepeatedBlockingReason(t *testing.T) {
+	blockingMsg := "same:blocking-review:data-contract"
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepCodeReview: {
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorBlockingReview,
+			ErrorMessage: blockingMsg,
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedCollaborationJob(t, st)
+
+	ctx := context.Background()
+	// Drain to terminal. With the per-reason cap at 1, the recurring identical
+	// blocking reason is repaired at most once, then the second occurrence fails
+	// the job terminally — so drain (which stops at no-queued-job) DOES terminate
+	// here, at status Failed. This is the case where drain's terminal-only
+	// stopping is correct: the job ends, it is not re-queued forever.
+	drain(t, ctx, e)
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusFailed {
+		t.Fatalf("job status = %s, want failed after repeated blocking reason", job.Status)
+	}
+	rs := decodeRepairState(t, job.CollaborationPlanJSON)
+	if rs.TotalAutomaticRepairs > 2 {
+		t.Fatalf("totalAutomaticRepairs = %d, want <= cap 2", rs.TotalAutomaticRepairs)
+	}
+	// The first repair incremented byReason[key] to 1; the second identical
+	// failure must NOT have been repaired (per-reason cap hit), so byReason[key]
+	// stays at 1 even though code_review failed twice with the same message.
+	wantKey := "code_review:blocking_review:" + blockingMsg
+	if got := rs.ByReason[wantKey]; got != 1 {
+		t.Fatalf("byReason[%q] = %d, want 1 (per-reason cap stops the 2nd)", wantKey, got)
+	}
 }

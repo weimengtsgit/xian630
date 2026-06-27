@@ -57,7 +57,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// clarification trace below share one gated path.
 	trace := runner.TraceEmitterFrom(emit)
 	switch step.Kind {
-	case model.StepRequirementAnalysis, model.StepSolutionDesign, model.StepCodeGeneration:
+	case model.StepRequirementAnalysis, model.StepSolutionDesign, model.StepCodeGeneration,
+		model.StepCollaborationOrchestration, model.StepDomainAnalysis, model.StepDesignContract,
+		model.StepDataIntegration, model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance:
 	default:
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "claude runner cannot handle " + string(step.Kind)}, nil
 	}
@@ -141,8 +143,27 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		res := c.finishCodeGeneration(ctx, trace, job, step, ws.OutputPath(), baseline)
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		return res, nil
+	case model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance:
+		// Blocking review gate: decode the gate's JSON status. status:"blocked"
+		// → failed with ErrorBlockingReview (the bounded-repair policy treats this
+		// as a repairable gate); status:"passed" (or absent) → succeeded. The
+		// gate output is produced by the prompt switch's review cases; decoding is
+		// lenient (prose/```json-wrapped output tolerated) the same way the
+		// generative steps are.
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		return finishReviewGate(ctx, trace, step, ws.OutputPath()), nil
 	default:
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "unsupported claude step"}, nil
+		// The remaining admitted gate kinds (collaboration_orchestration,
+		// domain_analysis, design_contract, data_integration) are analysis/
+		// contract producers with no executor-side validation beyond a parseable
+		// output.json. Succeed when output exists; fail output_invalid_json
+		// otherwise. They are NOT blocking gates, so they never carry
+		// ErrorBlockingReview and never trigger auto-repair.
+		var raw map[string]any
+		if err := runner.ReadAndDecode(ws.OutputPath(), &raw); err != nil {
+			return c.failureFromError(err), nil
+		}
+		return StepResult{Status: model.StepStatusSucceeded}, nil
 	}
 }
 
@@ -253,6 +274,67 @@ func assumptionPayload(warning string) string {
 	}{Assumption: warning})
 	if err != nil {
 		return `{"assumption":""}`
+	}
+	return string(b)
+}
+
+// finishReviewGate decodes a blocking-review gate's output.json and maps its
+// status field to a StepResult. The gate prompt asks the agent to emit a JSON
+// object with a top-level "status" of "passed" or "blocked" (plus optional
+// blockingFindings / advisoryFindings arrays). "blocked" → failed with
+// ErrorBlockingReview so the bounded-repair policy can rewind to code_generation;
+// "passed" (or a missing/empty status) → succeeded. The first blocking finding's
+// text becomes the error message so repairReasonKey (kind:code:message) is
+// stable for the SAME underlying block. Decoding is lenient via the shared
+// runner.ReadAndDecode so prose-wrapped / ```json-fenced output is tolerated.
+func finishReviewGate(ctx context.Context, trace runner.TraceEmitter, step model.JobStep, outputPath string) StepResult {
+	var raw reviewGateOutput
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorOutputInvalidJSON, ErrorMessage: err.Error()}
+	}
+	if strings.EqualFold(raw.Status, "blocked") {
+		msg := "blocking review"
+		if len(raw.BlockingFindings) > 0 {
+			f := raw.BlockingFindings[0]
+			if f.Message != "" {
+				msg = f.Message
+			} else if f.Title != "" {
+				msg = f.Title
+			}
+		}
+		// Surface the block as an assumption trace so the dialogue workbench
+		// shows what was blocked, then return the blocking-review failure.
+		if trace != nil {
+			_ = trace.Trace(ctx, string(model.WorkTraceAssumption), reviewBlockedPayload(step, msg))
+		}
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBlockingReview, ErrorMessage: msg}
+	}
+	return StepResult{Status: model.StepStatusSucceeded}
+}
+
+// reviewGateOutput is the decoded shape of a blocking-review gate output.json.
+// Only Status + the first blocking finding's text are load-bearing for the
+// pass/block decision; advisory findings are decoded so they survive a future
+// "advisory-only passed" refinement without re-shaping.
+type reviewGateOutput struct {
+	Status           string `json:"status"`
+	BlockingFindings []struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	} `json:"blockingFindings"`
+	AdvisoryFindings []struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	} `json:"advisoryFindings"`
+}
+
+func reviewBlockedPayload(step model.JobStep, msg string) string {
+	b, err := json.Marshal(struct {
+		Gate   string `json:"gate"`
+		Reason string `json:"reason"`
+	}{Gate: string(step.Kind), Reason: msg})
+	if err != nil {
+		return `{"gate":"","reason":""}`
 	}
 	return string(b)
 }
@@ -483,6 +565,12 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
+	case model.StepCodeReview:
+		return "你是软件工厂的代码审查门禁。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。只有影响正确性、可部署性、数据诚实、安全或确认用户行为的问题可以 blocking。"
+	case model.StepProductAcceptance:
+		return "你是软件工厂的产品验收智能体。对照确认需求摘要、设计契约、数据契约和主要用户流程验收。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
+	case model.StepSecurityReview:
+		return "你是软件工厂的安全审查智能体。检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
 	default:
 		return job.UserPrompt
 	}

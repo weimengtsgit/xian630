@@ -708,6 +708,17 @@ WHERE id = ?`, snapshotJSON, stepID)
 	return err
 }
 
+// SetJobCollaborationPlan overwrites the job's collaboration_plan_json. The
+// executor uses it to persist the bounded-repair state (repairState counters)
+// back into the plan document it already carries. Modeled on SetStepUserPrompt.
+func (s *Store) SetJobCollaborationPlan(ctx context.Context, jobID, planJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs
+SET collaboration_plan_json = ?
+WHERE id = ?`, planJSON, jobID)
+	return err
+}
+
 // AddConversation inserts a conversation message row.
 func (s *Store) AddConversation(ctx context.Context, msg model.ConversationMessage) error {
 	var jobID any

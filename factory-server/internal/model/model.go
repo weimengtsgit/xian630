@@ -82,6 +82,20 @@ const (
 	StepTestVerification    StepKind = "test_verification"
 	StepImageBuild          StepKind = "image_build"
 	StepDeployment          StepKind = "deployment"
+
+	// Collaboration-pipeline step kinds. These are the dynamic-plan gates: the
+	// first three are the early analysis/contract steps, and the last three are
+	// the blocking review gates whose failures may trigger a bounded auto-repair
+	// loop back to code_generation. They are NOT part of FixedSteps() (the legacy
+	// six-step path), so legacy executor tests are unaffected; a job carrying a
+	// CollaborationPlanJSON advances through its seeded steps by Seq order.
+	StepCollaborationOrchestration StepKind = "collaboration_orchestration"
+	StepDomainAnalysis             StepKind = "domain_analysis"
+	StepDesignContract             StepKind = "design_contract"
+	StepDataIntegration            StepKind = "data_integration"
+	StepCodeReview                 StepKind = "code_review"
+	StepSecurityReview             StepKind = "security_review"
+	StepProductAcceptance          StepKind = "product_acceptance"
 )
 
 type StepStatus string
@@ -114,7 +128,12 @@ const (
 	ErrorCCStatusUnavailable              ErrorCode = "cc_status_unavailable"
 	ErrorCanceled                         ErrorCode = "canceled"
 	ErrorExecutionRecordPersistenceFailed ErrorCode = "execution_record_persistence_failed"
-	ErrorUnknown                          ErrorCode = "unknown"
+	// ErrorBlockingReview is the error code for a blocking review gate
+	// (code_review / security_review / product_acceptance) whose agent output
+	// returned status:"blocked". It is the only code a blocking-review failure
+	// carries, and it is repairable under the bounded auto-repair policy.
+	ErrorBlockingReview ErrorCode = "blocking_review"
+	ErrorUnknown        ErrorCode = "unknown"
 )
 
 // ExecutionRecordKind is the kind tag of a StepExecutionRecord: system
