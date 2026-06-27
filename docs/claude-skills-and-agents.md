@@ -12,7 +12,7 @@
 
 因此，本文中的 “`.claude/ 下的 agent`” 特指 **Skill 附带 Agent Interface**。如果讨论软件工厂执行流程中的 agent，应称为 **运行时流水线 Agent**。
 
-此外，目标设计中会引入 **协作智能体**：它是 Factory 拥有的生成协作角色，用于组成一次生成任务的用户确认参与计划。协作智能体不同于 `.claude/skills/*/agents/openai.yaml`，也不等同于当前已经实现的固定六阶段运行时流水线 Agent。本文后文的“协作智能体目标模型”描述的是目标设计，不代表当前代码已经完整实现。
+此外，目标设计中会引入 **协作智能体**：它是 Factory 拥有的生成协作角色，用于组成一次生成任务的用户确认参与计划。协作智能体不同于 `.claude/skills/*/agents/openai.yaml`，也不等同于固定六阶段运行时流水线 Agent。协作智能体参与计划的**持久化、默认计划构建、确认前预览、动态任务卡片、本次快照编辑、质量门禁与有界自动修复**已经落地（见下文“协作智能体目标模型”的实现说明）；DAG 内并行执行、自然语言调整的完整应用、以及向全局 `.claude/skills/*` 写回仍属后续工作。
 
 ## Skills 总览
 
@@ -95,7 +95,7 @@ AIS 相关请求的硬边界是按目标舰队类型划分，而不是按 “AIS
 
 ## 协作智能体目标模型
 
-本节记录目标设计，见 ADR：[0008-dynamic-collaboration-agent-plan](./adr/0008-dynamic-collaboration-agent-plan.md)。可执行拆分见实施计划：[2026-06-27-dynamic-collaboration-agent-plan](./superpowers/plans/2026-06-27-dynamic-collaboration-agent-plan.md)。当前实现仍是上文的固定六阶段流水线和 3 x 2 任务卡片；目标模型会把用户可见任务区从固定阶段卡片推进为一次生成任务的 **协作智能体参与计划**。
+本节记录目标设计，见 ADR：[0008-dynamic-collaboration-agent-plan](./adr/0008-dynamic-collaboration-agent-plan.md)。可执行拆分见实施计划：[2026-06-27-dynamic-collaboration-agent-plan](./superpowers/plans/2026-06-27-dynamic-collaboration-agent-plan.md)。核心能力已落地：协作计划持久化、`collaboration.DefaultPlan` 默认计划、确认前预览、动态任务卡片、本次快照编辑、质量门禁与有界自动修复。DAG 内并行执行、自然语言调整的完整应用、以及向全局 `.claude/skills/*` 写回仍属后续工作。目标模型会把用户可见任务区从固定阶段卡片推进为一次生成任务的 **协作智能体参与计划**。
 
 ### 核心原则
 
@@ -141,17 +141,25 @@ AIS 相关请求的硬边界是按目标舰队类型划分，而不是按 “AIS
 
 当前代码已有手动“发送错误给代码修复”能力：`RepairFromFailure` 可把 `test_verification`、`image_build` 和 `health_check_failed` 的 `deployment` 回退到 `code_generation`，但它目前由接口和按钮触发，不是自动触发。目标模型应把这类修复变成受限自动策略，并保留用户可见审计记录。
 
-### 实现差距
+### 已实现（MVP）
 
-要落地目标模型，至少需要补齐以下能力：
+下列能力已经落地，代码位于 `factory-server/internal/collaboration`、`factory-server/internal/executor`、`factory-server/internal/server` 与 `sf-portal-mvp/src`：
 
-1. 持久化协作智能体参与计划、配置快照、依赖图和用户调整记录。
-2. 将确认需求摘要扩展为“需求摘要 + 协作智能体参与计划”。
-3. 增加协作编排智能体，用于生成默认计划和处理自然语言调整。
-4. 将任务区从固定六卡片改为按参与智能体渲染的动态卡片和泳道。
-5. 增加协作智能体详情中的 skill 查看、本次快照编辑、全局写回确认和审计。
-6. 将代码审查、产品验收、安全审查和有界自动修复回路接入执行器。
-7. 保持现有 `.claude/skills/*/agents/openai.yaml` 作为 Skill 附带 Agent Interface，不把它们误当成完整协作智能体定义。
+1. **计划持久化**：`jobs.collaboration_plan_json`、`job_steps.snapshot_json`、`job_step_edges` 表。确认生成时由三条“全新生成”路径（`POST /api/jobs`、对话确认子澄清、澄清确认）写入，刷新/重连可恢复。
+2. **默认计划构建**：`collaboration.DefaultPlan` 产出 12 个默认智能体（13 个含条件加入的安全审查智能体）、三条泳道（analysis / generation / delivery）、按 `Seq` 拓扑序排列的 `job_steps` 与 `edges`，`repairPolicy` 默认 `maxAutomaticRepairs=2`、`maxAutomaticRepairsPerBlockingReason=1`。
+3. **确认前预览**：当子澄清到达 `ready_to_confirm` 时，确认摘要携带 `collaborationPlanPreview`（泳道/智能体/边），在创建任务前展示。
+4. **动态任务卡片**：任务区按泳道渲染协作智能体卡片（`buildCollaborationCardView`）；没有计划的旧任务回退到固定六卡片矩阵。
+5. **本次快照编辑**：`PATCH /api/jobs/:id/steps/:stepID/snapshot` 与详情抽屉编辑器仅改写**本次任务快照**（`job_steps.snapshot_json`）；全局 `.claude/skills/*` 保持只读。
+6. **质量门禁与有界自动修复**：`code_review`、`security_review`、`product_acceptance` 等门禁以 Claude 模式运行；计划任务按 `Seq` 拓扑**串行**执行，阻断门禁失败时按 `repairState`（持久化于 `collaboration_plan_json`）有界回退到 `code_generation`，上限为每个任务 2 次 / 同一阻断原因 1 次，排除 `port_unavailable`、`podman_run_failed` 等不可由代码生成修复的问题。
+
+### 后续工作（未实现）
+
+下列能力仍属后续工作，不代表当前代码已完成：
+
+1. **DAG 内并行执行**：MVP 仅按拓扑序串行执行同一任务内的协作智能体。
+2. **自然语言调整的完整应用**：目前仅存在服务端识别 contract，实际通过全局 skill 移除/高影响移除门控的逻辑未实现。
+3. **向全局 `.claude/skills/*` 写回**：任务卡片编辑只作用于本次快照，全局 skill 文件保持只读，写回需单独确认与审计（未实现）。
+4. **Revise / rebuild 路径**：修订/重建任务仍沿用固定六阶段步骤，不重新种子默认计划。
 
 ### 持久化建议
 
