@@ -263,11 +263,14 @@ type Job struct {
 	BaseVersionID string `json:"base_version_id,omitempty"`
 	// Kind is the job kind (e.g. "generate", "revise"). Reserved for later tasks;
 	// surfaced now so the column is read/written rather than orphaned.
-	Kind      string     `json:"kind,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	StartedAt *time.Time `json:"started_at,omitempty"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	Kind string `json:"kind,omitempty"`
+	// CollaborationPlanJSON is the persisted, user-confirmed collaboration-agent
+	// plan for this generation task. Empty means legacy fixed-step job.
+	CollaborationPlanJSON string     `json:"collaboration_plan_json,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	StartedAt             *time.Time `json:"started_at,omitempty"`
+	EndedAt               *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 type JobStep struct {
@@ -287,6 +290,18 @@ type JobStep struct {
 	ErrorMessage      string     `json:"error_message,omitempty"`
 	ClaudeSessionID   string     `json:"claude_session_id,omitempty"`
 	CCStatusSessionID string     `json:"cc_status_session_id,omitempty"`
+	// SnapshotJSON is the per-task collaboration-agent configuration snapshot
+	// used by this step. Empty means legacy fixed-step behavior.
+	SnapshotJSON string `json:"snapshot_json,omitempty"`
+}
+
+// JobStepEdge is one directed dependency edge between two job steps: ToStepID
+// may only start after FromStepID has finished. The plan's topological order is
+// the set of edges for a job.
+type JobStepEdge struct {
+	JobID      string `json:"job_id"`
+	FromStepID string `json:"from_step_id"`
+	ToStepID   string `json:"to_step_id"`
 }
 
 // Artifact is a single output produced by a job step: a requirements doc, a

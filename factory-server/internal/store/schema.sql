@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     dialogue_id     TEXT    NOT NULL DEFAULT '',
     application_id  TEXT    NOT NULL DEFAULT '',
     base_version_id TEXT    NOT NULL DEFAULT '',
-    kind            TEXT    NOT NULL DEFAULT ''
+    kind            TEXT    NOT NULL DEFAULT '',
+    collaboration_plan_json TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS job_steps (
@@ -77,8 +78,18 @@ CREATE TABLE IF NOT EXISTS job_steps (
     error_code          TEXT    NOT NULL DEFAULT '',
     error_message       TEXT    NOT NULL DEFAULT '',
     claude_session_id   TEXT    NOT NULL DEFAULT '',
-    cc_status_session_id TEXT   NOT NULL DEFAULT ''
+    cc_status_session_id TEXT   NOT NULL DEFAULT '',
+    snapshot_json TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS job_step_edges (
+    job_id       TEXT NOT NULL,
+    from_step_id TEXT NOT NULL,
+    to_step_id   TEXT NOT NULL,
+    PRIMARY KEY(job_id, from_step_id, to_step_id)
+);
+CREATE INDEX IF NOT EXISTS idx_job_step_edges_job
+ON job_step_edges(job_id);
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id         TEXT    PRIMARY KEY,

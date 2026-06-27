@@ -11,25 +11,25 @@ import (
 // CreateJob inserts a new job row.
 func (s *Store) CreateJob(ctx context.Context, job model.Job) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind, collaboration_plan_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
 		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
 		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
 		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
-		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind)
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind, job.CollaborationPlanJSON)
 	return err
 }
 
 // CreateJobStep inserts a new job step row.
 func (s *Store) CreateJobStep(ctx context.Context, step model.JobStep) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id, snapshot_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
 		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
 		boolToInt(step.NeedsUserInput), step.UserPrompt, step.PendingQuestions, string(step.ErrorCode), step.ErrorMessage,
-		step.ClaudeSessionID, step.CCStatusSessionID)
+		step.ClaudeSessionID, step.CCStatusSessionID, step.SnapshotJSON)
 	return err
 }
 
@@ -38,24 +38,24 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 // + the clarification link are committed atomically.
 func createJobStepInTx(ctx context.Context, tx *sql.Tx, step model.JobStep) error {
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO job_steps(id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id, snapshot_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		step.ID, step.JobID, string(step.Kind), step.Seq, step.AgentKey,
 		string(step.Status), step.Attempt, nullableMs(step.StartedAt), nullableMs(step.EndedAt),
 		boolToInt(step.NeedsUserInput), step.UserPrompt, step.PendingQuestions, string(step.ErrorCode), step.ErrorMessage,
-		step.ClaudeSessionID, step.CCStatusSessionID)
+		step.ClaudeSessionID, step.CCStatusSessionID, step.SnapshotJSON)
 	return err
 }
 
 func createJobInTx(ctx context.Context, tx *sql.Tx, job model.Job) error {
 	_, err := tx.ExecContext(ctx, `
-INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO jobs(id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind, collaboration_plan_json)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, job.UserPrompt, job.NormalizedPrompt, job.AppSlug, job.AppName,
 		string(job.Status), string(job.CurrentStepKind), job.CreatedAppID, job.LockOwner,
 		ms(job.CreatedAt), nullableMs(job.StartedAt), nullableMs(job.EndedAt), ms(job.UpdatedAt),
 		job.ClarificationSessionID, job.ConfirmedRequirementJSON,
-		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind)
+		job.DialogueID, job.ApplicationID, job.BaseVersionID, job.Kind, job.CollaborationPlanJSON)
 	return err
 }
 
@@ -148,7 +148,7 @@ func (s *Store) SetJobStepSeedHook(fn func(model.JobStep) error) {
 // ListJobSteps returns the steps for a job ordered by sequence.
 func (s *Store) ListJobSteps(ctx context.Context, jobID string) ([]model.JobStep, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id, snapshot_json
 FROM job_steps
 WHERE job_id = ?
 ORDER BY seq`, jobID)
@@ -166,7 +166,7 @@ ORDER BY seq`, jobID)
 		if err := rows.Scan(&st.ID, &st.JobID, &kind, &st.Seq, &st.AgentKey,
 			&status, &st.Attempt, &started, &ended, &needsUserInput,
 			&st.UserPrompt, &st.PendingQuestions, &errorCode, &st.ErrorMessage,
-			&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
+			&st.ClaudeSessionID, &st.CCStatusSessionID, &st.SnapshotJSON); err != nil {
 			return nil, err
 		}
 		st.Kind = model.StepKind(kind)
@@ -198,7 +198,7 @@ func scanJob(sc scanner) (*model.Job, error) {
 		&status, &stepKind, &j.CreatedAppID, &j.LockOwner,
 		&createdMs, &started, &ended, &updatedMs,
 		&j.ClarificationSessionID, &j.ConfirmedRequirementJSON,
-		&j.DialogueID, &j.ApplicationID, &j.BaseVersionID, &j.Kind); err != nil {
+		&j.DialogueID, &j.ApplicationID, &j.BaseVersionID, &j.Kind, &j.CollaborationPlanJSON); err != nil {
 		return nil, err
 	}
 	j.Status = model.JobStatus(status)
@@ -212,7 +212,7 @@ func scanJob(sc scanner) (*model.Job, error) {
 
 // jobSelectCols lists the jobs columns in scan order, shared by GetJob and
 // ListJobs to keep the SELECT and scanJob in sync.
-const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind`
+const jobSelectCols = `id, user_prompt, normalized_prompt, app_slug, app_name, status, current_step_kind, created_app_id, lock_owner, created_at, started_at, ended_at, updated_at, clarification_session_id, confirmed_requirement_json, dialogue_id, application_id, base_version_id, kind, collaboration_plan_json`
 
 // GetJob returns the job with the given id. It returns (nil, nil) on a miss —
 // a missing row is not an error — mirroring GetApplication/GetAgent.
@@ -616,7 +616,7 @@ UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
 // (nil, nil) if there is no such step.
 func (s *Store) GetStepByKind(ctx context.Context, jobID string, kind model.StepKind) (*model.JobStep, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id
+SELECT id, job_id, kind, seq, agent_key, status, attempt, started_at, ended_at, needs_user_input, user_prompt, pending_questions, error_code, error_message, claude_session_id, cc_status_session_id, snapshot_json
 FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 	var st model.JobStep
 	var kstatus, errorCode, kkind string
@@ -625,7 +625,7 @@ FROM job_steps WHERE job_id = ? AND kind = ?`, jobID, string(kind))
 	if err := row.Scan(&st.ID, &st.JobID, &kkind, &st.Seq, &st.AgentKey,
 		&kstatus, &st.Attempt, &started, &ended, &needsUserInput,
 		&st.UserPrompt, &st.PendingQuestions, &errorCode, &st.ErrorMessage,
-		&st.ClaudeSessionID, &st.CCStatusSessionID); err != nil {
+		&st.ClaudeSessionID, &st.CCStatusSessionID, &st.SnapshotJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
