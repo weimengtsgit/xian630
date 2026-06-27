@@ -42,6 +42,15 @@
 .cw-item { max-width: 86%; padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 1.45; }
 .cw-user { align-self: flex-end; background: rgba(104, 221, 255, 0.18); color: #edfaff; }
 .cw-agent { align-self: flex-start; background: rgba(3, 17, 29, 0.74); border: 1px solid rgba(111, 218, 255, 0.16); color: #d7eef8; }
+.cw-copyable { display: flex; flex-direction: column; max-width: 86%; }
+.cw-copyable .cw-item { max-width: 100%; }
+.cw-user-wrap { align-self: flex-end; align-items: flex-end; }
+.cw-agent-wrap { align-self: flex-start; align-items: flex-start; }
+.cw-copy-row { display: flex; margin-top: 3px; padding: 0 2px; opacity: 0; transition: opacity 0.16s ease; }
+.cw-copyable:hover .cw-copy-row, .cw-copyable:focus-within .cw-copy-row { opacity: 1; }
+.cw-copy-button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: rgba(215, 238, 248, 0.56); font-size: 11px; line-height: 1.4; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.cw-copy-button:hover:not(:disabled), .cw-copy-button:focus-visible:not(:disabled) { color: #68ddff; background: rgba(104, 221, 255, 0.1); outline: none; }
+.cw-copy-button:disabled { cursor: not-allowed; opacity: 0.35; }
 .cw-item-label { display: block; color: #68ddff; font-size: 11px; margin-bottom: 4px; }
 
 /* Task 3 (D1/D2/D6): live streaming analysis + folded persisted analysis */
@@ -213,3 +222,10 @@
 .cw-live-thinking { opacity: 0.92; }
 .cw-live-thinking .cw-item-label { color: rgba(180, 200, 214, 0.78); }
 .cw-live-thinking .cw-live-text { color: rgba(170, 196, 214, 0.7); font-style: italic; }
+.cw-thinking-summary-text { color: rgba(215, 238, 248, 0.78) !important; font-style: normal !important; }
+.cw-thinking-summary-empty { margin: 0; color: rgba(170, 196, 214, 0.6); font-size: 12px; }
+.cw-raw-thinking { margin-top: 6px; border-top: 1px solid rgba(111, 218, 255, 0.12); padding-top: 6px; }
+.cw-raw-thinking summary { cursor: pointer; color: rgba(180, 200, 214, 0.72); font-size: 11px; }
+.cw-raw-thinking pre { margin-top: 6px !important; }
+.cw-raw-thinking-stream { max-height: 200px; overflow-y: auto; border: 1px solid rgba(111, 218, 255, 0.12); border-radius: 4px; padding: 6px 8px; background: rgba(0, 0, 0, 0.2); }
+.cw-raw-thinking-stream pre { margin: 0 !important; }

@@ -139,6 +139,10 @@ const draftView = {
     requirement: {
       appType: 'situation_replay', appName: '航母编队复盘', coreScenario: '复盘航迹',
       primaryView: '时间轴', dataPolicy: '本地',
+      judgementBoundary: {
+        dataSources: ['ontology', 'public_web_search'],
+        summary: '基于航母轨迹数据判断事件关联',
+      },
       // Legacy/internal field that must NEVER surface in the UI.
       blueprintRefs: ['carrier-formation-replay'],
     },
@@ -152,6 +156,38 @@ assert.equal(draftSerialized.includes('模板'), false, 'timeline must not conta
 assert.equal(draftSerialized.includes('carrier-formation-replay'), false, 'timeline must not leak internal blueprint slug')
 // requirement summary must be present for a ready_to_confirm child.
 assert.equal(draftTimeline.some(item => item.type === 'requirement_summary'), true, 'ready_to_confirm child must yield a requirement summary')
+const draftRequirementSummary = draftTimeline.find(item => item.type === 'requirement_summary')
+assert.equal(draftRequirementSummary.requirement.judgementBoundary.summary, '基于航母轨迹数据判断事件关联', 'requirement summary must retain judgement boundary summary')
+assert.deepEqual(draftRequirementSummary.requirement.judgementBoundary.dataSources, ['ontology', 'public_web_search'], 'requirement summary must retain safe data-source families')
+
+// Batched multi-select answers must render selected option labels, not the raw
+// JSON array value, so data-source answers read like business language.
+const multiAnswerTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_multi_answer', status: 'drafting_application', intent: 'application_generation', route_locked: true },
+  messages: [],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  child: {
+    id: 'clar_multi_answer', status: 'active', round: 2, max_rounds: 6,
+    requirement: {},
+    messages: [
+      { id: 'qds', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
+        id: 'judgementBoundary.dataSources',
+        label: '数据来源边界',
+        multiSelect: true,
+        options: [
+          { value: 'ontology', label: '本体数据源' },
+          { value: 'public_web_search', label: '网络公开搜索' },
+        ],
+      }) },
+      { id: 'ads', role: 'user', kind: 'answer', metadata_json: JSON.stringify({
+        questionId: 'judgementBoundary.dataSources',
+        value: JSON.stringify(['ontology', 'public_web_search']),
+      }) },
+    ],
+  },
+})
+const multiAnswerMessage = multiAnswerTimeline.find(item => item.id === 'ads')
+assert.equal(multiAnswerMessage.content, '数据来源边界：本体数据源、网络公开搜索')
 
 // ---- locked-route composer behavior ----------------------------------------
 
@@ -179,7 +215,7 @@ const generationChoiceView = {
   messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '创建一个新的排班应用' }],
   route: {
     intent: 'application_generation', confidence: 'high', needsRouteConfirmation: true,
-    userFacingReason: '我会澄清需求并生成一个可运行的新应用。', existingApplicationSlugs: [],
+    userFacingReason: '我会澄清需求并生成一个可运行的新智能体。', existingApplicationSlugs: [],
   },
 }
 const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')
@@ -362,6 +398,15 @@ state = applyDialogueEvent(state, 'dialogue.resolved', {
 })
 assert.equal(state.needsRefresh, 'dlg_1', 'selected dialogue resolved must request a targeted refresh by id')
 
+// A job.updated event for the selected dialogue must also flag a targeted refresh:
+// deployment completion updates the job/app first, and the workbench must reload
+// the composed view immediately so resolvedApplication.runtime_url appears without
+// requiring a browser refresh.
+state = applyDialogueEvent({ ...state, needsRefresh: null }, 'job.updated', {
+  data: { id: 'job_1', dialogue_id: 'dlg_1', status: 'completed', created_app_id: 'app_1' },
+})
+assert.equal(state.needsRefresh, 'dlg_1', 'selected dialogue job.updated must request a targeted refresh by id')
+
 // A wrapped clarification event (dialogue.clarification.updated) must also key by dialogue_id.
 state = applyDialogueEvent(state, 'dialogue.clarification.updated', {
   dialogue_id: 'dlg_1', data: { child_id: 'clar_1' },
@@ -378,6 +423,12 @@ assert.equal(statusText('drafting_business_agent'), '配置 Agent 中')
 assert.equal(statusText('resolved'), '已完成')
 assert.equal(statusText('failed'), '已失败')
 assert.equal(statusText('abandoned'), '已放弃')
+assert.equal(statusText('active'), '进行中')
+assert.equal(statusText('analyzing'), '分析中')
+assert.equal(statusText('waiting_user'), '等待补充')
+assert.equal(statusText('change_confirmation'), '变更确认中')
+assert.equal(statusText('task_running'), '任务执行中')
+assert.equal(statusText('archived'), '已归档')
 assert.equal(statusText('unknown'), 'unknown')
 
 // ---- static source checks ---------------------------------------------------
@@ -416,8 +467,21 @@ assert.match(eventsJs, /dialogue\.draft\.consolidation\.updated/, 'SSE registry 
 assert.match(eventsJs, /dialogue\.agent_draft\.updated/, 'SSE registry must include dialogue.agent_draft.updated')
 assert.match(eventsJs, /dialogue\.agent\.created/, 'SSE registry must include dialogue.agent.created')
 assert.match(eventsJs, /dialogue\.resolved/, 'SSE registry must include dialogue.resolved')
+assert.match(dialogueHookJs, /job\.updated/, 'useDialogueSessions must route job.updated events into targeted refresh handling')
 assert.match(dialogueHookJs, /dialogue\.draft\.delta/, 'useDialogueSessions must route dialogue.draft.delta events into targeted refresh handling')
 assert.match(workbenchJsx, /agentDraftStatus/, 'business confirm button must be gated by agentDraftStatus')
+assert.match(workbenchJsx, /formatDataPolicy/, 'ConversationWorkbench must format dataPolicy labels')
+assert.match(workbenchJsx, /import.*formatDataPolicy.*from.*utils\/formatLabels/, 'ConversationWorkbench must import formatDataPolicy from shared utils, not define its own')
+const formatLabelsSrc = readFileSync(new URL('../src/utils/formatLabels.js', import.meta.url), 'utf8')
+assert.match(formatLabelsSrc, /live_api:\s*'真实接口'/, 'formatLabels must label live_api as 真实接口')
+assert.match(formatLabelsSrc, /mock_data:\s*'演示数据'/, 'formatLabels must label mock_data as 演示数据')
+assert.match(workbenchJsx, /function CopyableBlock\(/, 'workbench must define CopyableBlock for Codex-style copy actions')
+assert.match(workbenchJsx, /navigator\.clipboard\.writeText/, 'copy action must use navigator.clipboard.writeText when available')
+assert.match(workbenchJsx, /document\.execCommand\('copy'\)/, 'copy action must include a textarea fallback')
+assert.match(workbenchJsx, /return document\.execCommand\('copy'\)/, 'copy fallback must return execCommand success instead of always reporting copied')
+assert.match(workbenchJsx, /cw-copy-row/, 'copy action must render below message content')
+assert.match(workbenchCss, /\.cw-copy-row/, 'copy action row must have dedicated styling')
+assert.match(workbenchCss, /\.cw-copy-button/, 'copy button must have dedicated styling')
 
 // No blueprint / template / hidden-id strings in the workbench source.
 assert.doesNotMatch(workbenchJsx, /蓝本/, 'workbench must not surface the word 蓝本')
@@ -560,5 +624,40 @@ assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static 
 const retryBody = retryFnMatch[0]
 assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
 assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
+
+// ---- Static: workbench renders the pending "正在思考…" placeholder copy ------
+//
+// The pending live_thinking placeholder ("正在思考…") is emitted by
+// buildDialogueTimeline when a turn is in flight but no live content has
+// streamed. The workbench renders live_thinking via ThinkingSummary, so the
+// copy must be present in the timeline source (not hardcoded in the workbench).
+// Assert the timeline mapper produces the copy and the workbench renders the
+// live_thinking type through ThinkingSummary.
+{
+  const placeholderView = {
+    session: {
+      id: 'dlg_placeholder_static', status: 'drafting_application',
+      intent: 'application_generation', route_locked: true, initial_prompt: 'hi',
+    },
+    messages: [{ id: 'ps1', role: 'user', content: 'hi' }],
+    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  }
+  const placeholderTimeline = buildDialogueTimeline(placeholderView, null, null, null, [], { turnId: 't1' })
+  const placeholderItem = placeholderTimeline.find(it => it.type === 'live_thinking' && it.pending)
+  assert.ok(placeholderItem, 'buildDialogueTimeline emits a pending live_thinking item for an in-flight turn')
+  assert.equal(placeholderItem.content, '正在思考…', 'placeholder copy is 正在思考…')
+
+  const workbenchSource = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+  assert.match(
+    workbenchSource,
+    /item\.type === 'live_thinking'/,
+    'ConversationWorkbench must render the live_thinking item type',
+  )
+  assert.match(
+    workbenchSource,
+    /ThinkingSummary/,
+    'ConversationWorkbench must render live_thinking through ThinkingSummary',
+  )
+}
 
 console.log('check-dialogue-workbench: OK')

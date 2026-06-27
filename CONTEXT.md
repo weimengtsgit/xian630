@@ -85,7 +85,7 @@ A user-requested change to an application already linked to the dialogue session
 _Avoid_: 新建重复应用, 覆盖历史版本, 独立会话
 
 **应用**:
-A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. The pipeline agents (协作智能体智能体) appear only on non-workbench surfaces such as the 协作智能体 tab, so they do not collide with the user-facing 智能体 label.
+A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. 协作智能体 appears only as Factory-owned generation collaborators, so it does not collide with the user-facing 智能体 label.
 _Avoid_: 任务, 会话, 模板
 
 **应用删除**:
@@ -125,8 +125,36 @@ The auditable record for one generation-task pipeline step, combining system sta
 _Avoid_: 智能体思维链, 原始推理, 单纯运行日志
 
 **确认需求摘要**:
-The structured requirement record confirmed by the user after clarification and used as the input for creating a generation task.
-_Avoid_: 初始需求, 聊天记录, 分析工作日志
+The structured requirement record confirmed by the user after clarification and used as the input for creating a generation task. When dynamic collaboration agents are involved, it also confirms the collaboration agent participation plan before the task is created.
+_Avoid_: 初始需求, 聊天记录, 分析工作日志, 任务创建后的二次确认
+
+**研判边界**:
+The business judgement frame captured during requirement clarification: the data sources, monitored objects and scope, judgement rules and thresholds, target judgement outcome, refresh or replay cadence, output view, and unavailable-data behavior for the generated application.
+_Avoid_: 软件生成边界, 普通需求字段, 实现范围
+
+**研判边界摘要**:
+A concise user-facing summary of the judgement boundary captured in the confirmed requirement. In the current implementation it complements the selected data-source family without decomposing every rule, scope, cadence, or output view into separate schema fields.
+_Avoid_: 完整实现规格, 原始需求复述, 隐式数据源承诺
+
+**真实数据研判约束**:
+A requirement-clarification constraint for customer-facing military or naval generated applications: judgement results must be based on real selected data-source boundaries rather than mock or demo values. Internal demos, preset applications, tests, and structural previews may still use demo data under their separate demo-data boundary.
+_Avoid_: mock 结果选项, 演示数据研判结果, 静默降级为 mock
+
+**数据来源边界**:
+The real data-source family selected for a customer-facing judgement application, such as ontology data, public internet sources, specific social platforms, web crawling, or public search interfaces. It is a user-facing clarification decision distinct from the internal data policy used by the generation pipeline.
+_Avoid_: dataPolicy 选项, mock/真实二选一, 数据接入实现细节
+
+**本体数据源**:
+A customer-provided ontology or DaaS data boundary with a documented access path, entity model, authentication handling, request shape, response shape, and coverage notes. It is the preferred source family when the requested judgement can be answered by known customer entities.
+_Avoid_: 本体 MCP 泛称, 未验证客户库, 模型自造实体
+
+**网络公开搜索**:
+A high-level real-source family for public web search or public web result retrieval selected during clarification. In the current simplified clarification it is only a source-family choice; generated applications must still use runtime-accessible endpoints or an explicit proxy/connector and must not rely on generation-time agent tools as their live data source.
+_Avoid_: 任意互联网数据, 未授权平台搜索, 默认可爬取
+
+**可接入数据源**:
+A data source that Factory may offer or confirm during clarification because it has a documented connector, authentication path where needed, request shape, coverage boundary, and failure behavior. A source mentioned only by a scenario or by the user is not accessible until this evidence exists.
+_Avoid_: 凭空数据源, 场景文字里的来源, 未验证公网接口
 
 **推荐收敛确认**:
 A late-stage clarification interaction that presents the remaining decisions with their recommended values, so the user can accept the recommended set or make a targeted adjustment before confirming the requirement summary.
@@ -248,13 +276,65 @@ _Avoid_: 全局个人技能, 普通模板文件
 The selected set of generation skill keys derived from a confirmed requirement and passed into the generation task.
 _Avoid_: 用户手选技能, 随机 agent 偏好
 
-**协作智能体智能体**:
-A Factory-owned agent that performs one fixed responsibility in the application-generation pipeline, such as requirement analysis, solution design, code generation, testing, image build, or deployment.
-_Avoid_: 业务处理智能体, 用户自定义智能体, 场景蓝本
+**协作智能体**:
+A Factory-owned agent that contributes one bounded responsibility to application generation, either as a required pipeline capability or as a dynamically selected specialist in a user-confirmed collaboration plan.
+_Avoid_: 业务处理智能体, 用户自定义智能体, 生成应用, Skill 附带 Agent Interface
+
+**协作智能体参与计划**:
+The user-confirmed set of collaboration agents and their relationships for one generation task. It may be adjusted before the task starts and then becomes the task's visible execution plan; its collaboration graph is an executable dependency plan rather than a decorative diagram and must be persisted with the task so it can be replayed after refresh, reconnect, retry, or history review.
+_Avoid_: 全局固定流水线, 隐式 agent 选择, 生成能力画像, 仅展示流程图
+
+**高影响协作智能体**:
+A collaboration agent whose removal or disabling can change quality gates, data-source commitments, deployability, permissions, or user-visible generation outcomes. Removing one before generation requires an explicit high-impact confirmation and is recorded in the confirmed requirement summary.
+_Avoid_: 普通显示开关, 静默删除, 低风险配置项
+
+**协作编排智能体**:
+A collaboration agent that proposes the default collaboration plan before task creation, explains agent selection and dependencies, interprets natural-language plan adjustments, and records user adjustments. After confirmation it appears as a completed task card so the generation task retains the plan rationale.
+_Avoid_: 隐式调度器, 用户不可见默认值, 生成能力画像
+
+**协作智能体配置快照**:
+The per-generation persisted editable copy of a collaboration agent's name, description, selected skills, task-specific instructions, and copied skill content overrides. Editing this snapshot affects only the pending or running generation task; referenced skill files are viewable by default, and writing changes back to a global generation capability package requires separate explicit confirmation.
+_Avoid_: 直接修改全局 Skill, 业务处理智能体 Prompt, 临时 UI 状态
+
+**协作智能体任务卡片**:
+A task-area card representing one collaboration agent that participates in the confirmed collaboration plan. Cards are grouped by execution lane but keep their own status, detail drawer, editable snapshot, execution records, artifacts, and retry or repair actions.
+_Avoid_: 固定六阶段卡片, 纯展示卡片, 阶段汇总行
+
+**有界自动修复回路**:
+A generation-task recovery policy where review, verification, or repairable runtime failures may automatically route back to code generation with failure context, limited by an explicit maximum attempt count. The default limit is two automatic repair loops per task and one automatic repair for the same blocking reason; infrastructure failures and non-repairable deployment errors do not enter this loop.
+_Avoid_: 无限重试, 手动重试当前阶段, 失败后直接重新生成整个应用
+
+**代码审查门禁**:
+A collaboration-agent checkpoint that reviews generated code before later verification or build stages and separates blocking findings from advisory findings. Only concrete, actionable issues that affect correctness, deployability, data honesty, security, or confirmed user-visible behavior block the task and may enter the bounded automatic repair loop.
+_Avoid_: 纯建议审查, 主观风格阻断, 测试验证替代品
+
+**安全审查智能体**:
+A conditional collaboration agent that joins generation when the requirement involves public data access, authentication, uploads, external interfaces, sensitive data, permissions, or exposed deployment surfaces. It reviews security and permission risks separately from general code review.
+_Avoid_: 普通代码审查, 所有任务强制安全门禁, 部署健康检查
+
+**产品验收智能体**:
+A default collaboration agent that checks the generated application against the confirmed requirement summary, design contract, data contract, and main user workflows after verification and before build/deploy. It focuses on product fit rather than code structure or command success.
+_Avoid_: 代码审查门禁, 测试验证, 用户最终验收
+
+**领域分析智能体**:
+A collaboration agent that brings domain knowledge into requirement analysis and solution design by interpreting selected generation capability packages, scene blueprints, data-source boundaries, and customer judgement language. It remains a general role until a domain has its own execution contract, data boundary, and review standard.
+_Avoid_: 固定海事智能体, 场景蓝本, 生成能力包
+
+**数据接入智能体**:
+A collaboration agent that defines data-source boundaries for a generation task, including real data integration plans, required capability packages, runtime-accessible connectors, unavailable-data behavior, and demo data contracts. It owns mock data shape as a replaceable contract, not as a substitute for real data promises.
+_Avoid_: 代码生成临时造数, mock 伪装真实数据, 单个数据 Skill
+
+**设计智能体**:
+A collaboration agent that turns confirmed requirements, domain analysis, and data contracts into a structured design contract for generated application views, layout regions, components, interaction states, UI data mapping, responsive constraints, and visual style boundaries.
+_Avoid_: 纯文本设计建议, 代码实现计划, 营销页包装
+
+**设计契约**:
+The structured output of the design agent that code generation consumes as a UI and interaction contract. It includes view inventory, layout structure, component responsibilities, loading/empty/error states, field-to-UI mapping, mobile constraints, and visual style constraints.
+_Avoid_: 灵感稿, 最终代码, 非结构化设计说明
 
 **业务处理智能体**:
 A user-confirmed definition of a business-handling role, containing a name, description, and prompt. In this phase it is cataloged and displayed but not directly executed.
-_Avoid_: 协作智能体智能体, 已运行任务, 生成应用
+_Avoid_: 协作智能体, 已运行任务, 生成应用
 
 **业务处理智能体建议**:
 A dormant future route that would recommend creating a business-processing agent and ask for the user's confirmation. It is not exposed as a current user-visible dialogue outcome while intelligent-agent requests are routed to assistant-application generation.

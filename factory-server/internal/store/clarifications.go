@@ -207,7 +207,7 @@ VALUES(?,?,?,?,?,?,?)`,
 func (s *Store) ListClarificationMessages(ctx context.Context, sessionID string) ([]model.ClarificationMessage, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id,session_id,role,kind,content,metadata_json,created_at
-FROM clarification_messages WHERE session_id = ? ORDER BY created_at ASC`, sessionID)
+FROM clarification_messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`, sessionID)
 	if err != nil {
 		return nil, err
 	}

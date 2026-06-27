@@ -5,6 +5,7 @@ import {
   Ban,
   Check,
   CheckCircle2,
+  Copy,
   ChevronDown,
   ChevronRight,
   Edit3,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react'
 import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
+import { formatDataPolicy } from '../utils/formatLabels'
 import './ConversationWorkbench.css'
 
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
@@ -117,7 +119,7 @@ export function ConversationWorkbench({
   // generated (or stopped, or not-yet-surfaced) app lacks — so without this the
   // composer locked even though generation finished and the user could iterate.
   const seededJob = view && view.seededJob
-  const continuousLoop = !!(seededJob && ['queued', 'running', 'completed'].includes(seededJob.status))
+  const continuousLoop = !!(seededJob && ['queued', 'running', 'waiting_user', 'completed'].includes(seededJob.status))
   const composerActive = versionDeployed || continuousLoop
   // Change-summary confirmation: a trace event of type change_confirmation or
   // dialogue.change.proposed surfaces a confirm panel (the continuous loop).
@@ -314,9 +316,69 @@ export function ConversationWorkbench({
   )
 }
 
+async function copyText(text) {
+  const value = String(text || '')
+  if (!value) return false
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(value)
+    return true
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = value
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+function CopyableBlock({ text, children, className = '', copyLabel = '复制' }) {
+  const [copied, setCopied] = useState(false)
+  const value = String(text || '')
+  const doCopy = async () => {
+    if (!value) return
+    try {
+      const ok = await copyText(value)
+      if (!ok) return
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    } catch (_) {
+      setCopied(false)
+    }
+  }
+  return (
+    <div className={`cw-copyable ${className}`.trim()}>
+      {children}
+      <div className="cw-copy-row">
+        <button type="button" className="cw-copy-button" onClick={doCopy} disabled={!value} title={copied ? '已复制' : copyLabel}>
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          <span>{copied ? '已复制' : copyLabel}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
-  if (item.type === 'user_message') return <div className="cw-item cw-user">{item.content}</div>
-  if (item.type === 'agent_message') return <div className="cw-item cw-agent">{item.content}</div>
+  if (item.type === 'user_message') {
+    return (
+      <CopyableBlock text={item.content} className="cw-user-wrap">
+        <div className="cw-item cw-user">{item.content}</div>
+      </CopyableBlock>
+    )
+  }
+  if (item.type === 'agent_message') {
+    return (
+      <CopyableBlock text={item.content} className="cw-agent-wrap">
+        <div className="cw-item cw-agent">{item.content}</div>
+      </CopyableBlock>
+    )
+  }
   if (item.type === 'clarification_prompt') {
     // A pipeline step (solution_design / code_generation) paused for user input.
     // Render the question(s) + structured options as a card; picking an option
@@ -339,26 +401,19 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     // (no view yet, send just accepted) a spinner marks it as actively working
     // so the workbench does not look frozen during the routing wait.
     return (
-      <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`}>
-        <span className="cw-item-label">
-          {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
-          {item.kind === 'step' ? '生成过程' : '分析过程'}
-        </span>
-        <pre className="cw-live-text">{item.content}</pre>
-      </div>
+      <CopyableBlock text={item.content} className="cw-agent-wrap" copyLabel="复制过程">
+        <div className={`cw-item cw-agent cw-live-analysis${item.kind === 'step' ? ' cw-live-step' : ''}${item.pending ? ' cw-live-pending' : ''}`}>
+          <span className="cw-item-label">
+            {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
+            {item.kind === 'step' ? '生成过程' : '分析过程'}
+          </span>
+          <pre className="cw-live-text">{item.content}</pre>
+        </div>
+      </CopyableBlock>
     )
   }
-  if (item.type === 'live_thinking') {
-    // The model's raw reasoning (thinking_delta), streamed live as a "思考过程"
-    // block above the analysis. Plaintext `<pre>`, never dangerouslySetInnerHTML.
-    // Policy: the conversation surface streams the model's thinking (#9 applies
-    // to the executor/trace pipeline, not here).
-    return (
-      <div className="cw-item cw-agent cw-live-thinking">
-        <span className="cw-item-label"><Loader2 size={12} className="cw-spin" />思考过程</span>
-        <pre className="cw-live-text">{item.content}</pre>
-      </div>
-    )
+  if (item.type === 'live_thinking' || item.type === 'thinking_summary') {
+    return <ThinkingSummary item={item} />
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
@@ -396,6 +451,42 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   return null
 }
 
+function ThinkingSummary({ item }) {
+  const summary = String(item.summary || '').trim()
+  const raw = String(item.content || '').trim()
+  const copyValue = summary || raw
+  const live = item.pending || item.type === 'live_thinking'
+  return (
+    <CopyableBlock text={copyValue} className="cw-agent-wrap" copyLabel="复制思考摘要">
+      <div className="cw-item cw-agent cw-live-thinking cw-thinking-summary">
+        <span className="cw-item-label">
+          {live ? <Loader2 size={12} className="cw-spin" /> : null}
+          {live ? '正在思考…' : '思考摘要'}
+        </span>
+        {live && raw ? (
+          <div className="cw-raw-thinking-stream">
+            <pre className="cw-live-text">{raw}</pre>
+          </div>
+        ) : (
+          <>
+            {summary ? (
+              <pre className="cw-live-text cw-thinking-summary-text">{summary}</pre>
+            ) : (
+              <p className="cw-thinking-summary-empty">中文摘要将在分析过程生成后显示。</p>
+            )}
+            {raw ? (
+              <details className="cw-raw-thinking">
+                <summary>原始思考过程</summary>
+                <pre className="cw-live-text">{raw}</pre>
+              </details>
+            ) : null}
+          </>
+        )}
+      </div>
+    </CopyableBlock>
+  )
+}
+
 // FoldedAnalysis (D6) renders the persisted analysis work log as a COLLAPSED
 // block with an expand/collapse toggle. The round's streamed analysis folds above
 // its conclusion once the persisted analysis lands; the user expands to read it.
@@ -404,18 +495,20 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
   const text = String(content || '')
   return (
-    <div className="cw-item cw-agent cw-folded-analysis">
-      <button
-        type="button"
-        className="cw-fold-toggle"
-        onClick={() => setExpanded(v => !v)}
-        aria-expanded={expanded}
-      >
-        <span className="cw-item-label">{label || '分析过程'}</span>
-        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
-      </button>
-      {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
-    </div>
+    <CopyableBlock text={text} className="cw-agent-wrap" copyLabel="复制分析">
+      <div className="cw-item cw-agent cw-folded-analysis">
+        <button
+          type="button"
+          className="cw-fold-toggle"
+          onClick={() => setExpanded(v => !v)}
+          aria-expanded={expanded}
+        >
+          <span className="cw-item-label">{label || '分析过程'}</span>
+          <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+        </button>
+        {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+      </div>
+    </CopyableBlock>
   )
 }
 
@@ -455,10 +548,16 @@ function AppRecommendationList({ cards, onOpenApp, submitting }) {
 }
 
 function AppRecommendationCard({ card, onOpenApp, submitting }) {
+  const managed = card.kind === 'managed_agent'
   const running = card.status === 'running'
-  const stopped = !running && card.status !== 'running'
+  const stopped = !managed && !running && card.status !== 'running'
+  const canOpen = !managed || Boolean(card.runtimeUrl)
   const open = () => {
-    if (submitting) return
+    if (submitting || !canOpen) return
+    if (managed) {
+      window.open(card.runtimeUrl, '_blank', 'noopener')
+      return
+    }
     onOpenApp(card.applicationId)
   }
   return (
@@ -469,7 +568,7 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
       </div>
       {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
       <div className="cw-app-actions">
-        {running ? (
+        {running && canOpen ? (
           <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开智能体">
             <ExternalLink size={14} />
             <span>打开智能体</span>
@@ -684,12 +783,15 @@ function CustomAnswer({ onSubmit }) {
 }
 
 function RequirementSummary({ requirement }) {
+  const boundary = requirement && requirement.judgementBoundary
   const rows = [
     ['智能体类型', requirement.appType],
     ['智能体名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
-    ['数据策略', requirement.dataPolicy],
+    ['研判边界', boundary && boundary.summary],
+    ['数据来源', boundary && formatDataSources(boundary.dataSources)],
+    ['数据策略', formatDataPolicy(requirement.dataPolicy)],
   ].filter(([, value]) => value)
   return (
     <div className="cw-summary">
@@ -829,15 +931,37 @@ function fieldLabel(field) {
     coreScenario: '核心场景',
     primaryView: '主视图',
     dataPolicy: '数据策略',
+    judgementBoundary: '研判边界',
+    'judgementBoundary.dataSources': '数据来源',
+    judgementDataSources: '数据来源',
+    judgement_boundary_data_sources: '数据来源',
+    'judgementBoundary.summary': '研判边界摘要',
   }
   return map[field] || field
 }
 
 function formatValue(value) {
   if (value == null || value === '') return ''
+  if (value && typeof value === 'object' && !Array.isArray(value) && (value.summary || value.dataSources)) {
+    const parts = [value.summary, formatDataSources(value.dataSources)].filter(Boolean)
+    return parts.join('；')
+  }
   if (Array.isArray(value)) return value.join('、')
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function formatDataSources(values) {
+  if (!Array.isArray(values) || values.length === 0) return ''
+  return values.map(dataSourceLabel).filter(Boolean).join('、')
+}
+
+function dataSourceLabel(value) {
+  const map = {
+    ontology: '本体数据源',
+    public_web_search: '网络公开搜索',
+  }
+  return map[value] || value
 }
 
 // ---- continuous-workbench components (Task 7) ------------------------------
