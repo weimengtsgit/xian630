@@ -205,6 +205,15 @@
 .cw-change-confirm span { color: #d7eef8; font-size: 12px; }
 .cw-change-confirm .primary { align-self: flex-start; padding: 5px 12px; border-radius: 5px; border: 1px solid rgba(104, 221, 255, 0.5); background: rgba(25, 83, 112, 0.7); color: #edfaff; cursor: pointer; }
 
+/* Collaboration plan preview (confirm-summary, Task 7): shows the participating
+   agents grouped by lane, rendered above the confirm button. */
+.cw-collaboration-preview { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 8px; background: rgba(25, 83, 112, 0.32); }
+.cw-collaboration-preview h3 { margin: 0; color: #edfaff; font-size: 13px; font-weight: 600; }
+.cw-collaboration-lane { display: flex; flex-direction: column; gap: 4px; }
+.cw-collaboration-lane strong { color: #d7eef8; font-size: 12px; }
+.cw-collaboration-lane ul { margin: 0; padding-left: 18px; color: #d7eef8; font-size: 12px; }
+.cw-collaboration-lane li { line-height: 1.5; }
+
 .cw-pending-turn { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(9, 24, 38, 0.94); border-top: 1px solid rgba(111, 218, 255, 0.18); font-size: 12px; color: #d7eef8; }
 .cw-pending-turn span { flex: 1; }
 .cw-cancel-turn { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 5px; border: 1px solid rgba(255, 150, 150, 0.4); background: rgba(60, 24, 30, 0.4); color: #ffb0b0; font-size: 11px; cursor: pointer; }

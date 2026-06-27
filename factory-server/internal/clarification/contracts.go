@@ -194,6 +194,26 @@ type RoundOutput struct {
 	// pipeline); this list carries the full remaining set so the gate and
 	// history can re-check without a model turn.
 	OpenHighImpact []HighImpactItem `json:"openHighImpact,omitempty"`
+	// CollaborationAdjustments carries natural-language requests to adjust the
+	// collaboration plan (e.g. remove a high-impact agent such as code-reviewer)
+	// that a clarification skill MAY emit. This field is a RECOGNITION POINT
+	// ONLY: the server decodes and carries it so a future skill-driven flow can
+	// read it. Application logic (removing agents, re-planning, re-confirming
+	// high-impact removals) is intentionally DEFERRED — the field is not yet
+	// consumed by the confirm path. When HighImpact is true the caller would keep
+	// a high-impact confirmation open until the user explicitly confirms the
+	// removal, but that gating is also deferred.
+	CollaborationAdjustments []CollaborationAdjustment `json:"collaborationAdjustments,omitempty"`
+}
+
+// CollaborationAdjustment is one requested change to the collaboration plan that
+// a clarification skill may emit. It is a light contract: the server recognizes
+// and decodes it but does not yet apply it (see RoundOutput.CollaborationAdjustments).
+type CollaborationAdjustment struct {
+	Action     string `json:"action"`     // e.g. "remove_agent"
+	AgentKey   string `json:"agentKey"`   // target agent key
+	HighImpact bool   `json:"highImpact"` // affects a blocking quality gate
+	Warning    string `json:"warning"`    // user-facing rationale
 }
 
 type StreamEvent struct {

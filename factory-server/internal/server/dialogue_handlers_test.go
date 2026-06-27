@@ -2930,3 +2930,46 @@ func TestScenarioArchiveThenExplicitDeletePreservesAudit(t *testing.T) {
 		t.Fatalf("trace lost on app deletion (audit violated): err=%v len=%d", err, len(trace))
 	}
 }
+
+func TestDialogueReadyToConfirmIncludesCollaborationPlanPreview(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "生成公网数据研判智能体"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create = %d body=%s", create.Code, create.Body.String())
+	}
+	var created dialogueView
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created view: %v", err)
+	}
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{
+		"intent": "application_generation",
+	})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var routed dialogueView
+	if err := json.NewDecoder(routeRec.Body).Decode(&routed); err != nil {
+		t.Fatalf("decode routed view: %v", err)
+	}
+	childID := routed.Session.ClarificationSessionID
+	if childID == "" {
+		t.Fatalf("route did not create child clarification: %+v", routed.Session)
+	}
+	completeReq := `{"appType":"command_dashboard","appName":"公网数据研判智能体","targetUsers":["值班员"],"coreScenario":"监控公网动态","primaryView":"指挥看板","mainEntities":["目标"],"dataPolicy":"live_api","judgementBoundary":{"dataSources":["public_web_search"],"summary":"使用公网搜索研判目标动态"},"generationProfile":{"base":["software-factory-app"]},"acceptanceFocus":["显示数据来源"]}`
+	if err := st.UpdateClarificationRequirement(context.Background(), childID, completeReq); err != nil {
+		t.Fatalf("UpdateClarificationRequirement: %v", err)
+	}
+	if err := st.SetClarificationStatus(context.Background(), childID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
+		t.Fatalf("SetClarificationStatus: %v", err)
+	}
+	view, err := srv.composeDialogueView(context.Background(), created.Session.ID)
+	if err != nil || view == nil {
+		t.Fatalf("composeDialogueView: view=%v err=%v", view != nil, err)
+	}
+	if view.CollaborationPlanPreview == nil {
+		t.Fatalf("missing collaboration plan preview in ready-to-confirm view")
+	}
+	if len(view.CollaborationPlanPreview.Agents) == 0 || len(view.CollaborationPlanPreview.Edges) == 0 {
+		t.Fatalf("empty collaboration plan preview: %+v", view.CollaborationPlanPreview)
+	}
+}

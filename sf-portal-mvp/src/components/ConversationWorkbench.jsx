@@ -231,6 +231,29 @@ export function ConversationWorkbench({
             </button>
           </div>
         ) : null}
+
+        {/* Collaboration plan preview (confirm-summary, Task 7): while the child
+            clarification is ready_to_confirm, the backend attaches a PREVIEW of the
+            collaboration plan that WOULD run on confirm. Render it above the confirm
+            button so the user can see the participating agents (grouped by lane)
+            before generation starts. No job is created yet. */}
+        {view && view.collaborationPlanPreview ? (
+          <section className="cw-collaboration-preview">
+            <h3>协作智能体参与计划</h3>
+            {(Array.isArray(view.collaborationPlanPreview.lanes) ? view.collaborationPlanPreview.lanes : []).map(lane => (
+              <div key={lane.id} className="cw-collaboration-lane">
+                <strong>{lane.label}</strong>
+                <ul>
+                  {(Array.isArray(view.collaborationPlanPreview.agents) ? view.collaborationPlanPreview.agents : [])
+                    .filter(agent => agent && agent.lane === lane.id)
+                    .map(agent => (
+                      <li key={agent.key}>{agent.name}</li>
+                    ))}
+                </ul>
+              </div>
+            ))}
+          </section>
+        ) : null}
       </div>
 
       {/* Pending-turn indicator + cancel-current-turn control (202 ack path). */}

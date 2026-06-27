@@ -130,17 +130,43 @@ type businessDraftRecord struct {
 
 // dialogueView is the composed response shape returned by every dialogue route.
 type dialogueView struct {
-	Session             model.DialogueSession         `json:"session"`
-	Messages            []model.DialogueMessage       `json:"messages"`
-	Route               routePayload                  `json:"route"`
-	Recommendations     []recommendationCard          `json:"recommendations,omitempty"`
-	AgentDraft          dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
-	AgentDraftStatus    string                        `json:"agentDraftStatus,omitempty"`
-	AgentConsolidation  []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
-	Child               *clarificationView            `json:"child,omitempty"`
-	ResolvedApplication *model.Application            `json:"resolvedApplication,omitempty"`
-	CreatedAgent        *model.Agent                  `json:"createdAgent,omitempty"`
-	SeededJob           *model.Job                    `json:"seededJob,omitempty"`
+	Session                   model.DialogueSession         `json:"session"`
+	Messages                  []model.DialogueMessage       `json:"messages"`
+	Route                     routePayload                  `json:"route"`
+	Recommendations           []recommendationCard          `json:"recommendations,omitempty"`
+	AgentDraft                dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
+	AgentDraftStatus          string                        `json:"agentDraftStatus,omitempty"`
+	AgentConsolidation        []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
+	Child                     *clarificationView            `json:"child,omitempty"`
+	CollaborationPlanPreview  *collaborationPlanPreview     `json:"collaborationPlanPreview,omitempty"`
+	ResolvedApplication       *model.Application            `json:"resolvedApplication,omitempty"`
+	CreatedAgent              *model.Agent                  `json:"createdAgent,omitempty"`
+	SeededJob                 *model.Job                    `json:"seededJob,omitempty"`
+}
+
+// collaborationPlanPreview is the confirm-summary preview of the collaboration
+// plan that WOULD run if the user confirms. It is built from
+// collaboration.DefaultPlan(RequirementContext{ConfirmedRequirementJSON}) while
+// the child clarification session is still ready_to_confirm — i.e. BEFORE any
+// task/job is created — so the user can see and (later) adjust the participating
+// agents before generation starts. No job is seeded in this path.
+type collaborationPlanPreview struct {
+	SchemaVersion      int                           `json:"schemaVersion"`
+	Mode               string                        `json:"mode"`
+	Lanes              []collaboration.Lane          `json:"lanes"`
+	Agents             []collaboration.Agent         `json:"agents"`
+	Edges              []collaboration.Edge          `json:"edges"`
+	HighImpactWarnings []collaborationHighImpactWarning `json:"highImpactWarnings,omitempty"`
+}
+
+// collaborationHighImpactWarning is one high-impact participation warning surfaced
+// in the preview (e.g. removing a blocking quality gate). Application of these
+// warnings is deferred to a future skill-driven adjustment flow; this type only
+// carries the data the server would recognize.
+type collaborationHighImpactWarning struct {
+	AgentKey string `json:"agentKey"`
+	Action   string `json:"action"`
+	Message  string `json:"message"`
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -468,6 +494,15 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		if err == nil && child != nil {
 			cv := s.viewFromSessionWithMessages(ctx, child)
 			view.Child = &cv
+			// While the child clarification is ready_to_confirm, surface a PREVIEW of
+			// the collaboration plan that WOULD run on confirm. The preview is built
+			// from the same DefaultPlan the confirm path uses, but NO job is created
+			// here — the preview exists so the user can see (and later adjust) the
+			// participating agents before generation begins. High-impact agents in the
+			// plan are projected as warnings so the surface can flag blocking gates.
+			if child.Status == model.ClarificationStatusReadyToConfirm && child.RequirementJSON != "" {
+				view.CollaborationPlanPreview = buildCollaborationPlanPreview(child.RequirementJSON)
+			}
 		}
 	}
 	// Linked results.
@@ -497,6 +532,33 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		view.SeededJob = s.findJobForDialogue(ctx, dlg)
 	}
 	return view, nil
+}
+
+// buildCollaborationPlanPreview constructs the confirm-summary preview of the
+// collaboration plan from a confirmed requirement JSON. It mirrors the plan the
+// confirm path materializes (collaboration.DefaultPlan), projecting it into the
+// preview shape the conversation workbench renders. High-impact agents become
+// high-impact warnings so the surface can flag blocking quality gates (e.g.
+// code-reviewer) before the user confirms. It performs NO job creation.
+func buildCollaborationPlanPreview(confirmedRequirementJSON string) *collaborationPlanPreview {
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: confirmedRequirementJSON})
+	preview := &collaborationPlanPreview{
+		SchemaVersion: plan.SchemaVersion,
+		Mode:          plan.Mode,
+		Lanes:         plan.Lanes,
+		Agents:        plan.Agents,
+		Edges:         plan.Edges,
+	}
+	for _, a := range plan.Agents {
+		if a.HighImpact {
+			preview.HighImpactWarnings = append(preview.HighImpactWarnings, collaborationHighImpactWarning{
+				AgentKey: a.Key,
+				Action:   "confirm_participation",
+				Message:  a.Description,
+			})
+		}
+	}
+	return preview
 }
 
 // cardsFromRoute rebuilds the recommendation cards from the persisted route +
