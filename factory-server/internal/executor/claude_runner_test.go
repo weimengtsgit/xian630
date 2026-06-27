@@ -238,6 +238,35 @@ func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T)
 	}
 }
 
+func TestCodeGenerationPromptInjectsCarrierOntologyFieldContract(t *testing.T) {
+	workspace := t.TempDir()
+	ws := runner.AttemptWorkspace{
+		Root:     filepath.Join(t.TempDir(), ".factory-runs"),
+		JobID:    "job_codegen_carrier_contract",
+		StepKind: model.StepCodeGeneration,
+		Attempt:  1,
+	}
+	r := &ClaudeStepRunner{Workspace: workspace}
+	carrierSkill := filepath.ToSlash(filepath.Join(workspace, ".claude", "skills", "carrier-affiliation-data-skill", "SKILL.md"))
+	prompt := r.prompt(model.Job{}, model.JobStep{Kind: model.StepCodeGeneration}, ws, []string{carrierSkill}, nil, "live_api")
+
+	for _, want := range []string{
+		"[航母本体字段硬契约",
+		"AviationCarrier columns: id, name, longitude, latitude, curStatus, curHeading, curSpeed, mmsi, airWing, aircraftCarried, homeportStation",
+		"forbidden: curLongitude, curLatitude",
+		"AircraftCarrierTrackLog columns: refAviationCarrier, trackInitTime, longitude, latitude, trackStatusCode",
+		"forbidden: recordTime, speed, heading, refHMId",
+		"MaritimeBaseCombatPlatform columns: id, name, typeCode, mmsi, longitude, latitude, curStatus, maxSpeed, cruiseRange",
+		"forbidden: callsign",
+		"RawADSData columns: icao, callsign, lat, lon, altitude, groundspeed, track, heading, startTime",
+		"logic: 'is not null'",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("carrier ontology prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 // TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: as of Task 5 the
 // requirement_analysis step FREEZES the confirmed requirement. It must NEVER
 // return waiting_user (clarification is pre-job now): a frozen output whose
