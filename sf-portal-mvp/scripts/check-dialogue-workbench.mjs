@@ -423,6 +423,12 @@ assert.equal(statusText('drafting_business_agent'), '配置 Agent 中')
 assert.equal(statusText('resolved'), '已完成')
 assert.equal(statusText('failed'), '已失败')
 assert.equal(statusText('abandoned'), '已放弃')
+assert.equal(statusText('active'), '进行中')
+assert.equal(statusText('analyzing'), '分析中')
+assert.equal(statusText('waiting_user'), '等待补充')
+assert.equal(statusText('change_confirmation'), '变更确认中')
+assert.equal(statusText('task_running'), '任务执行中')
+assert.equal(statusText('archived'), '已归档')
 assert.equal(statusText('unknown'), 'unknown')
 
 // ---- static source checks ---------------------------------------------------
@@ -464,6 +470,18 @@ assert.match(eventsJs, /dialogue\.resolved/, 'SSE registry must include dialogue
 assert.match(dialogueHookJs, /job\.updated/, 'useDialogueSessions must route job.updated events into targeted refresh handling')
 assert.match(dialogueHookJs, /dialogue\.draft\.delta/, 'useDialogueSessions must route dialogue.draft.delta events into targeted refresh handling')
 assert.match(workbenchJsx, /agentDraftStatus/, 'business confirm button must be gated by agentDraftStatus')
+assert.match(workbenchJsx, /formatDataPolicy/, 'ConversationWorkbench must format dataPolicy labels')
+assert.match(workbenchJsx, /import.*formatDataPolicy.*from.*utils\/formatLabels/, 'ConversationWorkbench must import formatDataPolicy from shared utils, not define its own')
+const formatLabelsSrc = readFileSync(new URL('../src/utils/formatLabels.js', import.meta.url), 'utf8')
+assert.match(formatLabelsSrc, /live_api:\s*'真实接口'/, 'formatLabels must label live_api as 真实接口')
+assert.match(formatLabelsSrc, /mock_data:\s*'演示数据'/, 'formatLabels must label mock_data as 演示数据')
+assert.match(workbenchJsx, /function CopyableBlock\(/, 'workbench must define CopyableBlock for Codex-style copy actions')
+assert.match(workbenchJsx, /navigator\.clipboard\.writeText/, 'copy action must use navigator.clipboard.writeText when available')
+assert.match(workbenchJsx, /document\.execCommand\('copy'\)/, 'copy action must include a textarea fallback')
+assert.match(workbenchJsx, /return document\.execCommand\('copy'\)/, 'copy fallback must return execCommand success instead of always reporting copied')
+assert.match(workbenchJsx, /cw-copy-row/, 'copy action must render below message content')
+assert.match(workbenchCss, /\.cw-copy-row/, 'copy action row must have dedicated styling')
+assert.match(workbenchCss, /\.cw-copy-button/, 'copy button must have dedicated styling')
 
 // No blueprint / template / hidden-id strings in the workbench source.
 assert.doesNotMatch(workbenchJsx, /蓝本/, 'workbench must not surface the word 蓝本')
@@ -606,5 +624,40 @@ assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static 
 const retryBody = retryFnMatch[0]
 assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
 assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
+
+// ---- Static: workbench renders the pending "正在思考…" placeholder copy ------
+//
+// The pending live_thinking placeholder ("正在思考…") is emitted by
+// buildDialogueTimeline when a turn is in flight but no live content has
+// streamed. The workbench renders live_thinking via ThinkingSummary, so the
+// copy must be present in the timeline source (not hardcoded in the workbench).
+// Assert the timeline mapper produces the copy and the workbench renders the
+// live_thinking type through ThinkingSummary.
+{
+  const placeholderView = {
+    session: {
+      id: 'dlg_placeholder_static', status: 'drafting_application',
+      intent: 'application_generation', route_locked: true, initial_prompt: 'hi',
+    },
+    messages: [{ id: 'ps1', role: 'user', content: 'hi' }],
+    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  }
+  const placeholderTimeline = buildDialogueTimeline(placeholderView, null, null, null, [], { turnId: 't1' })
+  const placeholderItem = placeholderTimeline.find(it => it.type === 'live_thinking' && it.pending)
+  assert.ok(placeholderItem, 'buildDialogueTimeline emits a pending live_thinking item for an in-flight turn')
+  assert.equal(placeholderItem.content, '正在思考…', 'placeholder copy is 正在思考…')
+
+  const workbenchSource = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+  assert.match(
+    workbenchSource,
+    /item\.type === 'live_thinking'/,
+    'ConversationWorkbench must render the live_thinking item type',
+  )
+  assert.match(
+    workbenchSource,
+    /ThinkingSummary/,
+    'ConversationWorkbench must render live_thinking through ThinkingSummary',
+  )
+}
 
 console.log('check-dialogue-workbench: OK')

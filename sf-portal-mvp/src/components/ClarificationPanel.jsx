@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusText } from '../hooks/clarificationLogic'
+import { formatDataPolicy } from '../utils/formatLabels'
 import './ClarificationPanel.css'
 
 // Renders the clarification flow: streaming analysis work-logs, structured
@@ -241,7 +242,7 @@ export function ClarificationPanel({
               <SummaryRow label="主视图" value={requirement.primaryView} />
               <SummaryRow label="研判边界" value={requirement.judgementBoundary && requirement.judgementBoundary.summary} />
               <SummaryRow label="数据来源" value={formatDataSources(requirement.judgementBoundary && requirement.judgementBoundary.dataSources)} />
-              <SummaryRow label="数据策略" value={requirement.dataPolicy} />
+              <SummaryRow label="数据策略" value={formatDataPolicy(requirement.dataPolicy)} />
             </div>
           </div>
         )}

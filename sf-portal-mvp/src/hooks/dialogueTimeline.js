@@ -51,12 +51,18 @@ export const initialDialogueState = () => ({
 export function statusText(status) {
   const map = {
     routing: '识别需求中',
+    active: '进行中',
+    analyzing: '分析中',
     recommending: '推荐智能体中',
     drafting_application: '需求澄清中',
     drafting_business_agent: '配置 Agent 中',
+    waiting_user: '等待补充',
+    change_confirmation: '变更确认中',
+    task_running: '任务执行中',
     resolved: '已完成',
     failed: '已失败',
     abandoned: '已放弃',
+    archived: '已归档',
   }
   if (status == null) return ''
   return map[status] || status
@@ -108,7 +114,7 @@ export function lockedFromView(view) {
 // the optimistic/persisted user message. It is SUPPRESSED when the persisted view
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
-export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = []) {
+export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = [], pendingTurn = null) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
 
@@ -159,6 +165,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         id: `livethink_${safeString(liveThinking.key)}`,
         type: 'live_thinking',
         content: safeString(liveThinking.content),
+        summary: safeString(la.content),
         kind: liveThinking.kind === 'step' ? 'step' : 'round',
       })
     }
@@ -209,30 +216,9 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     // Other parent agent kinds (business_draft handled below) are dropped here.
   }
 
-  // Transient live thinking (the model's raw reasoning, thinking_delta) —
-  // shown as a 思考过程 block ABOVE the analysis while the round streams.
-  // Cleared on view load, so it naturally disappears once the round completes.
-  if (liveThinking && liveThinking.content) {
-    items.push({
-      id: `livethink_${safeString(liveThinking.key)}`,
-      type: 'live_thinking',
-      content: safeString(liveThinking.content),
-      kind: liveThinking.kind === 'step' ? 'step' : 'round',
-    })
-  }
-
-  // Transient live analysis (Task 3, D1/D2): the streaming safe work log shown
-  // BEFORE the persisted analysis lands. Inserted immediately after the user
-  // message (the optimistic or persisted one). Suppressed once the persisted
-  // analysis for the round exists (D6 fold-on-completion).
-  if (liveAnalysis && liveAnalysis.content && !hasPersistedAnalysis) {
-    items.push({
-      id: `live_${safeString(liveAnalysis.key)}`,
-      type: 'live_analysis',
-      content: safeString(liveAnalysis.content),
-      kind: liveAnalysis.kind === 'step' ? 'step' : 'round',
-    })
-  }
+  // NOTE: transient live_thinking / live_analysis items are appended at the
+  // TAIL (after child/business surfaces, before resolved_outcome) so streamed
+  // content always appears after the latest persisted content — see below.
 
   // 2. Route choice cards when the intent is ambiguous (needs confirmation).
   const route = view.route
@@ -345,6 +331,46 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     }
   }
 
+  // 5c. Transient live items at the TAIL (after all persisted child/business
+  //     content, before resolved_outcome / system_status). Streaming content
+  //     must appear AFTER the latest persisted content so it sits at the bottom
+  //     of the conversation — not above the child history (the prior bug). The
+  //     D6 suppression is preserved: once the persisted analysis for the current
+  //     turn lands (hasPersistedAnalysis), the transient live_analysis is
+  //     suppressed (the folded persisted analysis is authoritative).
+  if (liveThinking && liveThinking.content) {
+    items.push({
+      id: `livethink_${safeString(liveThinking.key)}`,
+      type: 'live_thinking',
+      content: safeString(liveThinking.content),
+      summary: safeString(liveAnalysis && liveAnalysis.content),
+      kind: liveThinking.kind === 'step' ? 'step' : 'round',
+    })
+  }
+  if (liveAnalysis && liveAnalysis.content && !hasPersistedAnalysis) {
+    items.push({
+      id: `live_${safeString(liveAnalysis.key)}`,
+      type: 'live_analysis',
+      content: safeString(liveAnalysis.content),
+      kind: liveAnalysis.kind === 'step' ? 'step' : 'round',
+    })
+  }
+
+  // 5d. Pending "thinking" placeholder. When a turn is in flight (pendingTurn
+  //     truthy) but no live thinking/analysis has streamed yet, append a
+  //     pending live_thinking item so the workbench never looks frozen between
+  //     send and the first delta. Naturally replaced once real content arrives.
+  if (pendingTurn && !(liveThinking && liveThinking.content) && !(liveAnalysis && liveAnalysis.content)) {
+    items.push({
+      id: 'cw_pending_thinking',
+      type: 'live_thinking',
+      content: '正在思考…',
+      summary: '',
+      pending: true,
+      kind: 'round',
+    })
+  }
+
   // 6. Resolved outcome (application / agent / seeded job).
   appendResolvedOutcome(items, view)
 
@@ -438,7 +464,20 @@ function appendChildItems(items, child, parentSession) {
   // metadata_json.questionId names — not a single "last question", which would
   // mislabel every answer after the first in a batch.
   const questionsById = {}
+  let pendingThinking = null
+  const flushPendingThinking = () => {
+    if (!pendingThinking) return
+    items.push({
+      id: pendingThinking.id || `${parentSession.id || 'dlg'}_thinking_round_${pendingThinking.round}`,
+      type: 'thinking_summary',
+      content: pendingThinking.content,
+      summary: '',
+      label: `思考摘要 · 第${pendingThinking.round}轮`,
+    })
+    pendingThinking = null
+  }
   const flushAnalysis = () => {
+    flushPendingThinking()
     if (bucket && bucket.entries.length > 0) {
       items.push({
         id: `${parentSession.id || 'dlg'}_analysis_round_${bucket.round}`,
@@ -452,10 +491,26 @@ function appendChildItems(items, child, parentSession) {
     bucket = null
   }
   for (const msg of childMessages) {
+    if (msg && msg.role === 'agent' && msg.kind === 'thinking') {
+      pendingThinking = { id: msg.id, content: safeString(msg.content), round }
+      prevWasUser = false
+      continue
+    }
     if (msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
       if (msg.content) {
+        const analysis = safeString(msg.content)
+        if (pendingThinking) {
+          items.push({
+            id: pendingThinking.id || `${parentSession.id || 'dlg'}_thinking_round_${pendingThinking.round}`,
+            type: 'thinking_summary',
+            content: pendingThinking.content,
+            summary: analysis,
+            label: `思考摘要 · 第${pendingThinking.round}轮`,
+          })
+          pendingThinking = null
+        }
         if (!bucket) bucket = { round, entries: [] }
-        bucket.entries.push(safeString(msg.content))
+        bucket.entries.push(analysis)
       }
       prevWasUser = false
       continue

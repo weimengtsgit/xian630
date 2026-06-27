@@ -336,9 +336,23 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		ExistingApplications: appCandidates,
 		Blueprints:           bpCandidates,
 	}
-	out, err := s.dialogueRouter.RouteIntent(ctx, input, s.publishDialogueEvent)
+	routeThinking := ""
+	out, err := s.dialogueRouter.RouteIntent(ctx, input, func(ev dialogue.StreamEvent) {
+		if ev.Type == "dialogue.route.thinking" {
+			routeThinking = ev.Delta
+		}
+		s.publishDialogueEvent(ev)
+	})
 	if err != nil {
 		return persistedRoute{}, nil, err
+	}
+	if strings.TrimSpace(routeThinking) != "" {
+		if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID: "dmsg_" + idpkg.New(), DialogueID: dlg.ID, Role: "agent", Kind: "thinking",
+			Content: routeThinking, CreatedAt: time.Now(),
+		}); err != nil {
+			return persistedRoute{}, nil, err
+		}
 	}
 	route := persistedRoute{
 		Intent:                   out.Intent,
@@ -1283,23 +1297,40 @@ func (s *Server) runBusinessDraftRound(ctx context.Context, dialogueID string, d
 		CurrentDraft:     currentDraft,
 		CurrentQuestions: nil,
 	}
-	out, err := s.dialogueRouter.RunBusinessDraftRound(ctx, input, s.publishDialogueEvent)
+	draftThinking := ""
+	out, err := s.dialogueRouter.RunBusinessDraftRound(ctx, input, func(ev dialogue.StreamEvent) {
+		if ev.Type == "dialogue.draft.thinking" {
+			draftThinking = ev.Delta
+		}
+		s.publishDialogueEvent(ev)
+	})
 	if err != nil {
 		return err
 	}
-	// Persist work-log + questions + consolidation + agentDraft as messages.
+	// Persist thinking + work-log + questions + consolidation + agentDraft as messages.
 	now := time.Now()
+	analysisAt := now
+	if strings.TrimSpace(draftThinking) != "" {
+		if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "thinking",
+			Content: draftThinking, CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		analysisAt = now.Add(time.Millisecond)
+	}
 	for _, wl := range out.WorkLog {
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "analysis_work_log",
-			Content: wl.Content, CreatedAt: now,
+			Content: wl.Content, CreatedAt: analysisAt,
 		})
 	}
+	questionAt := analysisAt.Add(time.Millisecond)
 	for _, q := range out.Questions {
 		qBytes, _ := json.Marshal(q)
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "question",
-			MetadataJSON: string(qBytes), CreatedAt: now,
+			MetadataJSON: string(qBytes), CreatedAt: questionAt,
 		})
 		s.publishDialogueSimple("dialogue.draft.question.created", dialogueID, q)
 	}

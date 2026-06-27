@@ -257,6 +257,11 @@ assert.match(panelSource, /研判边界/, 'ClarificationPanel must render judgem
 assert.match(panelSource, /数据来源/, 'ClarificationPanel must render judgement data source labels')
 assert.match(panelSource, /ontology:\s*'本体数据源'/, 'ClarificationPanel must label ontology data source')
 assert.match(panelSource, /public_web_search:\s*'网络公开搜索'/, 'ClarificationPanel must label public web search data source')
+assert.match(panelSource, /formatDataPolicy/, 'ClarificationPanel must format dataPolicy labels')
+assert.match(panelSource, /import.*formatDataPolicy.*from.*utils\/formatLabels/, 'ClarificationPanel must import formatDataPolicy from shared utils, not define its own')
+const formatLabelsSrc = readFileSync(new URL('../src/utils/formatLabels.js', import.meta.url), 'utf8')
+assert.match(formatLabelsSrc, /live_api:\s*'真实接口'/, 'formatLabels must label live_api as 真实接口')
+assert.match(formatLabelsSrc, /mock_data:\s*'演示数据'/, 'formatLabels must label mock_data as 演示数据')
 
 // ---------------------------------------------------------------------------
 // ENVELOPE shape end-to-end: subscribeFactoryEvents yields the server.Event

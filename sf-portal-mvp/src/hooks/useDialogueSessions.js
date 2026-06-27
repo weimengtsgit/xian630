@@ -156,9 +156,9 @@ export function useDialogueSessions() {
     // rebuilding on every high-frequency assistant/tool trace token.
     if (!state.view && !optimisticUserMessage) return
     setState(prev => (prev.view === state.view
-      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items) }
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items, pendingTurn) }
       : prev))
-  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey, pendingTurn]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
