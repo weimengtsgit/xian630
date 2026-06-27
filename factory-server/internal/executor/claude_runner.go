@@ -538,7 +538,7 @@ func skillsPromptBlock(skillPaths, blueprintPaths []string, dataPolicy string) s
 		}
 		b.WriteString("**严禁**：用 synthetic/mock/fake/demo 数据替代真实请求；用 Math.random、确定性公式或 Math.sin/Math.cos 曲线合成潮汐/风/密度/航迹等核心序列；取数失败后 fallback 到 mock；为「保证构建成功」而硬编码看似真实的数据。")
 		b.WriteString("**文件命名同样受诚实数据审计约束**：src/ 下严禁出现名为 mock / mocks / mockData / mock-data / mock_data / fake / dummy / placeholder 的源文件——审计按文件名判定，即使该文件只放常量/阈值/标签/格式化函数也会被判定生成失败。常量、阈值、标签、格式化等辅助内容请命名为 constants / thresholds / labels / format / ui 等，绝不使用 mock 系文件名。")
-		b.WriteString("真实取数失败时（源不可达、覆盖范围不支持、鉴权缺失），应用必须显示明确的错误或空状态，并把失败原因记入 output.json 的 warnings——交付假数据等同于本次生成失败。")
+		b.WriteString("真实取数失败时（源不可达、覆盖范围不支持、鉴权缺失），应用必须渲染**降级态（Degraded State）**而不是一行裸「数据异常」——这是「所有真实源均失败」时**完整、合规、可交付**的终态，不要为此重试去编造数据，也不要卡死。降级态必须包含：(1) 顶部说明 banner：数据源不可用 + 失败原因 + 已尝试的数据源列表 + 手动重试按钮；(2) 数据视图的结构预览（图表轴标签 / 表格列头 / 卡片标题等「数据回来后会展示什么」的骨架，**严禁填充任何编造数值**，用空数组 / 占位线 / 「—」即可）；(3) 官方数据源链接；(4) 一句「数据恢复后此处将显示…」的说明。降级态组件命名为 EmptyState / DegradedState / DataUnavailable，**不要**使用 mock / fake / dummy / placeholder / sampleData / demoData 等命名（受诚实数据审计约束）。取数必须在**运行时（浏览器端）**进行，`npm run build` 必须能**完全离线**通过，禁止任何构建期取数依赖，保证页面在任何数据状况下都能产出来。降级判定必须快速：真实源**首次探测**即无覆盖或不可达时立即进入降级态，禁止对不可达源逐网格点/逐年份反复探测（用短超时 + 单点探测即可判定覆盖，绝不让用户长时间盯着加载圈等待）。把失败原因与已尝试源记入 output.json 的 warnings——交付假数据（含为「让构建通过」而硬编码的看似真实数值）等同于本次生成失败。")
 		b.WriteString("仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据（且 UI 须明确标注 mock/演示）。")
 		b.WriteString("注意：mock_then_api 表示「真实优先、失败诚实报错」，**不是**失败后回退 mock。")
 	}

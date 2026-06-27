@@ -52,13 +52,13 @@ func writeCanonicalSceneManifests(t *testing.T, root string) {
 // canonicalKnownSlugs is the 8 preset slugs that the real workspace ships.
 func canonicalKnownSlugs() map[string]bool {
 	return map[string]bool{
-		"carrier-formation-replay":              true,
-		"aircraft-carrier-track":                true,
-		"east-sea-situation":                    true,
-		"carrier-homeport-tide-window":          true,
-		"carrier-deck-wind-calculator":          true,
-		"merchant-density-grid-alert":           true,
-		"social-sighting-cluster-alert":         true,
+		"carrier-formation-replay":               true,
+		"aircraft-carrier-track":                 true,
+		"east-sea-situation":                     true,
+		"carrier-homeport-tide-window":           true,
+		"carrier-deck-wind-calculator":           true,
+		"merchant-density-grid-alert":            true,
+		"social-sighting-cluster-alert":          true,
 		"carrier-air-wing-affiliation-inference": true,
 	}
 }
@@ -177,6 +177,60 @@ func TestLoadSceneCatalogUnknownSlugErrors(t *testing.T) {
 }`)
 	if _, err := LoadSceneCatalog(root, canonicalKnownSlugs()); err == nil {
 		t.Fatal("expected error for unknown slug, got nil")
+	}
+}
+
+func TestLoadSceneCatalogManagedAgentsDoNotRequireSceneManifest(t *testing.T) {
+	root := t.TempDir()
+	writeCatalog(t, root, `{
+  "version": 1,
+  "scenes": {
+    "ops-copilot": {
+      "surface": "managed_agent",
+      "order": 2,
+      "name": "运维智能体",
+      "description": "排查部署、告警和服务健康问题",
+      "url": "https://example.com/ops",
+      "keywords": ["运维", "部署", "告警"]
+    },
+    "risk-copilot": {
+      "surface": "managed_agent",
+      "order": 1,
+      "name": "风险智能体",
+      "description": "识别风险事件并输出处置建议",
+      "url": "https://example.com/risk"
+    }
+  }
+}`)
+
+	cat, err := LoadSceneCatalog(root, canonicalKnownSlugs())
+	if err != nil {
+		t.Fatalf("LoadSceneCatalog with managed agents: %v", err)
+	}
+
+	agents := cat.ManagedAgents()
+	if len(agents) != 2 {
+		t.Fatalf("ManagedAgents = %d, want 2: %+v", len(agents), agents)
+	}
+	if agents[0].Slug != "risk-copilot" || agents[1].Slug != "ops-copilot" {
+		t.Fatalf("ManagedAgents order = %+v, want risk-copilot then ops-copilot", agents)
+	}
+	if agents[1].URL != "https://example.com/ops" || agents[1].Description == "" {
+		t.Fatalf("managed agent metadata not preserved: %+v", agents[1])
+	}
+}
+
+func TestLoadSceneCatalogManagedAgentRequiresURL(t *testing.T) {
+	root := t.TempDir()
+	writeCatalog(t, root, `{
+  "version": 1,
+  "scenes": {
+    "ops-copilot": { "surface": "managed_agent", "order": 1, "name": "运维智能体" }
+  }
+}`)
+
+	if _, err := LoadSceneCatalog(root, canonicalKnownSlugs()); err == nil {
+		t.Fatal("expected error for managed agent without url, got nil")
 	}
 }
 

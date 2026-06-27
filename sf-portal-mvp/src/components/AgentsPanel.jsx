@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Bot, Loader2, Plus, Trash2, X } from 'lucide-react'
+import { Bot, ChevronRight, Loader2, Plus, Trash2, X } from 'lucide-react'
 import './AgentsPanel.css'
 
 const emptyForm = {
@@ -29,6 +29,7 @@ export function AgentsPanel({
   onCreateAgent,
   onDeleteAgent,
   deletingAgentId,
+  onHidePanel,
 }) {
   const list = Array.isArray(agents) ? agents : []
   const [selectedId, setSelectedId] = useState('')
@@ -137,18 +138,31 @@ export function AgentsPanel({
   return (
     <div className="agents-panel">
       <div className="panel-header">
-        <h2>协作智能体</h2>
-        <div className="agents-header-actions">
+        <div className="agents-header-main">
+          <h2>协作智能体</h2>
+        </div>
+        <div className="panel-actions agents-header-actions">
           <span className="panel-count">{list.length} 个</span>
           <button
             type="button"
-            className="agent-icon-button"
+            className="panel-action-btn agent-icon-button"
             onClick={openCreateDialog}
             title="新增智能体"
             aria-label="新增智能体"
           >
             <Plus size={16} />
           </button>
+          {onHidePanel ? (
+            <button
+              type="button"
+              className="panel-action-btn agent-icon-button panel-hide-btn"
+              onClick={onHidePanel}
+              title="隐藏右侧智能体"
+              aria-label="隐藏右侧智能体"
+            >
+              <ChevronRight size={16} />
+            </button>
+          ) : null}
         </div>
       </div>
 

@@ -455,10 +455,15 @@ function AppRecommendationList({ cards, onOpenApp, submitting }) {
 }
 
 function AppRecommendationCard({ card, onOpenApp, submitting }) {
+  const managed = card.kind === 'managed_agent'
   const running = card.status === 'running'
-  const stopped = !running && card.status !== 'running'
+  const stopped = !managed && !running && card.status !== 'running'
   const open = () => {
     if (submitting) return
+    if (managed && card.runtimeUrl) {
+      window.open(card.runtimeUrl, '_blank', 'noopener')
+      return
+    }
     onOpenApp(card.applicationId)
   }
   return (

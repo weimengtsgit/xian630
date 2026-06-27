@@ -158,6 +158,7 @@ func newClarTestServer(t *testing.T, fake runner.CommandRunner) (*Server, *Route
 		writeServerSceneManifest(t, workspaceRoot, slug)
 	}
 	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: workspaceRoot}, st, scanner.Scanner{})
+	srv.async = func(fn func(context.Context)) { fn(context.Background()) }
 	srv.clarifier = clarification.Runner{
 		Cmd:           fake,
 		WorkspaceRoot: t.TempDir(),
