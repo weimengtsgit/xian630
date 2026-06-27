@@ -284,6 +284,46 @@ func (s *Server) jobExecutionSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summaries)
 }
 
+// getJobCollaborationPlan handles GET /api/jobs/:id/collaboration-plan. It
+// returns the job together with its parsed collaboration plan, materialized
+// steps, and dependency edges so the UI can render the lane/card view. A missing
+// job is 404; invalid plan JSON is 500.
+func (s *Server) getJobCollaborationPlan(w http.ResponseWriter, r *http.Request) {
+	id := Param(r, "id")
+	job, err := s.store.GetJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get job")
+		return
+	}
+	if job == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	steps, err := s.store.ListJobSteps(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list steps")
+		return
+	}
+	edges, err := s.store.ListJobStepEdges(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list step edges")
+		return
+	}
+	var plan any = map[string]any{}
+	if strings.TrimSpace(job.CollaborationPlanJSON) != "" {
+		if err := json.Unmarshal([]byte(job.CollaborationPlanJSON), &plan); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "invalid collaboration plan"})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"job":   job,
+		"plan":  plan,
+		"steps": steps,
+		"edges": edges,
+	})
+}
+
 // jobStepExecutionRecords handles GET
 // /api/jobs/:id/steps/:stepID/execution-records — the drawer pagination snapshot.
 // It is scoped to one (job, step, attempt) tuple. attempt defaults to the step's

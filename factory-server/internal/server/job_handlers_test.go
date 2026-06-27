@@ -307,6 +307,42 @@ func TestCreateJobSeedsCollaborationPlanSteps(t *testing.T) {
 	}
 }
 
+func TestGetJobCollaborationPlan(t *testing.T) {
+	_, r, _ := newJobsTestServer(t, config.Config{})
+	rec := createJobViaAPI(t, r, "生成公网数据研判智能体")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+
+	planRec := doJSON(t, r, http.MethodGet, "/api/jobs/"+job.ID+"/collaboration-plan", nil)
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("plan status = %d, body=%s", planRec.Code, planRec.Body.String())
+	}
+	var body struct {
+		Plan  map[string]any      `json:"plan"`
+		Edges []model.JobStepEdge `json:"edges"`
+		Steps []model.JobStep     `json:"steps"`
+	}
+	if err := json.NewDecoder(planRec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode plan response: %v", err)
+	}
+	if body.Plan["schemaVersion"] == nil || len(body.Steps) == 0 || len(body.Edges) == 0 {
+		t.Fatalf("unexpected plan response: %+v", body)
+	}
+}
+
+func TestGetJobCollaborationPlanMissingJob(t *testing.T) {
+	_, r, _ := newJobsTestServer(t, config.Config{})
+	rec := doJSON(t, r, http.MethodGet, "/api/jobs/missing/collaboration-plan", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
 // TestCreateJobMissingPrompt verifies the 400 path.
 func TestCreateJobMissingPrompt(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})

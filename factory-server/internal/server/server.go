@@ -436,6 +436,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/jobs/:id/steps/:stepID/execution-records", s.jobStepExecutionRecords)
 	r.Handle("GET", "/api/jobs/:id/artifacts", s.jobArtifacts)
 	r.Handle("GET", "/api/jobs/:id/execution-summary", s.jobExecutionSummary)
+	r.Handle("GET", "/api/jobs/:id/collaboration-plan", s.getJobCollaborationPlan)
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)
 	r.Handle("POST", "/api/jobs/:id/retry-current-step", s.retryCurrentStep)

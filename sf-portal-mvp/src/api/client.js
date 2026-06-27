@@ -96,6 +96,7 @@ export const factoryApi = {
   listJobs: () => request('/api/jobs'),
   getJob: id => request(`/api/jobs/${id}`),
   getJobSteps: id => request(`/api/jobs/${id}/steps`),
+  getJobCollaborationPlan: id => request(`/api/jobs/${id}/collaboration-plan`),
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
