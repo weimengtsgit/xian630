@@ -163,7 +163,7 @@ func loadSceneCatalogFile(root string) (SceneCatalog, error) {
 
 func validManagedAgentURL(raw string) bool {
 	u := strings.TrimSpace(raw)
-	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "/")
+	return u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "/")
 }
 
 func discoverPresetSceneSlugs(root string) (map[string]bool, error) {

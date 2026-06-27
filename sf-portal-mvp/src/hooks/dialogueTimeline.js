@@ -672,7 +672,7 @@ function safeJudgementBoundary(boundary) {
 // ONE view; for other dialogues it records lightweight activity. Returns NEW
 // state (immutable).
 export function applyDialogueEvent(state, type, ev) {
-  const dialogueId = ev && (ev.dialogue_id || (ev.data && ev.data.dialogue_id))
+  const dialogueId = ev && (ev.dialogue_id || ev.dialogueId || (ev.data && (ev.data.dialogue_id || ev.data.dialogueId)))
   if (!dialogueId) return state
   if (type === 'dialogue.deleted') {
     return applyDeletedEvent(state, dialogueId)

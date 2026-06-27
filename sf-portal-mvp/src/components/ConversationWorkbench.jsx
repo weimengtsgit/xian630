@@ -458,9 +458,10 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
   const managed = card.kind === 'managed_agent'
   const running = card.status === 'running'
   const stopped = !managed && !running && card.status !== 'running'
+  const canOpen = !managed || Boolean(card.runtimeUrl)
   const open = () => {
-    if (submitting) return
-    if (managed && card.runtimeUrl) {
+    if (submitting || !canOpen) return
+    if (managed) {
       window.open(card.runtimeUrl, '_blank', 'noopener')
       return
     }
@@ -474,7 +475,7 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
       </div>
       {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
       <div className="cw-app-actions">
-        {running ? (
+        {running && canOpen ? (
           <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开智能体">
             <ExternalLink size={14} />
             <span>打开智能体</span>

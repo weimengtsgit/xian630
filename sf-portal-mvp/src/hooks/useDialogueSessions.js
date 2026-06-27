@@ -55,6 +55,10 @@ const DIALOGUE_TYPES = new Set([
   'dialogue.turn.canceled',
   'dialogue.change.proposed',
   'dialogue.forked',
+  // A generated-app job completion updates the job/application first. Refresh the
+  // selected composed dialogue view so resolvedApplication.runtime_url appears
+  // immediately instead of only after a browser reload.
+  'job.updated',
   // Wrapped child clarification events arrive via publishDialogueChild; they carry
   // a parent dialogue_id so the portal updates one state source.
   'clarification.summary.updated',

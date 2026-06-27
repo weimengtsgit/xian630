@@ -220,17 +220,36 @@ func TestLoadSceneCatalogManagedAgentsDoNotRequireSceneManifest(t *testing.T) {
 	}
 }
 
-func TestLoadSceneCatalogManagedAgentRequiresURL(t *testing.T) {
+func TestLoadSceneCatalogManagedAgentAllowsEmptyURL(t *testing.T) {
 	root := t.TempDir()
 	writeCatalog(t, root, `{
   "version": 1,
   "scenes": {
-    "ops-copilot": { "surface": "managed_agent", "order": 1, "name": "运维智能体" }
+    "ops-copilot": { "surface": "managed_agent", "order": 1, "name": "运维智能体", "url": "" }
+  }
+}`)
+
+	cat, err := LoadSceneCatalog(root, canonicalKnownSlugs())
+	if err != nil {
+		t.Fatalf("LoadSceneCatalog with empty managed-agent url: %v", err)
+	}
+	agents := cat.ManagedAgents()
+	if len(agents) != 1 || agents[0].URL != "" {
+		t.Fatalf("ManagedAgents = %+v, want one agent with empty URL", agents)
+	}
+}
+
+func TestLoadSceneCatalogManagedAgentRejectsInvalidNonEmptyURL(t *testing.T) {
+	root := t.TempDir()
+	writeCatalog(t, root, `{
+  "version": 1,
+  "scenes": {
+    "ops-copilot": { "surface": "managed_agent", "order": 1, "name": "运维智能体", "url": "ftp://example.com" }
   }
 }`)
 
 	if _, err := LoadSceneCatalog(root, canonicalKnownSlugs()); err == nil {
-		t.Fatal("expected error for managed agent without url, got nil")
+		t.Fatal("expected error for invalid managed agent url, got nil")
 	}
 }
 

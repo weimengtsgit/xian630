@@ -250,11 +250,13 @@ function ManagedAgentList({ agents }) {
               </div>
             ) : null}
           </div>
-          <div className="app-card-footer">
-            <button type="button" className="card-btn primary-btn" onClick={() => window.open(agent.url, '_blank', 'noopener')} title={agent.url}>
-              <ExternalLink size={14} /> 打开
-            </button>
-          </div>
+          {agent.url ? (
+            <div className="app-card-footer">
+              <button type="button" className="card-btn primary-btn" onClick={() => window.open(agent.url, '_blank', 'noopener')} title={agent.url}>
+                <ExternalLink size={14} /> 打开
+              </button>
+            </div>
+          ) : null}
         </div>
       ))}
     </div>

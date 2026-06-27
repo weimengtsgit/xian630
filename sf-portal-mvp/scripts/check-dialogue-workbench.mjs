@@ -398,6 +398,15 @@ state = applyDialogueEvent(state, 'dialogue.resolved', {
 })
 assert.equal(state.needsRefresh, 'dlg_1', 'selected dialogue resolved must request a targeted refresh by id')
 
+// A job.updated event for the selected dialogue must also flag a targeted refresh:
+// deployment completion updates the job/app first, and the workbench must reload
+// the composed view immediately so resolvedApplication.runtime_url appears without
+// requiring a browser refresh.
+state = applyDialogueEvent({ ...state, needsRefresh: null }, 'job.updated', {
+  data: { id: 'job_1', dialogue_id: 'dlg_1', status: 'completed', created_app_id: 'app_1' },
+})
+assert.equal(state.needsRefresh, 'dlg_1', 'selected dialogue job.updated must request a targeted refresh by id')
+
 // A wrapped clarification event (dialogue.clarification.updated) must also key by dialogue_id.
 state = applyDialogueEvent(state, 'dialogue.clarification.updated', {
   dialogue_id: 'dlg_1', data: { child_id: 'clar_1' },
@@ -452,6 +461,7 @@ assert.match(eventsJs, /dialogue\.draft\.consolidation\.updated/, 'SSE registry 
 assert.match(eventsJs, /dialogue\.agent_draft\.updated/, 'SSE registry must include dialogue.agent_draft.updated')
 assert.match(eventsJs, /dialogue\.agent\.created/, 'SSE registry must include dialogue.agent.created')
 assert.match(eventsJs, /dialogue\.resolved/, 'SSE registry must include dialogue.resolved')
+assert.match(dialogueHookJs, /job\.updated/, 'useDialogueSessions must route job.updated events into targeted refresh handling')
 assert.match(dialogueHookJs, /dialogue\.draft\.delta/, 'useDialogueSessions must route dialogue.draft.delta events into targeted refresh handling')
 assert.match(workbenchJsx, /agentDraftStatus/, 'business confirm button must be gated by agentDraftStatus')
 
