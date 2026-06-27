@@ -93,6 +93,11 @@ assert.match(workbenchJsx, /已生效，可继续描述修改需求/, 'after a v
 assert.match(workbenchJsx, /取消本轮|cancel.*turn|onCancelTurn/, 'workbench must render a cancel-current-turn control')
 assert.match(workbenchJsx, /pending.*turn|turnId|本轮.*处理中|处理中.*轮/, 'workbench must render a pending-turn indicator')
 assert.match(workbenchJsx, /变更.*确认|change.*confirm|onConfirmChange/, 'workbench must render a change-summary confirmation control')
+assert.match(
+  workbenchJsx,
+  /const changeProposal = versionDeployed\s*\?/,
+  'change confirmation must only render after an initial application version is deployed',
+)
 assert.match(workbenchJsx, /回滚|rollback|onRollback/, 'workbench must render a rollback control (confirm-gated)')
 assert.match(workbenchJsx, /归档|archive|onArchive/, 'workbench must render an archive control')
 
