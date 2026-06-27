@@ -130,6 +130,7 @@ function App() {
                 getUnreadCount={jobs.getUnreadCount}
                 loadStepRecords={jobs.loadStepRecords}
                 getArtifactContent={factoryApiGetArtifactContent}
+                collaborationPlan={jobs.collaborationPlan}
               />
             }
             onNewSession={dialogue.newDialogue}

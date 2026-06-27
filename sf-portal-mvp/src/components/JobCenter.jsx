@@ -11,6 +11,7 @@ import {
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
+import { buildCollaborationCardView } from './../hooks/collaborationPlanState'
 import './JobCenter.css'
 
 // Fixed ordered step kinds (design §4). Same six stages, fixed order.
@@ -69,6 +70,7 @@ export function JobCenter({
   getUnreadCount,
   loadStepRecords,
   getArtifactContent,
+  collaborationPlan,
 }) {
   // Local drawer tab is owned by the drawer; JobCenter only owns whether the
   // drawer is open (driven by selectedStepId).
@@ -99,6 +101,14 @@ export function JobCenter({
     return map
   }, [summary])
 
+  // Collaboration plan: render lanes of agent cards when a plan is present,
+  // falling back to the fixed six-step matrix for legacy jobs.
+  const collaborationLanes = useMemo(
+    () => buildCollaborationCardView(steps, summary, collaborationPlan),
+    [steps, summary, collaborationPlan],
+  )
+  const hasCollaborationPlan = collaborationLanes.length > 0
+
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
   const canCancelHeader = activeJob && !isTerminal
@@ -126,6 +136,17 @@ export function JobCenter({
       (sm && (sm.attempt ?? sm.latest_attempt)) ??
       (step && (step.attempt ?? step.latest_attempt)) ??
       1
+    setDrawerOpen(true)
+    if (selectStepAttempt) selectStepAttempt(stepId, attempt)
+  }
+
+  // Open the drawer by a REAL step id (collaboration-plan cards carry the id
+  // directly, so no kind -> stepId resolution is needed).
+  const openDrawerForStepId = stepId => {
+    if (!stepId) return
+    const sm = summaryByStepId[stepId]
+    const step = (Array.isArray(steps) ? steps : []).find(s => s && s.id === stepId)
+    const attempt = (sm && (sm.attempt ?? sm.latest_attempt)) ?? (step && step.attempt) ?? 1
     setDrawerOpen(true)
     if (selectStepAttempt) selectStepAttempt(stepId, attempt)
   }
@@ -243,30 +264,60 @@ export function JobCenter({
         </div>
       ) : null}
 
-      {/* 3x2 matrix of the six fixed stages. Replaces the old vertical list. */}
-      <div className="jc-step-matrix">
-        {cardView.map(view => {
-          const { kind, label, stepId, step, summary: sm } = view
-          const attempt =
-            (sm && (sm.attempt ?? sm.latest_attempt)) ??
-            (step && (step.attempt ?? step.latest_attempt)) ??
-            null
-          // Unread and selected both key off the REAL step_id.
-          const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
-          return (
-            <StepCard
-              key={kind}
-              kind={kind}
-              label={label}
-              step={step}
-              summary={sm}
-              selected={!!stepId && selectedStepId === stepId}
-              unreadCount={unread}
-              onSelect={openDrawerFor}
-            />
-          )
-        })}
-      </div>
+      {hasCollaborationPlan ? (
+        <div className="jc-collaboration-lanes">
+          {collaborationLanes.map(group => (
+            <section className="jc-lane" key={group.lane.id}>
+              <h3 className="jc-lane-title">{group.lane.label}</h3>
+              <div className="jc-step-matrix">
+                {group.cards.map(view => {
+                  const attempt =
+                    (view.summary && (view.summary.attempt ?? view.summary.latest_attempt)) ??
+                    (view.step && (view.step.attempt ?? view.step.latest_attempt)) ??
+                    null
+                  return (
+                    <StepCard
+                      key={view.agent.key}
+                      kind={view.kind}
+                      label={view.label}
+                      agent={view.agent}
+                      step={view.step}
+                      summary={view.summary}
+                      selected={!!view.stepId && selectedStepId === view.stepId}
+                      unreadCount={view.stepId && getUnreadCount ? getUnreadCount(view.stepId, attempt) : 0}
+                      onSelect={() => openDrawerForStepId(view.stepId)}
+                    />
+                  )
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <div className="jc-step-matrix">
+          {cardView.map(view => {
+            const { kind, label, stepId, step, summary: sm } = view
+            const attempt =
+              (sm && (sm.attempt ?? sm.latest_attempt)) ??
+              (step && (step.attempt ?? step.latest_attempt)) ??
+              null
+            // Unread and selected both key off the REAL step_id.
+            const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
+            return (
+              <StepCard
+                key={kind}
+                kind={kind}
+                label={label}
+                step={step}
+                summary={sm}
+                selected={!!stepId && selectedStepId === stepId}
+                unreadCount={unread}
+                onSelect={openDrawerFor}
+              />
+            )
+          })}
+        </div>
+      )}
 
       {jobStatus === 'failed' && (
         <div className="jc-actions">

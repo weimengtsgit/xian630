@@ -27,6 +27,9 @@ export function useJobs() {
   // `getRecords(stepId, attempt)`.
   const [streamRecords, setStreamRecords] = useState([])
   const [artifacts, setArtifacts] = useState([])
+  // Collaboration plan (lanes + agents + edges) for the active job, when one
+  // exists. Null for legacy jobs without a plan.
+  const [collaborationPlan, setCollaborationPlan] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -65,6 +68,7 @@ export function useJobs() {
     setRecordsByStepAttempt({})
     setStreamRecords([])
     setLastReadByStepAttempt({})
+    setCollaborationPlan(null)
   }, [])
 
   const hydrateJob = useCallback(async job => {
@@ -81,10 +85,11 @@ export function useJobs() {
     setStreamRecords([])
     setLastReadByStepAttempt({})
 
-    const [stepsData, summaryData, artifactsData] = await Promise.all([
+    const [stepsData, summaryData, artifactsData, planData] = await Promise.all([
       factoryApi.getJobSteps(jobId).catch(() => []),
       factoryApi.getJobExecutionSummary(jobId).catch(() => []),
       factoryApi.getJobArtifacts(jobId).catch(() => []),
+      factoryApi.getJobCollaborationPlan(jobId).catch(() => null),
     ])
     // A history-dialogue switch may have selected another task while the old
     // request was in flight. Never paint the old job's details into the new
@@ -95,6 +100,7 @@ export function useJobs() {
     setSummary(Array.isArray(summaryData) ? summaryData : summaryData.steps || [])
     const arts = Array.isArray(artifactsData) ? artifactsData : artifactsData.artifacts || []
     setArtifacts(arts)
+    setCollaborationPlan(planData || null)
   }, [clearActiveJob])
 
   // -------------------------------------------------------------------------
@@ -384,6 +390,7 @@ export function useJobs() {
     steps,
     summary,
     artifacts,
+    collaborationPlan,
     loading,
     error,
     refresh,
