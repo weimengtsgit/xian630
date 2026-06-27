@@ -139,6 +139,10 @@ const draftView = {
     requirement: {
       appType: 'situation_replay', appName: '航母编队复盘', coreScenario: '复盘航迹',
       primaryView: '时间轴', dataPolicy: '本地',
+      judgementBoundary: {
+        dataSources: ['ontology', 'public_web_search'],
+        summary: '基于航母轨迹数据判断事件关联',
+      },
       // Legacy/internal field that must NEVER surface in the UI.
       blueprintRefs: ['carrier-formation-replay'],
     },
@@ -152,6 +156,38 @@ assert.equal(draftSerialized.includes('模板'), false, 'timeline must not conta
 assert.equal(draftSerialized.includes('carrier-formation-replay'), false, 'timeline must not leak internal blueprint slug')
 // requirement summary must be present for a ready_to_confirm child.
 assert.equal(draftTimeline.some(item => item.type === 'requirement_summary'), true, 'ready_to_confirm child must yield a requirement summary')
+const draftRequirementSummary = draftTimeline.find(item => item.type === 'requirement_summary')
+assert.equal(draftRequirementSummary.requirement.judgementBoundary.summary, '基于航母轨迹数据判断事件关联', 'requirement summary must retain judgement boundary summary')
+assert.deepEqual(draftRequirementSummary.requirement.judgementBoundary.dataSources, ['ontology', 'public_web_search'], 'requirement summary must retain safe data-source families')
+
+// Batched multi-select answers must render selected option labels, not the raw
+// JSON array value, so data-source answers read like business language.
+const multiAnswerTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_multi_answer', status: 'drafting_application', intent: 'application_generation', route_locked: true },
+  messages: [],
+  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  child: {
+    id: 'clar_multi_answer', status: 'active', round: 2, max_rounds: 6,
+    requirement: {},
+    messages: [
+      { id: 'qds', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
+        id: 'judgementBoundary.dataSources',
+        label: '数据来源边界',
+        multiSelect: true,
+        options: [
+          { value: 'ontology', label: '本体数据源' },
+          { value: 'public_web_search', label: '网络公开搜索' },
+        ],
+      }) },
+      { id: 'ads', role: 'user', kind: 'answer', metadata_json: JSON.stringify({
+        questionId: 'judgementBoundary.dataSources',
+        value: JSON.stringify(['ontology', 'public_web_search']),
+      }) },
+    ],
+  },
+})
+const multiAnswerMessage = multiAnswerTimeline.find(item => item.id === 'ads')
+assert.equal(multiAnswerMessage.content, '数据来源边界：本体数据源、网络公开搜索')
 
 // ---- locked-route composer behavior ----------------------------------------
 
@@ -179,7 +215,7 @@ const generationChoiceView = {
   messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '创建一个新的排班应用' }],
   route: {
     intent: 'application_generation', confidence: 'high', needsRouteConfirmation: true,
-    userFacingReason: '我会澄清需求并生成一个可运行的新应用。', existingApplicationSlugs: [],
+    userFacingReason: '我会澄清需求并生成一个可运行的新智能体。', existingApplicationSlugs: [],
   },
 }
 const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')
@@ -362,6 +398,15 @@ state = applyDialogueEvent(state, 'dialogue.resolved', {
 })
 assert.equal(state.needsRefresh, 'dlg_1', 'selected dialogue resolved must request a targeted refresh by id')
 
+// A job.updated event for the selected dialogue must also flag a targeted refresh:
+// deployment completion updates the job/app first, and the workbench must reload
+// the composed view immediately so resolvedApplication.runtime_url appears without
+// requiring a browser refresh.
+state = applyDialogueEvent({ ...state, needsRefresh: null }, 'job.updated', {
+  data: { id: 'job_1', dialogue_id: 'dlg_1', status: 'completed', created_app_id: 'app_1' },
+})
+assert.equal(state.needsRefresh, 'dlg_1', 'selected dialogue job.updated must request a targeted refresh by id')
+
 // A wrapped clarification event (dialogue.clarification.updated) must also key by dialogue_id.
 state = applyDialogueEvent(state, 'dialogue.clarification.updated', {
   dialogue_id: 'dlg_1', data: { child_id: 'clar_1' },
@@ -416,6 +461,7 @@ assert.match(eventsJs, /dialogue\.draft\.consolidation\.updated/, 'SSE registry 
 assert.match(eventsJs, /dialogue\.agent_draft\.updated/, 'SSE registry must include dialogue.agent_draft.updated')
 assert.match(eventsJs, /dialogue\.agent\.created/, 'SSE registry must include dialogue.agent.created')
 assert.match(eventsJs, /dialogue\.resolved/, 'SSE registry must include dialogue.resolved')
+assert.match(dialogueHookJs, /job\.updated/, 'useDialogueSessions must route job.updated events into targeted refresh handling')
 assert.match(dialogueHookJs, /dialogue\.draft\.delta/, 'useDialogueSessions must route dialogue.draft.delta events into targeted refresh handling')
 assert.match(workbenchJsx, /agentDraftStatus/, 'business confirm button must be gated by agentDraftStatus')
 

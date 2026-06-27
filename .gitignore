@@ -74,3 +74,9 @@ __debug*
 
 # Local isolated worktrees
 .worktrees/
+.claude/worktrees/
+
+# Factory runtime artifacts
+.factory-iso/
+.factory-runs/
+sf-deploy.tar.gz

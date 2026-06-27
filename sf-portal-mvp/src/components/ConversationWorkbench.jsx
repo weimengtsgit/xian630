@@ -455,10 +455,16 @@ function AppRecommendationList({ cards, onOpenApp, submitting }) {
 }
 
 function AppRecommendationCard({ card, onOpenApp, submitting }) {
+  const managed = card.kind === 'managed_agent'
   const running = card.status === 'running'
-  const stopped = !running && card.status !== 'running'
+  const stopped = !managed && !running && card.status !== 'running'
+  const canOpen = !managed || Boolean(card.runtimeUrl)
   const open = () => {
-    if (submitting) return
+    if (submitting || !canOpen) return
+    if (managed) {
+      window.open(card.runtimeUrl, '_blank', 'noopener')
+      return
+    }
     onOpenApp(card.applicationId)
   }
   return (
@@ -469,7 +475,7 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
       </div>
       {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
       <div className="cw-app-actions">
-        {running ? (
+        {running && canOpen ? (
           <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开智能体">
             <ExternalLink size={14} />
             <span>打开智能体</span>
@@ -684,11 +690,14 @@ function CustomAnswer({ onSubmit }) {
 }
 
 function RequirementSummary({ requirement }) {
+  const boundary = requirement && requirement.judgementBoundary
   const rows = [
     ['智能体类型', requirement.appType],
     ['智能体名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
+    ['研判边界', boundary && boundary.summary],
+    ['数据来源', boundary && formatDataSources(boundary.dataSources)],
     ['数据策略', requirement.dataPolicy],
   ].filter(([, value]) => value)
   return (
@@ -829,15 +838,37 @@ function fieldLabel(field) {
     coreScenario: '核心场景',
     primaryView: '主视图',
     dataPolicy: '数据策略',
+    judgementBoundary: '研判边界',
+    'judgementBoundary.dataSources': '数据来源',
+    judgementDataSources: '数据来源',
+    judgement_boundary_data_sources: '数据来源',
+    'judgementBoundary.summary': '研判边界摘要',
   }
   return map[field] || field
 }
 
 function formatValue(value) {
   if (value == null || value === '') return ''
+  if (value && typeof value === 'object' && !Array.isArray(value) && (value.summary || value.dataSources)) {
+    const parts = [value.summary, formatDataSources(value.dataSources)].filter(Boolean)
+    return parts.join('；')
+  }
   if (Array.isArray(value)) return value.join('、')
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function formatDataSources(values) {
+  if (!Array.isArray(values) || values.length === 0) return ''
+  return values.map(dataSourceLabel).filter(Boolean).join('、')
+}
+
+function dataSourceLabel(value) {
+  const map = {
+    ontology: '本体数据源',
+    public_web_search: '网络公开搜索',
+  }
+  return map[value] || value
 }
 
 // ---- continuous-workbench components (Task 7) ------------------------------

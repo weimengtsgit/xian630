@@ -254,6 +254,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       type: 'app_recommendation',
       cards: recs.slice(0, 3).map(card => ({
         applicationId: safeString(card.applicationId),
+        kind: safeString(card.kind),
         slug: safeString(card.slug),
         name: safeString(card.name),
         appType: safeString(card.appType),
@@ -530,8 +531,11 @@ function clarifyAnswerLabel(msg, questionsById) {
   if (!q) return raw
   const qLabel = safeString(q.label || q.question)
   const opts = Array.isArray(q.options) ? q.options : []
-  const opt = opts.find(o => o && safeString(o.value) === raw)
-  const optLabel = opt ? safeString(opt.label || opt.value) : raw
+  const selectedValues = parseAnswerValues(value)
+  const optLabel = selectedValues.map(selected => {
+    const opt = opts.find(o => o && safeString(o.value) === selected)
+    return opt ? safeString(opt.label || opt.value) : selected
+  }).filter(Boolean).join('、') || raw
   return qLabel ? `${qLabel}：${optLabel}` : optLabel
 }
 
@@ -645,7 +649,18 @@ function safeRequirement(req) {
     coreScenario: safeString(req.coreScenario),
     primaryView: safeString(req.primaryView),
     dataPolicy: safeString(req.dataPolicy),
+    judgementBoundary: safeJudgementBoundary(req.judgementBoundary),
   }
+}
+
+function safeJudgementBoundary(boundary) {
+  if (!boundary || typeof boundary !== 'object') return null
+  const dataSources = Array.isArray(boundary.dataSources)
+    ? boundary.dataSources.map(safeString).filter(Boolean)
+    : []
+  const summary = safeString(boundary.summary).trim()
+  if (dataSources.length === 0 && !summary) return null
+  return { dataSources, summary }
 }
 
 // ---- SSE event reducer -----------------------------------------------------
@@ -657,7 +672,7 @@ function safeRequirement(req) {
 // ONE view; for other dialogues it records lightweight activity. Returns NEW
 // state (immutable).
 export function applyDialogueEvent(state, type, ev) {
-  const dialogueId = ev && (ev.dialogue_id || (ev.data && ev.data.dialogue_id))
+  const dialogueId = ev && (ev.dialogue_id || ev.dialogueId || (ev.data && (ev.data.dialogue_id || ev.data.dialogueId)))
   if (!dialogueId) return state
   if (type === 'dialogue.deleted') {
     return applyDeletedEvent(state, dialogueId)
@@ -817,4 +832,13 @@ function parseJSON(raw) {
   } catch {
     return null
   }
+}
+
+function parseAnswerValues(value) {
+  if (Array.isArray(value)) return value.map(safeString).filter(Boolean)
+  const raw = safeString(value)
+  const parsed = parseJSON(raw)
+  if (Array.isArray(parsed)) return parsed.map(safeString).filter(Boolean)
+  if (parsed != null && typeof parsed !== 'object') return [safeString(parsed)]
+  return raw ? [raw] : []
 }

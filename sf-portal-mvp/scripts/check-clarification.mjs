@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   applyClarificationEvent,
   initialClarificationState,
@@ -98,9 +99,25 @@ s = applyClarificationEvent(s, 'clarification.created', {
 s = applyClarificationEvent(s, 'clarification.summary.updated', {
   type: 'clarification.summary.updated',
   session_id: 'sess_1',
-  data: { appType: 'dashboard', appName: 'Foo', coreScenario: 'x' },
+  data: {
+    appType: 'dashboard',
+    appName: 'Foo',
+    coreScenario: 'x',
+    judgementBoundary: {
+      dataSources: ['ontology', 'public_web_search'],
+      summary: '基于 AIS 数据判断异常',
+    },
+  },
 })
-assert.deepEqual(s.requirement, { appType: 'dashboard', appName: 'Foo', coreScenario: 'x' })
+assert.deepEqual(s.requirement, {
+  appType: 'dashboard',
+  appName: 'Foo',
+  coreScenario: 'x',
+  judgementBoundary: {
+    dataSources: ['ontology', 'public_web_search'],
+    summary: '基于 AIS 数据判断异常',
+  },
+})
 
 s = applyClarificationEvent(s, 'clarification.question.created', {
   type: 'clarification.question.created',
@@ -112,10 +129,20 @@ assert.equal(s.questions.length, 1, 'precondition: stale question exists before 
 s = applyClarificationEvent(s, 'clarification.ready_to_confirm', {
   type: 'clarification.ready_to_confirm',
   session_id: 'sess_1',
-  data: { appType: 'dashboard', appName: 'Foo', coreScenario: 'x', primaryView: 'map' },
+  data: {
+    appType: 'dashboard',
+    appName: 'Foo',
+    coreScenario: 'x',
+    primaryView: 'map',
+    judgementBoundary: {
+      dataSources: ['ontology', 'public_web_search'],
+      summary: '基于 AIS 数据判断异常',
+    },
+  },
 })
 assert.equal(s.session.status, 'ready_to_confirm')
 assert.equal(s.requirement.primaryView, 'map')
+assert.equal(s.requirement.judgementBoundary.summary, '基于 AIS 数据判断异常')
 assert.equal(s.questions.length, 0, 'ready_to_confirm must clear stale clarification questions')
 
 // ---------------------------------------------------------------------------
@@ -220,6 +247,18 @@ assert.equal(statusText(undefined), '')
 assert.equal(statusText(null), '')
 
 // ---------------------------------------------------------------------------
+// ClarificationPanel must not render internal blueprintRefs in the confirmation
+// summary. Blueprint refs are server-side Factory metadata only.
+// ---------------------------------------------------------------------------
+const panelSource = readFileSync(new URL('../src/components/ClarificationPanel.jsx', import.meta.url), 'utf8')
+assert.doesNotMatch(panelSource, /requirement\.blueprintRefs/, 'ClarificationPanel must not read requirement.blueprintRefs')
+assert.doesNotMatch(panelSource, /蓝本引用/, 'ClarificationPanel must not render blueprint reference copy')
+assert.match(panelSource, /研判边界/, 'ClarificationPanel must render judgement boundary summary')
+assert.match(panelSource, /数据来源/, 'ClarificationPanel must render judgement data source labels')
+assert.match(panelSource, /ontology:\s*'本体数据源'/, 'ClarificationPanel must label ontology data source')
+assert.match(panelSource, /public_web_search:\s*'网络公开搜索'/, 'ClarificationPanel must label public web search data source')
+
+// ---------------------------------------------------------------------------
 // ENVELOPE shape end-to-end: subscribeFactoryEvents yields the server.Event
 // envelope {seq,type,data,at}; the hook unwraps .data to the bare StreamEvent
 // before calling the reducer. Mirror that exact unwrap predicate here so the
@@ -262,7 +301,12 @@ const summaryEnvelope = {
   data: {
     type: 'clarification.summary.updated',
     session_id: 's',
-    data: { appType: 'situation_replay', appName: 'A', coreScenario: 'c' },
+    data: {
+      appType: 'situation_replay',
+      appName: 'A',
+      coreScenario: 'c',
+      judgementBoundary: { dataSources: ['ontology'], summary: '基于潮汐数据判断窗口' },
+    },
   },
 }
 s = applyClarificationEvent(
@@ -274,6 +318,7 @@ assert.deepEqual(s.requirement, {
   appType: 'situation_replay',
   appName: 'A',
   coreScenario: 'c',
+  judgementBoundary: { dataSources: ['ontology'], summary: '基于潮汐数据判断窗口' },
 })
 
 // A bare (non-envelope) StreamEvent must still pass through unchanged — the

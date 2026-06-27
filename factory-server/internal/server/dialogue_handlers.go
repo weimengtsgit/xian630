@@ -78,6 +78,7 @@ type dialoguePatchRequirementBody struct {
 // internal blueprint slug.
 type recommendationCard struct {
 	ApplicationID string `json:"applicationId"`
+	Kind          string `json:"kind,omitempty"`
 	Slug          string `json:"slug"`
 	Name          string `json:"name"`
 	AppType       string `json:"appType"`
@@ -206,7 +207,46 @@ func (s *Server) routingAppCandidates(ctx context.Context, catalog scanner.Scene
 			IsGenerated: app.Source == model.AppSourceGenerated,
 		})
 	}
+	for _, ma := range catalog.ManagedAgents() {
+		app := model.Application{
+			ID:          managedAgentID(ma.Slug),
+			Slug:        ma.Slug,
+			Name:        ma.Name,
+			Type:        "managed_agent",
+			Source:      model.AppSourcePreset,
+			Description: managedAgentSummary(ma),
+			Status:      model.AppStatusRunning,
+			RuntimeURL:  ma.URL,
+		}
+		bySlug[ma.Slug] = &app
+		out = append(out, dialogue.AppSummary{
+			Slug:        ma.Slug,
+			Name:        ma.Name,
+			AppType:     "managed_agent",
+			Summary:     app.Description,
+			IsGenerated: false,
+		})
+	}
 	return out, bySlug
+}
+
+func managedAgentID(slug string) string {
+	return "managed-agent-" + slug
+}
+
+func managedAgentSummary(ma scanner.ManagedAgent) string {
+	parts := []string{ma.Description}
+	if len(ma.Keywords) > 0 {
+		parts = append(parts, strings.Join(ma.Keywords, " "))
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func recommendationKind(app *model.Application) string {
+	if app != nil && strings.HasPrefix(app.ID, "managed-agent-") {
+		return "managed_agent"
+	}
+	return "application"
 }
 
 // blueprintCandidates builds the internal blueprint summaries from the catalog
@@ -340,6 +380,7 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		}
 		cards = append(cards, recommendationCard{
 			ApplicationID: app.ID,
+			Kind:          recommendationKind(app),
 			Slug:          app.Slug,
 			Name:          app.Name,
 			AppType:       app.Type,
@@ -447,7 +488,26 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 // the current app store state (so runtime URLs/status are fresh).
 func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []recommendationCard {
 	cards := make([]recommendationCard, 0, len(route.ExistingApplicationSlugs))
+	catalog := s.loadSceneCatalog(ctx)
+	managedBySlug := make(map[string]scanner.ManagedAgent)
+	for _, ma := range catalog.ManagedAgents() {
+		managedBySlug[ma.Slug] = ma
+	}
 	for i, slug := range route.ExistingApplicationSlugs {
+		if ma, ok := managedBySlug[slug]; ok {
+			cards = append(cards, recommendationCard{
+				ApplicationID: managedAgentID(ma.Slug),
+				Kind:          "managed_agent",
+				Slug:          ma.Slug,
+				Name:          ma.Name,
+				AppType:       "managed_agent",
+				MatchReason:   route.UserFacingReason,
+				Status:        string(model.AppStatusRunning),
+				RuntimeURL:    ma.URL,
+				Primary:       i == 0,
+			})
+			continue
+		}
 		apps, err := s.store.ListApplications(ctx)
 		if err != nil {
 			break
@@ -459,6 +519,7 @@ func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []rec
 			app := apps[j]
 			cards = append(cards, recommendationCard{
 				ApplicationID: app.ID,
+				Kind:          recommendationKind(&app),
 				Slug:          app.Slug,
 				Name:          app.Name,
 				AppType:       app.Type,
@@ -621,9 +682,8 @@ var errDialogueNotFound = errors.New("dialogue not found")
 // ---- handlers -------------------------------------------------------------
 
 // createDialogue handles POST /api/dialogues. It persists the first user
-// message, emits dialogue.created, builds routing candidates, invokes intent
-// routing, validates every returned slug, persists a structured route record,
-// emits dialogue.intent.updated (redacted), and returns the view.
+// message, emits dialogue.created, schedules intent routing, and returns the
+// initial view without waiting for the model.
 func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 	var body createDialogueBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -659,31 +719,9 @@ func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishDialogueSimple("dialogue.created", id, dlg)
 
-	// Run pre-lock routing.
-	msgs := []model.DialogueMessage{promptMsg}
-	route, _, rerr := s.runRouting(ctx, &dlg, body.Prompt, msgs)
-	if rerr != nil {
-		// Routing failed: mark the dialogue failed (no route persisted). A
-		// diagnosable session state remains.
-		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_failed", rerr.Error())
-		view, _ := s.composeDialogueView(ctx, id)
-		if view == nil {
-			view = &dialogueView{Session: dlg, Messages: msgs}
-		}
-		writeJSON(w, http.StatusCreated, view)
-		return
-	}
-	if err := s.persistRouteRecordUnlocked(ctx, id, route); err != nil {
-		writeError(w, http.StatusInternalServerError, "persist route")
-		return
-	}
-	// Re-read so the view reflects the persisted route.
-	updated, _ := s.store.GetDialogueSession(ctx, id)
-	if updated != nil {
-		dlg = *updated
-	}
-	// Emit redacted intent.updated (project the route before publishing).
-	s.publishDialogueSimple("dialogue.intent.updated", id, route.public())
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runDialogueRouting(asyncCtx, id, body.Prompt)
+	})
 
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -691,6 +729,45 @@ func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, view)
+}
+
+func (s *Server) runAsync(fn func(context.Context)) {
+	if s.async != nil {
+		s.async(fn)
+		return
+	}
+	go fn(context.Background())
+}
+
+func (s *Server) runDialogueRouting(ctx context.Context, id, userMessage string) {
+	dlg, err := s.store.GetDialogueSession(ctx, id)
+	if err != nil || dlg == nil {
+		if err != nil {
+			log.Printf("dialogue routing %s: get dialogue: %v", id, err)
+		}
+		return
+	}
+	if dlg.RouteLocked || dlg.Status != model.DialogueStatusRouting {
+		return
+	}
+	msgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
+	route, _, rerr := s.runRouting(ctx, dlg, userMessage, msgs)
+	if rerr != nil {
+		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_failed", rerr.Error())
+		s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+			"code": "route_failed", "message": rerr.Error(),
+		})
+		return
+	}
+	if err := s.persistRouteRecordUnlocked(ctx, id, route); err != nil {
+		log.Printf("dialogue routing %s: persist route: %v", id, err)
+		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_persist_failed", err.Error())
+		s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+			"code": "route_persist_failed", "message": err.Error(),
+		})
+		return
+	}
+	s.publishDialogueSimple("dialogue.intent.updated", id, route.public())
 }
 
 // listDialogues handles GET /api/dialogues.
@@ -814,8 +891,7 @@ func (s *Server) archiveDialogue(w http.ResponseWriter, r *http.Request) {
 //
 // Pre-route (status=routing, route not locked): the message is the user refining
 // their initial request before choosing a route, so the handler appends the
-// message and re-runs the (synchronous) intent-routing procedure, returning the
-// composed view — the legacy 200 contract preserved for the routing phase.
+// message, schedules intent routing, and returns 202 with the current view.
 //
 // Continuing session (status is one of the active/analyzing/... phases, i.e. the
 // session route is already established and the dialogue stays open): the handler
@@ -891,23 +967,21 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-route phase: synchronous re-routing (legacy 200 contract).
-	allMsgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
-	route, _, rerr := s.runRouting(ctx, dlg, body.Content, allMsgs)
-	if rerr != nil {
-		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_failed", rerr.Error())
-		view, _ := s.composeDialogueView(ctx, id)
-		writeJSON(w, http.StatusOK, view)
-		return
-	}
-	_ = s.persistRouteRecordUnlocked(ctx, id, route)
-	s.publishDialogueSimple("dialogue.intent.updated", id, route.public())
+	// Pre-route phase: re-routing can wait on the model, so accept the message
+	// immediately and let SSE/view refresh carry the result.
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runDialogueRouting(asyncCtx, id, body.Content)
+	})
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"dialogueId": id,
+		"acceptedAt": now.UTC().Format(time.RFC3339),
+		"view":       view,
+	})
 }
 
 // cancelDialogueTurn handles POST /api/dialogues/:id/turns/:turnId/cancel. It
@@ -1102,7 +1176,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		// candidate. Do not lock the user into an empty recommendation view.
 		intent = dialogue.IntentApplicationGeneration
 		route.Intent = intent
-		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
+		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新智能体。"
 	}
 
 	switch intent {
@@ -1143,8 +1217,10 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		s.runRoundAndPersistForDialogue(ctx, childID, 1, id)
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
+		s.runAsync(func(asyncCtx context.Context) {
+			s.runRoundAndPersistForDialogue(asyncCtx, childID, 1, id)
+		})
 
 	case dialogue.IntentBusinessProcessingAgent:
 		routeBytes, _ := json.Marshal(route)
@@ -1152,12 +1228,15 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		// Start business drafting round 1.
-		if rerr := s.runBusinessDraftRound(ctx, id, dlg, 1); rerr != nil {
-			writeError(w, http.StatusInternalServerError, "draft round")
-			return
-		}
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
+		s.runAsync(func(asyncCtx context.Context) {
+			if rerr := s.runBusinessDraftRound(asyncCtx, id, dlg, 1); rerr != nil {
+				_ = s.store.UpdateDialogueStatus(asyncCtx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
+				s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+					"code": "draft_round_failed", "message": rerr.Error(),
+				})
+			}
+		})
 	}
 
 	view, err := s.composeDialogueView(ctx, id)
@@ -1402,8 +1481,12 @@ func (s *Server) answerDialogueClarification(w http.ResponseWriter, r *http.Requ
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
-	_ = advanced
+	if updated != nil {
+		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusActive, "", "")
+		s.runAsync(func(asyncCtx context.Context) {
+			s.advanceAfterUserTurnForDialogue(asyncCtx, childID, updated, id)
+		})
+	}
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1504,8 +1587,12 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
-	_ = advanced
+	if updated != nil {
+		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusActive, "", "")
+		s.runAsync(func(asyncCtx context.Context) {
+			s.advanceAfterUserTurnForDialogue(asyncCtx, childID, updated, id)
+		})
+	}
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1601,6 +1688,7 @@ func (s *Server) patchDialogueRequirement(w http.ResponseWriter, r *http.Request
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
+	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	current.GenerationProfile = recomputeGenerationProfile(current)
 	reqBytes, _ := json.Marshal(current)
@@ -1637,7 +1725,9 @@ func (s *Server) retryDialogueClarificationRound(w http.ResponseWriter, r *http.
 	if retryRound < 1 {
 		retryRound = 1
 	}
-	s.runRoundAndPersistForDialogue(ctx, childID, retryRound, id)
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runRoundAndPersistForDialogue(asyncCtx, childID, retryRound, id)
+	})
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1930,10 +2020,15 @@ func (s *Server) continueDialogueBusinessAgent(w http.ResponseWriter, r *http.Re
 	if refreshed != nil {
 		dlg = refreshed
 	}
-	if rerr := s.runBusinessDraftRound(ctx, id, dlg, userTurns+1); rerr != nil {
-		// A failed round leaves a diagnosable state; the view still composes.
-		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
-	}
+	round := userTurns + 1
+	s.runAsync(func(asyncCtx context.Context) {
+		if rerr := s.runBusinessDraftRound(asyncCtx, id, dlg, round); rerr != nil {
+			_ = s.store.UpdateDialogueStatus(asyncCtx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
+			s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+				"code": "draft_round_failed", "message": rerr.Error(),
+			})
+		}
+	})
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")

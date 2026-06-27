@@ -224,11 +224,12 @@ func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T)
 		}
 	}
 	// live_api must inject the honest-data contract (forbids synthetic/mock/
-	// Math.random/fallback; demands error+warnings on failure).
+	// Math.random/fallback; demands the Degraded State + warnings on failure).
 	for _, want := range []string{
 		"[诚实数据契约 — 违反即判定生成失败]",
 		"Math.random",
 		"fallback 到 mock",
+		"降级态",
 		"warnings",
 	} {
 		if !strings.Contains(prompt, want) {

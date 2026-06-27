@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "slug": "merchant-density-grid-alert",
+  "name": "海域网格商船密度异常告警器",
+  "type": "command-dashboard",
+  "source": "preset",
+  "description": "AIS 商船密度网格异常告警",
+  "entry": "static-vite",
+  "path": "scene/merchant-density-grid-alert",
+  "tags": ["maritime", "dashboard", "ais", "density", "grid", "alert"],
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "runtime": {
+    "devCommand": "npm run dev",
+    "defaultPort": 5173
+  },
+  "docker": {
+    "enabled": true,
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "runtimePort": 80
+  }
+}

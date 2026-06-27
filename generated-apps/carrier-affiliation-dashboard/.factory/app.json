@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "slug": "carrier-affiliation-dashboard",
+  "name": "航母归属推断仪表板",
+  "type": "affiliation-inference-dashboard",
+  "source": "generated",
+  "description": "基于本体 DaaS 数据的航母-舰载机归属推断仪表板，展示航母打击群结构、舰载平台归属及 AIS 舰船轨迹",
+  "entry": "static-vite",
+  "path": "generated-apps/carrier-affiliation-dashboard",
+  "tags": ["carrier", "affiliation", "air-wing", "CSG"],
+  "build": { "command": "npm run build", "outputDir": "dist" },
+  "runtime": { "devCommand": "npm run dev", "defaultPort": 5173 },
+  "docker": { "enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80 }
+}
