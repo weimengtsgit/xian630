@@ -656,7 +656,7 @@ func (s *Server) repairFromFailure(w http.ResponseWriter, r *http.Request) {
 // (job_steps.snapshot_json) for one step. This edits ONLY this generation
 // task's copy; it never writes back to the global agents/skills registry.
 // Response contract: 200 {step_id, snapshot}, 400 invalid/empty JSON,
-// 404 step not found, 500 store error.
+// 404 step not found, 409 step has started (snapshot read-only), 500 store error.
 func (s *Server) patchJobStepSnapshot(w http.ResponseWriter, r *http.Request) {
 	jobID := Param(r, "id")
 	stepID := Param(r, "stepID")
@@ -675,21 +675,33 @@ func (s *Server) patchJobStepSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	// Validate the step exists AND belongs to this job. ListJobSteps is the
 	// existing API that returns the job's steps; matching by id confirms both
-	// existence and ownership in one call.
+	// existence and ownership in one call. It also returns the step's full row
+	// (including Status), so the read-only gate below is server-authoritative
+	// even if the UI is stale.
 	steps, err := s.store.ListJobSteps(r.Context(), jobID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list steps")
 		return
 	}
-	found := false
-	for _, step := range steps {
-		if step.ID == stepID {
-			found = true
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
 			break
 		}
 	}
-	if !found {
+	if step == nil {
 		writeError(w, http.StatusNotFound, "step not found")
+		return
+	}
+
+	// Status gate (data-integrity invariant): a snapshot is editable ONLY while
+	// its step is still pending — i.e. before the upcoming attempt starts. Any
+	// other status (running/waiting_user/succeeded/failed/canceled/skipped, plus
+	// historical attempts) is read-only. Reject with 409 so a stale UI cannot
+	// mutate a snapshot that an in-flight or terminal attempt already consumed.
+	if step.Status != model.StepStatusPending {
+		writeError(w, http.StatusConflict, "snapshot is read-only after the step has started")
 		return
 	}
 

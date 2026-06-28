@@ -1225,3 +1225,48 @@ func TestPatchJobStepSnapshotUpdatesOnlyTaskSnapshot(t *testing.T) {
 		t.Fatalf("snapshot not updated: %s", updated[0].SnapshotJSON)
 	}
 }
+
+// TestPatchJobStepSnapshotRejectsStartedStep verifies the server-side status
+// gate: a snapshot is editable ONLY while its step is still pending. Once the
+// step has started (running/succeeded/failed/waiting_user/canceled/skipped or
+// any historical attempt), the snapshot is read-only and a PATCH must return
+// 409 Conflict. This protects against a stale UI writing into an already-
+// started or terminal step (data-integrity invariant from the plan).
+func TestPatchJobStepSnapshotRejectsStartedStep(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	rec := createJobViaAPI(t, r, "生成复盘智能体")
+	var job model.Job
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil || len(steps) == 0 {
+		t.Fatalf("steps err=%v len=%d", err, len(steps))
+	}
+	// Flip the first step out of pending so it is read-only. MarkStepRunning is
+	// the canonical transition into "started"; any non-pending status must be
+	// rejected identically.
+	if err := st.MarkStepRunning(context.Background(), steps[0].ID); err != nil {
+		t.Fatalf("MarkStepRunning: %v", err)
+	}
+	body := map[string]any{
+		"snapshot": map[string]any{
+			"agentKey":       steps[0].AgentKey,
+			"name":           "本次调整",
+			"description":    "只影响本次任务",
+			"selectedSkills": []string{},
+		},
+	}
+	patch := doJSON(t, r, http.MethodPatch, "/api/jobs/"+job.ID+"/steps/"+steps[0].ID+"/snapshot", body)
+	if patch.Code != http.StatusConflict {
+		t.Fatalf("patch status = %d, want 409 (body=%s)", patch.Code, patch.Body.String())
+	}
+	// Confirm the write was NOT persisted.
+	updated, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	if strings.Contains(updated[0].SnapshotJSON, "本次调整") {
+		t.Fatalf("snapshot unexpectedly written for started step: %s", updated[0].SnapshotJSON)
+	}
+}

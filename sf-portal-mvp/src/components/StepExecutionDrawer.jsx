@@ -580,25 +580,31 @@ export function StepExecutionDrawer({
                     ) : null}
                   </div>
                 ) : null}
-                <textarea
-                  className="sed-snapshot-editor"
-                  value={snapshotDraft}
-                  onChange={event => setSnapshotDraft(event.target.value)}
-                  spellCheck={false}
-                  rows={12}
-                />
-                {snapshotError ? (
-                  <p className="sed-snapshot-error">{snapshotError}</p>
-                ) : null}
-                <button
-                  type="button"
-                  className="sed-action sed-snapshot-save"
-                  onClick={saveSnapshot}
-                  disabled={snapshotSaving}
-                >
-                  {snapshotSaving ? <Loader2 size={14} className="spin" /> : null}
-                  保存到本次任务
-                </button>
+                {step.status === 'pending' ? (
+                  <>
+                    <textarea
+                      className="sed-snapshot-editor"
+                      value={snapshotDraft}
+                      onChange={event => setSnapshotDraft(event.target.value)}
+                      spellCheck={false}
+                      rows={12}
+                    />
+                    {snapshotError ? (
+                      <p className="sed-snapshot-error">{snapshotError}</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="sed-action sed-snapshot-save"
+                      onClick={saveSnapshot}
+                      disabled={snapshotSaving}
+                    >
+                      {snapshotSaving ? <Loader2 size={14} className="spin" /> : null}
+                      保存到本次任务
+                    </button>
+                  </>
+                ) : (
+                  <p className="sed-readonly-hint">快照在步骤开始后只读（仅可查看名称/描述/技能，不可编辑）。</p>
+                )}
               </section>
             ) : null}
 
