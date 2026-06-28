@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   CornerDownRight,
+  ArrowLeft,
 } from 'lucide-react'
 
 // StepExecutionDrawer — right-side overlay drawer with three tabs.
@@ -220,9 +221,21 @@ export function StepExecutionDrawer({
   onCancel,
   onRetry,
   onRepairFromFailure,
+  // Per-task snapshot editor (Task 5): saves an edited snapshot to
+  // job_steps.snapshot_json — the editable copy that affects ONLY this
+  // generation task. Bound by JobCenter as
+  // (stepId, snapshotObj) => factoryApi.patchJobStepSnapshot(activeJob.id, ...).
+  onSaveSnapshot,
   // Artifacts
   artifacts,
   getArtifactContent,
+  // Phase 2 embedded mode: when true the drawer renders its panel body INLINE
+  // (no createPortal, no position:fixed overlay, no backdrop) so it fills the
+  // 任务执行 drawer. The header shows a back affordance (onBack) instead of a
+  // standalone X close. Reuses ALL existing detail logic (tabs, attempt
+  // selector, records, artifacts, snapshot editor, cancel/retry/repair).
+  embedded = false,
+  onBack,
 }) {
   const [tab, setTab] = useState('overview')
   const [artifactId, setArtifactId] = useState(null)
@@ -240,7 +253,28 @@ export function StepExecutionDrawer({
   const lastSeqRef = useRef(0)
   const recordCountRef = useRef(0)
 
+  // --- Per-task snapshot editor (Task 5) ---------------------------------
+  // snapshotDraft holds the editable text for the step's per-task snapshot
+  // (job_steps.snapshot_json). It is seeded from the existing snapshot (pretty-
+  // printed) whenever the step changes, so the user edits a readable copy.
+  // snapshotError surfaces a JSON parse failure without crashing the drawer.
+  const [snapshotDraft, setSnapshotDraft] = useState('')
+  const [snapshotError, setSnapshotError] = useState(null)
+  const [snapshotSaving, setSnapshotSaving] = useState(false)
+
   const status = (step && (step.status || step.state)) || 'pending'
+  const snapshotPreview = useMemo(() => {
+    if (!snapshotDraft.trim()) return null
+    try {
+      const parsed = JSON.parse(snapshotDraft)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }, [snapshotDraft])
+  const snapshotSkillFiles = snapshotPreview && Array.isArray(snapshotPreview.skillOverrides)
+    ? snapshotPreview.skillOverrides.filter(item => item && (item.path || item.content))
+    : []
 
   // Reset follow state when switching step or attempt (new view = fresh tail).
   useEffect(() => {
@@ -252,6 +286,26 @@ export function StepExecutionDrawer({
     setArtifactContent(null)
     setArtifactError(null)
   }, [step && step.id, selectedAttempt])
+
+  // Seed the snapshot editor from the step's existing per-task snapshot
+  // (pretty-printed so the user edits readable JSON). Re-seeds whenever the
+  // step or its snapshot changes (e.g. after a save + refresh). Clears the
+  // draft when there is no snapshot so the editor section stays hidden.
+  useEffect(() => {
+    setSnapshotError(null)
+    const raw = step && step.snapshot_json
+    if (!raw) {
+      setSnapshotDraft('')
+      return
+    }
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+      setSnapshotDraft(JSON.stringify(parsed, null, 2))
+    } catch {
+      // Store-backed snapshot is malformed; let the user edit the raw text.
+      setSnapshotDraft(typeof raw === 'string' ? raw : JSON.stringify(raw))
+    }
+  }, [step && step.id, step && step.snapshot_json])
 
   // Follow logic: when records grow AND we are following, pin to bottom. When
   // records grow but we are NOT following, bump the missed-count badge.
@@ -346,7 +400,394 @@ export function StepExecutionDrawer({
     }
   }
 
+  // saveSnapshot parses the draft as JSON, then persists it to the step's
+  // per-task snapshot via the onSaveSnapshot closure (which carries the job
+  // id). A malformed draft surfaces an inline error instead of crashing.
+  const saveSnapshot = async () => {
+    setSnapshotError(null)
+    let parsed
+    try {
+      parsed = JSON.parse(snapshotDraft)
+    } catch (err) {
+      setSnapshotError('JSON 格式无效：' + (err && err.message ? err.message : String(err)))
+      return
+    }
+    if (!step || !onSaveSnapshot) return
+    setSnapshotSaving(true)
+    try {
+      await onSaveSnapshot(step.id, parsed)
+    } catch (err) {
+      setSnapshotError(err && (err.message || String(err)))
+    } finally {
+      setSnapshotSaving(false)
+    }
+  }
+
   if (!open) return null
+
+  // The panel body is shared by BOTH modes (portal overlay + embedded inline).
+  // Extracting it keeps ALL detail logic (tabs, attempt selector, records,
+  // artifacts, snapshot editor, cancel/retry/repair) in one place so the
+  // embedded drawer renders an identical detail surface — only the wrapper +
+  // header affordance differ.
+  const panelBody = (
+    <>
+      <header className="sed-header">
+        <div className="sed-title-block">
+          {embedded ? (
+            <button
+              type="button"
+              className="sed-back"
+              aria-label="返回任务执行列表"
+              onClick={() => onBack && onBack()}
+            >
+              <ArrowLeft size={16} />
+            </button>
+          ) : null}
+          <span className="sed-stage">{stageLabel || (step && (step.label || step.kind)) || '步骤'}</span>
+          <span className={`sed-status sed-status-${status}`}>
+            <StatusIcon status={status} />
+            <span>{STATUS_TEXT[status] || status}</span>
+          </span>
+        </div>
+        {!embedded ? (
+          <button
+            type="button"
+            className="sed-close"
+            aria-label="关闭步骤详情"
+            onClick={onClose}
+          >
+            <X size={16} />
+          </button>
+        ) : null}
+      </header>
+
+      {Array.isArray(attempts) && attempts.length > 1 ? (
+        <div className="sed-attempt-row">
+          <span className="sed-attempt-label">尝试次数</span>
+          <div className="sed-attempt-chips" role="tablist" aria-label="选择尝试次数">
+            {attempts.map(a => (
+              <button
+                key={a}
+                type="button"
+                role="tab"
+                aria-selected={a === selectedAttempt}
+                className={`sed-attempt-chip${a === selectedAttempt ? ' sed-attempt-chip-active' : ''}`}
+                onClick={() => onSelectAttempt && onSelectAttempt(a)}
+              >
+                第 {a} 次
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <nav className="sed-tabs" role="tablist">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`sed-tab${tab === t.id ? ' sed-tab-active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="sed-body">
+        {tab === 'overview' && (
+          <div className="sed-overview">
+            <dl className="sed-facts">
+              <div className="sed-fact">
+                <dt>状态</dt>
+                <dd>
+                  <span className={`sed-status sed-status-${status}`}>
+                    <StatusIcon status={status} />
+                    <span>{STATUS_TEXT[status] || status}</span>
+                  </span>
+                </dd>
+              </div>
+              {selectedAttempt != null ? (
+                <div className="sed-fact">
+                  <dt>尝试</dt>
+                  <dd>第 {selectedAttempt} 次</dd>
+                </div>
+              ) : null}
+              {summary && (summary.duration_ms || summary.durationMs) ? (
+                <div className="sed-fact">
+                  <dt>耗时</dt>
+                  <dd>{Math.round((summary.duration_ms || summary.durationMs) / 1000)}s</dd>
+                </div>
+              ) : null}
+              {step && (step.agent_key || step.agent) ? (
+                <div className="sed-fact">
+                  <dt>代理</dt>
+                  <dd>{step.agent_key || step.agent}</dd>
+                </div>
+              ) : null}
+            </dl>
+
+            {summary && summary.latest_record &&
+            (summary.latest_record.content ||
+              summary.latest_record.text ||
+              summary.latest_record.message) ? (
+              <section className="sed-summary-block">
+                <h4>最新摘要</h4>
+                <pre className="sed-summary-text">
+                  {summary.latest_record.content ||
+                    summary.latest_record.text ||
+                    summary.latest_record.message}
+                </pre>
+              </section>
+            ) : null}
+
+            {step && step.error_message ? (
+              <section className="sed-error-block">
+                <h4>错误信息</h4>
+                <pre className="sed-error-text">{step.error_message}</pre>
+              </section>
+            ) : null}
+
+            {step && step.snapshot_json ? (
+              <section className="sed-snapshot">
+                <h4>本次配置快照</h4>
+                <p className="sed-snapshot-hint">
+                  编辑仅影响本次生成任务，不会改动全局代理/技能配置。
+                </p>
+                {snapshotPreview ? (
+                  <div className="sed-snapshot-meta">
+                    {snapshotPreview.name ? <strong>{snapshotPreview.name}</strong> : null}
+                    {snapshotPreview.description ? <p>{snapshotPreview.description}</p> : null}
+                    {Array.isArray(snapshotPreview.selectedSkills) && snapshotPreview.selectedSkills.length > 0 ? (
+                      <div className="sed-snapshot-skills">
+                        {snapshotPreview.selectedSkills.map(skill => (
+                          <span key={skill}>{skill}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {snapshotSkillFiles.length > 0 ? (
+                      <ul className="sed-snapshot-skill-files">
+                        {snapshotSkillFiles.map((file, index) => (
+                          <li key={`${file.path || 'inline'}-${index}`}>
+                            <FileText size={12} />
+                            <span>{file.path || `inline-${index + 1}`}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                {step.status === 'pending' ? (
+                  <>
+                    <textarea
+                      className="sed-snapshot-editor"
+                      value={snapshotDraft}
+                      onChange={event => setSnapshotDraft(event.target.value)}
+                      spellCheck={false}
+                      rows={12}
+                    />
+                    {snapshotError ? (
+                      <p className="sed-snapshot-error">{snapshotError}</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="sed-action sed-snapshot-save"
+                      onClick={saveSnapshot}
+                      disabled={snapshotSaving}
+                    >
+                      {snapshotSaving ? <Loader2 size={14} className="spin" /> : null}
+                      保存到本次任务
+                    </button>
+                  </>
+                ) : (
+                  <p className="sed-readonly-hint">快照在步骤开始后只读（仅可查看名称/描述/技能，不可编辑）。</p>
+                )}
+              </section>
+            ) : null}
+
+            {status === 'waiting_user' ? (
+              <ClarificationBlock step={step} />
+            ) : null}
+
+            <div className="sed-actions">
+              {canCancel ? (
+                <button
+                  type="button"
+                  className="sed-action sed-cancel"
+                  onClick={() => onCancel && onCancel()}
+                >
+                  <CancelIcon size={14} /> 取消任务
+                </button>
+              ) : null}
+              {canRetry ? (
+                <button
+                  type="button"
+                  className="sed-action sed-retry"
+                  onClick={() => onRetry && onRetry()}
+                >
+                  <RotateCcw size={14} /> 重试当前阶段
+                </button>
+              ) : null}
+              {canRepairFromFailure ? (
+                <button
+                  type="button"
+                  className="sed-action sed-retry"
+                  onClick={() => onRepairFromFailure && onRepairFromFailure()}
+                >
+                  <Wrench size={14} /> 发送错误给代码修复
+                </button>
+              ) : null}
+              {!canCancel && !canRetry && !canRepairFromFailure ? (
+                <p className="sed-readonly-hint">当前阶段为只读（已完成或非最新尝试）。</p>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        {tab === 'records' && (
+          <div className="sed-records">
+            <div className="sed-records-toolbar">
+              {hasOlder ? (
+                <button
+                  type="button"
+                  className="sed-load-older"
+                  onClick={() => onLoadOlder && onLoadOlder()}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? <Loader2 size={12} className="spin" /> : <ChevronUp size={12} />}
+                  加载更早记录
+                </button>
+              ) : (
+                <span className="sed-no-older">已是最早</span>
+              )}
+              <button
+                type="button"
+                className={`sed-follow-toggle${following ? ' sed-follow-on' : ''}`}
+                aria-pressed={following ? 'true' : 'false'}
+                onClick={resumeFollow}
+                disabled={following}
+              >
+                <CornerDownRight size={12} /> 自动跟随
+              </button>
+            </div>
+
+            {!following && missedCount > 0 ? (
+              <button type="button" className="sed-missed" onClick={resumeFollow}>
+                {missedCount} 条新记录
+              </button>
+            ) : null}
+
+            <div
+              className="sed-record-list"
+              ref={scrollRef}
+              onScroll={handleScroll}
+            >
+              {(!records || records.length === 0) ? (
+                <p className="sed-empty">暂无执行记录</p>
+              ) : (
+                records.map(r => {
+                  const body = renderRecordBody(r)
+                  return (
+                    <div key={r.id} className={`sed-record sed-record-${r.kind || 'log'}`}>
+                      <div className="sed-record-head">
+                        <span className="sed-record-kind">
+                          {RECORD_KIND_LABEL[r.kind] || r.kind || '记录'}
+                        </span>
+                        {r.sequence != null ? (
+                          <span className="sed-record-seq">#{r.sequence}</span>
+                        ) : null}
+                        {r.created_at != null || r.at != null ? (
+                          <span className="sed-record-at">
+                            {String(r.created_at || r.at).slice(11, 19)}
+                          </span>
+                        ) : null}
+                      </div>
+                      {body}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'artifacts' && (
+          <div className="sed-artifacts">
+            {(!artifacts || artifacts.length === 0) ? (
+              <p className="sed-empty">暂无产物</p>
+            ) : (
+              <ul className="sed-artifact-list">
+                {artifacts.map(a => {
+                  const isAdvanced =
+                    a.kind === 'audit' || a.advanced || (a.name || '').includes('审计')
+                  return (
+                    <li
+                      key={a.id}
+                      className={`sed-artifact${a.id === artifactId ? ' sed-artifact-active' : ''}`}
+                    >
+                      <button
+                        type="button"
+                        className="sed-artifact-pick"
+                        onClick={() => selectArtifact(a.id)}
+                        aria-pressed={a.id === artifactId}
+                      >
+                        <FileText size={14} />
+                        <span>{a.name || a.path || a.id}</span>
+                      </button>
+                      {isAdvanced ? <span className="sed-artifact-tag">审计</span> : null}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+
+            {artifactId ? (
+              <section className="sed-artifact-content">
+                <h4 className="sed-artifact-title">
+                  {artifacts.find(a => a.id === artifactId)?.name || artifactId}
+                </h4>
+                {artifactLoading ? (
+                  <p className="sed-empty">加载中...</p>
+                ) : artifactError ? (
+                  <pre className="sed-error-text">{artifactError}</pre>
+                ) : (() => {
+                    const current = artifacts.find(a => a.id === artifactId)
+                    const isAdvanced =
+                      current &&
+                      (current.kind === 'audit' || current.advanced || (current.name || '').includes('审计'))
+                    if (isAdvanced) {
+                      return (
+                        <details className="sed-advanced">
+                          <summary>高级审计</summary>
+                          <pre className="sed-artifact-text">{artifactContent}</pre>
+                        </details>
+                      )
+                    }
+                    return <pre className="sed-artifact-text">{artifactContent}</pre>
+                  })()}
+              </section>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </>
+  )
+
+  // Embedded mode (Phase 2): render the panel INLINE inside the 任务执行 drawer.
+  // No createPortal, no position:fixed overlay, no backdrop — the panel fills
+  // the drawer body directly. This collapses the old two-level portal-overlay
+  // stack (JobCenter inline + a createPortal drawer on top) into a single
+  // list↔detail view inside one drawer.
+  if (embedded) {
+    return (
+      <section className="sed-panel sed-panel-embedded" role="region" aria-label="步骤执行详情">
+        {panelBody}
+      </section>
+    )
+  }
 
   // Portal to document.body so the drawer is NOT trapped in the .workbench
   // stacking context (z-index 5). The drawer is position:fixed so its placement
@@ -358,278 +799,7 @@ export function StepExecutionDrawer({
   return createPortal(
     <aside className="sed-overlay" role="dialog" aria-label="步骤执行详情">
       <div className="sed-panel">
-        <header className="sed-header">
-          <div className="sed-title-block">
-            <span className="sed-stage">{stageLabel || (step && (step.label || step.kind)) || '步骤'}</span>
-            <span className={`sed-status sed-status-${status}`}>
-              <StatusIcon status={status} />
-              <span>{STATUS_TEXT[status] || status}</span>
-            </span>
-          </div>
-          <button
-            type="button"
-            className="sed-close"
-            aria-label="关闭步骤详情"
-            onClick={onClose}
-          >
-            <X size={16} />
-          </button>
-        </header>
-
-        {Array.isArray(attempts) && attempts.length > 1 ? (
-          <div className="sed-attempt-row">
-            <span className="sed-attempt-label">尝试次数</span>
-            <div className="sed-attempt-chips" role="tablist" aria-label="选择尝试次数">
-              {attempts.map(a => (
-                <button
-                  key={a}
-                  type="button"
-                  role="tab"
-                  aria-selected={a === selectedAttempt}
-                  className={`sed-attempt-chip${a === selectedAttempt ? ' sed-attempt-chip-active' : ''}`}
-                  onClick={() => onSelectAttempt && onSelectAttempt(a)}
-                >
-                  第 {a} 次
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <nav className="sed-tabs" role="tablist">
-          {TABS.map(t => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              className={`sed-tab${tab === t.id ? ' sed-tab-active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="sed-body">
-          {tab === 'overview' && (
-            <div className="sed-overview">
-              <dl className="sed-facts">
-                <div className="sed-fact">
-                  <dt>状态</dt>
-                  <dd>
-                    <span className={`sed-status sed-status-${status}`}>
-                      <StatusIcon status={status} />
-                      <span>{STATUS_TEXT[status] || status}</span>
-                    </span>
-                  </dd>
-                </div>
-                {selectedAttempt != null ? (
-                  <div className="sed-fact">
-                    <dt>尝试</dt>
-                    <dd>第 {selectedAttempt} 次</dd>
-                  </div>
-                ) : null}
-                {summary && (summary.duration_ms || summary.durationMs) ? (
-                  <div className="sed-fact">
-                    <dt>耗时</dt>
-                    <dd>{Math.round((summary.duration_ms || summary.durationMs) / 1000)}s</dd>
-                  </div>
-                ) : null}
-                {step && (step.agent_key || step.agent) ? (
-                  <div className="sed-fact">
-                    <dt>代理</dt>
-                    <dd>{step.agent_key || step.agent}</dd>
-                  </div>
-                ) : null}
-              </dl>
-
-              {summary && summary.latest_record &&
-              (summary.latest_record.content ||
-                summary.latest_record.text ||
-                summary.latest_record.message) ? (
-                <section className="sed-summary-block">
-                  <h4>最新摘要</h4>
-                  <pre className="sed-summary-text">
-                    {summary.latest_record.content ||
-                      summary.latest_record.text ||
-                      summary.latest_record.message}
-                  </pre>
-                </section>
-              ) : null}
-
-              {step && step.error_message ? (
-                <section className="sed-error-block">
-                  <h4>错误信息</h4>
-                  <pre className="sed-error-text">{step.error_message}</pre>
-                </section>
-              ) : null}
-
-              {status === 'waiting_user' ? (
-                <ClarificationBlock step={step} />
-              ) : null}
-
-              <div className="sed-actions">
-                {canCancel ? (
-                  <button
-                    type="button"
-                    className="sed-action sed-cancel"
-                    onClick={() => onCancel && onCancel()}
-                  >
-                    <CancelIcon size={14} /> 取消任务
-                  </button>
-                ) : null}
-                {canRetry ? (
-                  <button
-                    type="button"
-                    className="sed-action sed-retry"
-                    onClick={() => onRetry && onRetry()}
-                  >
-                    <RotateCcw size={14} /> 重试当前阶段
-                  </button>
-                ) : null}
-                {canRepairFromFailure ? (
-                  <button
-                    type="button"
-                    className="sed-action sed-retry"
-                    onClick={() => onRepairFromFailure && onRepairFromFailure()}
-                  >
-                    <Wrench size={14} /> 发送错误给代码修复
-                  </button>
-                ) : null}
-                {!canCancel && !canRetry && !canRepairFromFailure ? (
-                  <p className="sed-readonly-hint">当前阶段为只读（已完成或非最新尝试）。</p>
-                ) : null}
-              </div>
-            </div>
-          )}
-
-          {tab === 'records' && (
-            <div className="sed-records">
-              <div className="sed-records-toolbar">
-                {hasOlder ? (
-                  <button
-                    type="button"
-                    className="sed-load-older"
-                    onClick={() => onLoadOlder && onLoadOlder()}
-                    disabled={loadingOlder}
-                  >
-                    {loadingOlder ? <Loader2 size={12} className="spin" /> : <ChevronUp size={12} />}
-                    加载更早记录
-                  </button>
-                ) : (
-                  <span className="sed-no-older">已是最早</span>
-                )}
-                <button
-                  type="button"
-                  className={`sed-follow-toggle${following ? ' sed-follow-on' : ''}`}
-                  aria-pressed={following ? 'true' : 'false'}
-                  onClick={resumeFollow}
-                  disabled={following}
-                >
-                  <CornerDownRight size={12} /> 自动跟随
-                </button>
-              </div>
-
-              {!following && missedCount > 0 ? (
-                <button type="button" className="sed-missed" onClick={resumeFollow}>
-                  {missedCount} 条新记录
-                </button>
-              ) : null}
-
-              <div
-                className="sed-record-list"
-                ref={scrollRef}
-                onScroll={handleScroll}
-              >
-                {(!records || records.length === 0) ? (
-                  <p className="sed-empty">暂无执行记录</p>
-                ) : (
-                  records.map(r => {
-                    const body = renderRecordBody(r)
-                    return (
-                      <div key={r.id} className={`sed-record sed-record-${r.kind || 'log'}`}>
-                        <div className="sed-record-head">
-                          <span className="sed-record-kind">
-                            {RECORD_KIND_LABEL[r.kind] || r.kind || '记录'}
-                          </span>
-                          {r.sequence != null ? (
-                            <span className="sed-record-seq">#{r.sequence}</span>
-                          ) : null}
-                          {r.created_at != null || r.at != null ? (
-                            <span className="sed-record-at">
-                              {String(r.created_at || r.at).slice(11, 19)}
-                            </span>
-                          ) : null}
-                        </div>
-                        {body}
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </div>
-          )}
-
-          {tab === 'artifacts' && (
-            <div className="sed-artifacts">
-              {(!artifacts || artifacts.length === 0) ? (
-                <p className="sed-empty">暂无产物</p>
-              ) : (
-                <ul className="sed-artifact-list">
-                  {artifacts.map(a => {
-                    const isAdvanced =
-                      a.kind === 'audit' || a.advanced || (a.name || '').includes('审计')
-                    return (
-                      <li
-                        key={a.id}
-                        className={`sed-artifact${a.id === artifactId ? ' sed-artifact-active' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          className="sed-artifact-pick"
-                          onClick={() => selectArtifact(a.id)}
-                          aria-pressed={a.id === artifactId}
-                        >
-                          <FileText size={14} />
-                          <span>{a.name || a.path || a.id}</span>
-                        </button>
-                        {isAdvanced ? <span className="sed-artifact-tag">审计</span> : null}
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-
-              {artifactId ? (
-                <section className="sed-artifact-content">
-                  <h4 className="sed-artifact-title">
-                    {artifacts.find(a => a.id === artifactId)?.name || artifactId}
-                  </h4>
-                  {artifactLoading ? (
-                    <p className="sed-empty">加载中...</p>
-                  ) : artifactError ? (
-                    <pre className="sed-error-text">{artifactError}</pre>
-                  ) : (() => {
-                      const current = artifacts.find(a => a.id === artifactId)
-                      const isAdvanced =
-                        current &&
-                        (current.kind === 'audit' || current.advanced || (current.name || '').includes('审计'))
-                      if (isAdvanced) {
-                        return (
-                          <details className="sed-advanced">
-                            <summary>高级审计</summary>
-                            <pre className="sed-artifact-text">{artifactContent}</pre>
-                          </details>
-                        )
-                      }
-                      return <pre className="sed-artifact-text">{artifactContent}</pre>
-                    })()}
-                </section>
-              ) : null}
-            </div>
-          )}
-        </div>
+        {panelBody}
       </div>
     </aside>,
     document.body,

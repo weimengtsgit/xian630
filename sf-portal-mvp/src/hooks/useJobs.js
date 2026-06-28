@@ -27,6 +27,9 @@ export function useJobs() {
   // `getRecords(stepId, attempt)`.
   const [streamRecords, setStreamRecords] = useState([])
   const [artifacts, setArtifacts] = useState([])
+  // Collaboration plan (lanes + agents + edges) for the active job, when one
+  // exists. Null for legacy jobs without a plan.
+  const [collaborationPlan, setCollaborationPlan] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -65,6 +68,7 @@ export function useJobs() {
     setRecordsByStepAttempt({})
     setStreamRecords([])
     setLastReadByStepAttempt({})
+    setCollaborationPlan(null)
   }, [])
 
   const hydrateJob = useCallback(async job => {
@@ -81,10 +85,11 @@ export function useJobs() {
     setStreamRecords([])
     setLastReadByStepAttempt({})
 
-    const [stepsData, summaryData, artifactsData] = await Promise.all([
+    const [stepsData, summaryData, artifactsData, planData] = await Promise.all([
       factoryApi.getJobSteps(jobId).catch(() => []),
       factoryApi.getJobExecutionSummary(jobId).catch(() => []),
       factoryApi.getJobArtifacts(jobId).catch(() => []),
+      factoryApi.getJobCollaborationPlan(jobId).catch(() => null),
     ])
     // A history-dialogue switch may have selected another task while the old
     // request was in flight. Never paint the old job's details into the new
@@ -95,6 +100,7 @@ export function useJobs() {
     setSummary(Array.isArray(summaryData) ? summaryData : summaryData.steps || [])
     const arts = Array.isArray(artifactsData) ? artifactsData : artifactsData.artifacts || []
     setArtifacts(arts)
+    setCollaborationPlan(planData || null)
   }, [clearActiveJob])
 
   // -------------------------------------------------------------------------
@@ -273,11 +279,29 @@ export function useJobs() {
     [refresh],
   )
 
-  const answerJob = useCallback(
-    async (id, answer) => {
+  // saveStepSnapshot overwrites the per-task snapshot (job_steps.snapshot_json)
+  // for ONE step. Edits ONLY this generation task's copy; the global
+  // agents/skills registry is never touched. refresh() re-reads steps so the
+  // drawer reflects the persisted snapshot.
+  const saveStepSnapshot = useCallback(
+    async (jobId, stepId, snapshot) => {
       setError(null)
       try {
-        await factoryApi.answerJob(id, answer)
+        await factoryApi.patchJobStepSnapshot(jobId, stepId, snapshot)
+        await refresh()
+      } catch (err) {
+        setError(err.message || String(err))
+        throw err
+      }
+    },
+    [refresh],
+  )
+
+  const answerJob = useCallback(
+    async (id, answer, scope = {}) => {
+      setError(null)
+      try {
+        await factoryApi.answerJob(id, answer, scope)
         await refresh()
       } catch (err) {
         setError(err.message || String(err))
@@ -384,6 +408,7 @@ export function useJobs() {
     steps,
     summary,
     artifacts,
+    collaborationPlan,
     loading,
     error,
     refresh,
@@ -393,6 +418,7 @@ export function useJobs() {
     answerJob,
     retryCurrentStep,
     repairFromFailure,
+    saveStepSnapshot,
     // New (Task 5):
     selectedStepId,
     selectedAttempt,

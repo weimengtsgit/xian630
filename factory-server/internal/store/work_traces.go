@@ -16,7 +16,7 @@ import (
 
 // workTraceCols lists the work_trace_events columns in scan order, shared by the
 // SELECTs below to keep the query and scanWorkTrace in sync.
-const workTraceCols = `id,dialogue_id,sequence,task_id,application_id,version_id,step_id,attempt,type,payload_json,created_at`
+const workTraceCols = `id,dialogue_id,sequence,task_id,application_id,version_id,step_id,attempt,agent_key,type,payload_json,created_at`
 
 // workTraceMaxPayloadBytes is the defense-in-depth byte cap on a single trace
 // payload. Producers (Task 4) are expected to summarize before emitting; this
@@ -140,10 +140,10 @@ func (s *Store) AppendDialogueTrace(ctx context.Context, ev model.WorkTraceEvent
 	ev.Sequence = next
 
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO work_trace_events(id,dialogue_id,sequence,task_id,application_id,version_id,step_id,attempt,type,payload_json,created_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+	INSERT INTO work_trace_events(id,dialogue_id,sequence,task_id,application_id,version_id,step_id,attempt,agent_key,type,payload_json,created_at)
+	VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ev.ID, ev.DialogueID, ev.Sequence, ev.TaskID, ev.ApplicationID, ev.VersionID,
-		ev.StepID, ev.Attempt, ev.Type, ev.PayloadJSON, ms(ev.CreatedAt)); err != nil {
+		ev.StepID, ev.Attempt, ev.AgentKey, ev.Type, ev.PayloadJSON, ms(ev.CreatedAt)); err != nil {
 		return model.WorkTraceEvent{}, fmt.Errorf("work trace insert: %w", err)
 	}
 
@@ -209,7 +209,7 @@ func scanWorkTrace(sc scanner) (*model.WorkTraceEvent, error) {
 	var ev model.WorkTraceEvent
 	var created int64
 	err := sc.Scan(&ev.ID, &ev.DialogueID, &ev.Sequence, &ev.TaskID, &ev.ApplicationID,
-		&ev.VersionID, &ev.StepID, &ev.Attempt, &ev.Type, &ev.PayloadJSON, &created)
+		&ev.VersionID, &ev.StepID, &ev.Attempt, &ev.AgentKey, &ev.Type, &ev.PayloadJSON, &created)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -242,10 +242,10 @@ var sensitivePayloadSubstrings = []string{
 	"cookie:",
 	// common key/material prefixes for cloud + provider secrets.
 	"sk-",
-	"akia",   // AWS access key id prefix
-	"ghp_",   // GitHub PAT prefix
-	"gho_",   // GitHub OAuth token prefix
-	"xox",    // Slack token prefix
+	"akia", // AWS access key id prefix
+	"ghp_", // GitHub PAT prefix
+	"gho_", // GitHub OAuth token prefix
+	"xox",  // Slack token prefix
 }
 
 // sanitizePayload applies the defense-in-depth payload gate: it parses the

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "slug": "aircraft-carrier-track",
+  "name": "航母轨迹分析",
+  "type": "timeline-replay",
+  "source": "preset",
+  "description": "基于地图展示一周航母航行轨迹和每日重大事件，支持时间轴切换和事件卡片查看。",
+  "entry": "static-vite",
+  "path": "scene/aircraft-carrier-track",
+  "tags": ["map", "carrier", "track"],
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "runtime": {
+    "devCommand": "npm run dev",
+    "defaultPort": 3000
+  },
+  "docker": {
+    "enabled": true,
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "runtimePort": 80
+  }
+}

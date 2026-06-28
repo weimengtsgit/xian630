@@ -19,7 +19,7 @@
 //
 // Trace event shape (backend model.WorkTraceEvent, JSON-encoded as SSE data):
 //   { id, dialogue_id, sequence, task_id?, application_id?, version_id?,
-//     step_id?, attempt?, type, payload_json, created_at }
+//     step_id?, attempt?, agent_key?, type, payload_json, created_at }
 // For the reducer the caller passes a normalized event: { dialogueId, sequence,
 // type, payload, ...rest }. The SSE helper (events.js) parses payload_json before
 // calling applyTraceEvent.
@@ -64,6 +64,7 @@ export function normalizeTraceEvent(raw) {
     versionId: raw.versionId || raw.version_id || '',
     stepId: raw.stepId || raw.step_id || '',
     attempt: raw.attempt != null ? Number(raw.attempt) : 0,
+    agentKey: raw.agentKey || raw.agent_key || '',
     createdAt: raw.createdAt || raw.created_at || '',
   }
 }

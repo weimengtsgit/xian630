@@ -74,7 +74,7 @@ export function unreadCountForStep(state, stepId, attempt, lastReadSequence) {
  * @param {Array<{kind:string, label:string}>} fixedSteps - ordered six kinds
  * @returns {Array<{kind:string, label:string, stepId:string|null, step:object|null, summary:object|null}>}
  */
-export function buildStepCardView(steps, summary, fixedSteps) {
+export function buildStepCardView(steps, summary, fixedSteps = []) {
   const stepList = Array.isArray(steps) ? steps : []
   const sumList = Array.isArray(summary) ? summary : []
 

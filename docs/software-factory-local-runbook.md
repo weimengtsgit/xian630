@@ -115,6 +115,40 @@ Expected: the job walks all six steps to `completed`; the generated app card
 appears in the portal with `source=generated` and a deployment URL once
 deployment succeeds.
 
+### Collaboration plan smoke check
+
+A freshly created generation job is seeded with a dynamic collaboration plan.
+Replace `<job-id>` with the id from the POST above:
+
+```bash
+curl http://127.0.0.1:8787/api/jobs/<job-id>/collaboration-plan
+```
+
+Expected: the JSON response contains `plan.schemaVersion`, `steps`, and
+`edges`. `plan.lanes` lists the three default lanes
+(`analysis` / `generation` / `delivery`) and `plan.repairPolicy` reports
+`maxAutomaticRepairs: 2`, `maxAutomaticRepairsPerBlockingReason: 1`. Legacy
+jobs created before this feature (or revise/rebuild jobs) return an empty
+`plan` and fall back to the fixed six-card matrix in the portal.
+
+### Manual smoke test (collaboration flow)
+
+With all three services up and the real Claude CLI (`FACTORY_FAKE_CLAUDE`
+unset), drive one generation request through the dialogue and confirm:
+
+1. The confirmation summary shows a **collaboration plan preview** (lanes,
+   agents, edges) once the child clarification reaches `ready_to_confirm`.
+2. The generated job exposes
+   `GET /api/jobs/:id/collaboration-plan` returning `plan.schemaVersion`,
+   `steps`, and `edges`.
+3. The task area renders **collaboration lanes** and per-agent cards (not the
+   fixed six-card matrix).
+4. Opening a card shows execution records and the **per-task snapshot**
+   (`snapshot_json`); global `.claude/skills/*` stays read-only.
+5. A failed repairable gate (e.g. `code_review`) enters **bounded auto-repair**
+   back to `code_generation`, at most 2 times total / 1 per blocking reason,
+   excluding `port_unavailable` / `podman_run_failed`.
+
 ## Dialogue Session Flow
 
 The portal no longer creates a generation job from the first chat message. The

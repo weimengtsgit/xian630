@@ -41,6 +41,33 @@ func (s StringList) Contains(value string) bool {
 	return false
 }
 
+// HighImpactRecommendation is stored as a single recommended value in the
+// open-high-impact snapshot. Be tolerant when a model emits a JSON array for a
+// multi-select question: keep the first value so the entire round still parses.
+type HighImpactRecommendation string
+
+func (r *HighImpactRecommendation) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*r = ""
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		*r = HighImpactRecommendation(one)
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		*r = ""
+		return nil
+	}
+	*r = HighImpactRecommendation(list[0])
+	return nil
+}
+
 type Option struct {
 	Value       string `json:"value"`
 	Label       string `json:"label"`
@@ -71,16 +98,27 @@ type WorkLog struct {
 // blueprint recommendation type.
 
 type Requirement struct {
-	AppType           string              `json:"appType"`
-	AppName           string              `json:"appName"`
-	TargetUsers       []string            `json:"targetUsers"`
-	CoreScenario      string              `json:"coreScenario"`
-	PrimaryView       string              `json:"primaryView"`
-	MainEntities      []string            `json:"mainEntities"`
-	DataPolicy        string              `json:"dataPolicy"`
-	AcceptanceFocus   []string            `json:"acceptanceFocus"`
-	GenerationProfile map[string][]string `json:"generationProfile"`
-	BlueprintRefs     []string            `json:"blueprintRefs"`
+	AppType                  string                    `json:"appType"`
+	AppName                  string                    `json:"appName"`
+	TargetUsers              []string                  `json:"targetUsers"`
+	CoreScenario             string                    `json:"coreScenario"`
+	PrimaryView              string                    `json:"primaryView"`
+	MainEntities             []string                  `json:"mainEntities"`
+	DataPolicy               string                    `json:"dataPolicy"`
+	AcceptanceFocus          []string                  `json:"acceptanceFocus"`
+	JudgementBoundary        JudgementBoundary         `json:"judgementBoundary,omitempty"`
+	GenerationProfile        map[string][]string       `json:"generationProfile"`
+	BlueprintRefs            []string                  `json:"blueprintRefs"`
+	CollaborationAdjustments []CollaborationAdjustment `json:"collaborationAdjustments,omitempty"`
+}
+
+// JudgementBoundary captures the business judgement frame for military/naval
+// clarification flows: what real source families will be used and the concise
+// "based on data, apply rules, judge result, refresh cadence, output form"
+// summary shown back to the user before generation.
+type JudgementBoundary struct {
+	DataSources []string `json:"dataSources,omitempty"`
+	Summary     string   `json:"summary,omitempty"`
 }
 
 // requirementView is the user-facing projection of Requirement. It intentionally
@@ -97,6 +135,7 @@ type requirementView struct {
 	MainEntities      []string            `json:"mainEntities"`
 	DataPolicy        string              `json:"dataPolicy"`
 	AcceptanceFocus   []string            `json:"acceptanceFocus"`
+	JudgementBoundary JudgementBoundary   `json:"judgementBoundary,omitempty"`
 	GenerationProfile map[string][]string `json:"generationProfile"`
 }
 
@@ -135,10 +174,10 @@ type ConsolidationEntry struct {
 // disallowed. A field filled from a blueprint assumption is NOT a confirmed
 // high-impact decision — only an explicit user confirmation closes the item.
 type HighImpactItem struct {
-	ID             string   `json:"id"`
-	Label          string   `json:"label"`
-	Recommendation string   `json:"recommendation,omitempty"`
-	Options        []Option `json:"options"`
+	ID             string                   `json:"id"`
+	Label          string                   `json:"label"`
+	Recommendation HighImpactRecommendation `json:"recommendation,omitempty"`
+	Options        []Option                 `json:"options"`
 }
 
 type RoundOutput struct {
@@ -156,6 +195,21 @@ type RoundOutput struct {
 	// pipeline); this list carries the full remaining set so the gate and
 	// history can re-check without a model turn.
 	OpenHighImpact []HighImpactItem `json:"openHighImpact,omitempty"`
+	// CollaborationAdjustments carries natural-language requests to adjust the
+	// collaboration plan (e.g. remove code-reviewer or add security-reviewer).
+	// The server persists this into Requirement.CollaborationAdjustments so the
+	// preview and confirm paths build the same adjusted collaboration plan.
+	CollaborationAdjustments []CollaborationAdjustment `json:"collaborationAdjustments,omitempty"`
+}
+
+// CollaborationAdjustment is one requested change to the collaboration plan that
+// a clarification skill may emit. Supported actions in the plan builder are
+// remove_agent and add_agent for known collaboration-agent keys.
+type CollaborationAdjustment struct {
+	Action     string `json:"action"`     // e.g. "remove_agent"
+	AgentKey   string `json:"agentKey"`   // target agent key
+	HighImpact bool   `json:"highImpact"` // affects a blocking quality gate
+	Warning    string `json:"warning"`    // user-facing rationale
 }
 
 type StreamEvent struct {

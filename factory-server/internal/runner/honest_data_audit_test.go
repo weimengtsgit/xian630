@@ -20,6 +20,11 @@ func writeAppFile(t *testing.T, dir, rel, content string) {
 	}
 }
 
+func writeDegradedStateFixture(t *testing.T, dir string) {
+	t.Helper()
+	writeAppFile(t, dir, "src/components/DataUnavailable.jsx", "export function DataUnavailable({onRetry}){ return <section className=\"degraded\"><div>数据源不可用</div><button onClick={onRetry}>重试</button><a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a><table><thead><tr><th>时间</th><th>潮位</th></tr></thead><tbody><tr><td>—</td><td>—</td></tr></tbody></table><p>数据恢复后此处将显示潮汐序列。</p></section>; }\n")
+}
+
 // TestAuditHonestDataSkipsNonRealPolicies proves the audit is a no-op for
 // mock_data and unset policy: mock is explicitly allowed there, so even an app
 // that ships a mock source file must pass.
@@ -74,6 +79,7 @@ func TestAuditHonestDataFlagsMockIdentifier(t *testing.T) {
 func TestAuditHonestDataMathSinPasses(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export function series(h){ return Math.sin(h/12*Math.PI); }\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (Math.sin is not a reliable synthetic signal)", err)
 	}
@@ -97,6 +103,7 @@ func TestAuditHonestDataMathRandomWithoutDataSkillPasses(t *testing.T) {
 func TestAuditHonestDataUIRandomPasses(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/components/Spark.jsx", "export const particles = () => Math.random();\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (UI Math.random not data-layer)", err)
 	}
@@ -107,6 +114,7 @@ func TestAuditHonestDataSkipsTestFiles(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.test.js", "const mockData = [1];\ntest('x', () => {});\n")
 	writeAppFile(t, dir, "src/data/__tests__/helper.spec.ts", "const isMock = true;\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (test files skipped)", err)
 	}
@@ -118,6 +126,7 @@ func TestAuditHonestDataSkipsNodeModulesAndDeps(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "node_modules/lib/mock.js", "export const mockData = [1];\n")
 	writeAppFile(t, dir, "dist/assets/mock.js", "const isMock = true;\n")
+	writeDegradedStateFixture(t, dir)
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil (node_modules/dist skipped)", err)
 	}
@@ -128,7 +137,7 @@ func TestAuditHonestDataSkipsNodeModulesAndDeps(t *testing.T) {
 func TestAuditHonestDataCleanRealApp(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/tide.js", "export async function fetchTide(){ const r = await fetch(url); return r.json(); }\n")
-	writeAppFile(t, dir, "src/components/DataUnavailable.jsx", "export function DataUnavailable({onRetry}){ return <section><div>数据源不可用</div><button onClick={onRetry}>重试</button><a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a><table><thead><tr><th>时间</th><th>潮位</th></tr></thead><tbody><tr><td>—</td><td>—</td></tr></tbody></table><p>数据恢复后此处将显示潮汐序列。</p></section>; }\n")
+	writeDegradedStateFixture(t, dir)
 	writeAppFile(t, dir, "src/components/Card.jsx", "export const Card = ({h}) => <div>{Math.round(h)}</div>;\n")
 	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill", "deck-wind-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil for clean real-data app", err)
@@ -218,5 +227,49 @@ func TestAuditCarrierOntologyContractSkipsNonCarrierApps(t *testing.T) {
 	writeAppFile(t, dir, "src/data/other.ts", "export const fields = ['curLongitude', 'curLatitude'];\n")
 	if err := AuditCarrierOntologyContract(dir, "live_api", []string{"tide-data-skill"}); err != nil {
 		t.Fatalf("err = %v, want nil when carrier skill is absent", err)
+	}
+}
+
+// TestAuditHonestDataDegradedStatePasses proves that when all real sources fail,
+// the honest contract's required outcome — a Degraded State (banner + structural
+// preview + retry + source links, with NO fabricated values, no mock identifiers,
+// no synthetic comments) — passes the live_api / mock_then_api audit. The Degraded
+// State replaces the old bare "数据异常" string; it must not be falsely flagged as
+// mock/synthetic data.
+func TestAuditHonestDataDegradedStatePasses(t *testing.T) {
+	dir := t.TempDir()
+	// Real-first data layer: runtime fetch through the nginx proxy; throws on
+	// failure (never substitutes fake data). Build stays offline — fetch is
+	// client-side only.
+	writeAppFile(t, dir, "src/data/tideProvider.js",
+		"export async function fetchTideSeries(portKey){\n"+
+			"  const res = await fetch('/api/data/tide?port=' + portKey);\n"+
+			"  if (!res.ok) throw new Error('tide source unreachable: ' + res.status);\n"+
+			"  const j = await res.json();\n"+
+			"  return { port: portKey, series: j.predictions || [] };\n"+
+			"}\n")
+	// Degraded State UI: banner + structural preview (column headers) with NO
+	// values, source link, retry button. Empty array / "—" stand in for data.
+	writeAppFile(t, dir, "src/components/EmptyState.jsx",
+		"// 数据源不可用时的降级态：banner + 结构预览（无数值）\n"+
+			"export function EmptyState({ reason, sources, onRetry }) {\n"+
+			"  return (\n"+
+			"    <section className=\"degraded\">\n"+
+			"      <div className=\"banner\">数据源不可用：{reason}</div>\n"+
+			"      <ul>{(sources || []).map((s) => <li key={s}>{s}</li>)}</ul>\n"+
+			"      <table>\n"+
+			"        <thead><tr><th>港口</th><th>潮位</th></tr></thead>\n"+
+			"        <tbody><tr><td>—</td><td>—</td></tr></tbody>\n"+
+			"      </table>\n"+
+			"      <a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a>\n"+
+			"      <p>数据恢复后此处将显示潮汐序列。</p>\n"+
+			"      <button onClick={onRetry}>重试</button>\n"+
+			"    </section>\n"+
+			"  );\n"+
+			"}\n")
+	for _, policy := range []string{"live_api", "mock_then_api"} {
+		if err := AuditHonestData(dir, policy, []string{"tide-data-skill"}); err != nil {
+			t.Fatalf("policy=%s err = %v, want nil for Degraded State app (no fabricated values)", policy, err)
+		}
 	}
 }

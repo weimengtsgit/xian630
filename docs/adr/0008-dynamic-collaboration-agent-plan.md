@@ -1,0 +1,11 @@
+# Use a dynamic collaboration-agent plan for generation tasks
+
+Application generation will move from a user-visible fixed six-stage card model to a user-confirmed 协作智能体参与计划: a persisted, executable collaboration graph whose participating agents, dependencies, configuration snapshots, and high-impact removals are confirmed before the generation task is created. This keeps agent selection visible and adjustable while preserving replay after refresh, reconnect, retry, or history review.
+
+The fixed pipeline remains useful as a baseline execution capability, but it hides why design, domain, data, review, acceptance, security, build, and deployment responsibilities are included or omitted for a specific task. The dynamic plan is more complex to store and execute, but it supports natural-language plan adjustment, per-task editable 协作智能体配置快照, blocking code-review and product-acceptance gates, conditional security review, and a bounded automatic repair loop back to code generation.
+
+High-impact collaboration agents, such as code review, data access, deployment, and other quality or data-commitment gates, may be removed only through explicit high-impact confirmation and the removal is recorded in the confirmed requirement summary. Global generation capability packages remain read-only by default from task cards; edits affect the per-task snapshot unless the user separately confirms writing back to the global skill files.
+
+The execution model will reuse `job_steps` as the persisted node for each collaboration-agent task card, because execution records, artifacts, drawers, and SSE updates already attach to `step_id`. The collaboration plan, per-agent snapshots, lanes, high-impact confirmations, and dependency edges should be stored as task-level plan metadata plus explicit step-edge data rather than as a second parallel status model.
+
+The MVP will execute a task's collaboration graph in topological order rather than running multiple agents inside the same task concurrently. This keeps cancellation, retry, failure propagation, audit ordering, and bounded repair behavior close to the current executor while still making the confirmed collaboration graph visible and durable; intra-task parallelism can be added after the dynamic plan model is stable.

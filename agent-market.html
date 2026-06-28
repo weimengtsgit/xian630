@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>智能应用市场</title>
+    <style>
+      :root {
+        --bg: #1B2732;
+        --surface: #243340;
+        --surface-2: #2E3F4D;
+        --text: #E5EAFF;
+        --muted: #C9D2D9;
+        --soft: #CCDAFF;
+        --border: rgba(187, 203, 217, 0.35);
+        --cyan: #72E4FF;
+        --green: #84F0B2;
+        --amber: #FFD27A;
+        --violet: #B8A7FF;
+        --danger: #FF8D8D;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        overflow-x: hidden;
+        background:
+          linear-gradient(rgba(187, 203, 217, 0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(187, 203, 217, 0.045) 1px, transparent 1px),
+          radial-gradient(circle at 30% 0%, rgba(114, 228, 255, 0.12), transparent 34rem),
+          linear-gradient(135deg, #111C25 0%, var(--bg) 44%, #101820 100%);
+        background-size: 44px 44px, 44px 44px, auto, auto;
+        color: var(--text);
+        font-family: "OPPO Sans 4.0", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+        letter-spacing: 0;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .market-shell {
+        position: relative;
+        width: min(1440px, 100%);
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 28px clamp(18px, 3vw, 42px);
+      }
+
+      .market-shell::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(180deg, rgba(229, 234, 255, 0.07), transparent 11rem),
+          repeating-linear-gradient(
+            180deg,
+            rgba(229, 234, 255, 0.028) 0,
+            rgba(229, 234, 255, 0.028) 1px,
+            transparent 1px,
+            transparent 7px
+          );
+        mix-blend-mode: screen;
+        opacity: 0.55;
+      }
+
+      .market-topbar {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(27, 39, 50, 0.72);
+        backdrop-filter: blur(18px);
+      }
+
+      .brand-mark {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+
+      .brand-icon {
+        position: relative;
+        flex: 0 0 auto;
+        width: 38px;
+        height: 38px;
+        border: 1px solid rgba(114, 228, 255, 0.54);
+        border-radius: 8px;
+        background:
+          linear-gradient(135deg, rgba(114, 228, 255, 0.18), rgba(184, 167, 255, 0.12)),
+          var(--surface);
+        box-shadow: inset 0 0 18px rgba(114, 228, 255, 0.16), 0 0 20px rgba(114, 228, 255, 0.1);
+      }
+
+      .brand-icon::before,
+      .brand-icon::after {
+        content: "";
+        position: absolute;
+        inset: 9px;
+        border: 1px solid rgba(229, 234, 255, 0.62);
+        border-radius: 50%;
+      }
+
+      .brand-icon::after {
+        inset: 17px 8px 8px 17px;
+        border-radius: 2px;
+        border-color: var(--cyan);
+        transform: rotate(45deg);
+        transform-origin: top left;
+      }
+
+      .brand-copy {
+        min-width: 0;
+      }
+
+      .brand-kicker {
+        margin: 0 0 2px;
+        color: var(--soft);
+        font-size: 12px;
+      }
+
+      .brand-copy strong {
+        display: block;
+        color: var(--text);
+        font-size: 17px;
+        font-weight: 700;
+        white-space: normal;
+      }
+
+      .top-status {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .status-chip,
+      .filter-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 30px;
+        padding: 6px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: rgba(36, 51, 64, 0.62);
+        color: var(--soft);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .hero {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.72fr);
+        gap: clamp(18px, 3vw, 34px);
+        align-items: stretch;
+        padding: clamp(30px, 5vw, 62px) 0 26px;
+      }
+
+      .hero-copy {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+      }
+
+      .hero-label {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 18px;
+        padding: 7px 10px;
+        border: 1px solid rgba(114, 228, 255, 0.34);
+        border-left: 3px solid var(--cyan);
+        border-radius: 6px;
+        background: rgba(36, 51, 64, 0.54);
+        color: var(--soft);
+        font-size: 13px;
+      }
+
+      h1 {
+        margin: 0;
+        color: var(--text);
+        font-size: clamp(34px, 5vw, 66px);
+        line-height: 1.06;
+        font-weight: 800;
+      }
+
+      .hero-copy p {
+        max-width: 780px;
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.8;
+      }
+
+      .hero-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 26px;
+      }
+
+      .hero-action,
+      .card-action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 8px 13px;
+        border: 1px solid rgba(114, 228, 255, 0.45);
+        border-radius: 6px;
+        background: rgba(114, 228, 255, 0.11);
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .hero-action.secondary {
+        border-color: var(--border);
+        background: rgba(36, 51, 64, 0.5);
+        color: var(--soft);
+      }
+
+      .radar-panel {
+        position: relative;
+        min-height: 320px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background:
+          linear-gradient(135deg, rgba(36, 51, 64, 0.88), rgba(27, 39, 50, 0.68)),
+          radial-gradient(circle at 50% 50%, rgba(114, 228, 255, 0.14), transparent 48%);
+        overflow: hidden;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+      }
+
+      .radar-panel::before {
+        content: "";
+        position: absolute;
+        inset: 28px;
+        border: 1px solid rgba(114, 228, 255, 0.23);
+        border-radius: 50%;
+        box-shadow:
+          0 0 0 48px rgba(114, 228, 255, 0.035),
+          0 0 0 96px rgba(114, 228, 255, 0.025);
+      }
+
+      .radar-panel::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44%;
+        height: 2px;
+        background: linear-gradient(90deg, rgba(114, 228, 255, 0.8), transparent);
+        transform-origin: left center;
+        animation: sweep 7s linear infinite;
+      }
+
+      .radar-node {
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--cyan);
+        box-shadow: 0 0 20px rgba(114, 228, 255, 0.82);
+      }
+
+      .radar-node.one {
+        left: 31%;
+        top: 34%;
+      }
+
+      .radar-node.two {
+        right: 28%;
+        top: 48%;
+        background: var(--amber);
+        box-shadow: 0 0 18px rgba(255, 210, 122, 0.72);
+      }
+
+      .radar-node.three {
+        left: 48%;
+        bottom: 27%;
+        background: var(--green);
+        box-shadow: 0 0 18px rgba(132, 240, 178, 0.72);
+      }
+
+      .radar-readout {
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        bottom: 18px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .readout-item {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid rgba(187, 203, 217, 0.24);
+        border-radius: 6px;
+        background: rgba(27, 39, 50, 0.72);
+      }
+
+      .readout-item span {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .readout-item strong {
+        display: block;
+        margin-top: 4px;
+        color: var(--text);
+        font-size: 18px;
+      }
+
+      .filters {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 13px;
+        border: 1px solid rgba(187, 203, 217, 0.24);
+        border-radius: 8px;
+        background: rgba(27, 39, 50, 0.56);
+      }
+
+      .filter-chip.is-active {
+        border-color: rgba(114, 228, 255, 0.58);
+        background: rgba(114, 228, 255, 0.13);
+        color: var(--text);
+      }
+
+      .section-heading {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 28px 0 14px;
+      }
+
+      .section-heading h2 {
+        margin: 0;
+        color: var(--text);
+        font-size: 22px;
+      }
+
+      .section-heading p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+        text-align: right;
+      }
+
+      .agent-grid {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+
+      .agent-card {
+        position: relative;
+        display: flex;
+        min-height: 292px;
+        flex-direction: column;
+        gap: 16px;
+        padding: 18px;
+        border: 1px solid rgba(187, 203, 217, 0.28);
+        border-radius: 8px;
+        background:
+          linear-gradient(145deg, rgba(36, 51, 64, 0.82), rgba(27, 39, 50, 0.92)),
+          var(--surface);
+        color: inherit;
+        text-decoration: none;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+        transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+      }
+
+      .agent-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 8px;
+        border-top: 2px solid var(--accent, var(--cyan));
+        opacity: 0.82;
+        pointer-events: none;
+      }
+
+      .agent-card::after {
+        content: "";
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        top: 54px;
+        height: 1px;
+        background: linear-gradient(90deg, var(--accent, var(--cyan)), transparent);
+        opacity: 0.52;
+        pointer-events: none;
+      }
+
+      .agent-card:hover,
+      .agent-card:focus-visible {
+        transform: translateY(-4px);
+        border-color: rgba(114, 228, 255, 0.62);
+        box-shadow:
+          0 18px 54px rgba(0, 0, 0, 0.28),
+          0 0 28px rgba(114, 228, 255, 0.14);
+        outline: none;
+      }
+
+      .agent-card:focus-visible {
+        box-shadow:
+          0 0 0 2px rgba(229, 234, 255, 0.78),
+          0 18px 54px rgba(0, 0, 0, 0.28);
+      }
+
+      .card-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .agent-symbol {
+        position: relative;
+        flex: 0 0 auto;
+        width: 42px;
+        height: 42px;
+        border: 1px solid rgba(187, 203, 217, 0.32);
+        border-radius: 8px;
+        background: var(--surface-2);
+      }
+
+      .agent-symbol::before {
+        content: "";
+        position: absolute;
+        left: 10px;
+        right: 10px;
+        top: 10px;
+        bottom: 10px;
+        border: 1px solid var(--accent, var(--cyan));
+        border-radius: 50%;
+      }
+
+      .agent-symbol::after {
+        content: "";
+        position: absolute;
+        left: 20px;
+        top: 6px;
+        width: 2px;
+        height: 30px;
+        background: linear-gradient(180deg, transparent, var(--accent, var(--cyan)), transparent);
+        transform: rotate(45deg);
+      }
+
+      .agent-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        padding: 4px 9px;
+        border: 1px solid rgba(187, 203, 217, 0.28);
+        border-radius: 6px;
+        background: rgba(46, 63, 77, 0.72);
+        color: var(--soft);
+        font-size: 12px;
+      }
+
+      .card-title {
+        margin: 0;
+        color: var(--text);
+        font-size: 20px;
+        line-height: 1.36;
+        font-weight: 750;
+      }
+
+      .card-category {
+        width: fit-content;
+        margin: -8px 0 0;
+        padding: 4px 8px;
+        border: 1px solid rgba(187, 203, 217, 0.22);
+        border-left: 3px solid var(--accent, var(--cyan));
+        border-radius: 6px;
+        background: rgba(46, 63, 77, 0.5);
+        color: var(--soft);
+        font-size: 12px;
+      }
+
+      .card-description {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.68;
+      }
+
+      .capability-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: auto;
+      }
+
+      .capability {
+        display: inline-flex;
+        align-items: center;
+        min-height: 27px;
+        padding: 5px 8px;
+        border: 1px solid rgba(187, 203, 217, 0.2);
+        border-radius: 6px;
+        background: rgba(36, 51, 64, 0.62);
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .card-bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding-top: 4px;
+      }
+
+      .card-code {
+        color: rgba(201, 210, 217, 0.78);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .card-action {
+        flex: 0 0 auto;
+        border-color: rgba(187, 203, 217, 0.28);
+      }
+
+      .market-footer {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+        padding: 13px 2px 0;
+        color: rgba(201, 210, 217, 0.78);
+        font-size: 12px;
+      }
+
+      @keyframes sweep {
+        from {
+          transform: rotate(0deg);
+        }
+
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (max-width: 960px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .radar-panel {
+          min-height: 260px;
+        }
+
+        .section-heading {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .section-heading p {
+          text-align: left;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .market-shell {
+          padding: 16px;
+        }
+
+        .market-topbar,
+        .top-status,
+        .hero-actions,
+        .card-bottom {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .status-chip,
+        .hero-action,
+        .card-action {
+          width: 100%;
+        }
+
+        .radar-readout {
+          grid-template-columns: 1fr;
+        }
+
+        .agent-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+          transition-duration: 0.001ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="market-shell">
+      <section class="hero" aria-labelledby="market-title">
+        <div class="hero-copy">
+          <h1 id="market-title">智能应用市场</h1>
+          <p>
+            面向海上态势、舰载机研判和航母打击群规律分析的智能体入口。每张卡片代表一个可进入的能力单元，后续只需替换链接即可接入真实应用。
+          </p>
+        </div>
+
+        <aside class="radar-panel" aria-label="智能体态势概览">
+          <span class="radar-node one" aria-hidden="true"></span>
+          <span class="radar-node two" aria-hidden="true"></span>
+          <span class="radar-node three" aria-hidden="true"></span>
+          <div class="radar-readout">
+            <div class="readout-item">
+              <span>在线能力</span>
+              <strong>04</strong>
+            </div>
+            <div class="readout-item">
+              <span>覆盖领域</span>
+              <strong>03</strong>
+            </div>
+            <div class="readout-item">
+              <span>入口状态</span>
+              <strong>READY</strong>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="filters" aria-label="智能体分类">
+        <span class="filter-chip is-active">全部能力</span>
+        <span class="filter-chip">AIS 监测</span>
+        <span class="filter-chip">舰载机研判</span>
+        <span class="filter-chip">活动规律</span>
+        <span class="filter-chip">通用智能体</span>
+      </section>
+
+      <section class="section-heading" aria-labelledby="agent-section-title">
+        <h2 id="agent-section-title">精选 Agent</h2>
+        <p>点击卡片进入对应能力；当前使用临时 hash 链接。</p>
+      </section>
+
+      <section id="agent-grid" class="agent-grid" aria-label="Agent 卡片列表"></section>
+
+    </main>
+
+    <script>
+      const agents = [
+        {
+          name: '美航母AIS异常监测',
+          slug: 'agent-ais-monitor',
+          category: 'AIS 异常监测',
+          description: '识别航母相关 AIS 静默、漂移、身份异常和轨迹断点，辅助快速定位值得复核的海上目标。',
+          capabilities: ['AIS 异常', '轨迹断点', '风险提示'],
+          status: '可用',
+          href: '#agent-ais-monitor',
+          accent: '#72E4FF',
+        },
+        {
+          name: '航母舰载机归属推断工具',
+          slug: 'agent-airwing-attribution',
+          category: '舰载机归属',
+          description: '结合机型、呼号、活动区域和历史模式，推断舰载机可能归属与关联航母平台。',
+          capabilities: ['归属推断', '呼号关联', '证据链'],
+          status: '可用',
+          href: '#agent-airwing-attribution',
+          accent: '#84F0B2',
+        },
+        {
+          name: '华盛顿号航母打击群活动规律平台',
+          slug: 'agent-washington-csg-patterns',
+          category: '活动规律分析',
+          description: '面向华盛顿号航母打击群，沉淀区域巡航、补给节奏、编队伴随和任务窗口规律。',
+          capabilities: ['规律沉淀', '编队活动', '任务窗口'],
+          status: '预览',
+          href: '#agent-washington-csg-patterns',
+          accent: '#FFD27A',
+        },
+        {
+          name: 'xx智能体',
+          slug: 'agent-generic',
+          category: '通用能力',
+          description: '预留智能体入口，用于承载后续新增的数据处理、态势研判或业务自动化能力。',
+          capabilities: ['可配置', '待接入', '静态入口'],
+          status: '预留',
+          href: '#agent-generic',
+          accent: '#B8A7FF',
+        },
+      ];
+
+      const grid = document.querySelector('#agent-grid');
+
+      grid.innerHTML = agents
+        .map((agent, index) => {
+          const capabilities = agent.capabilities
+            .map(item => `<span class="capability">${item}</span>`)
+            .join('');
+
+          return `
+            <a class="agent-card" href="${agent.href}" style="--accent: ${agent.accent}" aria-labelledby="${agent.slug}-title">
+              <div class="card-top">
+                <span class="agent-symbol" aria-hidden="true"></span>
+                <span class="agent-status">${agent.status}</span>
+              </div>
+              <h3 id="${agent.slug}-title" class="card-title">${agent.name}</h3>
+              <span class="card-category">${agent.category}</span>
+              <p class="card-description">${agent.description}</p>
+              <div class="capability-list" aria-label="${agent.name}能力标签">${capabilities}</div>
+              <div class="card-bottom">
+                <span class="card-code">AGENT-${String(index + 1).padStart(2, '0')}</span>
+                <span class="card-action">进入能力</span>
+              </div>
+            </a>
+          `;
+        })
+        .join('');
+    </script>
+  </body>
+</html>

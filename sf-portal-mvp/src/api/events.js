@@ -38,11 +38,13 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'dialogue.intent.updated',
     'dialogue.route.started',
     'dialogue.route.delta',
+    'dialogue.route.thinking',
     'dialogue.route.completed',
     'dialogue.application.recommended',
     'dialogue.route.confirmed',
     'dialogue.draft.started',
     'dialogue.draft.delta',
+    'dialogue.draft.thinking',
     'dialogue.draft.completed',
     'dialogue.draft.question.created',
     'dialogue.draft.consolidation.updated',
@@ -52,7 +54,9 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'dialogue.agent.created',
     'dialogue.clarification.updated',
     'dialogue.clarification.delta',
+    'dialogue.clarification.thinking',
     'dialogue.resolved',
+    'dialogue.failed',
     'dialogue.abandoned',
     'dialogue.deleted',
   ]
@@ -201,6 +205,68 @@ export function subscribeDialogueTrace(
   return () => {
     closed = true
     hydrationAborted = true
+    if (source) {
+      source.close()
+      source = null
+    }
+  }
+}
+
+// Task-thinking SSE event type (Phase 4 Task 4).
+const TASK_THINKING_EVENT_TYPE = 'task.thinking.appended'
+
+// subscribeDialogueTaskThinking(dialogueId, { onEvent, onError, afterSequence, getDialogueTaskThinking })
+//
+// Per-dialogue SSE transport for task-thinking events (Phase 4).
+// Implements hydrate→live model similar to subscribeDialogueTrace,
+// but intentionally simplified (no gap detection).
+export function subscribeDialogueTaskThinking(dialogueId, {
+  afterSequence = 0,
+  getDialogueTaskThinking,
+  onEvent,
+  onError,
+} = {}) {
+  if (!dialogueId) return () => {}
+
+  let closed = false
+  let source = null
+  let highest = Number(afterSequence) || 0
+
+  const emit = row => {
+    if (!row || closed) return
+    const seq = Number(row.dialogue_sequence ?? row.dialogueSequence)
+    if (Number.isFinite(seq) && seq <= highest) return
+    if (Number.isFinite(seq)) highest = seq
+    if (onEvent) onEvent(row)
+  }
+
+  // Hydrate first if REST getter provided
+  if (getDialogueTaskThinking) {
+    getDialogueTaskThinking(dialogueId, highest)
+      .then(data => {
+        const rows = Array.isArray(data)
+          ? data
+          : data && Array.isArray(data.events)
+            ? data.events
+            : []
+        rows.forEach(emit)
+      })
+      .catch(err => { if (onError) onError(err) })
+  }
+
+  // Open live stream
+  source = new EventSource(`${API_BASE_URL}/api/dialogues/${dialogueId}/task-thinking/stream?afterSequence=${encodeURIComponent(highest)}`)
+
+  source.addEventListener(TASK_THINKING_EVENT_TYPE, event => {
+    try { emit(JSON.parse(event.data)) } catch (err) { if (onError) onError(err) }
+  })
+
+  source.addEventListener('error', err => {
+    if (onError) onError(err)
+  })
+
+  return () => {
+    closed = true
     if (source) {
       source.close()
       source = null

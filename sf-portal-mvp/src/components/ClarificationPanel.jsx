@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusText } from '../hooks/clarificationLogic'
+import { formatDataPolicy } from '../utils/formatLabels'
 import './ClarificationPanel.css'
 
 // Renders the clarification flow: streaming analysis work-logs, structured
@@ -231,23 +232,6 @@ export function ClarificationPanel({
           </div>
         )}
 
-        {blueprints.length > 0 && (
-          <div className="clar-blueprints">
-            <div className="clar-blueprints-title">参考蓝本</div>
-            <div className="clar-blueprint-chips">
-              {blueprints.map((bp, i) => (
-                <span key={bp.id || `bp_${i}`} className="clar-blueprint-chip">
-                  <span className="clar-bp-name">{bp.name || bp.id}</span>
-                  {bp.referenceKind ? (
-                    <span className="clar-bp-kind">{bp.referenceKind}</span>
-                  ) : null}
-                  {bp.reason ? <span className="clar-bp-reason">{bp.reason}</span> : null}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
         {requirement && (
           <div className="clar-summary">
             <strong className="clar-summary-title">确认需求摘要</strong>
@@ -256,19 +240,10 @@ export function ClarificationPanel({
               <SummaryRow label="应用名称" value={requirement.appName} />
               <SummaryRow label="核心场景" value={requirement.coreScenario} />
               <SummaryRow label="主视图" value={requirement.primaryView} />
-              <SummaryRow label="数据策略" value={requirement.dataPolicy} />
+              <SummaryRow label="研判边界" value={requirement.judgementBoundary && requirement.judgementBoundary.summary} />
+              <SummaryRow label="数据来源" value={formatDataSources(requirement.judgementBoundary && requirement.judgementBoundary.dataSources)} />
+              <SummaryRow label="数据策略" value={formatDataPolicy(requirement.dataPolicy)} />
             </div>
-            {Array.isArray(requirement.blueprintRefs) &&
-            requirement.blueprintRefs.length > 0 ? (
-              <div className="clar-summary-refs">
-                <span className="clar-summary-refs-label">蓝本引用：</span>
-                {requirement.blueprintRefs.map((ref, i) => (
-                  <span key={ref.id || ref.name || `ref_${i}`} className="clar-ref-chip">
-                    {ref.name || ref.id || ref}
-                  </span>
-                ))}
-              </div>
-            ) : null}
           </div>
         )}
       </div>
@@ -312,6 +287,19 @@ function SummaryRow({ label, value }) {
       <span className="clar-summary-value">{value}</span>
     </div>
   )
+}
+
+function formatDataSources(values) {
+  if (!Array.isArray(values) || values.length === 0) return ''
+  return values.map(dataSourceLabel).filter(Boolean).join('、')
+}
+
+function dataSourceLabel(value) {
+  const map = {
+    ontology: '本体数据源',
+    public_web_search: '网络公开搜索',
+  }
+  return map[value] || value
 }
 
 function recommendationValues(q) {

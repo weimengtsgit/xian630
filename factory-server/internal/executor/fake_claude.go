@@ -126,6 +126,15 @@ func (f *FakeClaudeRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		return f.runSolutionDesign(ctx, job, step)
 	case model.StepCodeGeneration:
 		return f.runCodeGeneration(ctx, job, step)
+	case model.StepCollaborationOrchestration, model.StepDomainAnalysis,
+		model.StepDesignContract, model.StepDataIntegration,
+		model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance:
+		// Collaboration-pipeline gates. In fake-claude mode (FACTORY_FAKE_CLAUDE)
+		// the full pipeline runs without a real Claude CLI, so these gates pass
+		// deterministically: the fake never emits a blocking finding. The real
+		// claude_runner decodes the gate's JSON status and maps "blocked" to a
+		// repairable ErrorBlockingReview; the fake exercises only the happy path.
+		return StepResult{Status: model.StepStatusSucceeded}, nil
 	default:
 		return StepResult{
 			Status:       model.StepStatusFailed,
