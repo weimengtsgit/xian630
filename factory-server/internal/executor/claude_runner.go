@@ -361,7 +361,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
-	return StepResult{Status: model.StepStatusSucceeded}
+	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
 }
 
 func (c *ClaudeStepRunner) failureFromError(err error) StepResult {
@@ -436,6 +436,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 	if step.Kind == model.StepRequirementAnalysis {
 		return "You are the software-factory requirement_analysis agent.\n" +
 			"Read confirmedRequirement from input.json and freeze it into a single final JSON object.\n" +
+			"If input.json job.kind is revise, apply job.user_prompt as the requested change to the prior confirmedRequirement before freezing the new requirement.\n" +
 			"Validate field completeness, capability boundaries, generationProfile, and blueprintRefs used only as reference scene docs. Record unsupported or out-of-scope asks in validation.unsupportedRequests.\n" +
 			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
 			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +

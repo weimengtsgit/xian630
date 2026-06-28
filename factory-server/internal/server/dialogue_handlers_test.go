@@ -2337,6 +2337,15 @@ func TestConfirmDialogueChangeRollsBackRevisionSeedFailure(t *testing.T) {
 	ctx := context.Background()
 	seedContinuingDialogue(t, st, "dlg_1", "app_1", "ver_1")
 	now := time.Now()
+	if err := st.CreateClarificationSession(ctx, model.ClarificationSession{
+		ID: "clar_1", InitialPrompt: "做一个航母编队航迹复盘应用", Status: model.ClarificationStatusConfirmed,
+		RequirementJSON: `{"coreScenario":"航迹复盘"}`, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed child clarification: %v", err)
+	}
+	if err := st.SetDialogueClarificationID(ctx, "dlg_1", "clar_1"); err != nil {
+		t.Fatalf("link child clarification: %v", err)
+	}
 	if err := st.CreateJob(ctx, model.Job{
 		ID: "job_v1", AppSlug: "app_1", AppName: "已部署的复盘应用", Status: model.JobStatusCompleted,
 		CurrentStepKind: model.StepDeployment, ApplicationID: "app_1", DialogueID: "dlg_1",
@@ -2395,6 +2404,12 @@ func TestConfirmDialogueChangeRollsBackRevisionSeedFailure(t *testing.T) {
 	}
 	if revision == nil || revision.DialogueID != "dlg_1" || revision.ApplicationID != "app_1" || revision.BaseVersionID != "ver_1" {
 		t.Fatalf("revision lineage = %+v", revision)
+	}
+	if revision.ConfirmedRequirementJSON != `{"coreScenario":"航迹复盘"}` {
+		t.Fatalf("revision confirmed requirement = %q", revision.ConfirmedRequirementJSON)
+	}
+	if revision.ClarificationSessionID != "clar_1" {
+		t.Fatalf("revision clarification id = %q, want clar_1", revision.ClarificationSessionID)
 	}
 	version, err := st.GetApplicationVersionByJob(ctx, revision.ID)
 	if err != nil || version == nil || version.ApplicationID != "app_1" || version.ParentVersionID != "ver_1" || version.Status != model.ApplicationVersionQueued {

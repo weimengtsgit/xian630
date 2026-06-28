@@ -11,6 +11,7 @@ import { useManagedAgents } from './hooks/useManagedAgents'
 import { useAgents } from './hooks/useAgents'
 import { useJobs } from './hooks/useJobs'
 import { useDialogueSessions } from './hooks/useDialogueSessions'
+import { composerLockedByGenerationStage } from './hooks/composerStageLock'
 import { factoryApi } from './api/client'
 import './App.css'
 
@@ -113,6 +114,7 @@ function App() {
             pendingTurn={dialogue.pendingTurn}
             focusTask={dialogue.focusTask}
             traceSteps={jobs.steps}
+            composerStageLocked={composerLockedByGenerationStage(jobs.steps, dialogue.focusTask, dialogue.session && dialogue.session.status)}
             taskPanel={
               <JobCenter
                 activeJob={dialogue.focusTask || null}

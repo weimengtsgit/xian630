@@ -36,6 +36,9 @@ type StepResult struct {
 	ErrorCode      model.ErrorCode  // set when failed
 	ErrorMessage   string
 	NeedsUserInput bool
+	// FrozenRequirementJSON carries the requirement_analysis step's canonical
+	// output so the job row becomes the source of truth for later steps and UI.
+	FrozenRequirementJSON string
 	// Questions is the clarifying questions a step raised when pausing for user
 	// input (waiting_user). Persisted on the step so the job detail can surface
 	// them; empty for non-waiting results.
@@ -508,6 +511,11 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepResult) error {
 	switch res.Status {
 	case model.StepStatusSucceeded:
+		if strings.TrimSpace(res.FrozenRequirementJSON) != "" {
+			if err := e.store.UpdateJobConfirmedRequirement(ctx, jobID, res.FrozenRequirementJSON); err != nil {
+				return err
+			}
+		}
 		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
 			return err
 		}

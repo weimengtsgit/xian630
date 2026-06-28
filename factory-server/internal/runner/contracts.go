@@ -28,8 +28,9 @@ var (
 // (design §5). Steps that need more fields decode into their own richer struct
 // first and then collapse into this for the executor's waiting-user signal.
 type StepOutput struct {
-	NeedsUserInput bool       `json:"needsUserInput"`
-	Questions      []Question `json:"questions"`
+	NeedsUserInput        bool       `json:"needsUserInput"`
+	Questions             []Question `json:"questions"`
+	FrozenRequirementJSON string     `json:"-"`
 }
 
 // Question is a single clarification the agent wants the user to answer before
@@ -332,7 +333,7 @@ type requirementAnalysisOutput struct {
 	// thinking/reasoning and every other hidden provider field are NOT in this
 	// struct, so the lenient decoder drops them (boundary locked by contract
 	// tests that include both a workLog and a thinking field).
-	WorkLog    []workLogEntry      `json:"workLog"`
+	WorkLog    []workLogEntry        `json:"workLog"`
 	Validation requirementValidation `json:"validation"`
 }
 
@@ -366,7 +367,11 @@ func ValidateRequirementAnalysis(path string) (StepOutput, error) {
 	if raw.AppType == "" || raw.AppName == "" || len(raw.GenerationProfile) == 0 {
 		return StepOutput{}, fmt.Errorf("missing required requirement fields: %w", ErrSchemaValidationFailed)
 	}
-	return StepOutput{}, nil
+	frozen, err := json.Marshal(raw)
+	if err != nil {
+		return StepOutput{}, err
+	}
+	return StepOutput{FrozenRequirementJSON: string(frozen)}, nil
 }
 
 // requirementRejectionDetail formats the agent's missingFields and

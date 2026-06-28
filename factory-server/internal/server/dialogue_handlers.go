@@ -1091,6 +1091,10 @@ func (s *Server) confirmDialogueChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "confirmed requirement unavailable"})
 		return
 	}
+	clarificationID := strings.TrimSpace(dlg.ClarificationSessionID)
+	if clarificationID == "" {
+		clarificationID = strings.TrimSpace(source.ClarificationSessionID)
+	}
 	var summary dialogue.TurnSummary
 	_ = json.Unmarshal([]byte(turn.SummaryJSON), &summary)
 	prompt := strings.TrimSpace(summary.ChangeDescription)
@@ -1103,7 +1107,7 @@ func (s *Server) confirmDialogueChange(w http.ResponseWriter, r *http.Request) {
 	job := model.Job{
 		ID: jobID, UserPrompt: prompt, AppName: app.Name, AppSlug: app.Slug,
 		Status: model.JobStatusQueued, CurrentStepKind: model.StepRequirementAnalysis,
-		ConfirmedRequirementJSON: source.ConfirmedRequirementJSON, DialogueID: dialogueID,
+		ClarificationSessionID: clarificationID, ConfirmedRequirementJSON: source.ConfirmedRequirementJSON, DialogueID: dialogueID,
 		ApplicationID: app.ID, BaseVersionID: base.ID, Kind: "revise", CreatedAt: now, UpdatedAt: now,
 	}
 	steps := make([]model.JobStep, 0, len(stepPlan))

@@ -61,6 +61,7 @@ export function ConversationWorkbench({
   pendingTurn,
   focusTask,
   traceSteps,
+  composerStageLocked,
   taskPanel,
   onCancelTurn,
   onConfirmChange,
@@ -128,6 +129,8 @@ export function ConversationWorkbench({
       it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
     )
     : null
+  const currentDeployment = deploymentStatusInfo({ view, focusTask, steps: traceSteps, traceItems })
+  const focusRequirement = requirementFromJob(focusTask)
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -136,7 +139,7 @@ export function ConversationWorkbench({
 
   const submitText = async () => {
     const value = input.trim()
-    if (!value || submitting || (locked && !composerActive)) return
+    if (!value || submitting || composerStageLocked || (locked && !composerActive)) return
     setInput('')
     await onSend(value)
   }
@@ -181,6 +184,7 @@ export function ConversationWorkbench({
             draftAnswers={draftAnswers}
             setDraftAnswers={setDraftAnswers}
             submitting={submitting}
+            focusRequirement={focusRequirement}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
@@ -233,6 +237,15 @@ export function ConversationWorkbench({
             </button>
           </div>
         ) : null}
+        {currentDeployment ? (
+          <div className="cw-deployment-info">
+            <GitCommit size={14} />
+            <span>
+              <b>当前部署版本 {currentDeployment.version}</b>
+              {currentDeployment.summary ? <em>摘要：{currentDeployment.summary}</em> : null}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {/* Pending-turn indicator + cancel-current-turn control (202 ack path). */}
@@ -283,7 +296,7 @@ export function ConversationWorkbench({
             resolved. Only true terminal-without-deployment states lock it. */}
         {status === 'resolved' && !composerActive ? (
           <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
-        ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
+        ) : status === 'failed' || status === 'archived' ? (
           <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
         ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
@@ -293,11 +306,11 @@ export function ConversationWorkbench({
               ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder={composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
-              disabled={submitting}
+              placeholder={composerStageLocked ? '任务执行中，进入部署阶段后可继续输入' : composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
+              disabled={submitting || composerStageLocked}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
             />
-            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
+            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting || composerStageLocked} title="发送" aria-label="发送">
               {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
             </button>
           </>
@@ -435,7 +448,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
+  if (item.type === 'requirement_summary') return <RequirementSummary requirement={focusRequirement || item.requirement} />
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
@@ -782,6 +795,43 @@ function CustomAnswer({ onSubmit }) {
       <button type="button" className="cw-custom-submit" disabled={!value.trim()} onClick={submit}>添加</button>
     </div>
   )
+}
+
+function deploymentStatusInfo({ view, focusTask, steps, traceItems }) {
+  const deploymentStep = (Array.isArray(steps) ? steps : []).find(step => {
+    const kind = step && step.kind
+    const agentKey = step && (step.agentKey || step.agent_key)
+    return kind === 'deployment' && (step.status === 'running' || step.status === 'succeeded') && (!agentKey || agentKey === 'deployer')
+  })
+  if (!deploymentStep) return null
+  const requirement = (view && view.child && view.child.requirement) || requirementFromJob(focusTask) || {}
+  const summary = String(requirement.coreScenario || '').trim()
+  return {
+    version: deploymentVersionLabel({ view, focusTask, traceItems }),
+    summary,
+  }
+}
+
+function requirementFromJob(job) {
+  const raw = job && (job.confirmed_requirement_json || job.confirmedRequirementJSON)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && (parsed.appType || parsed.appName || parsed.coreScenario || parsed.primaryView || parsed.dataPolicy) ? parsed : null
+  } catch (_) {
+    return null
+  }
+}
+
+function deploymentVersionLabel({ view, focusTask, traceItems }) {
+  const deployedApp = view && view.resolvedApplication
+  const existing = deployedApp && (deployedApp.version || deployedApp.version_label || deployedApp.versionLabel)
+  const match = existing && String(existing).match(/v\s*(\d+)/i)
+  if (match) return `V${match[1]}`
+  const versionEvents = (Array.isArray(traceItems) ? traceItems : []).filter(it => it && it.type === 'version').length
+  const baseVersionID = focusTask && (focusTask.base_version_id || focusTask.baseVersionID)
+  const nextNumber = Math.max(1, versionEvents + 1, baseVersionID ? 2 : 1)
+  return `V${nextNumber}`
 }
 
 function RequirementSummary({ requirement }) {
