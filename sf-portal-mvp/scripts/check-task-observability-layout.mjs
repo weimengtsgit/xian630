@@ -55,6 +55,18 @@ assert.doesNotMatch(
 assert.match(jobCenterJsx, /<StepCard/, 'JobCenter must render StepCard components')
 assert.match(jobCenterJsx, /<StepExecutionDrawer/, 'JobCenter must render the StepExecutionDrawer')
 
+// --- JobCenter task list (P1-a) -------------------------------------------
+// The 任务执行 drawer lists ALL generation tasks for the selected dialogue
+// (ranked, focus task first), not just the focus task. JobCenter accepts the
+// ranked `jobs` list + an onSelectTask handler and renders a .jc-task-list with
+// a back button returning from a task's detail to the list.
+assert.match(jobCenterJsx, /jobs,/, 'JobCenter must accept a `jobs` prop (the dialogue task list)')
+assert.match(jobCenterJsx, /onSelectTask,/, 'JobCenter must accept an onSelectTask handler (drill into a non-focus task)')
+assert.match(jobCenterJsx, /jc-task-list/, 'JobCenter must render a .jc-task-list of all dialogue tasks')
+assert.match(jobCenterJsx, /jc-task-card/, 'JobCenter must render a .jc-task-card row per dialogue task')
+assert.match(jobCenterJsx, /jc-back/, 'JobCenter task detail must have a back button returning to the task list')
+assert.match(jobCenterCss, /\.jc-task-list\s*\{/, 'JobCenter.css must style .jc-task-list')
+
 // Six fixed stages still appear for legacy jobs (FIXED_STEPS source of truth).
 // JobCenter renders a <StepCard .../> inside a .map() over the per-kind view
 // derived from the six FIXED_STEPS (via buildStepCardView), now inside a wave.

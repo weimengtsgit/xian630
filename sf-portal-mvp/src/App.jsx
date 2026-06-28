@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { SessionNav } from './components/SessionNav'
@@ -9,6 +9,7 @@ import { useManagedAgents } from './hooks/useManagedAgents'
 import { useAgents } from './hooks/useAgents'
 import { useJobs } from './hooks/useJobs'
 import { useDialogueSessions } from './hooks/useDialogueSessions'
+import { rankTasks } from './hooks/focusTask'
 import { factoryApi } from './api/client'
 import './App.css'
 
@@ -46,11 +47,42 @@ function App() {
     dialogue.setJobsForFocus(jobs.jobs)
   }, [jobs.jobs, dialogue.setJobsForFocus])
 
-  // A session switch is also a task-context switch. Hydrate details only for
-  // this dialogue's focus task; never retain the previous session's global job.
+  // The 任务执行 drawer shows ALL generation tasks for the selected dialogue,
+  // defaulting to the focus task (plan §Task Execution Drawer). The drawer's
+  // task list is the dialogue's jobs ranked by attention priority (focus task
+  // first); `selectedTaskId` lets the user drill into a non-focus task. null
+  // means "follow the focus task" — the default on dialogue switch.
+  const dialogueJobs = useMemo(
+    () => rankTasks(jobs.jobs, dialogue.selectedDialogueId),
+    [jobs.jobs, dialogue.selectedDialogueId],
+  )
+  const [selectedTaskId, setSelectedTaskId] = useState(null)
+  const effectiveTaskId = selectedTaskId || (dialogue.focusTask && dialogue.focusTask.id) || null
+  const activeJob =
+    dialogueJobs.find(j => j.id === effectiveTaskId) || dialogue.focusTask || null
+  const onSelectTask = useCallback(id => setSelectedTaskId(id || null), [])
+
+  // A session switch is also a task-context switch. Re-follow the new dialogue's
+  // focus task (clear any manual selection from the previous session) and
+  // hydrate its details.
   useEffect(() => {
-    jobs.selectJob(dialogue.focusTask ? dialogue.focusTask.id : null).catch(() => {})
-  }, [dialogue.focusTask, jobs.selectJob])
+    setSelectedTaskId(null)
+  }, [dialogue.selectedDialogueId])
+
+  // If the manually-selected task leaves the dialogue's job list (deleted, or
+  // rotated out by a later list snapshot), fall back to the focus task so the
+  // drawer never pins a stale id.
+  useEffect(() => {
+    if (selectedTaskId && !dialogueJobs.some(j => j.id === selectedTaskId)) {
+      setSelectedTaskId(null)
+    }
+  }, [selectedTaskId, dialogueJobs])
+
+  // Hydrate details for the effective task (focus by default, or the user's
+  // manual selection). Never retain the previous session's global job.
+  useEffect(() => {
+    jobs.selectJob(effectiveTaskId).catch(() => {})
+  }, [effectiveTaskId, jobs.selectJob])
 
   // Regeneration is another generate request. Task 5 gates bare POST /api/jobs
   // to require a confirmed requirement, so regeneration MUST flow through
@@ -150,14 +182,17 @@ function App() {
             onDeleteAgent: agents.deleteAgent,
             deletingAgentId: agents.deletingAgentId,
           }}
-          // Phase 2: thread the focus task's observability into the 任务执行
-          // drawer. activeJob is the dialogue's focusTask (focus-task only this
-          // round); the rest are the same useJobs accessors JobCenter needs.
-          // Records/artifacts accessors + cancel/retry/repair-from-failure +
-          // snapshot save are wired here so the embedded detail reuses the
-          // existing logic with no re-derivation.
+          // Phase 2: thread the dialogue's generation tasks into the 任务执行
+          // drawer. `jobs` is the ranked task list (all tasks for this dialogue,
+          // focus task first); `activeJob` is the currently-selected task (focus
+          // by default, or the user's manual selection); the rest are the same
+          // useJobs accessors JobCenter needs. Records/artifacts accessors +
+          // cancel/retry/repair-from-failure + snapshot save are wired here so
+          // the embedded detail reuses the existing logic with no re-derivation.
           taskProps={{
-            activeJob: dialogue.focusTask,
+            activeJob,
+            jobs: dialogueJobs,
+            onSelectTask,
             steps: jobs.steps,
             summary: jobs.summary,
             collaborationPlan: jobs.collaborationPlan,

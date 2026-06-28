@@ -65,9 +65,13 @@ assert.match(drawerJsx, /import \{ JobCenter \} from '\.\/JobCenter'/, 'Phase 2:
 assert.match(drawerJsx, /activeEntry === 'task' \?[\s\S]*<JobCenter/, 'Phase 2: the 任务执行 entry must render <JobCenter/>')
 assert.match(drawerJsx, /taskProps/, 'Phase 2: WorkbenchDrawer must thread task observability props (taskProps) into JobCenter')
 assert.doesNotMatch(drawerJsx, /任务执行详情将在下一阶段迁入抽屉/, 'Phase 2: the Phase-1 placeholder must be removed')
-// App threads the focus task + useJobs accessors into the drawer's task entry.
+// App threads the dialogue's generation tasks + useJobs accessors into the
+// drawer's task entry. The drawer shows ALL dialogue tasks (ranked, focus first),
+// defaulting to the focus task — NOT focus-task-only (P1-a).
 assert.match(appJsx, /taskProps=\{/, 'Phase 2: App must pass a taskProps bundle into WorkbenchDrawer')
-assert.match(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must wire the dialogue focus task as JobCenter.activeJob')
+assert.doesNotMatch(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must NOT hardwire activeJob to dialogue.focusTask only (drawer shows ALL dialogue tasks)')
+assert.match(appJsx, /jobs: dialogueJobs/, 'Phase 2: App must thread the ranked dialogue task list (dialogueJobs) into the task drawer')
+assert.match(appJsx, /onSelectTask/, 'Phase 2: App must wire onSelectTask so a non-focus task can be selected in the drawer')
 assert.match(appJsx, /collaborationPlan: jobs\.collaborationPlan/, 'Phase 2: App must thread the collaboration plan into the task drawer')
 assert.match(appJsx, /onRepairFromFailure: jobs\.repairFromFailure/, 'Phase 2: App must thread repair-from-failure into the task drawer')
 // The drawer is an OVERLAY (not a grid column) so the center width never jitters.

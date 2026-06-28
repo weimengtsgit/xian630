@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Ban,
   Wrench,
+  ChevronLeft,
 } from 'lucide-react'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
@@ -55,6 +56,11 @@ function formatJobTime(value) {
 
 export function JobCenter({
   activeJob,
+  // jobs: the SELECTED dialogue's generation tasks, ranked by attention
+  // priority (focus task first). The 任务执行 drawer lists ALL of them;
+  // onSelectTask drills into a non-focus task. See App.jsx taskProps.
+  jobs,
+  onSelectTask,
   steps,
   onCancel,
   onRetry,
@@ -76,6 +82,16 @@ export function JobCenter({
   // Local drawer tab is owned by the drawer; JobCenter only owns whether the
   // drawer is open (driven by selectedStepId).
   const [drawerOpen, setDrawerOpen] = useState(false)
+
+  // Task-list ↔ task-detail toggle (plan §Task Execution Drawer). The drawer
+  // lands on the task list when the dialogue has multiple generation tasks; a
+  // single (or zero) task skips the list and goes straight to its detail. The
+  // list is ranked upstream (focus task first), so index 0 is always the focus
+  // task — marked with a 焦点 badge.
+  const dialogueJobs = Array.isArray(jobs) ? jobs : []
+  const multiTask = dialogueJobs.length > 1
+  const [taskView, setTaskView] = useState('list')
+  const view = multiTask ? taskView : 'detail'
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so
@@ -222,8 +238,60 @@ export function JobCenter({
 
   return (
     <section className={`job-center job-status-${jobStatus}`}>
+      {view === 'list' ? (
+        <div className="jc-task-list">
+          <div className="jc-task-list-head">
+            <span className="jc-label">生成任务</span>
+            <span className="jc-task-count">{dialogueJobs.length} 个任务</span>
+          </div>
+          {dialogueJobs.map((job, index) => {
+            const status = job.status || 'queued'
+            const title = job.app_name || job.user_prompt || job.normalized_prompt || job.id
+            const selected = !!(activeJob && job.id === activeJob.id)
+            return (
+              <button
+                key={job.id}
+                type="button"
+                className={`jc-task-card jc-status-${status}${selected ? ' jc-task-card-selected' : ''}`}
+                aria-pressed={selected ? 'true' : 'false'}
+                aria-label={`查看任务 ${title}`}
+                onClick={() => {
+                  if (onSelectTask) onSelectTask(job.id)
+                  setTaskView('detail')
+                }}
+              >
+                <div className="jc-task-card-head">
+                  <span className={`jc-status-badge jc-status-${status}`}>
+                    {JOB_STATUS_LABEL[status] || status}
+                  </span>
+                  {index === 0 ? <span className="jc-task-focus">焦点</span> : null}
+                </div>
+                <div className="jc-task-card-title">{title}</div>
+                <div className="jc-task-card-meta">
+                  {job.started_at ? (
+                    <time dateTime={job.started_at}>开始 {formatJobTime(job.started_at)}</time>
+                  ) : job.created_at ? (
+                    <time dateTime={job.created_at}>排队 {formatJobTime(job.created_at)}</time>
+                  ) : null}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <>
       <header className="jc-header">
         <div className="jc-title-block">
+          {multiTask ? (
+            <button
+              type="button"
+              className="jc-back"
+              onClick={() => setTaskView('list')}
+              aria-label="返回任务列表"
+            >
+              <ChevronLeft size={14} /> 任务列表
+            </button>
+          ) : null}
           <span className="jc-label">当前任务</span>
           {/* started_at (actual exec start) vs created_at (queue time) — Constraint #10.
               Show both, distinctly, when present. */}
@@ -391,6 +459,8 @@ export function JobCenter({
           </a>
         </div>
       ) : null}
+        </>
+      )}
 
       {loading && <div className="jc-loading-hint">同步任务状态中...</div>}
     </section>

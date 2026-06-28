@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { selectFocusTask } from '../src/hooks/focusTask.js'
+import { selectFocusTask, rankTasks } from '../src/hooks/focusTask.js'
 
 // Helper to build a minimal job with explicit timestamps. Times are ISO strings;
 // later strings sort after earlier ones.
@@ -84,5 +84,26 @@ function job(id, status, { dialogue_id, started_at, created_at, updated_at } = {
 assert.equal(selectFocusTask([], 'dlg-1'), null, 'empty → null')
 assert.equal(selectFocusTask(null, 'dlg-1'), null, 'null → null')
 assert.equal(selectFocusTask(undefined), null, 'undefined → null')
+
+// (g) rankTasks returns ALL eligible tasks ordered by attention priority
+// (focus task first), so the 任务执行 drawer can list every dialogue task.
+// The first element always equals selectFocusTask.
+{
+  const wait = job('wait', 'waiting_user', { dialogue_id: 'dlg-1', started_at: '2026-06-01T00:00:00Z' })
+  const queued = job('q', 'queued', { dialogue_id: 'dlg-1', started_at: '2026-06-10T00:00:00Z' })
+  const completed = job('c', 'completed', { dialogue_id: 'dlg-1', started_at: '2026-06-05T00:00:00Z' })
+  const ranked = rankTasks([completed, queued, wait], 'dlg-1')
+  assert.deepEqual(ranked.map(j => j.id), ['wait', 'q', 'c'], 'rankTasks orders waiting_user → queued → completed')
+  assert.equal(ranked[0].id, selectFocusTask([completed, queued, wait], 'dlg-1').id, 'rankTasks[0] === selectFocusTask')
+}
+// (g') rankTasks scopes to the dialogue and drops unknown statuses, keeping
+// every eligible task (not just the winner).
+{
+  const mine = job('a', 'running', { dialogue_id: 'dlg-1', started_at: '2026-06-01T00:00:00Z' })
+  const other = job('b', 'waiting_user', { dialogue_id: 'dlg-other', started_at: '2026-06-10T00:00:00Z' })
+  const ranked = rankTasks([mine, other], 'dlg-1')
+  assert.deepEqual(ranked.map(j => j.id), ['a'], 'rankTasks scopes to the dialogue')
+  assert.equal(rankTasks([], 'dlg-1').length, 0, 'rankTasks empty → []')
+}
 
 console.log('check-focus-task: ok')

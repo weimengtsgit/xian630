@@ -116,22 +116,28 @@ assert.match(workbenchJsx, /resolveWorkbenchTitle\(view,\s*session\)/, 'workbenc
 // 任务执行 drawer (via WorkbenchDrawer's task entry), not as a global panel in
 // the center or at the App root. The center keeps only the conversation timeline
 // + composer; the task observability (waves + embedded detail) lives behind the
-// drawer entry, dialogue-scoped to the focus task.
+// drawer entry, dialogue-scoped to the selected dialogue's tasks.
 //
 // The OLD Phase-1 assertions here pinned the center NOT owning a taskPanel and
 // App NOT passing a global <JobCenter activeJob={jobs.activeJob}>. Phase 2 keeps
 // those prohibitions (the center must not regain the inline panel) AND adds the
-// positive Phase-2 contract: App threads the focus task into the DRAWER's task
-// entry via taskProps, so JobCenter is reached only through the drawer host.
+// positive Phase-2 contract: App threads the dialogue's generation tasks into the
+// DRAWER's task entry via taskProps, so JobCenter is reached only through the
+// drawer host.
 assert.doesNotMatch(workbenchJsx, /\btaskPanel\b/, 'the center must NOT render an inline task panel (lives behind the 任务执行 drawer)')
 assert.doesNotMatch(workbenchJsx, /cw-focus-task/, 'the center must NOT keep the inline focus-task area markup')
 assert.doesNotMatch(appJsx, /taskPanel=\{/, 'App must NOT pass a taskPanel prop into ConversationWorkbench (inline task area removed)')
 assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must NOT remain a global task panel outside the 任务执行 drawer')
 // Phase 2: JobCenter is reached ONLY through the drawer's task entry. App wires
-// the dialogue's focus task (not the global jobs.activeJob) as JobCenter.activeJob,
-// scoped to the focus task per the plan.
-assert.match(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must scope JobCenter to the dialogue focus task (focus-task only), threaded via taskProps')
-assert.match(appJsx, /focusTask/, 'App must keep the focusTask signal wired (drawer task entry reuses it)')
+// ALL of the dialogue's generation tasks (ranked, focus task first) into the
+// drawer via taskProps, with activeJob defaulting to the focus task and an
+// onSelectTask handler so any task can be drilled into. The drawer must NOT be
+// focus-task-only (that hid queued/historical/waiting-user tasks — P1-a).
+assert.doesNotMatch(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must NOT hardwire activeJob to dialogue.focusTask only (drawer shows ALL dialogue tasks)')
+assert.match(appJsx, /jobs: dialogueJobs/, 'Phase 2: App must thread the ranked dialogue task list (dialogueJobs) into the drawer taskProps')
+assert.match(appJsx, /onSelectTask/, 'Phase 2: App must wire an onSelectTask handler so a non-focus task can be selected in the drawer')
+assert.match(appJsx, /rankTasks/, 'Phase 2: App must rank the dialogue tasks via rankTasks (focus task first)')
+assert.match(appJsx, /focusTask/, 'App must keep the focusTask signal wired (drawer task entry defaults to it)')
 assert.match(appJsx, /factoryApiGetArtifactContent/, 'App must keep the factoryApi artifact-content wrapper exported (drawer task entry reuses it)')
 
 

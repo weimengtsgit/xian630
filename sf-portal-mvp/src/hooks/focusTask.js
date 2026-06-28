@@ -47,28 +47,37 @@ function timeKey(job) {
   return updated || 0
 }
 
-// selectFocusTask picks the focus job for a dialogue from the full job list.
-//   - When dialogueId is provided, only jobs whose dialogue_id matches are
-//     eligible (Constraint #7/#10 — the trace/focus is dialogue-scoped).
-//   - Picks the job with the LOWEST status tier (most-attention-first); within
-//     the same tier, the newest by started_at → created_at → updated_at.
-//   - Returns null when nothing is eligible.
-export function selectFocusTask(jobs, dialogueId) {
+// rankTasks returns the dialogue's generation tasks sorted by attention
+// priority: status tier ascending (waiting_user → running → queued → failed →
+// terminal), and within a tier newest-first by started_at → created_at →
+// updated_at. Jobs are scoped to dialogueId when provided (Constraint #7/#10 —
+// the trace/focus is dialogue-scoped); legacy jobs with no dialogue_id are
+// eligible only when no dialogue is selected. Unknown/garbage statuses are
+// dropped so they never win the focus slot or pollute the list.
+//
+// Pure + side-effect-free so it can be exercised by the logic harness, memoized
+// cheaply inside the hook, AND reused to order the 任务执行 drawer's task list
+// (the focus task naturally lands first).
+export function rankTasks(jobs, dialogueId) {
   const list = Array.isArray(jobs) ? jobs : []
   const scoped =
     dialogueId != null && dialogueId !== ''
       ? list.filter(j => j && j.dialogue_id === dialogueId)
       : list
-  // Restrict to statuses we know how to rank; drop unknown/garbage statuses so
-  // they never win the focus slot.
   const eligible = scoped.filter(j => isActive(j) || isTerminal(j))
-  if (eligible.length === 0) return null
   return eligible.slice().sort((a, b) => {
     const ta = statusTier(a)
     const tb = statusTier(b)
     if (ta !== tb) return ta - tb // ascending tier — most attention first
     return timeKey(b) - timeKey(a) // within tier, newest first
-  })[0]
+  })
+}
+
+// selectFocusTask picks the focus job for a dialogue from the full job list:
+// the first-ranked task (most-attention-first). Returns null when nothing is
+// eligible.
+export function selectFocusTask(jobs, dialogueId) {
+  return rankTasks(jobs, dialogueId)[0] || null
 }
 
 // focusTaskOverview returns the CROSS-SESSION overview slice (Constraint #10:

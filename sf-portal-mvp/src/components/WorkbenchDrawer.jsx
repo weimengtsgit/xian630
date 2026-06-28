@@ -14,11 +14,13 @@ import './WorkbenchDrawer.css'
 // center column's width never jitters when the drawer opens/closes.
 //
 // Phase 2 entries:
-//   - 'task'       (任务执行): renders the focus task's observability via
-//                   <JobCenter/> — vertical 执行波次 + agent cards, with the step
-//                   detail opening IN THE SAME drawer (embedded, no portal overlay).
-//                   When the dialogue has no focus task, JobCenter shows the
-//                   "当前会话暂无生成任务" empty state.
+//   - 'task'       (任务执行): renders the selected dialogue's generation tasks
+//                   via <JobCenter/> — a task list (ALL dialogue tasks, focus task
+//                   first) that drills into each task's vertical 执行波次 + agent
+//                   cards, with the step detail opening IN THE SAME drawer
+//                   (embedded, no portal overlay). When the dialogue has no
+//                   generation task, JobCenter shows the "当前会话暂无生成任务"
+//                   empty state.
 //   - 'agents'     (协作智能体): renders the existing AgentsPanel CONTENT (agents
 //                   list + create/delete/detail) by reusing AgentsPanel without its
 //                   hide button (no onHidePanel prop => the button stays hidden).
@@ -30,8 +32,9 @@ export function WorkbenchDrawer({
   agentsProps,
   focusTaskActive,
   // Phase 2: task-observability props threaded from App (useJobs + focusTask).
-  // `taskProps.activeJob` is the dialogue's focus task; the rest are the same
-  // accessors JobCenter needs (steps, summary, collaborationPlan, records/
+  // `taskProps.jobs` is the ranked dialogue task list (ALL tasks, focus first);
+  // `taskProps.activeJob` is the selected task (focus by default); the rest are
+  // the accessors JobCenter needs (steps, summary, collaborationPlan, records/
   // artifacts accessors, cancel/retry/repair-from-failure, snapshot save).
   taskProps,
 }) {

@@ -1055,3 +1055,99 @@
   border-radius: 0;
   background: transparent;
 }
+
+/* --- Task list (任务执行 drawer top level) ------------------------------
+ * The drawer lists ALL generation tasks for the selected dialogue (plan §Task
+ * Execution Drawer). Each row is a button; the focus task (index 0) carries a
+ * 焦点 badge. Selecting a row drills into that task's step detail.
+ */
+.jc-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jc-task-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.jc-task-count {
+  font-size: 11px;
+  color: #8fb0bf;
+}
+
+.jc-task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(143, 176, 191, 0.18);
+  background: rgba(143, 176, 191, 0.06);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.jc-task-card:hover {
+  border-color: rgba(104, 221, 255, 0.45);
+  background: rgba(104, 221, 255, 0.06);
+}
+
+.jc-task-card-selected {
+  border-color: rgba(104, 221, 255, 0.65);
+  background: rgba(104, 221, 255, 0.1);
+}
+
+.jc-task-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jc-task-focus {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #f3c761;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+
+.jc-task-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #edfaff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jc-task-card-meta {
+  font-size: 11px;
+  color: #8fb0bf;
+}
+
+/* Back button (task detail → task list). */
+.jc-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8fb0bf;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.jc-back:hover {
+  color: #68ddff;
+  background: rgba(104, 221, 255, 0.08);
+}
