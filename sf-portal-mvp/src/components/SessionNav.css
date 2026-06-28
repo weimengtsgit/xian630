@@ -314,8 +314,12 @@
   opacity: 0.6;
 }
 
-/* Collapsed rail: a narrow strip that still offers 新建会话 + expand. */
-.session-nav-collapsed {
+/* Collapsed rail: a narrow strip that still offers 新建会话 + expand.
+ * Scoped to `.session-nav` so this rule does NOT bleed onto `.workbench`,
+ * which also carries the `session-nav-collapsed` class when collapsed.
+ * Without the prefix it overrode the workbench grid's `align-items`/`padding`
+ * /`gap`, collapsing the center column to its content height. */
+.session-nav.session-nav-collapsed {
   align-items: center;
   padding: 10px 0;
   gap: 8px;
