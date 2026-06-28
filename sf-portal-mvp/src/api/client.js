@@ -192,6 +192,11 @@ export const factoryApi = {
   // Used on open + on a detected replay gap (sequence jump) to re-sync.
   getDialogueTrace: (id, afterSequence) =>
     request(`/api/dialogues/${id}/work-trace${afterSequence != null ? `?afterSequence=${afterSequence}` : ''}`),
+  // getDialogueTaskThinking is the REST hydration endpoint for a dialogue's
+  // task-thinking events, ascending by dialogueSequence, honoring afterSequence.
+  // Returns { events: [...] } or just the array defensively.
+  getDialogueTaskThinking: (id, afterSequence = 0) =>
+    request(`/api/dialogues/${id}/task-thinking?afterSequence=${encodeURIComponent(afterSequence)}`),
   // rollbackApp is the confirm-gated version rollback. The body MUST carry an
   // explicit confirm flag ({confirm: true}) — the backend rejects a rollback
   // without it (destructive, retain-prior-service-on-failure contract).
