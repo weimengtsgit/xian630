@@ -106,7 +106,14 @@ export const factoryApi = {
       body: JSON.stringify({ snapshot }),
     }),
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
-  answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
+  answerJob: (id, answer, scope = {}) => request(`/api/jobs/${id}/answer`, {
+    method: 'POST',
+    body: JSON.stringify({
+      answer,
+      ...(scope.stepId ? { stepId: scope.stepId } : {}),
+      ...(scope.attempt ? { attempt: scope.attempt } : {}),
+    }),
+  }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
   repairFromFailure: id => request(`/api/jobs/${id}/repair-from-failure`, { method: 'POST' }),
   // Execution observability (Task 4 backend contract):

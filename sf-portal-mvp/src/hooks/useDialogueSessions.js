@@ -114,6 +114,12 @@ export function useDialogueSessions() {
   // dialogue (Constraint #10 — switching history syncs the focus task). Driven
   // by the job list the App passes in via setJobsForFocus; null when no list.
   const [jobsForFocus, setJobsForFocus] = useState([])
+  // jobStepBlocks: the active task's task_execution_block descriptors (Phase 3),
+  // built by App from useJobs steps + summary. Fed into buildDialogueTimeline so
+  // the conversation flow shows a block per executing step. Updates only on a
+  // useJobs refresh (SSE step.updated), so it is low-frequency and safe to use
+  // as a timeline-rebuild dependency (unlike the high-frequency workTrace.items).
+  const [jobStepBlocks, setJobStepBlocks] = useState([])
   // pendingTurnRef mirrors pendingTurn so the SSE onEvent closure (which must
   // NOT re-subscribe the stream on every turn change) reads the latest value.
   const pendingTurnRef = useRef(null)
@@ -156,9 +162,9 @@ export function useDialogueSessions() {
     // rebuilding on every high-frequency assistant/tool trace token.
     if (!state.view && !optimisticUserMessage) return
     setState(prev => (prev.view === state.view
-      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items, pendingTurn) }
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items, pendingTurn, jobStepBlocks) }
       : prev))
-  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey, pendingTurn]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey, pendingTurn, jobStepBlocks]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -199,7 +205,7 @@ export function useDialogueSessions() {
         ...prev,
         selectedDialogueId: id,
         view,
-        timeline: buildDialogueTimeline(view, null, null, null, workTrace.items),
+        timeline: buildDialogueTimeline(view, null, null, null, workTrace.items, null, jobStepBlocks),
         questions: openQuestionsForView(view),
         requirement: view.child ? (view.child.requirement || null) : null,
         needsRefresh: null,
@@ -766,6 +772,7 @@ export function useDialogueSessions() {
     pendingTurn,
     focusTask,
     setJobsForFocus,
+    setJobStepBlocks,
     cancelTurn,
     rollback,
     confirmChange,

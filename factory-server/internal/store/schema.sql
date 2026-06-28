@@ -281,6 +281,7 @@ CREATE TABLE IF NOT EXISTS work_trace_events (
     version_id     TEXT    NOT NULL DEFAULT '',
     step_id        TEXT    NOT NULL DEFAULT '',
     attempt        INTEGER NOT NULL DEFAULT 0,
+    agent_key      TEXT    NOT NULL DEFAULT '',
     type           TEXT    NOT NULL,            -- allowlisted category, never thinking/raw body
     payload_json   TEXT    NOT NULL DEFAULT '', -- producer-summarized, capped + structurally redacted
     created_at     INTEGER NOT NULL,

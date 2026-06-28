@@ -17,6 +17,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
   buildDialogueTimeline,
+  buildTaskBlocks,
   initialDialogueState,
   applyDialogueEvent,
   lockedFromView,
@@ -215,7 +216,7 @@ const generationChoiceView = {
   messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '创建一个新的排班应用' }],
   route: {
     intent: 'application_generation', confidence: 'high', needsRouteConfirmation: true,
-    userFacingReason: '我会澄清需求并生成一个可运行的新智能体。', existingApplicationSlugs: [],
+    userFacingReason: '我会澄清需求并生成一个可运行的新应用。', existingApplicationSlugs: [],
   },
 }
 const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')
@@ -417,7 +418,7 @@ assert.equal(state.needsRefresh, 'dlg_1', 'wrapped clarification event must requ
 
 assert.equal(titleForDialogue(recommendingView.session), '我想看航母编队态势')
 assert.equal(statusText('routing'), '识别需求中')
-assert.equal(statusText('recommending'), '推荐智能体中')
+assert.equal(statusText('recommending'), '推荐应用中')
 assert.equal(statusText('drafting_application'), '需求澄清中')
 assert.equal(statusText('drafting_business_agent'), '配置 Agent 中')
 assert.equal(statusText('resolved'), '已完成')
@@ -499,8 +500,8 @@ assert.ok(
   'composer must be gated (disabled or suppressed) when locked',
 )
 
-// App recommendation cards: running => 打开智能体; stopped => 启动并打开.
-assert.match(workbenchJsx, /打开智能体/, 'running recommendation card must offer 打开智能体')
+// App recommendation cards: running => 打开应用; stopped => 启动并打开.
+assert.match(workbenchJsx, /打开应用/, 'running recommendation card must offer 打开应用')
 assert.match(workbenchJsx, /启动并打开/, 'stopped recommendation card must offer 启动并打开')
 
 // Route cards render when intent is ambiguous.
@@ -519,8 +520,8 @@ assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation
 assert.doesNotMatch(workbenchJsx, /onSelectRoute\('business_processing_agent'\)/, 'route choices must not expose business_processing_agent')
 assert.doesNotMatch(workbenchJsx, /配置业务 Agent/, 'route choices must not show 配置业务 Agent')
 assert.doesNotMatch(workbenchJsx, /创建一个业务处理 Agent/, 'route choices must not show 创建一个业务处理 Agent')
-assert.match(workbenchJsx, /复用已有智能体/, 'route choices must still offer existing-agent reuse')
-assert.match(workbenchJsx, /生成新智能体/, 'route choices must still offer agent generation')
+assert.match(workbenchJsx, /复用已有应用/, 'route choices must still offer existing-application reuse')
+assert.match(workbenchJsx, /生成新应用/, 'route choices must still offer application generation')
 assert.match(workbenchJsx, /canReuseExistingApplication/, 'route choices must hide reuse when no application is recommended')
 
 const genericReasonRule = routingSkill.match(/- `userFacingReason`[\s\S]*?- `needsRouteConfirmation`/)
@@ -659,5 +660,146 @@ assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry 
     'ConversationWorkbench must render live_thinking through ThinkingSummary',
   )
 }
+
+// ---- task execution blocks (Phase 3 §Conversation Task Blocks) ------------
+
+// buildTaskBlocks derives one descriptor per step of the active task: name from
+// the stage label, status + step-level summary from the StepExecutionSummary,
+// and a display-policy fold state (running/waiting/failed expand, terminal
+// folds). Ordered by step.seq.
+{
+  const steps = [
+    { id: 's1', job_id: 'j1', kind: 'code_generation', seq: 1, agent_key: 'coder', status: 'running', started_at: '2026-06-01T00:00:00Z' },
+    { id: 's2', job_id: 'j1', kind: 'deployment', seq: 2, agent_key: 'deploy', status: 'succeeded' },
+  ]
+  const summary = [
+    { step_id: 's1', latest_attempt: 1, latest_record: { content: '生成中…' } },
+  ]
+  const blocks = buildTaskBlocks(steps, summary)
+  assert.equal(blocks.length, 2, 'one task_execution_block per step')
+  assert.equal(blocks[0].type, 'task_execution_block')
+  assert.equal(blocks[0].stepId, 's1', 'ordered by seq — code_generation first')
+  assert.equal(blocks[0].name, '代码生成', 'name comes from the stage label')
+  assert.equal(blocks[0].summary, '生成中…', 'summary joined from latest_record.content')
+  assert.equal(blocks[0].folded, false, 'running step expands')
+  assert.equal(blocks[0].expanded, true, 'running step expands')
+  assert.equal(blocks[1].folded, true, 'succeeded step folds')
+  assert.equal(blocks[1].expanded, false, 'succeeded step folds')
+}
+
+// buildDialogueTimeline threads the blocks into the flow after the persisted
+// content, and reconstructs EACH step attempt's safe-execution process by
+// grouping ALL persisted work-trace rows by stepId+attempt (history replay), not
+// just the latest live step. The input blocks are hook state, so the builder must
+// clone/enrich them without mutating the original array or objects.
+{
+  const steps = [
+    { id: 's1', job_id: 'j1', kind: 'solution_design', seq: 1, agent_key: 'arch', status: 'succeeded', attempt: 1 },
+    { id: 's2', job_id: 'j1', kind: 'code_generation', seq: 2, agent_key: 'coder', status: 'running', attempt: 2 },
+  ]
+  const blocks = buildTaskBlocks(steps, [])
+  const before = JSON.stringify(blocks)
+  const workTrace = [
+    { type: 'step', jobId: 'j1', stepId: 's1', attempt: 1, sequence: 1, payload: { summary: '分析约束' } },
+    { type: 'step', jobId: 'j1', stepId: 's2', attempt: 1, sequence: 2, payload: { summary: '旧尝试生成组件' } },
+    { type: 'step', jobId: 'j1', stepId: 's2', attempt: 2, sequence: 3, payload: { summary: '生成组件' } },
+    { type: 'step', jobId: 'j1', stepId: 's1', attempt: 1, sequence: 4, payload: { message: '确认方案' } },
+  ]
+  const view = {
+    session: { id: 'dlg_t', status: 'task_running', intent: 'application_generation', route_locked: true },
+    messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '生成一个应用' }],
+    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
+  }
+  const liveAnalysis = { key: 'step:j1:s2', content: '生成组件', kind: 'step' }
+  const liveThinking = { key: 'thinking:t1', content: 'round thinking stays independent', kind: 'round' }
+  const timeline = buildDialogueTimeline(view, null, liveAnalysis, liveThinking, workTrace, null, blocks)
+  const block1 = timeline.find(it => it.type === 'task_execution_block' && it.stepId === 's1')
+  const block2 = timeline.find(it => it.type === 'task_execution_block' && it.stepId === 's2')
+  assert.ok(block1 && block2, 'timeline contains one task_execution_block per step')
+  assert.equal(block1.safeExecution, '分析约束\n确认方案', 'history replay reconstructs earlier step safeExecution from all rows')
+  assert.equal(block2.safeExecution, '生成组件', 'running step gets only the safeExecution for its current attempt')
+  assert.equal(JSON.stringify(blocks), before, 'buildDialogueTimeline must not mutate the input jobStepBlocks')
+  // No standalone live_analysis(kind:'step') duplicating the safeExecution already
+  // attached to the matching block.
+  const dupStepAnalysis = timeline.find(it => it.type === 'live_analysis' && it.kind === 'step')
+  assert.equal(dupStepAnalysis, undefined, 'absorbed step stream is NOT re-emitted as a standalone live_analysis')
+  // Task thinking is not step-attributed yet; it must remain in the independent
+  // live_thinking surface until Phase 4 adds task_thinking_events.
+  const thinking = timeline.find(it => it.type === 'live_thinking')
+  assert.ok(thinking, 'round-level live_thinking remains independent')
+  assert.equal('taskThinking' in block2, false, 'task blocks do not claim unreachable step-attributed thinking data')
+}
+
+// Task-internal clarification cards preserve provenance and are placed
+// immediately after their related task_execution_block. Waiting step => open;
+// non-waiting/stale step => answered/read-only folded.
+{
+  const waitingBlock = {
+    id: 'taskblock_j1_s_wait', type: 'task_execution_block', taskId: 'j1', jobId: 'j1', stepId: 's_wait', attempt: 2,
+    agentKey: 'designer', name: '方案设计', status: 'waiting_user', expanded: true, folded: false,
+  }
+  const doneBlock = {
+    id: 'taskblock_j1_s_done', type: 'task_execution_block', taskId: 'j1', jobId: 'j1', stepId: 's_done', attempt: 1,
+    agentKey: 'coder', name: '代码生成', status: 'succeeded', expanded: false, folded: true,
+  }
+  const view = {
+    session: { id: 'dlg_scope', status: 'task_running', intent: 'application_generation', route_locked: true },
+    messages: [
+      { id: 'ans_done', role: 'user', kind: 'task_clarification_answer', content: '最终选择历史方案', metadata_json: JSON.stringify({ taskId: 'j1', stepId: 's_done', attempt: 1, agentKey: 'coder' }) },
+    ],
+    route: {},
+  }
+  const timeline = buildDialogueTimeline(view, null, null, null, [
+    { type: 'clarification', sequence: 1, dialogueId: 'dlg_scope', id: 'cw1', taskId: 'j1', stepId: 's_wait', attempt: 2, agentKey: 'designer', payload: { questions: [{ id: 'q1', question: '选 A 还是 B？', options: [{ value: 'a', label: 'A' }] }] } },
+    { type: 'clarification', sequence: 2, dialogueId: 'dlg_scope', id: 'cw2', taskId: 'j1', stepId: 's_done', attempt: 1, agentKey: 'coder', payload: { questions: [{ id: 'q2', question: '历史问题？' }] } },
+  ], null, [waitingBlock, doneBlock])
+  const waitIdx = timeline.findIndex(it => it.type === 'task_execution_block' && it.stepId === 's_wait')
+  const waitClar = timeline[waitIdx + 1]
+  assert.equal(waitClar.type, 'clarification_prompt', 'open clarification must appear immediately after matching task block')
+  assert.equal(waitClar.taskId, 'j1')
+  assert.equal(waitClar.stepId, 's_wait')
+  assert.equal(waitClar.attempt, 2)
+  assert.equal(waitClar.agentKey, 'designer')
+  assert.equal(waitClar.stepName, '方案设计')
+  assert.equal(waitClar.status, 'open')
+  assert.equal(waitClar.expanded, true)
+  const doneIdx = timeline.findIndex(it => it.type === 'clarification_prompt' && it.stepId === 's_done')
+  const doneClar = timeline[doneIdx]
+  assert.equal(doneClar.status, 'answered', 'non-waiting step clarification is read-only/answered')
+  assert.equal(doneClar.folded, true)
+  assert.equal(doneClar.finalAnswer, '最终选择历史方案', 'answered clarification carries the final answer')
+  assert.equal(timeline[doneIdx + 1].id, 'ans_done', 'task clarification answer user_message renders immediately after its card')
+  assert.equal(timeline[0].id === 'ans_done', false, 'task clarification answer must not render above the task block as a generic parent message')
+}
+
+// Existing 1–2-arg callers stay green: no blocks ⇒ no task_execution_block items.
+{
+  const view = { session: { id: 'dlg_x', status: 'active', intent: 'application_generation' }, messages: [], route: { intent: 'application_generation', needsRouteConfirmation: false } }
+  const timeline = buildDialogueTimeline(view)
+  assert.equal(timeline.some(it => it.type === 'task_execution_block'), false, 'no jobStepBlocks arg ⇒ no task_execution_block items')
+}
+
+// Static: the workbench renders the new item type + component, the CSS exists,
+// App wires the builder, and the dialogue hook bridges the blocks.
+assert.match(workbenchJsx, /item\.type === 'task_execution_block'/, 'ConversationWorkbench must render the task_execution_block item type')
+assert.match(workbenchJsx, /TaskExecutionBlock/, 'ConversationWorkbench must have a TaskExecutionBlock component')
+assert.match(workbenchCss, /\.cw-task-block/, 'ConversationWorkbench.css must style .cw-task-block')
+assert.match(workbenchJsx, /const \[userExpandedOverride, setUserExpandedOverride\]/, 'TaskExecutionBlock must track explicit user fold overrides')
+assert.match(workbenchJsx, /const expanded = userExpandedOverride \?\? !!item\.expanded/, 'TaskExecutionBlock must follow builder default expansion after status changes until the user toggles')
+assert.match(appJsx, /buildTaskBlocks\(jobs\.steps, jobs\.summary\)/, 'App must build task blocks from useJobs steps+summary and feed them to the dialogue hook')
+assert.match(appJsx, /setJobStepBlocks/, 'App must bridge the task blocks into the dialogue hook via setJobStepBlocks')
+assert.match(dialogueHookJs, /setJobStepBlocks/, 'useDialogueSessions must expose setJobStepBlocks')
+assert.match(dialogueHookJs, /jobStepBlocks\)/, 'useDialogueSessions must pass jobStepBlocks into buildDialogueTimeline')
+assert.match(apiClientJs, /answerJob:\s*\(id, answer, scope = \{\}\)/, 'factoryApi.answerJob must accept optional clarification scope')
+assert.match(apiClientJs, /stepId:\s*scope\.stepId/, 'factoryApi.answerJob must send stepId when scope is provided')
+assert.match(appJsx, /selectedClarificationScope/, 'App must remember the clarification card the user selected')
+assert.match(appJsx, /activeClarification/, 'App must compute an open task clarification scope')
+assert.match(appJsx, /jobs\.answerJob\(activeClarification\.taskId/, 'App must route open clarification answers by taskId/stepId before generic send')
+assert.match(workbenchJsx, /onSelectClarificationScope/, 'ConversationWorkbench must report which clarification card the user picked')
+assert.match(workbenchJsx, /onFocusCapture=\{selectScope\}/, 'ClarificationPromptCard focus must select card scope for no-option manual replies')
+assert.match(workbenchJsx, /onMouseDown=\{selectScope\}/, 'ClarificationPromptCard click must select card scope for no-option manual replies')
+assert.match(workbenchJsx, /onPick\(scope, value\)/, 'ClarificationPromptCard option clicks must pass the card scope, not only the value')
+assert.match(workbenchJsx, /finalAnswer/, 'ClarificationPromptCard must render the final answer for answered cards')
+assert.match(workbenchJsx, /clarificationScope/, 'ConversationWorkbench must receive a clarificationScope for composer scoping')
 
 console.log('check-dialogue-workbench: OK')

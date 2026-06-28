@@ -4,12 +4,14 @@ import { LeftToolbar } from './components/LeftToolbar'
 import { SessionNav } from './components/SessionNav'
 import { ConversationWorkbench } from './components/ConversationWorkbench'
 import { WorkbenchDrawer } from './components/WorkbenchDrawer'
+import { ApplicationStorePage } from './components/ApplicationStorePage'
 import { useApplications } from './hooks/useApplications'
 import { useManagedAgents } from './hooks/useManagedAgents'
 import { useAgents } from './hooks/useAgents'
 import { useJobs } from './hooks/useJobs'
 import { useDialogueSessions } from './hooks/useDialogueSessions'
 import { rankTasks } from './hooks/focusTask'
+import { buildTaskBlocks } from './hooks/dialogueTimeline'
 import { factoryApi } from './api/client'
 import './App.css'
 
@@ -34,6 +36,7 @@ function App() {
   // right drawer is an overlay opened by the 3 workbench header buttons.
   const [sessionNavCollapsed, setSessionNavCollapsed] = useState(false)
   const [drawerEntry, setDrawerEntry] = useState(null)
+  const [currentPage, setCurrentPage] = useState('workbench')
   const workbenchClass = [
     'workbench',
     sessionNavCollapsed ? 'session-nav-collapsed' : '',
@@ -46,6 +49,14 @@ function App() {
   useEffect(() => {
     dialogue.setJobsForFocus(jobs.jobs)
   }, [jobs.jobs, dialogue.setJobsForFocus])
+
+  // Feed the active task's step/summary state into the dialogue hook so the
+  // conversation timeline can render a task_execution_block per executing step
+  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
+  // low-frequency change (useJobs refresh on SSE step.updated).
+  useEffect(() => {
+    dialogue.setJobStepBlocks(buildTaskBlocks(jobs.steps, jobs.summary))
+  }, [jobs.steps, jobs.summary, dialogue.setJobStepBlocks])
 
   // The 任务执行 drawer shows ALL generation tasks for the selected dialogue,
   // defaulting to the focus task (plan §Task Execution Drawer). The drawer's
@@ -60,6 +71,25 @@ function App() {
   const effectiveTaskId = selectedTaskId || (dialogue.focusTask && dialogue.focusTask.id) || null
   const activeJob =
     dialogueJobs.find(j => j.id === effectiveTaskId) || dialogue.focusTask || null
+  const [selectedClarificationScope, setSelectedClarificationScope] = useState(null)
+  const openClarifications = useMemo(() => {
+    const items = Array.isArray(dialogue.timeline) ? dialogue.timeline : []
+    return items.filter(item =>
+      item && item.type === 'clarification_prompt' && item.status === 'open' && item.taskId && item.stepId,
+    )
+  }, [dialogue.timeline])
+  const activeClarification = useMemo(() => {
+    if (selectedClarificationScope) {
+      const selected = openClarifications.find(item =>
+        item.taskId === selectedClarificationScope.taskId &&
+        item.stepId === selectedClarificationScope.stepId &&
+        Number(item.attempt || 0) === Number(selectedClarificationScope.attempt || 0),
+      )
+      if (selected) return selected
+    }
+    return openClarifications[0] || null
+  }, [openClarifications, selectedClarificationScope])
+  const onSelectClarificationScope = useCallback(scope => setSelectedClarificationScope(scope || null), [])
   const onSelectTask = useCallback(id => setSelectedTaskId(id || null), [])
 
   // A session switch is also a task-context switch. Re-follow the new dialogue's
@@ -67,6 +97,7 @@ function App() {
   // hydrate its details.
   useEffect(() => {
     setSelectedTaskId(null)
+    setSelectedClarificationScope(null)
   }, [dialogue.selectedDialogueId])
 
   // If the manually-selected task leaves the dialogue's job list (deleted, or
@@ -77,6 +108,19 @@ function App() {
       setSelectedTaskId(null)
     }
   }, [selectedTaskId, dialogueJobs])
+
+  // If the user had clicked a specific clarification card and that card is no
+  // longer open (answered/stale after SSE refresh), fall back to the first open
+  // clarification. This prevents a later send from routing to a stale step.
+  useEffect(() => {
+    if (!selectedClarificationScope) return
+    const stillOpen = openClarifications.some(item =>
+      item.taskId === selectedClarificationScope.taskId &&
+      item.stepId === selectedClarificationScope.stepId &&
+      Number(item.attempt || 0) === Number(selectedClarificationScope.attempt || 0),
+    )
+    if (!stillOpen) setSelectedClarificationScope(null)
+  }, [selectedClarificationScope, openClarifications])
 
   // Hydrate details for the effective task (focus by default, or the user's
   // manual selection). Never retain the previous session's global job.
@@ -90,9 +134,14 @@ function App() {
   // via job.created SSE to useJobs). Do NOT call jobs.createJob here.
   const regenerateApplication = app => {
     const name = app.name || app.slug || app.id
-    dialogue
+    return dialogue
       .send(`基于已有应用「${name}」重新生成一个更完整的版本，保留原有主题和运行形态，并改进页面效果与交互。`)
       .catch(() => {})
+  }
+
+  const regenerateApplicationFromStore = app => {
+    setCurrentPage('workbench')
+    return regenerateApplication(app)
   }
 
   // Drawer entry toggle: clicking the active entry closes the drawer; clicking a
@@ -112,106 +161,129 @@ function App() {
   // re-deriving the data plumbing. The left ApplicationsPanel is unmounted in
   // Phase 1 (its list moves to a separate page later) — the hook is retained so
   // a subsequent page can reuse it.
-  void apps
   void managedAgents
-  void regenerateApplication
 
   return (
     <main className="portal-shell">
       <TopBar />
-      <LeftToolbar />
-      <div className={workbenchClass}>
-        <div className="wb-col wb-left">
-          <SessionNav
-            sessions={dialogue.sessions}
-            selectedId={dialogue.session && dialogue.session.id}
-            collapsed={sessionNavCollapsed}
-            onToggleCollapse={() => setSessionNavCollapsed(v => !v)}
-            onNewSession={dialogue.newDialogue}
-            onSelect={dialogue.selectDialogue}
-            onDeleteSession={dialogue.deleteDialogue}
-            deletingDialogueId={dialogue.deletingDialogueId}
-          />
-        </div>
+      <LeftToolbar activePage={currentPage} onNavigate={setCurrentPage} />
+      {currentPage === 'workbench' ? (
+        <div className={workbenchClass}>
+          <div className="wb-col wb-left">
+            <SessionNav
+              sessions={dialogue.sessions}
+              selectedId={dialogue.session && dialogue.session.id}
+              collapsed={sessionNavCollapsed}
+              onToggleCollapse={() => setSessionNavCollapsed(v => !v)}
+              onNewSession={dialogue.newDialogue}
+              onSelect={dialogue.selectDialogue}
+              onDeleteSession={dialogue.deleteDialogue}
+              deletingDialogueId={dialogue.deletingDialogueId}
+            />
+          </div>
 
-        <div className="wb-col wb-center">
-          <ConversationWorkbench
-            session={dialogue.session}
-            view={dialogue.view}
-            timeline={dialogue.timeline}
-            questions={dialogue.questions}
-            locked={dialogue.locked}
-            error={dialogue.error || jobs.error}
-            submitting={dialogue.submitting}
-            workTrace={dialogue.workTrace}
-            pendingTurn={dialogue.pendingTurn}
-            focusTask={dialogue.focusTask}
-            traceSteps={jobs.steps}
-            drawerEntry={drawerEntry}
-            onToggleDrawerEntry={toggleDrawerEntry}
-            hasBoundApplication={hasBoundApplication}
-            onSend={prompt => {
-              if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
-                return jobs.answerJob(dialogue.focusTask.id, prompt)
-              }
-              return dialogue.send(prompt)
+          <div className="wb-col wb-center">
+            <ConversationWorkbench
+              session={dialogue.session}
+              view={dialogue.view}
+              timeline={dialogue.timeline}
+              questions={dialogue.questions}
+              locked={dialogue.locked}
+              error={dialogue.error || jobs.error}
+              submitting={dialogue.submitting}
+              workTrace={dialogue.workTrace}
+              pendingTurn={dialogue.pendingTurn}
+              focusTask={dialogue.focusTask}
+              clarificationScope={activeClarification}
+              onSelectClarificationScope={onSelectClarificationScope}
+              traceSteps={jobs.steps}
+              drawerEntry={drawerEntry}
+              onToggleDrawerEntry={toggleDrawerEntry}
+              hasBoundApplication={hasBoundApplication}
+              onSend={prompt => {
+                if (activeClarification) {
+                  return jobs.answerJob(activeClarification.taskId, prompt, {
+                    stepId: activeClarification.stepId,
+                    attempt: activeClarification.attempt,
+                  })
+                }
+                if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
+                  return jobs.answerJob(dialogue.focusTask.id, prompt)
+                }
+                return dialogue.send(prompt)
+              }}
+              onSelectRoute={dialogue.selectRoute}
+              onOpenApp={dialogue.openApp}
+              onAnswerBatch={dialogue.answerBatch}
+              onAcceptConsolidation={dialogue.acceptConsolidation}
+              onConfirm={dialogue.confirm}
+              onRetry={dialogue.retry}
+              onAbandon={dialogue.abandon}
+              onCancelTurn={dialogue.cancelTurn}
+              onConfirmChange={dialogue.confirmChange}
+              onRollback={dialogue.rollback}
+              onArchive={dialogue.archive}
+              onOpenApplicationStore={() => setCurrentPage('appStore')}
+            />
+          </div>
+
+          <WorkbenchDrawer
+            activeEntry={drawerEntry}
+            onClose={() => setDrawerEntry(null)}
+            focusTaskActive={!!dialogue.focusTask}
+            agentsProps={{
+              agents: agents.agents,
+              loading: agents.loading,
+              error: agents.error,
+              onCreateAgent: agents.createAgent,
+              onDeleteAgent: agents.deleteAgent,
+              deletingAgentId: agents.deletingAgentId,
             }}
-            onSelectRoute={dialogue.selectRoute}
-            onOpenApp={dialogue.openApp}
-            onAnswerBatch={dialogue.answerBatch}
-            onAcceptConsolidation={dialogue.acceptConsolidation}
-            onConfirm={dialogue.confirm}
-            onRetry={dialogue.retry}
-            onAbandon={dialogue.abandon}
-            onCancelTurn={dialogue.cancelTurn}
-            onConfirmChange={dialogue.confirmChange}
-            onRollback={dialogue.rollback}
-            onArchive={dialogue.archive}
+            // Phase 2: thread the dialogue's generation tasks into the 任务执行
+            // drawer. `jobs` is the ranked task list (all tasks for this dialogue,
+            // focus task first); `activeJob` is the currently-selected task (focus
+            // by default, or the user's manual selection); the rest are the same
+            // useJobs accessors JobCenter needs. Records/artifacts accessors +
+            // cancel/retry/repair-from-failure + snapshot save are wired here so
+            // the embedded detail reuses the existing logic with no re-derivation.
+            taskProps={{
+              activeJob,
+              jobs: dialogueJobs,
+              onSelectTask,
+              steps: jobs.steps,
+              summary: jobs.summary,
+              collaborationPlan: jobs.collaborationPlan,
+              artifacts: jobs.artifacts,
+              getArtifactContent: factoryApiGetArtifactContent,
+              selectedStepId: jobs.selectedStepId,
+              selectedAttempt: jobs.selectedAttempt,
+              selectStepAttempt: jobs.selectStepAttempt,
+              getRecords: jobs.getRecords,
+              getUnreadCount: jobs.getUnreadCount,
+              loadStepRecords: jobs.loadStepRecords,
+              onCancel: jobs.cancelJob,
+              onRetry: jobs.retryCurrentStep,
+              onRepairFromFailure: jobs.repairFromFailure,
+              onSaveSnapshot: jobs.saveStepSnapshot,
+              loading: jobs.loading,
+            }}
           />
         </div>
-
-        <WorkbenchDrawer
-          activeEntry={drawerEntry}
-          onClose={() => setDrawerEntry(null)}
-          focusTaskActive={!!dialogue.focusTask}
-          agentsProps={{
-            agents: agents.agents,
-            loading: agents.loading,
-            error: agents.error,
-            onCreateAgent: agents.createAgent,
-            onDeleteAgent: agents.deleteAgent,
-            deletingAgentId: agents.deletingAgentId,
-          }}
-          // Phase 2: thread the dialogue's generation tasks into the 任务执行
-          // drawer. `jobs` is the ranked task list (all tasks for this dialogue,
-          // focus task first); `activeJob` is the currently-selected task (focus
-          // by default, or the user's manual selection); the rest are the same
-          // useJobs accessors JobCenter needs. Records/artifacts accessors +
-          // cancel/retry/repair-from-failure + snapshot save are wired here so
-          // the embedded detail reuses the existing logic with no re-derivation.
-          taskProps={{
-            activeJob,
-            jobs: dialogueJobs,
-            onSelectTask,
-            steps: jobs.steps,
-            summary: jobs.summary,
-            collaborationPlan: jobs.collaborationPlan,
-            artifacts: jobs.artifacts,
-            getArtifactContent: factoryApiGetArtifactContent,
-            selectedStepId: jobs.selectedStepId,
-            selectedAttempt: jobs.selectedAttempt,
-            selectStepAttempt: jobs.selectStepAttempt,
-            getRecords: jobs.getRecords,
-            getUnreadCount: jobs.getUnreadCount,
-            loadStepRecords: jobs.loadStepRecords,
-            onCancel: jobs.cancelJob,
-            onRetry: jobs.retryCurrentStep,
-            onRepairFromFailure: jobs.repairFromFailure,
-            onSaveSnapshot: jobs.saveStepSnapshot,
-            loading: jobs.loading,
-          }}
+      ) : null}
+      {currentPage === 'appStore' ? (
+        <ApplicationStorePage
+          apps={apps.apps}
+          loading={apps.loading}
+          error={apps.error}
+          actionById={apps.actionById}
+          refresh={apps.refresh}
+          startApplication={apps.startApplication}
+          stopApplication={apps.stopApplication}
+          restartApplication={apps.restartApplication}
+          deleteApplication={apps.deleteApplication}
+          onRegenerate={regenerateApplicationFromStore}
         />
-      </div>
+      ) : null}
     </main>
   )
 }

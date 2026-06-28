@@ -97,8 +97,36 @@ A user-requested change to an application already linked to the dialogue session
 _Avoid_: 新建重复应用, 覆盖历史版本, 独立会话
 
 **应用**:
-A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. 协作智能体 appears only as Factory-owned generation collaborators, so it does not collide with the user-facing 智能体 label.
-_Avoid_: 任务, 会话, 模板
+A runnable software product shown in the portal application catalog, either imported from preset manifests, connected as an externally managed application, or produced by a completed generation task. Its user-facing surface label is **应用**; generated assistant-like products are applications, while 协作智能体 and 纳管智能体 remain agent concepts.
+_Avoid_: 任务, 会话, 模板, 业务智能体, 生成智能体
+
+**应用商店**:
+The portal's global application catalog page for browsing, filtering, opening, and managing available applications outside any single dialogue session. It is an in-portal page switch that reuses portal application data and actions, including generated applications and scene-catalog entries assigned to the application surface; selecting an application opens an in-page detail view where operational actions live.
+_Avoid_: 会话导航栏, 业务智能体列表, 工作台抽屉, 独立静态页, iframe, 卡片直接跳转
+
+**应用商店入口**:
+A global navigation affordance that switches the portal to the application store page. The primary entry lives in the portal's global toolbar, and the conversation workbench may expose a secondary button that performs the same page switch.
+_Avoid_: 会话列表项, 工作台抽屉项, 应用项目入口
+
+**应用类型标签**:
+The user-facing Chinese category label derived from an application's internal type value and used for application-store filtering and display.
+_Avoid_: 英文 type 原值, 前端硬编码新分类, 参考项目分类复制
+
+**应用商店排序**:
+The application-store display order that places generated applications first by newest creation time, then preset application-surface entries by their scene-catalog order, with stable name or slug ordering as a fallback.
+_Avoid_: 随机排序, 纯创建时间排序, 忽略场景目录 order
+
+**应用操作**:
+The lifecycle actions exposed from an application detail view, including open, start, stop, rebuild image, refresh status, and generated-application-only regeneration or deletion.
+_Avoid_: 预置应用删除, 生成智能体删除, 卡片外跳即操作
+
+**纳管智能体**:
+An externally managed agent entry that the portal can catalog and open, but that is not produced as a software-factory application and is not a collaboration agent in a generation task.
+_Avoid_: 应用, 协作智能体, 业务智能体
+
+**纳管智能体页面**:
+A future global catalog page for browsing and opening managed agents, modeled after the application store but kept separate from the application catalog.
+_Avoid_: 应用商店分类, 会话导航栏, 协作智能体抽屉
 
 **应用项目**:
 The project workspace for the application bound to the current dialogue session, containing generated requirements, plans, design documents, source code, configuration, tests, and related project files.
@@ -377,8 +405,8 @@ The structured output of the design agent that code generation consumes as a UI 
 _Avoid_: 灵感稿, 最终代码, 非结构化设计说明
 
 **业务处理智能体**:
-A user-confirmed definition of a business-handling role, containing a name, description, and prompt. In this phase it is cataloged and displayed but not directly executed.
-_Avoid_: 协作智能体, 已运行任务, 生成应用
+A dormant future concept for a user-confirmed business-handling role definition. It is not the current user-facing product produced by the software factory; requests to create an intelligent business tool are treated as application generation.
+_Avoid_: 协作智能体, 已运行任务, 生成应用, 业务智能体
 
 **业务处理智能体建议**:
 A dormant future route that would recommend creating a business-processing agent and ask for the user's confirmation. It is not exposed as a current user-visible dialogue outcome while intelligent-agent requests are routed to assistant-application generation.

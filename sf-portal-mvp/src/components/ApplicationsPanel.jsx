@@ -116,25 +116,25 @@ export function ApplicationsPanel({
       <div className="panel-header">
         <div className="panel-header-main">
           {showManagedTab ? (
-            <div className="panel-tabs" role="tablist" aria-label="智能体分类">
+            <div className="panel-tabs" role="tablist" aria-label="应用分类">
               <button type="button" className={activeTab === 'business' ? 'active' : ''} onClick={() => setActiveTab('business')}>
-                业务智能体
+                应用
               </button>
               <button type="button" className={activeTab === 'managed' ? 'active' : ''} onClick={() => setActiveTab('managed')}>
                 纳管智能体
               </button>
             </div>
           ) : (
-            <h2>业务智能体</h2>
+            <h2>应用</h2>
           )}
         </div>
         <div className="panel-actions">
-          <span className="panel-count">{activeCount} 个智能体</span>
+          <span className="panel-count">{activeCount} 个应用</span>
           <button type="button" className="panel-action-btn panel-refresh-btn" title="刷新" aria-label="刷新" onClick={refreshActive}>
             <RefreshCw size={14} />
           </button>
           {onHidePanel ? (
-            <button type="button" className="panel-action-btn panel-hide-btn" title="隐藏左侧智能体" aria-label="隐藏左侧智能体" onClick={onHidePanel}>
+            <button type="button" className="panel-action-btn panel-hide-btn" title="隐藏左侧应用" aria-label="隐藏左侧应用" onClick={onHidePanel}>
               <ChevronLeft size={14} />
             </button>
           ) : null}
@@ -150,7 +150,7 @@ export function ApplicationsPanel({
           <ManagedAgentList agents={managedList} />
         ) : list.length === 0 ? (
           <div className="panel-loading">
-            {error ? '无法连接到工厂服务' : '暂无智能体'}
+            {error ? '无法连接到工厂服务' : '暂无应用'}
           </div>
         ) : (
           <div className="applications-list">
@@ -234,7 +234,7 @@ function ApplicationCard({ app, action, onStart, onStop, onRebuild, onRegenerate
           </button>
         )}
         {isGenerated(app) && (
-          <button type="button" className="card-btn ghost-btn" onClick={() => onRegenerate && onRegenerate(app)} title="基于该智能体重新生成" disabled={busy}>
+          <button type="button" className="card-btn ghost-btn" onClick={() => onRegenerate && onRegenerate(app)} title="基于该应用重新生成" disabled={busy}>
             {action === 'regenerate' ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
             {action === 'regenerate' ? ACTION_TEXT[action] : '重新生成'}
           </button>
@@ -244,11 +244,11 @@ function ApplicationCard({ app, action, onStart, onStop, onRebuild, onRegenerate
             type="button"
             className="card-btn danger-btn"
             onClick={() => {
-              if (window.confirm(`确认删除生成智能体「${app.name || app.slug}」？本地生成目录会被删除，生成审计记录会保留。`)) {
+              if (window.confirm(`确认删除生成应用「${app.name || app.slug}」？本地生成目录会被删除，生成审计记录会保留。`)) {
                 onDelete && onDelete(app.id)
               }
             }}
-            title="删除生成智能体"
+            title="删除生成应用"
             disabled={busy}
           >
             {action === 'delete' ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}

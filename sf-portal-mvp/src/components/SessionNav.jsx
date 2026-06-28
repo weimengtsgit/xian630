@@ -200,7 +200,7 @@ function summaryForEntry(entry) {
 function resultForEntry(entry) {
   if (!entry) return ''
   const sess = entry.session || {}
-  if (entry.resolvedApplication) return entry.resolvedApplication.name || '智能体已就绪'
+  if (entry.resolvedApplication) return entry.resolvedApplication.name || '应用已就绪'
   if (entry.createdAgent) return entry.createdAgent.name || 'Agent 已创建'
   if (entry.seededJob) return entry.seededJob.app_name ? `生成任务：${entry.seededJob.app_name}` : '生成任务已创建'
   if (sess.status === 'resolved') return '已完成'

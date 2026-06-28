@@ -73,6 +73,26 @@
   opacity: 0.45;
 }
 
+.cw-store-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid rgba(126, 231, 135, 0.42);
+  border-radius: 6px;
+  background: rgba(20, 64, 50, 0.42);
+  color: #bff6c4;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cw-store-btn:hover {
+  border-color: rgba(126, 231, 135, 0.72);
+  background: rgba(20, 64, 50, 0.62);
+  color: #edfaff;
+}
+
 .cw-drawer-btn-label {
   white-space: nowrap;
 }
@@ -113,11 +133,39 @@
 .cw-fold-toggle .cw-item-label { margin-bottom: 0; }
 .cw-fold-hint { color: rgba(104, 221, 255, 0.7); font-size: 11px; }
 .cw-folded-text { margin: 0 10px 10px; padding-top: 6px; border-top: 1px solid rgba(111, 218, 255, 0.14); white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; color: rgba(215, 238, 248, 0.78); }
+
+/* --- Task execution block (Phase 3) ------------------------------------- */
+.cw-task-block { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; background: rgba(11, 29, 44, 0.55); overflow: hidden; }
+.cw-task-toggle { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: transparent; border: none; cursor: pointer; color: inherit; font: inherit; text-align: left; }
+.cw-task-name { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: #edfaff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-task-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+.cw-task-badge-running { color: #68ddff; background: rgba(104, 221, 255, 0.12); }
+.cw-task-badge-waiting_user { color: #f3c761; background: rgba(243, 199, 97, 0.14); }
+.cw-task-badge-failed { color: #ff665e; background: rgba(255, 102, 94, 0.14); }
+.cw-task-badge-succeeded, .cw-task-badge-completed { color: #7feb9b; background: rgba(127, 235, 155, 0.14); }
+.cw-task-badge-canceled, .cw-task-badge-cancelled, .cw-task-badge-skipped, .cw-task-badge-pending { color: #8fb0bf; background: rgba(143, 176, 191, 0.12); }
+.cw-task-summary-row { margin: 0; padding: 0 10px 8px; font-size: 12px; line-height: 1.5; color: rgba(215, 238, 248, 0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-task-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+.cw-task-section { border-top: 1px solid rgba(111, 218, 255, 0.14); padding-top: 6px; }
+.cw-task-section h5 { margin: 0 0 4px; font-size: 11px; color: #68ddff; font-weight: 600; }
+.cw-task-section .cw-live-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; color: rgba(215, 238, 248, 0.82); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.cw-task-error h5 { color: #ff665e; }
+.cw-task-error .cw-live-text { color: rgba(255, 180, 176, 0.9); }
+.cw-task-status-running { border-color: rgba(104, 221, 255, 0.45); }
+.cw-task-status-failed { border-color: rgba(255, 102, 94, 0.45); }
+.cw-task-status-waiting_user { border-color: rgba(243, 199, 97, 0.45); }
 .cw-system { align-self: center; color: rgba(215, 238, 248, 0.55); font-size: 11px; }
 .cw-question-group, .cw-summary, .cw-apps, .cw-business, .cw-consolidation, .cw-route-choice { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; padding: 10px; background: rgba(11, 29, 44, 0.55); }
 .cw-question { display: flex; flex-direction: column; gap: 8px; }
 .cw-clarification { border: 1px solid rgba(255, 196, 87, 0.45); border-radius: 8px; padding: 12px; background: rgba(45, 34, 12, 0.55); box-shadow: 0 0 0 1px rgba(255, 196, 87, 0.12); }
+.cw-clarification-answered { border-color: rgba(143, 176, 191, 0.28); background: rgba(25, 39, 51, 0.5); box-shadow: none; }
 .cw-clarification .cw-item-label { color: #ffc457; }
+.cw-clarification-answered .cw-item-label { color: rgba(215, 238, 248, 0.72); }
+.cw-clarification-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0; margin: 0; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.cw-clarification-attribution { display: block; margin-top: 4px; color: rgba(215, 238, 248, 0.58); font-size: 11px; }
+.cw-clarification-final-answer { margin-top: 10px; padding: 8px; border-radius: 6px; border: 1px solid rgba(127, 235, 155, 0.28); background: rgba(20, 64, 50, 0.28); }
+.cw-clarification-final-answer strong { display: block; margin-bottom: 4px; color: #7feb9b; font-size: 11px; }
+.cw-clarification-final-answer p { margin: 0; color: #dff7e5; font-size: 12px; line-height: 1.5; }
 .cw-clarification-q { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
 .cw-clarification-q + .cw-clarification-q { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 196, 87, 0.18); }
 .cw-clarification-text { margin: 0; color: #f3ead2; font-size: 13px; line-height: 1.5; }
@@ -181,6 +229,7 @@
 .cw-resolved { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; background: rgba(20, 64, 50, 0.62) !important; border: 1px solid rgba(126, 231, 135, 0.42); color: #bff6c4; }
 .cw-answer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid rgba(111, 218, 255, 0.14); font-size: 12px; }
 .cw-error { padding: 6px 12px; color: #ff9a9a; background: rgba(255, 102, 94, 0.08); font-size: 12px; }
+.cw-composer-scope { align-self: stretch; flex-basis: 100%; color: #ffc457; font-size: 11px; line-height: 1.4; padding: 4px 8px; border: 1px solid rgba(255, 196, 87, 0.24); border-radius: 6px; background: rgba(45, 34, 12, 0.42); }
 .cw-composer textarea { flex: 1; min-height: 76px; max-height: 220px; resize: none; line-height: 1.5; font-size: 13px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.24); background: rgba(3, 17, 29, 0.8); color: #edfaff; padding: 8px; font-family: inherit; overflow-y: auto; }
 .cw-send { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; }
 /* Phase 1: the .cw-history* and .cw-delete-confirm* rules that styled the old

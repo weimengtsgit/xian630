@@ -119,8 +119,9 @@ type stepEmitter struct {
 	store    recordAppender
 	onRecord func(context.Context, runner.ExecutionRecordUpdate)
 
-	jobID  string
-	stepID string
+	jobID    string
+	stepID   string
+	agentKey string
 
 	// Trace-attribution context: the dialogue the job belongs to (the gate's
 	// sequence-partition key) + the task id (job id) + attempt, stamped onto
@@ -141,12 +142,17 @@ type stepEmitter struct {
 // before the runner runs), so records are tagged with the same attempt the
 // job_steps row carries. dialogueID is the job's dialogue link (the trace
 // sequence-partition key); empty for legacy jobs.
-func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int) *stepEmitter {
+func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int, agentKey ...string) *stepEmitter {
+	key := ""
+	if len(agentKey) > 0 {
+		key = agentKey[0]
+	}
 	return &stepEmitter{
 		store:      e.store,
 		onRecord:   e.OnRecord,
 		jobID:      jobID,
 		stepID:     stepID,
+		agentKey:   key,
 		dialogueID: dialogueID,
 		attempt:    attempt,
 		onTrace:    e.OnTrace,
@@ -247,6 +253,7 @@ func (s *stepEmitter) Trace(ctx context.Context, traceType, payload string) erro
 		TaskID:      s.jobID,
 		StepID:      s.stepID,
 		Attempt:     s.attempt,
+		AgentKey:    s.agentKey,
 		Type:        traceType,
 		PayloadJSON: payload,
 	}
@@ -443,7 +450,7 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	// persistence; the runner only forwards safe records through it. System
 	// lifecycle records are emitted through the same emitter so they interleave
 	// with activity records by sequence.
-	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt)
+	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt, currentStep.AgentKey)
 	emitter.emit(runCtx, model.ExecutionRecordSystem, systemRecordStarted)
 
 	res, runErr := e.runner.Run(runCtx, *current, currentStep, emitter)
@@ -712,7 +719,7 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	// shows the retry decision inline. Best-effort: a failure here does not block
 	// the retry (the job is already re-queued).
 	if step != nil {
-		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt)
+		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt, step.AgentKey)
 		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
 	}
 	updated, err := e.store.GetJob(ctx, jobID)
@@ -790,7 +797,7 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 		return model.Job{}, fmt.Errorf("requeue job: %w", err)
 	}
 
-	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt)
+	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
 	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStep.ID, failedStep.Attempt); err == nil {
 		emitter.nextSeq = maxSeq + 1
 	}
@@ -901,7 +908,7 @@ func (e *Executor) maybeAutoRepair(ctx context.Context, jobID, failedStepID stri
 	}
 
 	// Emit a system record on the failed step's attempt documenting the repair.
-	emitter := e.newStepEmitter(jobID, failedStepID, job.DialogueID, failedStep.Attempt)
+	emitter := e.newStepEmitter(jobID, failedStepID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
 	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStepID, failedStep.Attempt); err == nil {
 		emitter.nextSeq = maxSeq + 1
 	}

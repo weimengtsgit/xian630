@@ -703,6 +703,104 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	}
 }
 
+func TestAnswerJobRoutesToProvidedWaitingStep(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	create := createJobViaAPI(t, r, "p")
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", create.Code)
+	}
+	var job model.Job
+	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil || len(steps) < 2 {
+		t.Fatalf("ListJobSteps len=%d err=%v", len(steps), err)
+	}
+	target := steps[1]
+	if err := st.MarkStepWaitingUser(context.Background(), target.ID, `{"questions":[{"id":"q"}]}`); err != nil {
+		t.Fatalf("mark target waiting: %v", err)
+	}
+	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/answer", map[string]any{
+		"answer": "选择 B", "stepId": target.ID, "attempt": target.Attempt,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	updatedJob, err := st.GetJob(context.Background(), job.ID)
+	if err != nil || updatedJob == nil {
+		t.Fatalf("GetJob updated: %#v %v", updatedJob, err)
+	}
+	if updatedJob.CurrentStepKind != target.Kind {
+		t.Fatalf("CurrentStepKind = %s, want target kind %s", updatedJob.CurrentStepKind, target.Kind)
+	}
+	updatedSteps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps updated: %v", err)
+	}
+	for _, step := range updatedSteps {
+		if step.ID == target.ID {
+			if step.Status != model.StepStatusPending || step.NeedsUserInput {
+				t.Fatalf("target step after answer = %#v, want pending without needs_user_input", step)
+			}
+			if step.UserPrompt != "选择 B" {
+				t.Fatalf("target UserPrompt = %q", step.UserPrompt)
+			}
+		} else if step.UserPrompt == "选择 B" {
+			t.Fatalf("answer leaked to unrelated step %#v", step)
+		}
+	}
+}
+
+func TestAnswerJobRejectsStaleStepAttempt(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	create := createJobViaAPI(t, r, "p")
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", create.Code)
+	}
+	var job model.Job
+	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	steps, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil || len(steps) == 0 {
+		t.Fatalf("ListJobSteps len=%d err=%v", len(steps), err)
+	}
+	target := steps[0]
+	if err := st.IncrementStepAttempt(context.Background(), target.ID); err != nil {
+		t.Fatalf("increment attempt: %v", err)
+	}
+	if err := st.IncrementStepAttempt(context.Background(), target.ID); err != nil {
+		t.Fatalf("increment attempt again: %v", err)
+	}
+	steps, _ = st.ListJobSteps(context.Background(), job.ID)
+	target = steps[0]
+	if err := st.MarkStepWaitingUser(context.Background(), target.ID, `{"questions":[{"id":"q"}]}`); err != nil {
+		t.Fatalf("mark target waiting: %v", err)
+	}
+	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/answer", map[string]any{
+		"answer": "stale", "stepId": target.ID, "attempt": target.Attempt - 1,
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("answer status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := st.ListJobSteps(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListJobSteps updated: %v", err)
+	}
+	if updated[0].Status != model.StepStatusWaitingUser || updated[0].UserPrompt != "" {
+		t.Fatalf("stale answer mutated step: %#v", updated[0])
+	}
+}
+
 // TestListJobsStatusFilter verifies the optional status filter narrows results.
 func TestListJobsStatusFilter(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})

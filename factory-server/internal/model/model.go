@@ -599,6 +599,7 @@ type WorkTraceEvent struct {
 	VersionID     string    `json:"version_id,omitempty"`
 	StepID        string    `json:"step_id,omitempty"`
 	Attempt       int       `json:"attempt,omitempty"`
+	AgentKey      string    `json:"agent_key,omitempty"`
 	Type          string    `json:"type"`
 	PayloadJSON   string    `json:"payload_json"`
 	CreatedAt     time.Time `json:"created_at"`
