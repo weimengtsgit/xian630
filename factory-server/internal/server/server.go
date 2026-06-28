@@ -490,6 +490,11 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/dialogues/:id/work-trace", s.dialogueTraceEvents)
 	r.Handle("GET", "/api/dialogues/:id/work-trace/stream", s.dialogueTraceStream)
 
+	// Dialogue-scoped task-thinking transport (Task 2). REST hydration + SSE
+	// stream, both filtered to :id, sequence-replayable, persist-before-publish.
+	r.Handle("GET", "/api/dialogues/:id/task-thinking", s.dialogueTaskThinkingEvents)
+	r.Handle("GET", "/api/dialogues/:id/task-thinking/stream", s.dialogueTaskThinkingStream)
+
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)
 	return r

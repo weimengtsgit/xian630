@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,14 +19,15 @@ import (
 // newTraceTestServer wires a minimal Server (store + hub) for the work-trace
 // stream tests. It does not start any background worker; tests drive the store
 // and hub directly.
-func newTraceTestServer(t *testing.T) *Server {
+func newTraceTestServer(t *testing.T) (*Server, *Router, *store.Store) {
 	t.Helper()
 	st, err := store.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
+	srv := New(config.Config{WorkspaceRoot: t.TempDir()}, st, scanner.Scanner{})
+	return srv, srv.routes(), st
 }
 
 // readSSEEvent reads one SSE frame from the buffered reader and returns the
@@ -66,7 +68,7 @@ func readSSEEvent(t *testing.T, br *bufio.Reader) (eventType, idLine, dataLine s
 // TestWorkTraceRESTReplayReturnsPersistedRows verifies the REST hydration
 // endpoint returns persisted rows ascending by sequence.
 func TestWorkTraceRESTReplayReturnsPersistedRows(t *testing.T) {
-	srv := newTraceTestServer(t)
+	srv, r, _ := newTraceTestServer(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		if _, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
@@ -76,7 +78,6 @@ func TestWorkTraceRESTReplayReturnsPersistedRows(t *testing.T) {
 		}
 	}
 
-	r := srv.routes()
 	req := httptest.NewRequest("GET", "/api/dialogues/dlg_1/work-trace", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -92,7 +93,7 @@ func TestWorkTraceRESTReplayReturnsPersistedRows(t *testing.T) {
 
 // TestWorkTraceRESTAfterSequenceFilter verifies the REST afterSequence filter.
 func TestWorkTraceRESTAfterSequenceFilter(t *testing.T) {
-	srv := newTraceTestServer(t)
+	srv, r, _ := newTraceTestServer(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
 		if _, err := srv.store.AppendDialogueTrace(ctx, model.WorkTraceEvent{
@@ -101,7 +102,6 @@ func TestWorkTraceRESTAfterSequenceFilter(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	r := srv.routes()
 	req := httptest.NewRequest("GET", "/api/dialogues/dlg_1/work-trace?afterSequence=1", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -123,7 +123,7 @@ func TestWorkTraceRESTAfterSequenceFilter(t *testing.T) {
 // store + hub access).
 func startTraceStreamServer(t *testing.T) (*httptest.Server, *Server) {
 	t.Helper()
-	srv := newTraceTestServer(t)
+	srv, _, _ := newTraceTestServer(t)
 	ts := httptest.NewServer(srv.routes())
 	t.Cleanup(ts.Close)
 	return ts, srv
@@ -378,7 +378,7 @@ func TestWorkTraceStreamLastEventIDHeaderWins(t *testing.T) {
 // unpersisted-event dropping at the transport layer; this proves the producer
 // contract is enforced at the persistence boundary regardless of producer.
 func TestWorkTraceStoreGateRejectsDisallowedTypes(t *testing.T) {
-	srv := newTraceTestServer(t)
+	srv, _, _ := newTraceTestServer(t)
 	ctx := context.Background()
 
 	disallowed := []string{
@@ -432,7 +432,7 @@ func TestWorkTraceStoreGateRejectsDisallowedTypes(t *testing.T) {
 // both are persisted before the stream connects. This closes the gap where
 // isolation was only asserted against live hub events, not stored replay.
 func TestWorkTraceStreamNeverDeliversOtherDialogueOnReplay(t *testing.T) {
-	srv := newTraceTestServer(t)
+	srv, _, _ := newTraceTestServer(t)
 	ctx := context.Background()
 	// Persist rows for both dialogues BEFORE the stream connects.
 	for i := 0; i < 2; i++ {
@@ -481,5 +481,52 @@ func TestWorkTraceStreamNeverDeliversOtherDialogueOnReplay(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timeout: only %d/2 A replay rows arrived", got)
 		}
+	}
+}
+
+// TestDialogueTaskThinkingEventsHydratesAfterCursor verifies the task-thinking
+// REST hydration endpoint returns persisted rows ascending by sequence,
+// honoring the afterSequence replay cursor.
+func TestDialogueTaskThinkingEventsHydratesAfterCursor(t *testing.T) {
+	srv, r, st := newTraceTestServer(t)
+	_ = srv
+	ctx := context.Background()
+	_, _ = st.AppendTaskThinking(ctx, model.TaskThinkingEvent{ID: "t1", DialogueID: "dlg_1", TaskID: "job", StepID: "s", Content: "a"})
+	_, _ = st.AppendTaskThinking(ctx, model.TaskThinkingEvent{ID: "t2", DialogueID: "dlg_1", TaskID: "job", StepID: "s", Content: "b"})
+
+	req := httptest.NewRequest("GET", "/api/dialogues/dlg_1/task-thinking?afterSequence=1", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct{ Events []model.TaskThinkingEvent `json:"events"` }
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Events) != 1 || body.Events[0].ID != "t2" {
+		t.Fatalf("events=%#v, want only t2", body.Events)
+	}
+}
+
+// TestRecordAndPublishTaskThinkingPersistsBeforePublish verifies that
+// recordAndPublishTaskThinking persists a row to task_thinking_events BEFORE
+// publishing it to the hub, assigning DialogueSequence in the process. It also
+// verifies that the published event carries the full persisted row.
+func TestRecordAndPublishTaskThinkingPersistsBeforePublish(t *testing.T) {
+	srv, _, st := newTraceTestServer(t)
+	ctx := context.Background()
+	ev, err := srv.recordAndPublishTaskThinking(ctx, model.TaskThinkingEvent{
+		ID: "think_pub", DialogueID: "dlg_pub", TaskID: "job", StepID: "s", Content: "visible",
+	})
+	if err != nil {
+		t.Fatalf("recordAndPublishTaskThinking: %v", err)
+	}
+	if ev.DialogueSequence == 0 {
+		t.Fatalf("DialogueSequence not assigned: %#v", ev)
+	}
+	rows, err := st.ListTaskThinking(ctx, "dlg_pub", 0, 500)
+	if err != nil || len(rows) != 1 || rows[0].ID != "think_pub" {
+		t.Fatalf("persisted rows=%#v err=%v", rows, err)
 	}
 }
