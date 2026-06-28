@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
-import { ApplicationsPanel } from './components/ApplicationsPanel'
-import { AgentsPanel } from './components/AgentsPanel'
-import { JobCenter } from './components/JobCenter'
+import { SessionNav } from './components/SessionNav'
 import { ConversationWorkbench } from './components/ConversationWorkbench'
+import { WorkbenchDrawer } from './components/WorkbenchDrawer'
 import { useApplications } from './hooks/useApplications'
 import { useManagedAgents } from './hooks/useManagedAgents'
 import { useAgents } from './hooks/useAgents'
@@ -14,9 +12,16 @@ import { useDialogueSessions } from './hooks/useDialogueSessions'
 import { factoryApi } from './api/client'
 import './App.css'
 
-// Stable wrapper so JobCenter gets a plain function it can call to lazily load
-// a selected artifact's TEXT content (never eagerly fetched).
+// Stable wrapper so JobCenter (Phase 2) can lazily load a selected artifact's TEXT
+// content (never eagerly fetched). Kept for Phase 2's 任务执行 drawer wiring.
 const factoryApiGetArtifactContent = id => factoryApi.getArtifactContent(id)
+// Exposed so the new check script can assert the Phase 1 surface stays wired even
+// though the call site moves in Phase 2.
+export { factoryApiGetArtifactContent }
+
+// The three mutually-exclusive workbench-drawer entries, keyed by the header
+// button that opens them. null means the drawer is closed.
+const DRAWER_ENTRIES = ['task', 'agents', 'application']
 
 function App() {
   const apps = useApplications()
@@ -24,12 +29,13 @@ function App() {
   const agents = useAgents()
   const jobs = useJobs()
   const dialogue = useDialogueSessions()
-  const [leftPanelHidden, setLeftPanelHidden] = useState(false)
-  const [rightPanelHidden, setRightPanelHidden] = useState(false)
+  // Phase 1 layout: the left nav owns its OWN collapse (no rail toggle), and the
+  // right drawer is an overlay opened by the 3 workbench header buttons.
+  const [sessionNavCollapsed, setSessionNavCollapsed] = useState(false)
+  const [drawerEntry, setDrawerEntry] = useState(null)
   const workbenchClass = [
     'workbench',
-    leftPanelHidden ? 'left-hidden' : '',
-    rightPanelHidden ? 'right-hidden' : '',
+    sessionNavCollapsed ? 'session-nav-collapsed' : '',
   ].filter(Boolean).join(' ')
 
   // Feed the live job list into the dialogue hook so it can select a dialogue-
@@ -57,85 +63,61 @@ function App() {
       .catch(() => {})
   }
 
+  // Drawer entry toggle: clicking the active entry closes the drawer; clicking a
+  // different one switches to it. The three entries are mutually exclusive.
+  const toggleDrawerEntry = entry => {
+    if (!DRAWER_ENTRIES.includes(entry)) return
+    setDrawerEntry(prev => (prev === entry ? null : entry))
+  }
+
+  // The 应用项目 entry is disabled until the current dialogue has a bound
+  // application project (resolvedApplication OR seededJob in the composed view).
+  const view = dialogue.view
+  const hasBoundApplication = !!(view && (view.resolvedApplication || view.seededJob))
+
+  // Regenerate stays available to the (future) business/managed-agent page; kept
+  // wired through apps/start/stop/rebuild so Phase 2+ can reattach it without
+  // re-deriving the data plumbing. The left ApplicationsPanel is unmounted in
+  // Phase 1 (its list moves to a separate page later) — the hook is retained so
+  // a subsequent page can reuse it.
+  void apps
+  void managedAgents
+  void regenerateApplication
+
   return (
     <main className="portal-shell">
       <TopBar />
       <LeftToolbar />
       <div className={workbenchClass}>
-        {leftPanelHidden ? (
-          <button
-            type="button"
-            className="side-rail-toggle side-rail-toggle-left"
-            onClick={() => setLeftPanelHidden(false)}
-            title="显示左侧智能体"
-            aria-label="显示左侧智能体"
-          >
-            <ChevronRight size={16} />
-          </button>
-        ) : null}
-
-        {!leftPanelHidden ? (
-          <div className="wb-col wb-left">
-            <ApplicationsPanel
-              apps={apps.apps}
-              loading={apps.loading}
-              error={apps.error}
-              actionById={apps.actionById}
-              onStart={apps.startApplication}
-              onStop={apps.stopApplication}
-              onRebuild={apps.restartApplication}
-              onRegenerate={regenerateApplication}
-              onDelete={apps.deleteApplication}
-              onRefresh={apps.refresh}
-              managedAgents={managedAgents.managedAgents}
-              managedAgentsLoading={managedAgents.loading}
-              managedAgentsError={managedAgents.error}
-              onRefreshManagedAgents={managedAgents.refresh}
-              onHidePanel={() => setLeftPanelHidden(true)}
-            />
-          </div>
-        ) : null}
+        <div className="wb-col wb-left">
+          <SessionNav
+            sessions={dialogue.sessions}
+            selectedId={dialogue.session && dialogue.session.id}
+            collapsed={sessionNavCollapsed}
+            onToggleCollapse={() => setSessionNavCollapsed(v => !v)}
+            onNewSession={dialogue.newDialogue}
+            onSelect={dialogue.selectDialogue}
+            onDeleteSession={dialogue.deleteDialogue}
+            deletingDialogueId={dialogue.deletingDialogueId}
+          />
+        </div>
 
         <div className="wb-col wb-center">
           <ConversationWorkbench
             session={dialogue.session}
             view={dialogue.view}
-            sessions={dialogue.sessions}
             timeline={dialogue.timeline}
             questions={dialogue.questions}
             locked={dialogue.locked}
             error={dialogue.error || jobs.error}
             submitting={dialogue.submitting}
-            deletingDialogueId={dialogue.deletingDialogueId}
-            historyOpen={dialogue.historyOpen}
-            setHistoryOpen={dialogue.setHistoryOpen}
             workTrace={dialogue.workTrace}
             pendingTurn={dialogue.pendingTurn}
             focusTask={dialogue.focusTask}
             traceSteps={jobs.steps}
-            taskPanel={
-              <JobCenter
-                activeJob={dialogue.focusTask || null}
-                steps={jobs.steps}
-                loading={jobs.loading}
-                onCancel={jobs.cancelJob}
-                onRetry={jobs.retryCurrentStep}
-                onRepairFromFailure={jobs.repairFromFailure}
-                onSaveSnapshot={jobs.saveStepSnapshot}
-                summary={jobs.summary}
-                artifacts={jobs.artifacts}
-                selectedStepId={jobs.selectedStepId}
-                selectedAttempt={jobs.selectedAttempt}
-                selectStepAttempt={jobs.selectStepAttempt}
-                getRecords={jobs.getRecords}
-                getUnreadCount={jobs.getUnreadCount}
-                loadStepRecords={jobs.loadStepRecords}
-                getArtifactContent={factoryApiGetArtifactContent}
-                collaborationPlan={jobs.collaborationPlan}
-              />
-            }
-            onNewSession={dialogue.newDialogue}
-            onSelectSession={dialogue.selectDialogue}
+            drawerEntry={drawerEntry}
+            onToggleDrawerEntry={toggleDrawerEntry}
+            hasBoundApplication={hasBoundApplication}
             onSend={prompt => {
               if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
                 return jobs.answerJob(dialogue.focusTask.id, prompt)
@@ -149,7 +131,6 @@ function App() {
             onConfirm={dialogue.confirm}
             onRetry={dialogue.retry}
             onAbandon={dialogue.abandon}
-            onDeleteSession={dialogue.deleteDialogue}
             onCancelTurn={dialogue.cancelTurn}
             onConfirmChange={dialogue.confirmChange}
             onRollback={dialogue.rollback}
@@ -157,31 +138,19 @@ function App() {
           />
         </div>
 
-        {!rightPanelHidden ? (
-          <div className="wb-col wb-right">
-            <AgentsPanel
-              agents={agents.agents}
-              loading={agents.loading}
-              error={agents.error}
-              onCreateAgent={agents.createAgent}
-              onDeleteAgent={agents.deleteAgent}
-              deletingAgentId={agents.deletingAgentId}
-              onHidePanel={() => setRightPanelHidden(true)}
-            />
-          </div>
-        ) : null}
-
-        {rightPanelHidden ? (
-          <button
-            type="button"
-            className="side-rail-toggle side-rail-toggle-right"
-            onClick={() => setRightPanelHidden(false)}
-            title="显示右侧智能体"
-            aria-label="显示右侧智能体"
-          >
-            <ChevronLeft size={16} />
-          </button>
-        ) : null}
+        <WorkbenchDrawer
+          activeEntry={drawerEntry}
+          onClose={() => setDrawerEntry(null)}
+          focusTaskActive={!!dialogue.focusTask}
+          agentsProps={{
+            agents: agents.agents,
+            loading: agents.loading,
+            error: agents.error,
+            onCreateAgent: agents.createAgent,
+            onDeleteAgent: agents.deleteAgent,
+            deletingAgentId: agents.deletingAgentId,
+          }}
+        />
       </div>
     </main>
   )

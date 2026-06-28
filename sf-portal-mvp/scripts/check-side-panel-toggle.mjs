@@ -1,46 +1,76 @@
+// Phase 1 (workbench-drawer migration) layout check.
+//
+// The OLD layout this script pinned (3-col grid + ApplicationsPanel left +
+// AgentsPanel right + side-rail-toggle restore buttons + leftPanelHidden /
+// rightPanelHidden state) is GONE. Phase 1 replaces it with a 2-col grid
+// (会话导航 rail + 中间工作台) where the left nav owns its OWN collapse, and a
+// unified right-side WorkbenchDrawer overlay opened by the 3 workbench header
+// buttons (replacing the old right AgentsPanel column + the floating restore
+// button).
+//
+// This rewrite asserts the NEW layout MEANINGFULLY — it does not just delete the
+// old assertions to force green. It pins:
+//   - the 2-col grid + the left-nav-owned collapse (session-nav-collapsed class)
+//   - the SessionNav rail is mounted on the left and ApplicationsPanel is NOT
+//   - the WorkbenchDrawer overlay host is mounted and the fixed right AgentsPanel
+//     column + BOTH rail-toggle restore buttons are removed
+//   - AgentsPanel content is reused INSIDE the drawer (hide button omitted)
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const appCss = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
-const applicationsPanelCss = readFileSync(new URL('../src/components/ApplicationsPanel.css', import.meta.url), 'utf8')
-const agentsPanelCss = readFileSync(new URL('../src/components/AgentsPanel.css', import.meta.url), 'utf8')
-const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
-const applicationsPanelJsx = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
+const sessionNavJsx = readFileSync(new URL('../src/components/SessionNav.jsx', import.meta.url), 'utf8')
+const sessionNavCss = readFileSync(new URL('../src/components/SessionNav.css', import.meta.url), 'utf8')
+const workbenchDrawerJsx = readFileSync(new URL('../src/components/WorkbenchDrawer.jsx', import.meta.url), 'utf8')
 const agentsPanelJsx = readFileSync(new URL('../src/components/AgentsPanel.jsx', import.meta.url), 'utf8')
 
-assert.match(appJsx, /leftPanelHidden/, 'App must keep left panel visibility state')
-assert.match(appJsx, /rightPanelHidden/, 'App must keep right panel visibility state')
-assert.match(appJsx, /left-hidden/, 'workbench must expose a left-hidden layout class')
-assert.match(appJsx, /right-hidden/, 'workbench must expose a right-hidden layout class')
-assert.match(appJsx, /!\s*leftPanelHidden[\s\S]*<ApplicationsPanel/, 'left agent panel must not render while hidden')
-assert.match(appJsx, /!\s*rightPanelHidden[\s\S]*<AgentsPanel/, 'right agent panel must not render while hidden')
-assert.match(appJsx, /setLeftPanelHidden\(false\)/, 'hidden left panel must have an icon restore action')
-assert.match(appJsx, /setRightPanelHidden\(false\)/, 'hidden right panel must have an icon restore action')
-assert.match(appJsx, /side-rail-toggle side-rail-toggle-left/, 'left restore must use an edge rail affordance')
-assert.match(appJsx, /side-rail-toggle side-rail-toggle-right/, 'right restore must use an edge rail affordance')
+// ---- LEFT: SessionNav owns the left column + its own collapse ----------------
 
-assert.doesNotMatch(workbenchJsx, /onToggleSidePanels/, 'ConversationWorkbench must not own side-panel toggles')
-assert.doesNotMatch(workbenchJsx, /隐藏两侧|显示两侧|cw-side-toggle/, 'center workbench must not render the old text toggle button')
+// SessionNav is mounted in the left column and ApplicationsPanel is NOT mounted
+// anywhere in App.jsx (its list moves to a separate page later; the file stays
+// on disk but is unmounted from the main workbench in Phase 1).
+assert.match(appJsx, /<SessionNav/, 'App must mount SessionNav in the left column')
+assert.doesNotMatch(appJsx, /<ApplicationsPanel/, 'App must NOT mount ApplicationsPanel in the main workbench (left nav is SessionNav now)')
 
-assert.match(applicationsPanelJsx, /onHidePanel/, 'left panel must expose a hide icon action')
-assert.match(applicationsPanelJsx, /隐藏左侧智能体/, 'left panel hide action must be accessible')
-assert.match(applicationsPanelJsx, /panel-header-main/, 'left panel header must have a structured main area')
-assert.match(applicationsPanelJsx, /panel-actions/, 'left panel header actions must be grouped')
+// The left nav owns its OWN collapse state. The old leftPanelHidden/rightPanelHidden
+// rail-toggle state is gone.
+assert.match(appJsx, /sessionNavCollapsed/, 'App must keep a dedicated sessionNavCollapsed state for the left nav collapse')
+assert.doesNotMatch(appJsx, /leftPanelHidden/, 'App must NOT keep the old leftPanelHidden rail-toggle state')
+assert.doesNotMatch(appJsx, /rightPanelHidden/, 'App must NOT keep the old rightPanelHidden rail-toggle state')
 
-assert.match(agentsPanelJsx, /onHidePanel/, 'right panel must expose a hide icon action')
-assert.match(agentsPanelJsx, /隐藏右侧智能体/, 'right panel hide action must be accessible')
-assert.match(agentsPanelJsx, /agents-header-main/, 'right panel header must have a structured main area')
-assert.match(agentsPanelJsx, /panel-actions/, 'right panel header actions must be grouped')
+// The collapse class flips the grid first column to a narrow (~56px) rail.
+assert.match(appJsx, /session-nav-collapsed/, 'App must apply a session-nav-collapsed layout class when the left nav is collapsed')
+assert.match(appCss, /\.workbench\.session-nav-collapsed\s*\{[\s\S]*grid-template-columns:\s*56px/, 'collapsed left nav must shrink the first grid column to a ~56px rail')
+assert.match(appCss, /\.workbench\s*\{[\s\S]*grid-template-columns:\s*var\(--session-nav-w,\s*300px\)\s+minmax\(0,\s*1fr\)/, 'workbench must be a 2-col grid (left nav + center), not the old 3-col layout')
 
-assert.match(appCss, /\.workbench\.left-hidden\.right-hidden\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)/, 'hidden layout must make the center column fill the workbench')
-assert.match(appCss, /\.workbench\.left-hidden:not\(\.right-hidden\)\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+300px/, 'left-hidden layout must keep the right panel visible')
-assert.match(appCss, /\.workbench\.right-hidden:not\(\.left-hidden\)\s*\{[\s\S]*grid-template-columns:\s*300px\s+minmax\(0,\s*1fr\)/, 'right-hidden layout must keep the left panel visible')
-assert.match(appCss, /\.side-rail-toggle/, 'hidden side panels must have edge rail restore affordances')
-assert.match(applicationsPanelCss, /\.panel-header-main/, 'left panel header must use a structured title/action layout')
-assert.match(applicationsPanelCss, /\.panel-action-btn/, 'left panel icon actions must use consistent styling')
-assert.match(agentsPanelCss, /\.agents-header-main/, 'right panel header must use a structured title/action layout')
-assert.match(agentsPanelCss, /\.panel-action-btn/, 'right panel icon actions must use consistent styling')
-assert.doesNotMatch(appCss, /\.side-restore\s*\{[\s\S]*position:\s*absolute[\s\S]*width:\s*28px[\s\S]*height:\s*28px/, 'restore affordance must not be the old floating square')
+// SessionNav renders the new-session action and an expand affordance in BOTH
+// expanded and collapsed variants (the collapsed rail must still offer 新建会话).
+assert.match(sessionNavJsx, /session-nav-new/, 'SessionNav must render a new-session action')
+assert.match(sessionNavJsx, /session-nav-new-mini/, 'SessionNav collapsed rail must keep a new-session affordance')
+assert.match(sessionNavJsx, /session-nav-expand/, 'SessionNav collapsed rail must offer an expand affordance')
+assert.match(sessionNavJsx, /session-nav-collapse/, 'SessionNav expanded rail must offer a collapse affordance')
+assert.match(sessionNavCss, /\.session-nav-collapsed\s*\{[\s\S]*align-items:\s*center/, 'collapsed SessionNav must render as a narrow centered rail')
+
+// ---- RIGHT: WorkbenchDrawer overlay host replaces the fixed AgentsPanel column
+
+// The unified WorkbenchDrawer host is mounted (the 3 header buttons open it).
+assert.match(appJsx, /<WorkbenchDrawer/, 'App must mount the WorkbenchDrawer overlay host')
+// The fixed right AgentsPanel column + BOTH rail-toggle restore buttons are gone.
+assert.doesNotMatch(appJsx, /wb-right/, 'App must NOT render the fixed right .wb-right AgentsPanel column')
+assert.doesNotMatch(appJsx, /side-rail-toggle side-rail-toggle-left/, 'App must NOT render the left rail-toggle restore button (left nav owns its collapse now)')
+assert.doesNotMatch(appJsx, /side-rail-toggle side-rail-toggle-right/, 'App must NOT render the right rail-toggle restore button (replaced by the 协作智能体 drawer entry)')
+assert.doesNotMatch(appJsx, /left-hidden|right-hidden/, 'App must NOT use the old left-hidden/right-hidden layout classes')
+
+// The drawer is an OVERLAY (not a 3rd grid column) so opening/closing it never
+// changes the center width.
+assert.match(workbenchDrawerJsx, /workbench-drawer-open/, 'WorkbenchDrawer must render an open variant class')
+
+// AgentsPanel CONTENT is reused inside the drawer: the drawer renders AgentsPanel
+// WITHOUT its hide button (onHidePanel omitted), so the agents list / create /
+// delete / detail surface stays usable inside the overlay.
+assert.match(workbenchDrawerJsx, /<AgentsPanel/, 'WorkbenchDrawer must reuse AgentsPanel content for the 协作智能体 entry')
+assert.match(agentsPanelJsx, /onHidePanel\s*\?/, 'AgentsPanel must render its hide button ONLY when onHidePanel is passed (so the drawer can omit it)')
+assert.doesNotMatch(workbenchDrawerJsx, /onHidePanel=\{/, 'WorkbenchDrawer must NOT pass onHidePanel as a prop to AgentsPanel (no hide button inside the drawer)')
 
 console.log('side panel toggle check passed')

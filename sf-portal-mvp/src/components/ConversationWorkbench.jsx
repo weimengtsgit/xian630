@@ -16,17 +16,14 @@ import {
   HelpCircle,
   Loader2,
   MessageSquare,
-  MessageSquarePlus,
-  History,
   PlayCircle,
   RefreshCw,
   RotateCcw,
   Send,
-  Trash2,
   X,
   XCircle,
 } from 'lucide-react'
-import { resolveWorkbenchTitle, statusText, titleForDialogue } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
 import './ConversationWorkbench.css'
@@ -38,17 +35,11 @@ const SHOW_WORK_TRACE = false
 export function ConversationWorkbench({
   session,
   view,
-  sessions,
   timeline,
   questions,
   locked,
   error,
   submitting,
-  deletingDialogueId,
-  historyOpen,
-  setHistoryOpen,
-  onNewSession,
-  onSelectSession,
   onSend,
   onSelectRoute,
   onOpenApp,
@@ -57,12 +48,13 @@ export function ConversationWorkbench({
   onConfirm,
   onRetry,
   onAbandon,
-  onDeleteSession,
   workTrace,
   pendingTurn,
   focusTask,
   traceSteps,
-  taskPanel,
+  drawerEntry,
+  onToggleDrawerEntry,
+  hasBoundApplication,
   onCancelTurn,
   onConfirmChange,
   onRollback,
@@ -196,15 +188,49 @@ export function ConversationWorkbench({
         </div>
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
-          <button type="button" className="cw-icon-btn" onClick={onNewSession} title="新建会话" aria-label="新建会话"><MessageSquarePlus size={16} /></button>
-          <button type="button" className="cw-icon-btn" onClick={() => setHistoryOpen(true)} title="历史会话" aria-label="历史会话"><History size={16} /></button>
+          {/* Phase 1: the 3 top-right drawer-entry buttons. Mutually exclusive —
+              clicking the active one closes the drawer; 应用项目 is disabled until
+              the current dialogue has a bound application project. 任务执行 keeps a
+              presence-dot badge while a focus task exists, even when another entry
+              is open (full agent-chip strip is later). */}
+          <button
+            type="button"
+            className={`cw-drawer-btn${drawerEntry === 'task' ? ' is-active' : ''}`}
+            onClick={() => onToggleDrawerEntry('task')}
+            title="任务执行"
+            aria-label="任务执行"
+            aria-pressed={drawerEntry === 'task'}
+          >
+            <span className="cw-drawer-btn-label">任务执行</span>
+            {focusTask ? <span className="cw-drawer-badge" aria-label="有进行中的任务" /> : null}
+          </button>
+          <button
+            type="button"
+            className={`cw-drawer-btn${drawerEntry === 'agents' ? ' is-active' : ''}`}
+            onClick={() => onToggleDrawerEntry('agents')}
+            title="协作智能体"
+            aria-label="协作智能体"
+            aria-pressed={drawerEntry === 'agents'}
+          >
+            <span className="cw-drawer-btn-label">协作智能体</span>
+          </button>
+          <button
+            type="button"
+            className={`cw-drawer-btn${drawerEntry === 'application' ? ' is-active' : ''}`}
+            onClick={() => onToggleDrawerEntry('application')}
+            title={hasBoundApplication ? '应用项目' : '当前会话未绑定应用项目'}
+            aria-label="应用项目"
+            aria-pressed={drawerEntry === 'application'}
+            disabled={!hasBoundApplication}
+          >
+            <span className="cw-drawer-btn-label">应用项目</span>
+          </button>
         </div>
       </header>
 
-      {/* The focus task belongs to the selected dialogue. Keeping the task
-          panel inside this workbench makes a history-session switch change the
-          conversation, task status, timing, and task actions as one unit. */}
-      {focusTask && taskPanel ? <div className="cw-focus-task">{taskPanel}</div> : null}
+      {/* Phase 1: the inline focus-task panel has been REMOVED from the center.
+          Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
+          it). The center keeps only the conversation timeline + composer. */}
 
       <div className="cw-body">
         {timeline.length === 0 && traceItems.length === 0 ? (
@@ -376,11 +402,13 @@ export function ConversationWorkbench({
         ) : null}
         {/* Continuous loop: a version that deployed keeps the composer ACTIVE so
             the user can describe further changes, even though the dialogue is
-            resolved. Only true terminal-without-deployment states lock it. */}
+            resolved. Only true terminal-without-deployment states lock it.
+            Phase 1: the 新建会话 action moved to the left SessionNav, so the
+            terminal hints no longer reference it here. */}
         {status === 'resolved' && !composerActive ? (
-          <p className="cw-terminal-hint">会话已完成，点击右上角「新建会话」开始新的需求。</p>
+          <p className="cw-terminal-hint">会话已完成，在左侧「会话导航」开始新的需求。</p>
         ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
-          <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}新建会话开始新需求。</p>
+          <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
         ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
@@ -399,17 +427,6 @@ export function ConversationWorkbench({
           </>
         )}
       </footer>
-
-      {historyOpen ? (
-        <DialogueHistoryDrawer
-          sessions={sessions}
-          selectedId={session && session.id}
-          deletingDialogueId={deletingDialogueId}
-          onClose={() => setHistoryOpen(false)}
-          onSelect={id => { onSelectSession(id); setHistoryOpen(false) }}
-          onDeleteSession={onDeleteSession}
-        />
-      ) : null}
     </section>
   )
 }
@@ -899,93 +916,6 @@ function RequirementSummary({ requirement }) {
   )
 }
 
-function DialogueHistoryDrawer({ sessions, selectedId, deletingDialogueId, onClose, onSelect, onDeleteSession }) {
-  const list = Array.isArray(sessions) ? sessions : []
-  const [pendingDelete, setPendingDelete] = useState(null)
-  const pendingTitle = pendingDelete ? titleForDialogue(pendingDelete.session || pendingDelete) : ''
-  const confirmingDelete = pendingDelete && deletingDialogueId === (pendingDelete.session && pendingDelete.session.id)
-
-  useEffect(() => {
-    if (!pendingDelete) return
-    const pid = pendingDelete.session && pendingDelete.session.id
-    if (!list.some(v => v.session && v.session.id === pid)) setPendingDelete(null)
-  }, [pendingDelete, list.map(v => v.session && v.session.id).join('|')])
-
-  const requestDelete = entry => {
-    const sess = entry && entry.session
-    if (!sess) return
-    setPendingDelete(entry)
-  }
-
-  const confirmDelete = async () => {
-    if (!pendingDelete || confirmingDelete) return
-    const sess = pendingDelete.session
-    if (!sess) return
-    try {
-      await onDeleteSession(sess.id)
-      setPendingDelete(null)
-    } catch (_) {
-      // The hook surfaces the error in the workbench error bar.
-    }
-  }
-
-  return (
-    <aside className="cw-history">
-      <header>
-        <strong>历史会话</strong>
-        <button type="button" className="cw-history-close" onClick={onClose} title="关闭历史会话" aria-label="关闭历史会话"><X size={16} /></button>
-      </header>
-      <div className="cw-history-list">
-        {list.map(entry => {
-          const sess = entry && entry.session
-          if (!sess) return null
-          return (
-            <div key={sess.id} className={`cw-history-row${sess.id === selectedId ? ' active' : ''}`}>
-              <button type="button" className="cw-history-item" onClick={() => onSelect(sess.id)}>
-                <span className="cw-history-title">{titleForDialogue(sess)}</span>
-                <span className="cw-history-meta">
-                  <em>{statusText(sess.status)}</em>
-                  <time dateTime={sess.updated_at}>{formatSessionTime(sess.updated_at)}</time>
-                </span>
-                <small>{summaryForEntry(entry)}</small>
-                {resultForEntry(entry) ? <b>{resultForEntry(entry)}</b> : null}
-              </button>
-              <button
-                type="button"
-                className="cw-history-delete"
-                disabled={deletingDialogueId === sess.id}
-                onClick={() => requestDelete(entry)}
-                title="删除历史会话"
-                aria-label="删除历史会话"
-              >
-                {deletingDialogueId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-              </button>
-            </div>
-          )
-        })}
-      </div>
-      {pendingDelete ? (
-        <div className="cw-delete-confirm" role="dialog" aria-labelledby="cw-delete-confirm-title">
-          <div className="cw-delete-confirm-card">
-            <span className="cw-delete-confirm-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
-            <div className="cw-delete-confirm-copy">
-              <strong id="cw-delete-confirm-title">删除历史会话</strong>
-              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
-            </div>
-            <div className="cw-delete-confirm-actions">
-              <button type="button" className="cw-delete-confirm-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>取消</button>
-              <button type="button" className="cw-delete-confirm-danger" onClick={confirmDelete} disabled={confirmingDelete}>
-                {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </aside>
-  )
-}
-
 function optionIsRecommended(q, opt) {
   if (opt.recommended) return true
   const values = Array.isArray(q.recommendation) ? q.recommendation : q.recommendation ? [q.recommendation] : []
@@ -994,32 +924,6 @@ function optionIsRecommended(q, opt) {
 
 function hasAnswer(value) {
   return Array.isArray(value) ? value.length > 0 : value != null && value !== ''
-}
-
-function formatSessionTime(value) {
-  if (!value) return '未更新'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value)
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function summaryForEntry(entry) {
-  const child = entry && entry.child
-  const req = (child && child.requirement) || {}
-  const parts = [req.appType, req.coreScenario].filter(Boolean)
-  if (parts.length > 0) return parts.join(' · ')
-  const sess = entry && entry.session
-  return (sess && sess.initial_prompt) || '暂无摘要'
-}
-
-function resultForEntry(entry) {
-  if (!entry) return ''
-  const sess = entry.session || {}
-  if (entry.resolvedApplication) return entry.resolvedApplication.name || '智能体已就绪'
-  if (entry.createdAgent) return entry.createdAgent.name || 'Agent 已创建'
-  if (entry.seededJob) return entry.seededJob.app_name ? `生成任务：${entry.seededJob.app_name}` : '生成任务已创建'
-  if (sess.status === 'resolved') return '已完成'
-  return ''
 }
 
 function fieldLabel(field) {

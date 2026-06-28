@@ -1,0 +1,346 @@
+/* SessionNav — the left 会话导航栏 (Phase 1 workbench-drawer migration).
+ *
+ * The rail is a flex column: header + new-session action + scrollable history
+ * list + an in-app delete-confirm overlay. When collapsed the host
+ * (App.jsx) swaps the grid column to ~56px and renders the collapsed variant,
+ * which keeps the new-session + expand affordances. */
+
+.session-nav {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: rgba(11, 29, 44, 0.72);
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.session-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  background: rgba(104, 221, 255, 0.08);
+  border-bottom: 1px solid rgba(111, 218, 255, 0.24);
+}
+
+.session-nav-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #edfaff;
+  white-space: nowrap;
+}
+
+.session-nav-collapse,
+.session-nav-expand {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid rgba(111, 218, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(104, 221, 255, 0.08);
+  color: #68ddff;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.session-nav-collapse:hover,
+.session-nav-expand:hover {
+  border-color: rgba(111, 218, 255, 0.5);
+  background: rgba(104, 221, 255, 0.16);
+  color: #edfaff;
+}
+
+.session-nav-actions {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(111, 218, 255, 0.16);
+}
+
+.session-nav-new {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(104, 221, 255, 0.5);
+  border-radius: 6px;
+  background: rgba(104, 221, 255, 0.14);
+  color: #edfaff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.session-nav-new:hover {
+  border-color: rgba(104, 221, 255, 0.8);
+  background: rgba(104, 221, 255, 0.22);
+}
+
+.session-nav-new-mini {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+.session-nav-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-nav-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.session-nav-list::-webkit-scrollbar-thumb {
+  background: rgba(111, 218, 255, 0.28);
+  border-radius: 999px;
+}
+
+.session-nav-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 24px 8px;
+  color: #8fb0bf;
+  font-size: 12px;
+}
+
+.session-nav-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid rgba(111, 218, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(3, 17, 29, 0.6);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.session-nav-row:hover {
+  border-color: rgba(111, 218, 255, 0.32);
+}
+
+.session-nav-row.active {
+  border-color: rgba(104, 221, 255, 0.6);
+  box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.18);
+  background: rgba(104, 221, 255, 0.08);
+}
+
+.session-nav-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.session-nav-item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #edfaff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-nav-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: #8fb0bf;
+}
+
+.session-nav-item-meta em {
+  color: #68ddff;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.session-nav-item-meta time {
+  color: rgba(165, 189, 202, 0.7);
+  white-space: nowrap;
+}
+
+.session-nav-item small {
+  font-size: 11px;
+  color: #a5bdca;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-nav-item-result {
+  font-size: 11px;
+  font-weight: 600;
+  color: #7feb9b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-nav-delete {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 102, 94, 0.24);
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 138, 136, 0.78);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.session-nav-delete:hover:not(:disabled) {
+  border-color: rgba(255, 102, 94, 0.5);
+  background: rgba(255, 102, 94, 0.14);
+  color: #ffb0aa;
+}
+
+.session-nav-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* In-app delete confirmation (never window.confirm). Positioned inside the rail
+ * so the confirm card anchors to the rail the way the old workbench drawer did. */
+.session-nav-delete-confirm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  padding: 10px;
+  background: linear-gradient(180deg, rgba(3, 17, 29, 0.4), rgba(3, 17, 29, 0.96) 40%);
+}
+
+.session-nav-delete-card {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 102, 94, 0.32);
+  border-radius: 8px;
+  background: rgba(9, 24, 38, 0.96);
+  color: #edfaff;
+}
+
+.session-nav-delete-icon {
+  color: #ffb0aa;
+}
+
+.session-nav-delete-copy strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.session-nav-delete-copy p {
+  margin: 0;
+  font-size: 11.5px;
+  color: #a5bdca;
+  line-height: 1.4;
+}
+
+.session-nav-delete-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.session-nav-delete-cancel,
+.session-nav-delete-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid rgba(111, 218, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(104, 221, 255, 0.08);
+  color: #d4ecf7;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.session-nav-delete-cancel:hover:not(:disabled) {
+  background: rgba(104, 221, 255, 0.16);
+}
+
+.session-nav-delete-danger {
+  border-color: rgba(255, 102, 94, 0.4);
+  background: rgba(255, 102, 94, 0.14);
+  color: #ffb0aa;
+}
+
+.session-nav-delete-danger:hover:not(:disabled) {
+  background: rgba(255, 102, 94, 0.24);
+}
+
+.session-nav-delete-cancel:disabled,
+.session-nav-delete-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Collapsed rail: a narrow strip that still offers 新建会话 + expand. */
+.session-nav-collapsed {
+  align-items: center;
+  padding: 10px 0;
+  gap: 8px;
+}
+
+.session-nav-expand {
+  flex-direction: column;
+  width: 36px;
+  height: auto;
+  min-height: 48px;
+  padding: 6px 0;
+  gap: 2px;
+}
+
+.session-nav-expand-label {
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.spin {
+  animation: session-nav-spin 0.9s linear infinite;
+}
+
+@keyframes session-nav-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -67,7 +67,14 @@ assert.match(drawerJsx, /failed/, 'retry visibility must gate on the failed stat
 assert.match(clientJs, /repairFromFailure/, 'client API must expose repairFromFailure')
 assert.match(clientJs, /\/repair-from-failure/, 'client API must call the repair-from-failure endpoint')
 assert.match(useJobsJs, /repairFromFailure/, 'useJobs must expose repairFromFailure')
-assert.match(appJsx, /onRepairFromFailure=\{jobs\.repairFromFailure\}/, 'App must pass repairFromFailure into JobCenter')
+// Phase 1 (workbench-drawer migration) REMOVED JobCenter from App.jsx's render
+// tree: the task-execution surface moved behind the 任务执行 drawer entry and
+// Phase 2 re-mounts JobCenter inside WorkbenchDrawer. So App.jsx no longer
+// passes repairFromFailure / getRecords / getUnreadCount / selectStepAttempt
+// into a JobCenter sibling. These App.jsx wiring assertions are deferred to
+// Phase 2; the JobCenter/StepCard/StepExecutionDrawer INTERNAL contracts below
+// (and the client + useJobs plumbing) still hold and must stay green so Phase 2
+// can re-attach them without re-deriving the field shapes.
 assert.match(jobCenterJsx, /onRepairFromFailure/, 'JobCenter must accept and pass the repair action')
 assert.match(drawerJsx, /onRepairFromFailure/, 'StepExecutionDrawer must accept the repair action')
 assert.match(jobCenterJsx, /发送错误给代码修复/, 'failed JobCenter must show the repair button label')
@@ -91,10 +98,13 @@ assert.doesNotMatch(
   'StepCard must NEVER use dangerouslySetInnerHTML (no HTML execution)',
 )
 
-// App.jsx must thread the new state surface (records + selected step + artifacts) into JobCenter.
-assert.match(appJsx, /getRecords/, 'App must pass getRecords through to JobCenter')
-assert.match(appJsx, /getUnreadCount/, 'App must pass getUnreadCount through to JobCenter')
-assert.match(appJsx, /selectStepAttempt/, 'App must pass selectStepAttempt through to JobCenter')
+// App.jsx no longer threads records/selected-step/artifacts into JobCenter in
+// Phase 1: JobCenter is unmounted from App.jsx's render tree (it moves behind
+// the 任务执行 drawer in Phase 2). The useJobs hook still exposes these so
+// Phase 2 can wire them inside WorkbenchDrawer; pin the hook surface instead.
+assert.match(useJobsJs, /getRecords/, 'useJobs must keep getRecords so Phase 2 can wire it inside the 任务执行 drawer')
+assert.match(useJobsJs, /getUnreadCount/, 'useJobs must keep getUnreadCount so Phase 2 can wire it inside the 任务执行 drawer')
+assert.match(useJobsJs, /selectStepAttempt/, 'useJobs must keep selectStepAttempt so Phase 2 can wire it inside the 任务执行 drawer')
 
 // --- Backend field-shape pin (Task 4 summary) -----------------------------
 // The backend serializes each step summary as { step_id, latest_attempt:int,
