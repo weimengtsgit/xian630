@@ -78,8 +78,9 @@ type Executor struct {
 	// allowlist + cap + sensitive-key stripping + persist-before-publish; and
 	// the SSE forwarder re-validates persisted rows. Thinking never reaches here
 	// (dropped at the source in stream.go).
-	OnTrace func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
-	RunLog  *runlog.Logger
+	OnTrace         func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	OnTaskThinking  func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
+	RunLog          *runlog.Logger
 
 	// cancels maps a running jobID → the CancelFunc of its in-flight step's ctx,
 	// guarded by cancelsMu. runJobStep adds on start and removes on end (defer);
@@ -131,6 +132,7 @@ type stepEmitter struct {
 	dialogueID string
 	attempt    int
 	onTrace    func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	onThinking func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
 
 	mu       sync.Mutex
 	nextSeq  int
@@ -148,15 +150,16 @@ func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int,
 		key = agentKey[0]
 	}
 	return &stepEmitter{
-		store:      e.store,
-		onRecord:   e.OnRecord,
-		jobID:      jobID,
-		stepID:     stepID,
-		agentKey:   key,
-		dialogueID: dialogueID,
-		attempt:    attempt,
-		onTrace:    e.OnTrace,
-		nextSeq:    1,
+		store:       e.store,
+		onRecord:    e.OnRecord,
+		jobID:       jobID,
+		stepID:      stepID,
+		agentKey:    key,
+		dialogueID:  dialogueID,
+		attempt:     attempt,
+		onTrace:     e.OnTrace,
+		onThinking:  e.OnTaskThinking,
+		nextSeq:     1,
 	}
 }
 
@@ -258,6 +261,29 @@ func (s *stepEmitter) Trace(ctx context.Context, traceType, payload string) erro
 		PayloadJSON: payload,
 	}
 	_, _ = s.onTrace(ctx, ev) // best-effort: a gate error never aborts the run
+	return nil
+}
+
+// Think is the runner.TaskThinkingEmitter implementation: it forwards one raw
+// thinking delta to the server's recordAndPublishTaskThinking gate via
+// OnTaskThinking, stamped with this step's dialogue + task + step + attempt
+// attribution. This is the ONLY path that thinking ever takes; it MUST NEVER
+// reach StepRecordEmitter or TraceEmitter (Constraint #9). It is idempotent-safe:
+// a nil OnTaskThinking, an empty dialogue id, or a gate error never aborts the
+// agent run (best-effort, like Emit and Trace).
+func (s *stepEmitter) Think(ctx context.Context, content string) error {
+	if s.onThinking == nil || s.dialogueID == "" || content == "" {
+		return nil
+	}
+	ev := model.TaskThinkingEvent{
+		DialogueID: s.dialogueID,
+		TaskID:     s.jobID,
+		StepID:     s.stepID,
+		Attempt:    s.attempt,
+		AgentKey:   s.agentKey,
+		Content:    content,
+	}
+	_, _ = s.onThinking(ctx, ev) // best-effort: a gate error never aborts the run
 	return nil
 }
 

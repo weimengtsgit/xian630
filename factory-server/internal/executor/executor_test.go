@@ -1380,3 +1380,24 @@ func TestExecutorStopsAfterRepeatedBlockingReason(t *testing.T) {
 		t.Fatalf("byReason[%q] = %d, want 1 (per-reason cap stops the 2nd)", wantKey, got)
 	}
 }
+
+	func TestStepEmitterThinkStampsTaskAttribution(t *testing.T) {
+		var got model.TaskThinkingEvent
+		emit := &stepEmitter{
+			jobID:      "job_t",
+			stepID:     "step_t",
+			agentKey:   "designer",
+			dialogueID: "dlg_t",
+			attempt:    4,
+			onThinking: func(_ context.Context, ev model.TaskThinkingEvent) (model.TaskThinkingEvent, error) {
+				got = ev
+				return ev, nil
+			},
+		}
+		if err := emit.Think(context.Background(), "private"); err != nil {
+			t.Fatalf("Think: %v", err)
+		}
+		if got.DialogueID != "dlg_t" || got.TaskID != "job_t" || got.StepID != "step_t" || got.Attempt != 4 || got.AgentKey != "designer" || got.Content != "private" {
+			t.Fatalf("thinking attribution = %#v", got)
+		}
+	}

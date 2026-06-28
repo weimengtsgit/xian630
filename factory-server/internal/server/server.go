@@ -307,6 +307,15 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	s.exec.OnTrace = func(ctx context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
 		return s.recordAndPublishWorkTrace(ctx, ev)
 	}
+	// OnTaskThinking routes every raw thinking delta the runner produces through
+	// the centralized persist-before-publish gate (recordAndPublishTaskThinking).
+	// This is the ONLY path that thinking ever takes; it MUST NEVER reach
+	// StepRecordEmitter or TraceEmitter (Constraint #9). The gate enforces
+	// persist-before-publish and sequence assignment; the SSE forwarder re-validates
+	// persisted rows. Thinking never reaches any other path.
+	s.exec.OnTaskThinking = func(ctx context.Context, ev model.TaskThinkingEvent) (model.TaskThinkingEvent, error) {
+		return s.recordAndPublishTaskThinking(ctx, ev)
+	}
 	s.async = async
 	return s
 }
