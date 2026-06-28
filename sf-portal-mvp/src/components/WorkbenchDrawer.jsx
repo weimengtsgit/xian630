@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
 import { AgentsPanel } from './AgentsPanel'
+import { JobCenter } from './JobCenter'
 import './WorkbenchDrawer.css'
 
 // WorkbenchDrawer is the unified right-side 工作台抽屉 host (Phase 1 of the
@@ -12,9 +13,12 @@ import './WorkbenchDrawer.css'
 // overlay (position:absolute on the right of the workbench, slides in) so the
 // center column's width never jitters when the drawer opens/closes.
 //
-// Phase 1 entries:
-//   - 'task'       (任务执行): a PLACEHOLDER. Phase 2 migrates JobCenter/StepCard/
-//                   StepExecutionDrawer into this entry. Do NOT mount JobCenter here yet.
+// Phase 2 entries:
+//   - 'task'       (任务执行): renders the focus task's observability via
+//                   <JobCenter/> — vertical 执行波次 + agent cards, with the step
+//                   detail opening IN THE SAME drawer (embedded, no portal overlay).
+//                   When the dialogue has no focus task, JobCenter shows the
+//                   "当前会话暂无生成任务" empty state.
 //   - 'agents'     (协作智能体): renders the existing AgentsPanel CONTENT (agents
 //                   list + create/delete/detail) by reusing AgentsPanel without its
 //                   hide button (no onHidePanel prop => the button stays hidden).
@@ -25,6 +29,11 @@ export function WorkbenchDrawer({
   onClose,
   agentsProps,
   focusTaskActive,
+  // Phase 2: task-observability props threaded from App (useJobs + focusTask).
+  // `taskProps.activeJob` is the dialogue's focus task; the rest are the same
+  // accessors JobCenter needs (steps, summary, collaborationPlan, records/
+  // artifacts accessors, cancel/retry/repair-from-failure, snapshot save).
+  taskProps,
 }) {
   if (!activeEntry) return null
   const title = ENTRY_TITLES[activeEntry] || ''
@@ -44,7 +53,9 @@ export function WorkbenchDrawer({
       </header>
 
       <div className="workbench-drawer-body">
-        {activeEntry === 'task' ? <TaskExecutionPlaceholder /> : null}
+        {activeEntry === 'task' ? (
+          <JobCenter {...(taskProps || {})} />
+        ) : null}
         {activeEntry === 'agents' ? (
           <AgentsPanel
             {...(agentsProps || {})}
@@ -63,15 +74,6 @@ const ENTRY_TITLES = {
   task: '任务执行',
   agents: '协作智能体',
   application: '应用项目',
-}
-
-function TaskExecutionPlaceholder() {
-  return (
-    <div className="workbench-drawer-placeholder">
-      <p>任务执行详情将在下一阶段迁入抽屉。</p>
-      <small>当前生成任务的进度与步骤执行记录仍可经由此入口查看（Phase 2 迁入）。</small>
-    </div>
-  )
 }
 
 function ApplicationProjectPlaceholder() {

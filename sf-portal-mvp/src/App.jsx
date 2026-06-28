@@ -150,6 +150,31 @@ function App() {
             onDeleteAgent: agents.deleteAgent,
             deletingAgentId: agents.deletingAgentId,
           }}
+          // Phase 2: thread the focus task's observability into the 任务执行
+          // drawer. activeJob is the dialogue's focusTask (focus-task only this
+          // round); the rest are the same useJobs accessors JobCenter needs.
+          // Records/artifacts accessors + cancel/retry/repair-from-failure +
+          // snapshot save are wired here so the embedded detail reuses the
+          // existing logic with no re-derivation.
+          taskProps={{
+            activeJob: dialogue.focusTask,
+            steps: jobs.steps,
+            summary: jobs.summary,
+            collaborationPlan: jobs.collaborationPlan,
+            artifacts: jobs.artifacts,
+            getArtifactContent: factoryApiGetArtifactContent,
+            selectedStepId: jobs.selectedStepId,
+            selectedAttempt: jobs.selectedAttempt,
+            selectStepAttempt: jobs.selectStepAttempt,
+            getRecords: jobs.getRecords,
+            getUnreadCount: jobs.getUnreadCount,
+            loadStepRecords: jobs.loadStepRecords,
+            onCancel: jobs.cancelJob,
+            onRetry: jobs.retryCurrentStep,
+            onRepairFromFailure: jobs.repairFromFailure,
+            onSaveSnapshot: jobs.saveStepSnapshot,
+            loading: jobs.loading,
+          }}
         />
       </div>
     </main>

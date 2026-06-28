@@ -213,8 +213,8 @@ export function JobCenter({
       <section className="job-center job-center-empty">
         <div className="jc-placeholder">
           <AlertTriangle size={22} />
-          <p>当前没有进行中的生成任务</p>
-          <span className="jc-hint">在下方输入需求以创建新的任务</span>
+          <p>当前会话暂无生成任务</p>
+          <span className="jc-hint">在对话区输入需求以创建新的生成任务</span>
         </div>
       </section>
     )
@@ -265,62 +265,99 @@ export function JobCenter({
         </div>
       ) : null}
 
-      {hasCollaborationPlan ? (
-        <div className="jc-collaboration-lanes">
-          {collaborationLanes.map(group => (
-            <section className="jc-lane" key={group.lane.id}>
-              <h3 className="jc-lane-title">{group.lane.label}</h3>
-              <div className="jc-step-matrix">
-                {group.cards.map(view => {
-                  const attempt =
-                    (view.summary && (view.summary.attempt ?? view.summary.latest_attempt)) ??
-                    (view.step && (view.step.attempt ?? view.step.latest_attempt)) ??
-                    null
-                  return (
-                    <StepCard
-                      key={view.agent.key}
-                      kind={view.kind}
-                      label={view.label}
-                      agent={view.agent}
-                      step={view.step}
-                      summary={view.summary}
-                      selected={!!view.stepId && selectedStepId === view.stepId}
-                      unreadCount={view.stepId && getUnreadCount ? getUnreadCount(view.stepId, attempt) : 0}
-                      onSelect={() => openDrawerForStepId(view.stepId)}
-                    />
-                  )
-                })}
-              </div>
-            </section>
-          ))}
-        </div>
+      {/*
+        Phase 2: in-drawer list↔detail toggle. The body switches between the
+        vertical 执行波次 list and the embedded step detail (rendered INLINE,
+        no createPortal overlay). `drawerOpen` (driven by selectedStepId) is the
+        toggle; the detail's back button calls closeDrawer to return to the
+        list. Both views live inside this one drawer — no stacked overlays.
+      */}
+      {drawerOpen && selectedStepId ? (
+        <StepExecutionDrawer
+          embedded
+          open
+          onBack={closeDrawer}
+          onClose={closeDrawer}
+          step={selectedStep}
+          summary={selectedSummary}
+          stageLabel={selectedStageLabel}
+          attempts={selectedAttempts}
+          selectedAttempt={selectedAttempt}
+          onSelectAttempt={onSelectAttempt}
+          records={recordsView}
+          onLoadOlder={loadOlder}
+          hasOlder={hasOlder}
+          loadingOlder={false}
+          onCancel={() => onCancel && onCancel(activeJob.id)}
+          onRetry={() => onRetry && onRetry(activeJob.id)}
+          onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
+          onSaveSnapshot={(stepId, snapshot) =>
+            onSaveSnapshot && onSaveSnapshot(activeJob.id, stepId, snapshot)
+          }
+          artifacts={artifacts || []}
+          getArtifactContent={getArtifactContent}
+        />
       ) : (
-        <div className="jc-step-matrix">
-          {cardView.map(view => {
-            const { kind, label, stepId, step, summary: sm } = view
-            const attempt =
-              (sm && (sm.attempt ?? sm.latest_attempt)) ??
-              (step && (step.attempt ?? step.latest_attempt)) ??
-              null
-            // Unread and selected both key off the REAL step_id.
-            const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
-            return (
-              <StepCard
-                key={kind}
-                kind={kind}
-                label={label}
-                step={step}
-                summary={sm}
-                selected={!!stepId && selectedStepId === stepId}
-                unreadCount={unread}
-                onSelect={openDrawerFor}
-              />
-            )
-          })}
+        <div className="jc-waves">
+          {hasCollaborationPlan
+            ? collaborationLanes.map(group => (
+                <section className="jc-wave" key={group.lane.id}>
+                  <h3 className="jc-wave-title">{group.lane.label}</h3>
+                  <div className="jc-wave-cards">
+                    {group.cards.map(view => {
+                      const attempt =
+                        (view.summary && (view.summary.attempt ?? view.summary.latest_attempt)) ??
+                        (view.step && (view.step.attempt ?? view.step.latest_attempt)) ??
+                        null
+                      return (
+                        <StepCard
+                          key={view.agent.key}
+                          kind={view.kind}
+                          label={view.label}
+                          agent={view.agent}
+                          step={view.step}
+                          summary={view.summary}
+                          selected={!!view.stepId && selectedStepId === view.stepId}
+                          unreadCount={view.stepId && getUnreadCount ? getUnreadCount(view.stepId, attempt) : 0}
+                          onSelect={() => openDrawerForStepId(view.stepId)}
+                        />
+                      )
+                    })}
+                  </div>
+                </section>
+              ))
+            : (
+                <section className="jc-wave">
+                  <h3 className="jc-wave-title">执行阶段</h3>
+                  <div className="jc-wave-cards">
+                    {cardView.map(view => {
+                      const { kind, label, stepId, step, summary: sm } = view
+                      const attempt =
+                        (sm && (sm.attempt ?? sm.latest_attempt)) ??
+                        (step && (step.attempt ?? step.latest_attempt)) ??
+                        null
+                      // Unread and selected both key off the REAL step_id.
+                      const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
+                      return (
+                        <StepCard
+                          key={kind}
+                          kind={kind}
+                          label={label}
+                          step={step}
+                          summary={sm}
+                          selected={!!stepId && selectedStepId === stepId}
+                          unreadCount={unread}
+                          onSelect={openDrawerFor}
+                        />
+                      )
+                    })}
+                  </div>
+                </section>
+              )}
         </div>
       )}
 
-      {jobStatus === 'failed' && (
+      {jobStatus === 'failed' && !drawerOpen && (
         <div className="jc-actions">
           <button
             type="button"
@@ -341,7 +378,7 @@ export function JobCenter({
         </div>
       )}
 
-      {jobStatus === 'completed' && (activeJob.runtime_url || activeJob.url) ? (
+      {jobStatus === 'completed' && (activeJob.runtime_url || activeJob.url) && !drawerOpen ? (
         <div className="jc-completed">
           <CheckCircle2 size={18} />
           <a
@@ -356,31 +393,6 @@ export function JobCenter({
       ) : null}
 
       {loading && <div className="jc-loading-hint">同步任务状态中...</div>}
-
-      {/* Right-side overlay drawer. Does NOT consume center-column space; it
-          overlays the agent-list region. */}
-      <StepExecutionDrawer
-        open={drawerOpen && !!selectedStepId}
-        onClose={closeDrawer}
-        step={selectedStep}
-        summary={selectedSummary}
-        stageLabel={selectedStageLabel}
-        attempts={selectedAttempts}
-        selectedAttempt={selectedAttempt}
-        onSelectAttempt={onSelectAttempt}
-        records={recordsView}
-        onLoadOlder={loadOlder}
-        hasOlder={hasOlder}
-        loadingOlder={false}
-        onCancel={() => onCancel && onCancel(activeJob.id)}
-        onRetry={() => onRetry && onRetry(activeJob.id)}
-        onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
-        onSaveSnapshot={(stepId, snapshot) =>
-          onSaveSnapshot && onSaveSnapshot(activeJob.id, stepId, snapshot)
-        }
-        artifacts={artifacts || []}
-        getArtifactContent={getArtifactContent}
-      />
     </section>
   )
 }

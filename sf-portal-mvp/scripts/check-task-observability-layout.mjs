@@ -9,23 +9,55 @@ const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const clientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const useJobsJs = readFileSync(new URL('../src/hooks/useJobs.js', import.meta.url), 'utf8')
 
-// --- 3x2 matrix CSS rule ---------------------------------------------------
+// --- Phase 2: vertical 执行波次 layout (replaces the old 3-wide matrix) ---
+// JobCenter now stacks collaboration-plan lanes (analysis/generation/delivery)
+// as VERTICAL waves (.jc-waves > .jc-wave > .jc-wave-cards), one labeled group
+// per lane, with agent cards in dependency order. Legacy fixed-step jobs render
+// as a single vertical wave group too. The old 3-wide .jc-step-matrix grid CSS
+// is removed (kept out of the stylesheet so a stale pin does not false-green).
+assert.match(
+  jobCenterJsx,
+  /className="jc-waves"/,
+  'JobCenter must render a .jc-waves vertical-wave container (replaces the horizontal matrix)',
+)
+assert.match(
+  jobCenterJsx,
+  /className="jc-wave"/,
+  'JobCenter must render each execution wave as a .jc-wave group',
+)
+assert.match(
+  jobCenterJsx,
+  /className="jc-wave-title"/,
+  'each wave must show a .jc-wave-title label (the lane name)',
+)
+assert.match(
+  jobCenterJsx,
+  /className="jc-wave-cards"/,
+  'each wave must stack its agent cards in a .jc-wave-cards container',
+)
 assert.match(
   jobCenterCss,
-  /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/,
-  'step matrix must be a 3-wide CSS grid of six fixed stages',
+  /\.jc-waves\s*\{[\s\S]*flex-direction:\s*column/,
+  'the .jc-waves container must stack waves vertically (column flex)',
+)
+assert.match(
+  jobCenterCss,
+  /\.jc-wave-cards\s*\{[\s\S]*flex-direction:\s*column/,
+  'cards inside a wave must stack vertically (column flex), not the old 3-wide grid',
+)
+assert.doesNotMatch(
+  jobCenterCss,
+  /\.jc-step-matrix\s*\{/,
+  'the old 3-wide .jc-step-matrix grid CSS rule must be removed (vertical waves replace it)',
 )
 
-// --- JobCenter wires StepCard + the drawer ---------------------------------
+// --- JobCenter wires StepCard + the (embedded) detail ----------------------
 assert.match(jobCenterJsx, /<StepCard/, 'JobCenter must render StepCard components')
 assert.match(jobCenterJsx, /<StepExecutionDrawer/, 'JobCenter must render the StepExecutionDrawer')
 
-// Six fixed stages must appear (each StepCard instance maps to one stage).
-// JobCenter renders a single <StepCard ... /> inside a .map() over a per-kind
-// view derived from the six FIXED_STEPS (via buildStepCardView). The literal
-// JSX count is 1; the real requirement is that all six stage labels appear AND
-// the matrix maps the per-kind view into StepCard, while still defining the
-// six FIXED_STEPS source-of-truth kinds in order.
+// Six fixed stages still appear for legacy jobs (FIXED_STEPS source of truth).
+// JobCenter renders a <StepCard .../> inside a .map() over the per-kind view
+// derived from the six FIXED_STEPS (via buildStepCardView), now inside a wave.
 const stepCardCount = (jobCenterJsx.match(/<StepCard/g) || []).length
 assert.ok(stepCardCount >= 1, `JobCenter must render StepCard (found ${stepCardCount})`)
 assert.match(
@@ -39,13 +71,29 @@ assert.match(
   'JobCenter must keep the six fixed stage kinds in order',
 )
 
-// Six fixed stage names in the source (so the matrix shows the full pipeline).
+// Six fixed stage names in the source (so legacy jobs show the full pipeline).
 for (const label of ['需求分析', '方案设计', '代码生成', '测试验证', '镜像构建', '部署']) {
   assert.ok(
     jobCenterJsx.includes(label) || stepCardJsx.includes(label),
     `fixed stage label missing: ${label}`,
   )
 }
+
+// --- Phase 2: embedded in-drawer detail (collapses the portal-overlay stack)
+// The detail now opens INSIDE the 任务执行 drawer: JobCenter toggles its body
+// between the wave list and an embedded StepExecutionDrawer (no createPortal
+// overlay, no position:fixed). The back button returns to the list.
+assert.match(
+  jobCenterJsx,
+  /drawerOpen && selectedStepId \?[\s\S]*<StepExecutionDrawer[\s\S]*embedded/,
+  'JobCenter must render an embedded StepExecutionDrawer when a step is selected (in-drawer detail)',
+)
+assert.match(jobCenterJsx, /onBack=\{closeDrawer\}/, 'the embedded detail must expose a back action to return to the wave list')
+assert.match(drawerJsx, /embedded = false/, 'StepExecutionDrawer must accept an embedded prop (default false)')
+assert.match(drawerJsx, /sed-panel-embedded/, 'embedded mode must render a .sed-panel-embedded container (inline, no portal overlay)')
+assert.match(drawerJsx, /ArrowLeft/, 'embedded mode must show a back affordance (ArrowLeft icon)')
+assert.match(drawerJsx, /sed-back/, 'embedded mode must render a .sed-back back button')
+
 
 // --- Drawer tabs + affordances --------------------------------------------
 assert.match(drawerJsx, /概览/, 'drawer must have an 概览 (overview) tab')

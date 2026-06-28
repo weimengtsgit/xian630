@@ -112,24 +112,28 @@ assert.equal(displayJobTitle({ app_name: '航迹复盘', user_prompt: '将阈值
 assert.equal(displayJobTitle({ app_name: '航迹复盘', id: 'job_1' }), 'job_1')
 assert.match(workbenchJsx, /resolveWorkbenchTitle\(view,\s*session\)/, 'workbench must resolve its header title through the pure helper')
 
-// Phase 1 (workbench-drawer migration) REMOVED the inline focus-task panel from
-// the center: the task-execution surface now lives behind the 任务执行 drawer
-// entry (Phase 2 migrates JobCenter/StepCard/StepExecutionDrawer INTO that
-// drawer). The center keeps only the conversation timeline + composer.
+// Phase 2 (task-execution drawer migration) mounts JobCenter INSIDE the
+// 任务执行 drawer (via WorkbenchDrawer's task entry), not as a global panel in
+// the center or at the App root. The center keeps only the conversation timeline
+// + composer; the task observability (waves + embedded detail) lives behind the
+// drawer entry, dialogue-scoped to the focus task.
 //
-// The OLD assertions here pinned the center owning a taskPanel rendered from a
-// focusTask-driven <JobCenter …>. Phase 1 removes both: ConversationWorkbench
-// no longer accepts/renders taskPanel, and App no longer passes one. We assert
-// the removal MEANINGFULLY (not deleted to force green) so a regression that
-// silently re-mounts the inline task panel in the center fails the harness.
-assert.doesNotMatch(workbenchJsx, /\btaskPanel\b/, 'Phase 1: ConversationWorkbench must NOT render an inline task panel (moved to the 任务执行 drawer)')
-assert.doesNotMatch(workbenchJsx, /cw-focus-task/, 'Phase 1: ConversationWorkbench must NOT keep the inline focus-task area markup')
-assert.doesNotMatch(appJsx, /taskPanel=\{/, 'Phase 1: App must NOT pass a taskPanel prop into ConversationWorkbench (inline task area removed)')
-assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must not remain a global task panel outside the dialogue workbench')
-// Phase 1 keeps the focus-task selector + factoryApi artifact wrapper wired so
-// Phase 2 can reattach JobCenter inside the drawer without re-deriving plumbing.
-assert.match(appJsx, /focusTask/, 'App must keep the focusTask signal wired (Phase 2 drawer reuses it)')
-assert.match(appJsx, /factoryApiGetArtifactContent/, 'App must keep the factoryApi artifact-content wrapper exported (Phase 2 drawer reuses it)')
+// The OLD Phase-1 assertions here pinned the center NOT owning a taskPanel and
+// App NOT passing a global <JobCenter activeJob={jobs.activeJob}>. Phase 2 keeps
+// those prohibitions (the center must not regain the inline panel) AND adds the
+// positive Phase-2 contract: App threads the focus task into the DRAWER's task
+// entry via taskProps, so JobCenter is reached only through the drawer host.
+assert.doesNotMatch(workbenchJsx, /\btaskPanel\b/, 'the center must NOT render an inline task panel (lives behind the 任务执行 drawer)')
+assert.doesNotMatch(workbenchJsx, /cw-focus-task/, 'the center must NOT keep the inline focus-task area markup')
+assert.doesNotMatch(appJsx, /taskPanel=\{/, 'App must NOT pass a taskPanel prop into ConversationWorkbench (inline task area removed)')
+assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must NOT remain a global task panel outside the 任务执行 drawer')
+// Phase 2: JobCenter is reached ONLY through the drawer's task entry. App wires
+// the dialogue's focus task (not the global jobs.activeJob) as JobCenter.activeJob,
+// scoped to the focus task per the plan.
+assert.match(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must scope JobCenter to the dialogue focus task (focus-task only), threaded via taskProps')
+assert.match(appJsx, /focusTask/, 'App must keep the focusTask signal wired (drawer task entry reuses it)')
+assert.match(appJsx, /factoryApiGetArtifactContent/, 'App must keep the factoryApi artifact-content wrapper exported (drawer task entry reuses it)')
+
 
 // WorkTraceList (执行轨迹) is collapsible like FoldedAnalysis: a fold toggle
 // with an expand/collapse hint, defaulting collapsed, plus a live step count in

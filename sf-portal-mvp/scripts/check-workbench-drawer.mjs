@@ -58,9 +58,18 @@ assert.match(drawerJsx, /if \(!activeEntry\) return null/, 'WorkbenchDrawer must
 assert.match(drawerJsx, /activeEntry === 'task'/, 'the drawer must branch on the task entry')
 assert.match(drawerJsx, /activeEntry === 'agents'/, 'the drawer must branch on the agents entry')
 assert.match(drawerJsx, /activeEntry === 'application'/, 'the drawer must branch on the application entry')
-// Phase 1: the task entry is a PLACEHOLDER (JobCenter migrates in Phase 2).
-assert.match(drawerJsx, /任务执行详情将在下一阶段迁入抽屉/, 'the 任务执行 entry must show a Phase-1 placeholder (JobCenter NOT mounted yet)')
-assert.doesNotMatch(drawerJsx, /<JobCenter/, 'Phase 1: WorkbenchDrawer must NOT mount JobCenter (Phase 2 migrates it)')
+// Phase 2: the 任务执行 entry now MOUNTS JobCenter (the placeholder is gone).
+// JobCenter renders the focus task's vertical 执行波次 + agent cards and the
+// step detail opens IN THE SAME drawer (embedded, no portal overlay stack).
+assert.match(drawerJsx, /import \{ JobCenter \} from '\.\/JobCenter'/, 'Phase 2: WorkbenchDrawer must import JobCenter')
+assert.match(drawerJsx, /activeEntry === 'task' \?[\s\S]*<JobCenter/, 'Phase 2: the 任务执行 entry must render <JobCenter/>')
+assert.match(drawerJsx, /taskProps/, 'Phase 2: WorkbenchDrawer must thread task observability props (taskProps) into JobCenter')
+assert.doesNotMatch(drawerJsx, /任务执行详情将在下一阶段迁入抽屉/, 'Phase 2: the Phase-1 placeholder must be removed')
+// App threads the focus task + useJobs accessors into the drawer's task entry.
+assert.match(appJsx, /taskProps=\{/, 'Phase 2: App must pass a taskProps bundle into WorkbenchDrawer')
+assert.match(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must wire the dialogue focus task as JobCenter.activeJob')
+assert.match(appJsx, /collaborationPlan: jobs\.collaborationPlan/, 'Phase 2: App must thread the collaboration plan into the task drawer')
+assert.match(appJsx, /onRepairFromFailure: jobs\.repairFromFailure/, 'Phase 2: App must thread repair-from-failure into the task drawer')
 // The drawer is an OVERLAY (not a grid column) so the center width never jitters.
 assert.match(drawerCss, /\.workbench-drawer\s*\{[\s\S]*position:\s*absolute/, 'the drawer must be an absolute overlay (not a grid column) to avoid center-width jitter')
 assert.match(drawerCss, /\.workbench-drawer\s*\{[\s\S]*right:\s*16px/, 'the overlay must anchor to the right of the workbench')
