@@ -48,6 +48,10 @@ _Avoid_: 生成任务草稿, 空任务
 A previously created dialogue session that remains available for review or continuation according to its lifecycle state.
 _Avoid_: 任务历史, 应用历史
 
+**会话导航栏**:
+The left workbench navigation surface for creating a new dialogue session and switching among historical dialogue sessions.
+_Avoid_: 应用列表, 业务智能体列表, 历史会话抽屉
+
 **会话归档**:
 The user-initiated removal of a continuing dialogue session from active work without removing its messages, visible work trace, application lineage, or audit records.
 _Avoid_: 会话删除, 应用删除, 完成后自动关闭
@@ -59,6 +63,14 @@ _Avoid_: 会话归档, 应用删除, 自动清理
 **会话工作台**:
 The central portal experience for reviewing and continuing a dialogue session, including intent results, model analysis process, route-specific confirmation, and application requirement clarification where applicable.
 _Avoid_: 需求澄清区域, 独立澄清面板, 任务区
+
+**工作台抽屉**:
+A collapsible auxiliary surface opened from the conversation workbench for task execution, collaboration-agent, or application-project views without occupying the central dialogue workspace.
+_Avoid_: 固定右栏, 任务区, 悬浮恢复按钮
+
+**执行波次**:
+A visual grouping of collaboration-agent task cards whose dependency position allows them to be understood together in the task execution drawer. It describes dependency grouping, not necessarily concurrent execution.
+_Avoid_: 并行任务, 固定六阶段泳道, 实际并发保证
 
 **生成任务**:
 A confirmed, independently executable unit of work within a dialogue session that creates or modifies one application version through the software factory pipeline.
@@ -88,6 +100,26 @@ _Avoid_: 新建重复应用, 覆盖历史版本, 独立会话
 A runnable software product shown in the portal application list, either imported from preset manifests or produced by a completed generation task. Its user-facing surface label is **智能体** (the produced agent-product is what the user builds, opens, and manages); the internal entity name **应用** is retained in code and this glossary. 协作智能体 appears only as Factory-owned generation collaborators, so it does not collide with the user-facing 智能体 label.
 _Avoid_: 任务, 会话, 模板
 
+**应用项目**:
+The project workspace for the application bound to the current dialogue session, containing generated requirements, plans, design documents, source code, configuration, tests, and related project files.
+_Avoid_: 业务智能体列表, 纳管智能体列表, 应用列表
+
+**机器执行契约**:
+A structured, immutable step output such as `output.json` that the factory validates and uses to advance generation-task execution.
+_Avoid_: 用户可编辑文档, Markdown 说明文档, 项目文档
+
+**项目文档**:
+A human-readable document in the application project, usually Markdown, projected from machine execution contracts and related context for user review.
+_Avoid_: 机器执行契约, 审计附件, 任务执行日志
+
+**项目文档索引**:
+A factory-owned metadata file in an application project that links each project document to its source machine execution contract and generation attribution.
+_Avoid_: 应用运行 manifest, 审计附件列表, 用户文档内容
+
+**文档草稿**:
+A user-edited project document state that is saved for review but has not been converted into a confirmed application modification or used by a generation task.
+_Avoid_: 应用修改, 机器执行契约, 生效版本内容
+
 **应用删除**:
 The removal of a generated application's portal record, runtime deployment state, and local generated application directory while retaining the clarification and generation audit trail.
 _Avoid_: 删除生成任务, 删除历史会话, 清空审计记录
@@ -107,6 +139,18 @@ _Avoid_: 原始思考过程, 思维链, 系统状态日志
 **模型分析过程**:
 The analysis portion of the visible work trace shown inside a clarification conversation, composed from structured analysis work logs and model output summaries.
 **模型思考过程 (思考过程)**: The model's raw reasoning (`thinking_delta`), streamed live on the conversation surface as a 思考过程 block (distinct from 分析过程). Shown to the user token-by-token; the conversation flow surfaces it (the executor/trace pipeline is a separate surface).
+
+**任务思考过程**:
+The `thinking_delta` emitted by a generation-task agent while a task card is executing, shown in the dialogue conversation flow as task-attributed thinking with credential redaction but without summarization or semantic rewriting. It is distinct from analysis work logs, visible work trace events, and step execution records.
+_Avoid_: 分析工作日志, 可见工作轨迹, 步骤执行记录
+
+**任务执行块**:
+A dialogue conversation-flow block representing one executing generation-task card or collaboration-agent step, containing its task thinking process, safe execution process, and step-level summary while remaining attributed to the parent generation task.
+_Avoid_: 任务卡片, 右侧任务抽屉, 步骤执行记录
+
+**任务内澄清请求**:
+A dialogue conversation-flow card raised by an executing generation-task card when user input is required before that card can continue. It appears as an independent conversation item after the related task execution block; the user's chosen clarification is then recorded as a normal user dialogue message.
+_Avoid_: 任务执行日志, 任务执行块内部内容, 普通需求澄清会话
 
 **可见工作轨迹**:
 An ordered, persistent, user-facing record of analysis, tool activity, data-source decisions, validation, output, and state changes for a dialogue or generation task. It is pushed in real time and can be replayed after a reconnect; every event is attributed to its dialogue and, where applicable, its task; hidden model reasoning is excluded.
