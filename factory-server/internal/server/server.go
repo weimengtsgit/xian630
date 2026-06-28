@@ -425,6 +425,8 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/apps", s.listApps)
 	r.Handle("GET", "/api/managed-agents", s.listManagedAgents)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
+	r.Handle("GET", "/api/apps/:id/project-tree", s.applicationProjectTree)
+	r.Handle("GET", "/api/apps/:id/project-file", s.applicationProjectFile)
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)
 	r.Handle("POST", "/api/apps/:id/rebuild", s.rebuildApp)

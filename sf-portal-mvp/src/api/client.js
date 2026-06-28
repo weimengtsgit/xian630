@@ -85,6 +85,8 @@ async function requestText(path, options = {}) {
 
 export const factoryApi = {
   listApps: () => request('/api/apps'),
+  getApplicationProjectTree: appId => request(`/api/apps/${appId}/project-tree`),
+  getApplicationProjectFile: (appId, path) => request(`/api/apps/${appId}/project-file?path=${encodeURIComponent(path)}`),
   listManagedAgents: () => request('/api/managed-agents'),
   startApp: id => request(`/api/apps/${id}/start`, { method: 'POST' }),
   stopApp: id => request(`/api/apps/${id}/stop`, { method: 'POST' }),

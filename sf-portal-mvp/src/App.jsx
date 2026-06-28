@@ -155,6 +155,10 @@ function App() {
   // application project (resolvedApplication OR seededJob in the composed view).
   const view = dialogue.view
   const hasBoundApplication = !!(view && (view.resolvedApplication || view.seededJob))
+  const applicationProjectId =
+    (view && view.resolvedApplication && view.resolvedApplication.id) ||
+    (view && view.seededJob && (view.seededJob.application_id || view.seededJob.created_app_id)) ||
+    ''
 
   // Regenerate stays available to the (future) business/managed-agent page; kept
   // wired through apps/start/stop/rebuild so Phase 2+ can reattach it without
@@ -266,6 +270,11 @@ function App() {
               onRepairFromFailure: jobs.repairFromFailure,
               onSaveSnapshot: jobs.saveStepSnapshot,
               loading: jobs.loading,
+            }}
+            applicationProps={{
+              application: view && view.resolvedApplication ? view.resolvedApplication : null,
+              applicationId: applicationProjectId,
+              seededJob: view && view.seededJob ? view.seededJob : null,
             }}
           />
         </div>

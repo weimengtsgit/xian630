@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { AgentsPanel } from './AgentsPanel'
 import { JobCenter } from './JobCenter'
+import { ApplicationProjectPanel } from './ApplicationProjectPanel'
 import './WorkbenchDrawer.css'
 
 // WorkbenchDrawer is the unified right-side 工作台抽屉 host (Phase 1 of the
@@ -37,6 +38,7 @@ export function WorkbenchDrawer({
   // the accessors JobCenter needs (steps, summary, collaborationPlan, records/
   // artifacts accessors, cancel/retry/repair-from-failure, snapshot save).
   taskProps,
+  applicationProps,
 }) {
   if (!activeEntry) return null
   const title = ENTRY_TITLES[activeEntry] || ''
@@ -67,7 +69,7 @@ export function WorkbenchDrawer({
             // hide affordance.
           />
         ) : null}
-        {activeEntry === 'application' ? <ApplicationProjectPlaceholder /> : null}
+        {activeEntry === 'application' ? <ApplicationProjectPanel {...(applicationProps || {})} /> : null}
       </div>
     </aside>
   )
