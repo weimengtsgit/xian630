@@ -630,3 +630,23 @@ const (
 	WorkTraceError         WorkTraceType = "error"               // error surfaced
 	WorkTraceAssistant     WorkTraceType = "assistant_output"    // assistant text output
 )
+
+// TaskThinkingEvent is one durable, immutable row of raw provider thinking
+// captured during task execution. Unlike WorkTraceEvent, this holds the
+// full, unredacted (except credentials) thinking stream for debugging and
+// audit, never surfaced to the UI. DialogueSequence is per dialogue_id and
+// assigned by the store (MAX+1 in one transaction). StepSequence is per
+// (task_id, step_id, attempt) and also assigned by the store.
+type TaskThinkingEvent struct {
+	ID               string    `json:"id"`
+	DialogueID       string    `json:"dialogue_id"`
+	TaskID           string    `json:"task_id,omitempty"`
+	StepID           string    `json:"step_id,omitempty"`
+	Attempt          int       `json:"attempt,omitempty"`
+	AgentKey         string    `json:"agent_key,omitempty"`
+	DialogueSequence int64     `json:"dialogue_sequence"`
+	StepSequence     int       `json:"step_sequence"`
+	Content          string    `json:"content"`
+	Redacted         bool      `json:"redacted"`
+	CreatedAt        time.Time `json:"created_at"`
+}
