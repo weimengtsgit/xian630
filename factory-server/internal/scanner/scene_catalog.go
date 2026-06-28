@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 )
 
 // Surface is the runtime assignment for a preset scene: whether it shows as an
@@ -23,9 +22,6 @@ const (
 	// SurfaceHidden: the preset exists on disk but is excluded from both the app
 	// list and the blueprint catalog.
 	SurfaceHidden Surface = "hidden"
-	// SurfaceManagedAgent: an externally managed/static agent entry. It is
-	// configured directly in the catalog and does not require a scene manifest.
-	SurfaceManagedAgent Surface = "managed_agent"
 )
 
 // catalogVersion is the single supported scene-catalog.json schema version.
@@ -34,12 +30,8 @@ const catalogVersion = 1
 // catalogEntry is one row of the on-disk .factory/scene-catalog.json scenes map.
 type catalogEntry struct {
 	Surface Surface `json:"surface"`
-	// Order is required iff Surface == SurfaceApplication or SurfaceManagedAgent.
-	Order       int      `json:"order,omitempty"`
-	Name        string   `json:"name,omitempty"`
-	Description string   `json:"description,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	Keywords    []string `json:"keywords,omitempty"`
+	// Order is required iff Surface == SurfaceApplication. Zero otherwise.
+	Order int `json:"order,omitempty"`
 }
 
 type catalogFile struct {
@@ -74,9 +66,6 @@ func LoadSceneCatalog(root string, knownPresetSlugs map[string]bool) (SceneCatal
 		return cat, err
 	}
 	for slug := range cat.entries {
-		if cat.entries[slug].Surface == SurfaceManagedAgent {
-			continue
-		}
 		if !knownPresetSlugs[slug] {
 			return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q is not a discovered preset slug", slug)
 		}
@@ -120,50 +109,29 @@ func loadSceneCatalogFile(root string) (SceneCatalog, error) {
 		return SceneCatalog{}, fmt.Errorf("load scene catalog: missing scenes map")
 	}
 
-	seenAppOrder := make(map[int]string)     // order -> first application slug
-	seenManagedOrder := make(map[int]string) // order -> first managed-agent slug
+	seenOrder := make(map[int]string) // order -> first slug claiming it
 	cat := SceneCatalog{entries: make(map[string]catalogEntry, len(cf.Scenes))}
 	for slug, entry := range cf.Scenes {
 		// Validate surface value.
 		switch entry.Surface {
-		case SurfaceApplication, SurfaceBlueprint, SurfaceHidden, SurfaceManagedAgent:
+		case SurfaceApplication, SurfaceBlueprint, SurfaceHidden:
 		default:
-			return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q has invalid surface %q (want application|blueprint|hidden|managed_agent)", slug, entry.Surface)
+			return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q has invalid surface %q (want application|blueprint|hidden)", slug, entry.Surface)
 		}
 		// Application surfaces require a positive, unique order.
 		if entry.Surface == SurfaceApplication {
 			if entry.Order <= 0 {
 				return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q is an application surface but has no valid order (%d)", slug, entry.Order)
 			}
-			if first, dup := seenAppOrder[entry.Order]; dup {
+			if first, dup := seenOrder[entry.Order]; dup {
 				return SceneCatalog{}, fmt.Errorf("load scene catalog: duplicate application order %d (scenes %q and %q)", entry.Order, first, slug)
 			}
-			seenAppOrder[entry.Order] = slug
-		}
-		if entry.Surface == SurfaceManagedAgent {
-			if entry.Order <= 0 {
-				return SceneCatalog{}, fmt.Errorf("load scene catalog: scene %q is a managed_agent surface but has no valid order (%d)", slug, entry.Order)
-			}
-			if first, dup := seenManagedOrder[entry.Order]; dup {
-				return SceneCatalog{}, fmt.Errorf("load scene catalog: duplicate managed_agent order %d (scenes %q and %q)", entry.Order, first, slug)
-			}
-			if !validManagedAgentURL(entry.URL) {
-				return SceneCatalog{}, fmt.Errorf("load scene catalog: managed_agent %q has invalid url %q", slug, entry.URL)
-			}
-			if strings.TrimSpace(entry.Name) == "" {
-				return SceneCatalog{}, fmt.Errorf("load scene catalog: managed_agent %q has empty name", slug)
-			}
-			seenManagedOrder[entry.Order] = slug
+			seenOrder[entry.Order] = slug
 		}
 		cat.entries[slug] = entry
 	}
 
 	return cat, nil
-}
-
-func validManagedAgentURL(raw string) bool {
-	u := strings.TrimSpace(raw)
-	return u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "/")
 }
 
 func discoverPresetSceneSlugs(root string) (map[string]bool, error) {
@@ -225,49 +193,6 @@ func (c SceneCatalog) VisibleApplications() []VisibleApplication {
 type VisibleApplication struct {
 	Slug  string
 	Order int
-}
-
-// ManagedAgent is one externally managed/static agent link configured in the
-// scene catalog.
-type ManagedAgent struct {
-	Slug        string   `json:"slug"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	URL         string   `json:"url"`
-	Keywords    []string `json:"keywords,omitempty"`
-	Order       int      `json:"order"`
-}
-
-// ManagedAgents returns managed-agent links ordered by catalog order ascending.
-func (c SceneCatalog) ManagedAgents() []ManagedAgent {
-	type pair struct {
-		slug  string
-		entry catalogEntry
-	}
-	pairs := make([]pair, 0, len(c.entries))
-	for slug, e := range c.entries {
-		if e.Surface == SurfaceManagedAgent {
-			pairs = append(pairs, pair{slug: slug, entry: e})
-		}
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].entry.Order != pairs[j].entry.Order {
-			return pairs[i].entry.Order < pairs[j].entry.Order
-		}
-		return pairs[i].slug < pairs[j].slug
-	})
-	out := make([]ManagedAgent, 0, len(pairs))
-	for _, p := range pairs {
-		out = append(out, ManagedAgent{
-			Slug:        p.slug,
-			Name:        p.entry.Name,
-			Description: p.entry.Description,
-			URL:         p.entry.URL,
-			Keywords:    append([]string(nil), p.entry.Keywords...),
-			Order:       p.entry.Order,
-		})
-	}
-	return out
 }
 
 // ApplicationOrder returns the catalog display order for an application-surface

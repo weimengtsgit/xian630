@@ -17,18 +17,9 @@ import { readFileSync } from 'node:fs'
 import {
   initialWorkTraceState,
   applyTraceEvent,
-  normalizeTraceEvent,
 } from '../src/hooks/workTraceState.js'
 import { resolveWorkbenchTitle } from '../src/hooks/dialogueTimeline.js'
 import { displayJobTitle } from '../src/hooks/jobSelection.js'
-
-// ---- normalize: provenance fields ------------------------------------------
-{
-  const snake = normalizeTraceEvent({ dialogue_id: 'dlg', sequence: 1, type: 'clarification', agent_key: 'designer', payload_json: '{}' })
-  assert.equal(snake.agentKey, 'designer', 'normalizeTraceEvent must preserve snake_case agent_key')
-  const camel = normalizeTraceEvent({ dialogueId: 'dlg', sequence: 2, type: 'clarification', agentKey: 'coder', payload: {} })
-  assert.equal(camel.agentKey, 'coder', 'normalizeTraceEvent must preserve camelCase agentKey')
-}
 
 // ---- reducer: ordering, isolation, dedup (the verbatim brief test) -----------
 
@@ -121,34 +112,12 @@ assert.equal(displayJobTitle({ app_name: '航迹复盘', user_prompt: '将阈值
 assert.equal(displayJobTitle({ app_name: '航迹复盘', id: 'job_1' }), 'job_1')
 assert.match(workbenchJsx, /resolveWorkbenchTitle\(view,\s*session\)/, 'workbench must resolve its header title through the pure helper')
 
-// Phase 2 (task-execution drawer migration) mounts JobCenter INSIDE the
-// 任务执行 drawer (via WorkbenchDrawer's task entry), not as a global panel in
-// the center or at the App root. The center keeps only the conversation timeline
-// + composer; the task observability (waves + embedded detail) lives behind the
-// drawer entry, dialogue-scoped to the selected dialogue's tasks.
-//
-// The OLD Phase-1 assertions here pinned the center NOT owning a taskPanel and
-// App NOT passing a global <JobCenter activeJob={jobs.activeJob}>. Phase 2 keeps
-// those prohibitions (the center must not regain the inline panel) AND adds the
-// positive Phase-2 contract: App threads the dialogue's generation tasks into the
-// DRAWER's task entry via taskProps, so JobCenter is reached only through the
-// drawer host.
-assert.doesNotMatch(workbenchJsx, /\btaskPanel\b/, 'the center must NOT render an inline task panel (lives behind the 任务执行 drawer)')
-assert.doesNotMatch(workbenchJsx, /cw-focus-task/, 'the center must NOT keep the inline focus-task area markup')
-assert.doesNotMatch(appJsx, /taskPanel=\{/, 'App must NOT pass a taskPanel prop into ConversationWorkbench (inline task area removed)')
-assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must NOT remain a global task panel outside the 任务执行 drawer')
-// Phase 2: JobCenter is reached ONLY through the drawer's task entry. App wires
-// ALL of the dialogue's generation tasks (ranked, focus task first) into the
-// drawer via taskProps, with activeJob defaulting to the focus task and an
-// onSelectTask handler so any task can be drilled into. The drawer must NOT be
-// focus-task-only (that hid queued/historical/waiting-user tasks — P1-a).
-assert.doesNotMatch(appJsx, /activeJob: dialogue\.focusTask/, 'Phase 2: App must NOT hardwire activeJob to dialogue.focusTask only (drawer shows ALL dialogue tasks)')
-assert.match(appJsx, /jobs: dialogueJobs/, 'Phase 2: App must thread the ranked dialogue task list (dialogueJobs) into the drawer taskProps')
-assert.match(appJsx, /onSelectTask/, 'Phase 2: App must wire an onSelectTask handler so a non-focus task can be selected in the drawer')
-assert.match(appJsx, /rankTasks/, 'Phase 2: App must rank the dialogue tasks via rankTasks (focus task first)')
-assert.match(appJsx, /focusTask/, 'App must keep the focusTask signal wired (drawer task entry defaults to it)')
-assert.match(appJsx, /factoryApiGetArtifactContent/, 'App must keep the factoryApi artifact-content wrapper exported (drawer task entry reuses it)')
-
+// The selected dialogue owns the task panel. It must not be a separate
+// workbench sibling driven by the global display-job selector: selecting a
+// history dialogue must immediately change the task context and its actions.
+assert.match(workbenchJsx, /taskPanel/, 'ConversationWorkbench must render its focus-task panel internally')
+assert.match(appJsx, /taskPanel=\{[\s\S]*focusTask/, 'App must pass a dialogue focusTask-driven task panel into the workbench')
+assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must not remain a global task panel outside the dialogue workbench')
 
 // WorkTraceList (执行轨迹) is collapsible like FoldedAnalysis: a fold toggle
 // with an expand/collapse hint, defaulting collapsed, plus a live step count in

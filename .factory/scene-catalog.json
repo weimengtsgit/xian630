@@ -4,38 +4,6 @@
     "carrier-formation-replay": { "surface": "application", "order": 1 },
     "aircraft-carrier-track": { "surface": "application", "order": 2 },
     "east-sea-situation": { "surface": "application", "order": 3 },
-    "intention-analysis-intelligent-agent": {
-      "surface": "managed_agent",
-      "order": 1,
-      "name": "意图研判智能体",
-      "description": "本智能体从事件、轨迹、社交媒体、装备部署、基地配置等多元数据中提取特征，并行执行战略意图规则推理与区域态势背景分析。规则推理基于六大意图类别指标包括：威慑、塑造态势、局部控制、火力投送、非战争行动、战后维稳逐项评估概率，态势分析结合地缘政治与舆情倾向。最终综合输出意图候选列表、雷达图及数据溯源，辅助判明目标战略方向。",
-      "url": "http://123.56.109.32:81/",
-      "keywords": ["意图", "研判"]
-    },
-    "threat-analysis-intelligent-agent": {
-      "surface": "managed_agent",
-      "order": 2,
-      "name": "威胁研判智能体",
-      "description": "本智能体从事件、轨迹、武器部署、关键区域等数据中提取特征，并行执行威胁等级规则推理与火力覆盖/区域重合计算。规则推理依据锁定状态、目标进入要害区程度及国际热点烈度，区域计算结合武器射程与监视区边界动态划定。最终输出威胁等级、监视区监测列表、置信度及数据溯源，为预警决策提供量化依据。",
-      "url": "http://8.140.249.89/intelligence/monitor?alertId=alert-demo-001&tab=detail",
-      "keywords": ["威胁", "研判"]
-    },
-    "state-analysis-intelligent-agent": {
-      "surface": "managed_agent",
-      "order": 3,
-      "name": "状态研判智能体",
-      "description": "本智能体从事件、轨迹、编队、装备等多源数据中提取特征，并行执行状态规则推理与补给进度估算。规则推理基于七类状态，包括休整、维修、训练、警戒、演习、作战、补给逐项匹配条件，补给估算依据消耗模型计算干料等剩余比例。最终综合裁决当前状态，输出状态判定、补给进度、置信度及数据溯源，支撑航母动态精准研判。",
-      "url": "",
-      "keywords": ["状态", "研判"]
-    },
-    "trend-analysis-intelligent-agent": {
-      "surface": "managed_agent",
-      "order": 4,
-      "name": "动向研判智能体",
-      "description": "动向研判智能体",
-      "url": "http://211.91.71.64:8046/carrier-movement",
-      "keywords": ["动向", "研判"]
-    },
     "carrier-homeport-tide-window": { "surface": "blueprint" },
     "carrier-deck-wind-calculator": { "surface": "blueprint" },
     "merchant-density-grid-alert": { "surface": "blueprint" },

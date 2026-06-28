@@ -59,8 +59,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     dialogue_id     TEXT    NOT NULL DEFAULT '',
     application_id  TEXT    NOT NULL DEFAULT '',
     base_version_id TEXT    NOT NULL DEFAULT '',
-    kind            TEXT    NOT NULL DEFAULT '',
-    collaboration_plan_json TEXT NOT NULL DEFAULT ''
+    kind            TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS job_steps (
@@ -78,18 +77,8 @@ CREATE TABLE IF NOT EXISTS job_steps (
     error_code          TEXT    NOT NULL DEFAULT '',
     error_message       TEXT    NOT NULL DEFAULT '',
     claude_session_id   TEXT    NOT NULL DEFAULT '',
-    cc_status_session_id TEXT   NOT NULL DEFAULT '',
-    snapshot_json TEXT NOT NULL DEFAULT ''
+    cc_status_session_id TEXT   NOT NULL DEFAULT ''
 );
-
-CREATE TABLE IF NOT EXISTS job_step_edges (
-    job_id       TEXT NOT NULL,
-    from_step_id TEXT NOT NULL,
-    to_step_id   TEXT NOT NULL,
-    PRIMARY KEY(job_id, from_step_id, to_step_id)
-);
-CREATE INDEX IF NOT EXISTS idx_job_step_edges_job
-ON job_step_edges(job_id);
 
 CREATE TABLE IF NOT EXISTS artifacts (
     id         TEXT    PRIMARY KEY,
@@ -281,7 +270,6 @@ CREATE TABLE IF NOT EXISTS work_trace_events (
     version_id     TEXT    NOT NULL DEFAULT '',
     step_id        TEXT    NOT NULL DEFAULT '',
     attempt        INTEGER NOT NULL DEFAULT 0,
-    agent_key      TEXT    NOT NULL DEFAULT '',
     type           TEXT    NOT NULL,            -- allowlisted category, never thinking/raw body
     payload_json   TEXT    NOT NULL DEFAULT '', -- producer-summarized, capped + structurally redacted
     created_at     INTEGER NOT NULL,
@@ -289,29 +277,3 @@ CREATE TABLE IF NOT EXISTS work_trace_events (
 );
 CREATE INDEX IF NOT EXISTS idx_work_trace_replay
 ON work_trace_events(dialogue_id, sequence);
-
--- Task-thinking events: the durable, HIDDEN, immutable audit trail of raw
--- provider thinking captured during task execution. Unlike work_trace_events,
--- this table holds the full thinking stream (minus redacted credentials) for
--- debugging and audit, and is NEVER surfaced to the UI. dialogue_sequence
--- is per dialogue_id, allocated MAX(dialogue_sequence)+1 inside one transaction;
--- step_sequence is per (task_id, step_id, attempt).
-CREATE TABLE IF NOT EXISTS task_thinking_events (
-    id                TEXT    PRIMARY KEY,
-    dialogue_id       TEXT    NOT NULL,
-    task_id           TEXT    NOT NULL DEFAULT '',
-    step_id           TEXT    NOT NULL DEFAULT '',
-    attempt           INTEGER NOT NULL DEFAULT 0,
-    agent_key         TEXT    NOT NULL DEFAULT '',
-    dialogue_sequence INTEGER NOT NULL,
-    step_sequence     INTEGER NOT NULL,
-    content           TEXT    NOT NULL DEFAULT '',
-    redacted          INTEGER NOT NULL DEFAULT 0,
-    created_at        INTEGER NOT NULL,
-    UNIQUE(dialogue_id, dialogue_sequence),
-    UNIQUE(task_id, step_id, attempt, step_sequence)
-);
-CREATE INDEX IF NOT EXISTS idx_task_thinking_replay
-ON task_thinking_events(dialogue_id, dialogue_sequence);
-CREATE INDEX IF NOT EXISTS idx_task_thinking_step
-ON task_thinking_events(task_id, step_id, attempt, step_sequence);

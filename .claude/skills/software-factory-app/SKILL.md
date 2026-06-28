@@ -60,8 +60,8 @@ working" default:
 - `live_api` or `mock_then_api` — **real data first.** When a data skill is in the
   generation profile, fetch real public data through that skill's adapter and
   populate the data layer from the real response. On a real fetch failure (source
-  unreachable, coverage not available, auth missing), render the **Degraded State**
-  (see below) and record the reason in `output.json` `warnings`. `mock_then_api`
+  unreachable, coverage not available, auth missing), show an **explicit error or
+  empty state** and record the reason in `output.json` `warnings`. `mock_then_api`
   does NOT mean "fall back to mock" — it means real-first, fail honestly.
 - `mock_data` or `useMock=true` — mock is allowed, but the UI must clearly label
   its data as `mock` / `演示数据` so it is never mistaken for real data.
@@ -75,38 +75,12 @@ failure, even if it "makes the build pass"):
 - falling back to mock after a real fetch fails;
 - hard-coding realistic-looking values to guarantee a successful build.
 
-### Degraded State（所有真实源失败时的终态）
-
-When every real source fails, the page MUST still ship and render a meaningful
-**Degraded State** — NOT a bare `数据异常` / `数据不可用` error string, and never fake
-data. Producing the Degraded State is a complete, compliant, shippable outcome; do
-not retry to fabricate and do not stall. It must include:
-
-1. A top banner: data source unavailable + failure reason + the sources already
-   tried + a manual retry button.
-2. A structural preview of the data view (chart axis labels / table column headers
-   / card titles showing "what this will display once data returns"). **Never fill
-   in fabricated values** — use empty arrays / skeleton lines / `—`.
-3. Links to the official data sources for manual verification.
-4. A one-line note: "数据恢复后此处将显示…".
-
-Name the component `EmptyState` / `DegradedState` / `DataUnavailable` — never
-`mock` / `fake` / `dummy` / `placeholder` / `sampleData` / `demoData` (honest-data
-audit). Data acquisition is runtime (browser-side) only; `npm run build` MUST pass
-fully offline with no build-time fetch dependency, so the page is always produced.
-
-**Fail fast.** The Degraded State must appear within seconds, not minutes: probe a
-real source **once** (a single point / latest year) with a short timeout; if that
-first probe is unreachable or returns no coverage, degrade immediately. Never loop
-over every grid cell / year / port retrying an unreachable source — that makes the
-user stare at a spinner. One probe is enough to decide coverage.
-
 ## Output Checklist
 
 - Buildable with `npm install` or `npm ci`.
 - Deployable by Podman with the generated Dockerfile.
 - All external API calls go through nginx reverse proxy, NEVER directly from browser JS.
-- Runtime page has meaningful non-empty content (the Degraded State satisfies this when real data is unavailable).
+- Runtime page has meaningful non-empty content.
 - Buttons and controls have visible feedback.
 
 ## API Proxy Rule (nginx reverse proxy)

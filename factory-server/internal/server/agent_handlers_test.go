@@ -53,35 +53,21 @@ func TestListAgents(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(got) != 13 {
-		t.Fatalf("len = %d, want 13", len(got))
+	if len(got) != 6 {
+		t.Fatalf("len = %d, want 6", len(got))
 	}
 	keys := map[string]bool{}
 	for _, a := range got {
 		keys[a.Key] = true
 	}
-	for _, k := range []string{
-		"collaboration-orchestrator",
-		"requirement-analyst",
-		"domain-analyst",
-		"designer",
-		"data-integration",
-		"solution-designer",
-		"code-generator",
-		"code-reviewer",
-		"security-reviewer",
-		"tester",
-		"product-acceptance",
-		"image-builder",
-		"deployer",
-	} {
+	for _, k := range []string{"requirement-analyst", "solution-designer", "code-generator", "tester", "image-builder", "deployer"} {
 		if !keys[k] {
 			t.Fatalf("missing agent key %s", k)
 		}
 	}
 	// Agents should be ordered by sort_order ascending.
-	if got[0].SortOrder != 1 || got[12].SortOrder != 13 {
-		t.Fatalf("sort order not ascending: first=%d last=%d", got[0].SortOrder, got[12].SortOrder)
+	if got[0].SortOrder != 1 || got[5].SortOrder != 6 {
+		t.Fatalf("sort order not ascending: first=%d last=%d", got[0].SortOrder, got[5].SortOrder)
 	}
 }
 
@@ -120,8 +106,8 @@ func TestCreateAgent(t *testing.T) {
 	if got.Category != model.AgentCategoryBusinessProcessing || got.Prompt != "你是评审助手" {
 		t.Fatalf("category/prompt mismatch: %+v", got)
 	}
-	if got.SortOrder != 14 {
-		t.Fatalf("sort_order = %d, want 14", got.SortOrder)
+	if got.SortOrder != 7 {
+		t.Fatalf("sort_order = %d, want 7", got.SortOrder)
 	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
@@ -134,11 +120,11 @@ func TestCreateAgent(t *testing.T) {
 	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(all) != 14 {
-		t.Fatalf("len = %d, want 14", len(all))
+	if len(all) != 7 {
+		t.Fatalf("len = %d, want 7", len(all))
 	}
-	if all[13].Key != "review-agent" {
-		t.Fatalf("last key = %q, want review-agent", all[13].Key)
+	if all[6].Key != "review-agent" {
+		t.Fatalf("last key = %q, want review-agent", all[6].Key)
 	}
 }
 
@@ -294,7 +280,7 @@ func TestUpdateAgentBadBody(t *testing.T) {
 }
 
 // TestDeleteAgentBusiness deletes a user-created business agent, asserts 200,
-// and confirms the list drops back to the seeded collaboration pipeline agents.
+// and confirms the list drops back to the six seeded pipeline agents.
 func TestDeleteAgentBusiness(t *testing.T) {
 	_, r := newAgentTestServer(t)
 
@@ -321,8 +307,8 @@ func TestDeleteAgentBusiness(t *testing.T) {
 	if err := json.NewDecoder(listRec.Body).Decode(&all); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(all) != 13 {
-		t.Fatalf("len = %d, want 13 after delete", len(all))
+	if len(all) != 6 {
+		t.Fatalf("len = %d, want 6 after delete", len(all))
 	}
 	for _, a := range all {
 		if a.ID == "agent_review_agent" {

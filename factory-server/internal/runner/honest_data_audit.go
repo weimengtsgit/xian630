@@ -97,10 +97,6 @@ func AuditHonestData(projectDir, dataPolicy string, dataSkills []string) error {
 		return nil
 	})
 
-	if len(dataSkills) > 0 && !hasDegradedStateSurface(projectDir) {
-		add("src/", "真实数据应用缺少可交付降级态：需要 EmptyState/DegradedState/DataUnavailable、重试入口、数据源说明、结构预览和恢复说明，不能只显示“数据异常”")
-	}
-
 	if len(findings) == 0 {
 		return nil
 	}
@@ -333,91 +329,4 @@ func isDataLayerFile(rel string) bool {
 		}
 	}
 	return false
-}
-
-func hasDegradedStateSurface(projectDir string) bool {
-	var seen degradedStateSignals
-	_ = filepath.WalkDir(projectDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if auditSkipSegment(d.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, rerr := filepath.Rel(projectDir, path)
-		if rerr != nil {
-			return nil
-		}
-		relSlash := filepath.ToSlash(rel)
-		if auditSkipFile(relSlash, d.Name()) {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if !auditedExts[ext] {
-			return nil
-		}
-		raw, rerr := os.ReadFile(path)
-		if rerr != nil || len(raw) > honestDataMaxFileBytes {
-			return nil
-		}
-		seen.observe(string(raw))
-		return nil
-	})
-	return seen.complete()
-}
-
-type degradedStateSignals struct {
-	component bool
-	retry     bool
-	source    bool
-	structure bool
-	recovery  bool
-	noValue   bool
-}
-
-func (s *degradedStateSignals) observe(body string) {
-	lower := strings.ToLower(body)
-	if strings.Contains(body, "EmptyState") ||
-		strings.Contains(body, "DegradedState") ||
-		strings.Contains(body, "DataUnavailable") ||
-		strings.Contains(lower, "className=\"degraded") ||
-		strings.Contains(lower, "class=\"degraded") {
-		s.component = true
-	}
-	if strings.Contains(body, "重试") ||
-		strings.Contains(lower, "retry") ||
-		strings.Contains(body, "onRetry") {
-		s.retry = true
-	}
-	if strings.Contains(body, "官方数据源") ||
-		strings.Contains(body, "已尝试") ||
-		strings.Contains(lower, "sources") ||
-		strings.Contains(lower, "source tried") ||
-		strings.Contains(lower, "sourcetried") {
-		s.source = true
-	}
-	if strings.Contains(lower, "<thead") ||
-		strings.Contains(lower, "<th") ||
-		strings.Contains(lower, "axis") ||
-		strings.Contains(body, "图表轴") ||
-		strings.Contains(body, "表格列") {
-		s.structure = true
-	}
-	if strings.Contains(body, "数据恢复后") ||
-		strings.Contains(body, "恢复后此处将显示") ||
-		strings.Contains(lower, "will display") {
-		s.recovery = true
-	}
-	if strings.Contains(body, "—") ||
-		strings.Contains(lower, "empty array") ||
-		strings.Contains(lower, "skeleton") {
-		s.noValue = true
-	}
-}
-
-func (s degradedStateSignals) complete() bool {
-	return s.component && s.retry && s.source && s.structure && s.recovery && s.noValue
 }

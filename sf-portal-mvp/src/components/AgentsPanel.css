@@ -8,48 +8,34 @@
   overflow: hidden;
 }
 
-.agents-panel .panel-header {
+.panel-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  min-height: 56px;
-  padding: 10px 12px;
+  padding: 14px 18px;
   background: rgba(104, 221, 255, 0.08);
   border-bottom: 1px solid rgba(111, 218, 255, 0.24);
 }
 
-.agents-panel .panel-header h2 {
+.panel-header h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
   color: #edfaff;
-  white-space: nowrap;
 }
 
 .panel-count {
   font-size: 12px;
   color: #8fb0bf;
-  white-space: nowrap;
 }
 
-.agents-panel .agents-header-main {
+.agents-header-actions {
   display: flex;
   align-items: center;
-  flex: 1 1 auto;
-  min-width: 0;
+  gap: 8px;
 }
 
-.agents-panel .agents-header-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-.agents-panel .agent-icon-button,
-.agents-panel .panel-action-btn {
+.agent-icon-button {
   width: 28px;
   height: 28px;
   border: 1px solid rgba(111, 218, 255, 0.28);
@@ -63,8 +49,7 @@
   transition: border-color 0.2s, background 0.2s, color 0.2s;
 }
 
-.agents-panel .agent-icon-button:hover,
-.agents-panel .panel-action-btn:hover {
+.agent-icon-button:hover {
   border-color: rgba(111, 218, 255, 0.48);
   background: rgba(104, 221, 255, 0.14);
   color: #edfaff;

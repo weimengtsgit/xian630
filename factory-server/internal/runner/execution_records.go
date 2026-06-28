@@ -79,30 +79,3 @@ type NopTraceEmitter struct{}
 
 // Trace discards the trace and returns nil.
 func (NopTraceEmitter) Trace(context.Context, string, string) error { return nil }
-
-// TaskThinkingEmitter is the scoped seam through which a runner forwards raw
-// model thinking events to the executor, which routes them through the server's
-// persist-before-publish gate (recordAndPublishTaskThinking → AppendTaskThinking).
-// This is the ONLY path that thinking ever takes; it MUST NEVER reach
-// StepRecordEmitter or TraceEmitter (Constraint #9).
-type TaskThinkingEmitter interface {
-	// Think forwards one raw thinking delta. content is the raw thinking_delta
-	// string from the Claude stream. It MUST be idempotent-safe: a nil receiver
-	// or a store error never aborts the agent run.
-	Think(ctx context.Context, content string) error
-}
-
-// TaskThinkingEmitterFrom returns the TaskThinkingEmitter capability of emit
-// when emit also implements it, else a NopTaskThinkingEmitter.
-func TaskThinkingEmitterFrom(emit StepRecordEmitter) TaskThinkingEmitter {
-	if t, ok := emit.(TaskThinkingEmitter); ok {
-		return t
-	}
-	return NopTaskThinkingEmitter{}
-}
-
-// NopTaskThinkingEmitter is a TaskThinkingEmitter that discards everything.
-type NopTaskThinkingEmitter struct{}
-
-// Think discards the thinking and returns nil.
-func (NopTaskThinkingEmitter) Think(context.Context, string) error { return nil }

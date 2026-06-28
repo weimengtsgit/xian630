@@ -647,7 +647,6 @@ func TestApplyConsolidationAdjustment(t *testing.T) {
 		{Field: "mainEntities", RecommendedValue: json.RawMessage(`["港口","潮汐","窗口"]`), Reason: "r"},
 		{Field: "dataPolicy", RecommendedValue: json.RawMessage(`"mock_data"`), Reason: "r"},
 		{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["窗口计算"]`), Reason: "r"},
-		{Field: "judgementBoundary", RecommendedValue: json.RawMessage(`{"dataSources":["ontology"],"summary":"基于潮汐数据判断出港窗口"}`), Reason: "r"},
 	}
 	// User adjusts primaryView away from the recommendation.
 	merged, err := ApplyConsolidationAdjustment(base, consolidation, "primaryView", "双屏对比")
@@ -666,12 +665,6 @@ func TestApplyConsolidationAdjustment(t *testing.T) {
 	}
 	if len(merged.AcceptanceFocus) != 1 || merged.AcceptanceFocus[0] != "窗口计算" {
 		t.Fatalf("acceptanceFocus should be merged: %+v", merged.AcceptanceFocus)
-	}
-	if merged.JudgementBoundary.Summary != "基于潮汐数据判断出港窗口" {
-		t.Fatalf("judgementBoundary should be merged: %+v", merged.JudgementBoundary)
-	}
-	if len(merged.JudgementBoundary.DataSources) != 1 || merged.JudgementBoundary.DataSources[0] != "ontology" {
-		t.Fatalf("judgementBoundary dataSources should be merged: %+v", merged.JudgementBoundary.DataSources)
 	}
 }
 
@@ -716,7 +709,6 @@ func TestRunnerRedactsBlueprintRefsFromUserFacingEvents(t *testing.T) {
     "appType":"command_dashboard","appName":"潮汐窗口","targetUsers":["作战参谋"],
     "coreScenario":"窗口计算","primaryView":"四格仪表盘","mainEntities":["港口","潮汐"],
     "dataPolicy":"mock_data","acceptanceFocus":["窗口计算"],
-    "judgementBoundary":{"dataSources":["ontology"],"summary":"基于潮汐数据判断出港窗口"},
     "generationProfile":{"base":["software-factory-app"]},
     "blueprintRefs":["carrier-homeport-tide-window"]
   }
@@ -755,9 +747,6 @@ func TestRunnerRedactsBlueprintRefsFromUserFacingEvents(t *testing.T) {
 			if strings.Contains(body, slug) {
 				t.Fatalf("clarification.summary.updated leaks blueprint slug: %s", body)
 			}
-			if !strings.Contains(body, "judgementBoundary") || !strings.Contains(body, "基于潮汐数据判断出港窗口") {
-				t.Fatalf("clarification.summary.updated should retain judgementBoundary: %s", body)
-			}
 		case "clarification.ready_to_confirm":
 			sawReady = true
 			b, _ := json.Marshal(ev.Data)
@@ -767,9 +756,6 @@ func TestRunnerRedactsBlueprintRefsFromUserFacingEvents(t *testing.T) {
 			}
 			if strings.Contains(body, slug) {
 				t.Fatalf("clarification.ready_to_confirm leaks blueprint slug: %s", body)
-			}
-			if !strings.Contains(body, "judgementBoundary") || !strings.Contains(body, "基于潮汐数据判断出港窗口") {
-				t.Fatalf("clarification.ready_to_confirm should retain judgementBoundary: %s", body)
 			}
 		}
 	}
@@ -918,7 +904,7 @@ func TestRunnerParsesOpenHighImpact(t *testing.T) {
     "dataPolicy": "mock_data","acceptanceFocus": ["窗口"],"generationProfile": {"base":["software-factory-app"]}
   },
   "openHighImpact": [
-    {"id": "data_policy","label": "数据来源策略","recommendation": ["mock_data"],
+    {"id": "data_policy","label": "数据来源策略","recommendation": "mock_data",
      "options": [{"value":"mock_data","label":"Mock 数据优先"},{"value":"api_first","label":"接口优先"}]},
     {"id": "scope","label": "应用范围","options": [{"value":"all","label":"全部"},{"value":"part","label":"部分"}]}
   ]

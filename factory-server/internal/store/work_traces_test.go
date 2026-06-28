@@ -36,29 +36,6 @@ func TestAppendDialogueTraceAssignsStrictSequence(t *testing.T) {
 	}
 }
 
-func TestAppendDialogueTraceRoundTripsAgentKey(t *testing.T) {
-	st := newTestStore(t)
-	ctx := context.Background()
-
-	_, err := st.AppendDialogueTrace(ctx, model.WorkTraceEvent{
-		ID: "trace_agent", DialogueID: "dlg_1", TaskID: "job_1", StepID: "step_1", Attempt: 2,
-		AgentKey: "designer", Type: string(model.WorkTraceClarification), PayloadJSON: "{}",
-	})
-	if err != nil {
-		t.Fatalf("AppendDialogueTrace: %v", err)
-	}
-	rows, err := st.ListDialogueTrace(ctx, "dlg_1", 0, 500)
-	if err != nil {
-		t.Fatalf("ListDialogueTrace: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("rows len = %d, want 1", len(rows))
-	}
-	if rows[0].AgentKey != "designer" {
-		t.Fatalf("AgentKey = %q, want designer", rows[0].AgentKey)
-	}
-}
-
 // TestAppendDialogueTraceIndependentSequencesPerDialogue verifies the sequence
 // is scoped per dialogue_id: two dialogues each start at 1 and do not interfere.
 func TestAppendDialogueTraceIndependentSequencesPerDialogue(t *testing.T) {

@@ -179,21 +179,12 @@ body,
   color: #68ddff;
 }
 
-.left-toolbar button.is-active {
-  background: rgba(104, 221, 255, 0.22);
-  color: #edfaff;
-  box-shadow: inset 0 0 0 1px rgba(104, 221, 255, 0.42);
-}
-
 .toolbar-label {
   font-size: 9px;
   margin-top: 2px;
 }
 
-/* Workbench (2-column: 会话导航 + 中间工作台). The right 工作台抽屉 is an
- * overlay (see WorkbenchDrawer.css), NOT a grid column, so opening/closing it
- * never changes the center width. The left nav owns its own collapse: when
- * collapsed the first column shrinks to a ~56px rail. */
+/* Workbench (3-column) */
 .workbench {
   position: absolute;
   left: 56px;
@@ -203,13 +194,9 @@ body,
   z-index: 5;
   padding: 14px 16px 16px 16px;
   display: grid;
-  grid-template-columns: var(--session-nav-w, 300px) minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr) 300px;
   gap: 14px;
   overflow: hidden;
-}
-
-.workbench.session-nav-collapsed {
-  grid-template-columns: 56px minmax(0, 1fr);
 }
 
 .wb-col {
@@ -219,11 +206,13 @@ body,
   flex-direction: column;
 }
 
-.wb-left {
+.wb-left,
+.wb-right {
   height: 100%;
 }
 
-.wb-left > * {
+.wb-left > *,
+.wb-right > * {
   flex: 1;
   min-height: 0;
 }
@@ -235,11 +224,7 @@ body,
 
 @media (max-width: 1200px) {
   .workbench {
-    grid-template-columns: 260px minmax(0, 1fr);
-  }
-
-  .workbench.session-nav-collapsed {
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: 280px minmax(0, 1fr) 280px;
   }
 }
 

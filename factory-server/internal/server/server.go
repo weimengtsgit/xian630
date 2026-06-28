@@ -31,7 +31,6 @@ type Server struct {
 	scanner scanner.Scanner
 	hub     *Hub
 	srv     *http.Server
-	async   func(func(context.Context))
 
 	// Deploy runtime. These are initialized by New to production defaults and
 	// overridden by same-package tests to substitute fakes.
@@ -267,18 +266,6 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	if runner.LLMConsoleEnabled() {
 		log.Printf("FACTORY_LLM_CONSOLE=1: claude request/response traces stream to stderr")
 	}
-	asyncLimit := cfg.MaxConcurrentJobs
-	if asyncLimit < 1 {
-		asyncLimit = 1
-	}
-	asyncSem := make(chan struct{}, asyncLimit)
-	async := func(fn func(context.Context)) {
-		go func() {
-			asyncSem <- struct{}{}
-			defer func() { <-asyncSem }()
-			fn(context.Background())
-		}()
-	}
 	dispatch := executor.NewDispatcher(factory, claude)
 	s.exec = executor.NewExecutor(st, dispatch, cfg.MaxConcurrentJobs)
 	s.exec.RunLog = runLogger
@@ -307,16 +294,6 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	s.exec.OnTrace = func(ctx context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
 		return s.recordAndPublishWorkTrace(ctx, ev)
 	}
-	// OnTaskThinking routes every raw thinking delta the runner produces through
-	// the centralized persist-before-publish gate (recordAndPublishTaskThinking).
-	// This is the ONLY path that thinking ever takes; it MUST NEVER reach
-	// StepRecordEmitter or TraceEmitter (Constraint #9). The gate enforces
-	// persist-before-publish and sequence assignment; the SSE forwarder re-validates
-	// persisted rows. Thinking never reaches any other path.
-	s.exec.OnTaskThinking = func(ctx context.Context, ev model.TaskThinkingEvent) (model.TaskThinkingEvent, error) {
-		return s.recordAndPublishTaskThinking(ctx, ev)
-	}
-	s.async = async
 	return s
 }
 
@@ -423,7 +400,6 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/healthz", s.health)
 
 	r.Handle("GET", "/api/apps", s.listApps)
-	r.Handle("GET", "/api/managed-agents", s.listManagedAgents)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)
@@ -443,10 +419,8 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/jobs/:id", s.getJob)
 	r.Handle("GET", "/api/jobs/:id/steps", s.jobSteps)
 	r.Handle("GET", "/api/jobs/:id/steps/:stepID/execution-records", s.jobStepExecutionRecords)
-	r.Handle("PATCH", "/api/jobs/:id/steps/:stepID/snapshot", s.patchJobStepSnapshot)
 	r.Handle("GET", "/api/jobs/:id/artifacts", s.jobArtifacts)
 	r.Handle("GET", "/api/jobs/:id/execution-summary", s.jobExecutionSummary)
-	r.Handle("GET", "/api/jobs/:id/collaboration-plan", s.getJobCollaborationPlan)
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)
 	r.Handle("POST", "/api/jobs/:id/retry-current-step", s.retryCurrentStep)
@@ -498,11 +472,6 @@ func (s *Server) routes() *Router {
 	// stream above stays for legacy consumers.
 	r.Handle("GET", "/api/dialogues/:id/work-trace", s.dialogueTraceEvents)
 	r.Handle("GET", "/api/dialogues/:id/work-trace/stream", s.dialogueTraceStream)
-
-	// Dialogue-scoped task-thinking transport (Task 2). REST hydration + SSE
-	// stream, both filtered to :id, sequence-replayable, persist-before-publish.
-	r.Handle("GET", "/api/dialogues/:id/task-thinking", s.dialogueTaskThinkingEvents)
-	r.Handle("GET", "/api/dialogues/:id/task-thinking/stream", s.dialogueTaskThinkingStream)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

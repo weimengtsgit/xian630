@@ -25,18 +25,6 @@ func (s *Server) listApps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, visible)
 }
 
-// listManagedAgents handles GET /api/managed-agents. Managed agents are
-// catalog-configured external/static links and do not participate in app
-// lifecycle operations.
-func (s *Server) listManagedAgents(w http.ResponseWriter, r *http.Request) {
-	catalog, err := scanner.LoadSceneCatalogForSurface(s.cfg.WorkspaceRoot)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "load scene catalog")
-		return
-	}
-	writeJSON(w, http.StatusOK, catalog.ManagedAgents())
-}
-
 // getApp handles GET /api/apps/:id — returns a single application or 404.
 func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")

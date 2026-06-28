@@ -1,4 +1,0 @@
-interface:
-  display_name: "Carrier Affiliation Data"
-  short_description: "Load carrier ADS-B, position, and surface data."
-  default_prompt: "Use $carrier-affiliation-data-skill to fetch and normalize data for carrier-air-wing affiliation inference."

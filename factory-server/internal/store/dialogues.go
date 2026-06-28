@@ -278,9 +278,6 @@ DELETE FROM clarification_sessions WHERE id = (
 	if _, err := tx.ExecContext(ctx, `DELETE FROM dialogue_messages WHERE dialogue_id = ?`, id); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM task_thinking_events WHERE dialogue_id = ?`, id); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM dialogue_sessions WHERE id = ?`, id); err != nil {
 		return err
 	}

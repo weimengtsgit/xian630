@@ -7,12 +7,10 @@ import {
   RotateCcw,
   Ban,
   Wrench,
-  ChevronLeft,
 } from 'lucide-react'
 import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
-import { buildCollaborationCardView } from './../hooks/collaborationPlanState'
 import './JobCenter.css'
 
 // Fixed ordered step kinds (design §4). Same six stages, fixed order.
@@ -56,16 +54,10 @@ function formatJobTime(value) {
 
 export function JobCenter({
   activeJob,
-  // jobs: the SELECTED dialogue's generation tasks, ranked by attention
-  // priority (focus task first). The 任务执行 drawer lists ALL of them;
-  // onSelectTask drills into a non-focus task. See App.jsx taskProps.
-  jobs,
-  onSelectTask,
   steps,
   onCancel,
   onRetry,
   onRepairFromFailure,
-  onSaveSnapshot,
   loading,
   // Task 6 state surface from useJobs:
   summary,
@@ -77,21 +69,10 @@ export function JobCenter({
   getUnreadCount,
   loadStepRecords,
   getArtifactContent,
-  collaborationPlan,
 }) {
   // Local drawer tab is owned by the drawer; JobCenter only owns whether the
   // drawer is open (driven by selectedStepId).
   const [drawerOpen, setDrawerOpen] = useState(false)
-
-  // Task-list ↔ task-detail toggle (plan §Task Execution Drawer). The drawer
-  // lands on the task list when the dialogue has multiple generation tasks; a
-  // single (or zero) task skips the list and goes straight to its detail. The
-  // list is ranked upstream (focus task first), so index 0 is always the focus
-  // task — marked with a 焦点 badge.
-  const dialogueJobs = Array.isArray(jobs) ? jobs : []
-  const multiTask = dialogueJobs.length > 1
-  const [taskView, setTaskView] = useState('list')
-  const view = multiTask ? taskView : 'detail'
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so
@@ -117,14 +98,6 @@ export function JobCenter({
     }
     return map
   }, [summary])
-
-  // Collaboration plan: render lanes of agent cards when a plan is present,
-  // falling back to the fixed six-step matrix for legacy jobs.
-  const collaborationLanes = useMemo(
-    () => buildCollaborationCardView(steps, summary, collaborationPlan),
-    [steps, summary, collaborationPlan],
-  )
-  const hasCollaborationPlan = collaborationLanes.length > 0
 
   const jobStatus = activeJob ? activeJob.status || 'queued' : 'queued'
   const isTerminal = ['completed', 'canceled', 'cancelled', 'failed'].includes(jobStatus)
@@ -153,17 +126,6 @@ export function JobCenter({
       (sm && (sm.attempt ?? sm.latest_attempt)) ??
       (step && (step.attempt ?? step.latest_attempt)) ??
       1
-    setDrawerOpen(true)
-    if (selectStepAttempt) selectStepAttempt(stepId, attempt)
-  }
-
-  // Open the drawer by a REAL step id (collaboration-plan cards carry the id
-  // directly, so no kind -> stepId resolution is needed).
-  const openDrawerForStepId = stepId => {
-    if (!stepId) return
-    const sm = summaryByStepId[stepId]
-    const step = (Array.isArray(steps) ? steps : []).find(s => s && s.id === stepId)
-    const attempt = (sm && (sm.attempt ?? sm.latest_attempt)) ?? (step && step.attempt) ?? 1
     setDrawerOpen(true)
     if (selectStepAttempt) selectStepAttempt(stepId, attempt)
   }
@@ -229,8 +191,8 @@ export function JobCenter({
       <section className="job-center job-center-empty">
         <div className="jc-placeholder">
           <AlertTriangle size={22} />
-          <p>当前会话暂无生成任务</p>
-          <span className="jc-hint">在对话区输入需求以创建新的生成任务</span>
+          <p>当前没有进行中的生成任务</p>
+          <span className="jc-hint">在下方输入需求以创建新的任务</span>
         </div>
       </section>
     )
@@ -238,60 +200,8 @@ export function JobCenter({
 
   return (
     <section className={`job-center job-status-${jobStatus}`}>
-      {view === 'list' ? (
-        <div className="jc-task-list">
-          <div className="jc-task-list-head">
-            <span className="jc-label">生成任务</span>
-            <span className="jc-task-count">{dialogueJobs.length} 个任务</span>
-          </div>
-          {dialogueJobs.map((job, index) => {
-            const status = job.status || 'queued'
-            const title = job.app_name || job.user_prompt || job.normalized_prompt || job.id
-            const selected = !!(activeJob && job.id === activeJob.id)
-            return (
-              <button
-                key={job.id}
-                type="button"
-                className={`jc-task-card jc-status-${status}${selected ? ' jc-task-card-selected' : ''}`}
-                aria-pressed={selected ? 'true' : 'false'}
-                aria-label={`查看任务 ${title}`}
-                onClick={() => {
-                  if (onSelectTask) onSelectTask(job.id)
-                  setTaskView('detail')
-                }}
-              >
-                <div className="jc-task-card-head">
-                  <span className={`jc-status-badge jc-status-${status}`}>
-                    {JOB_STATUS_LABEL[status] || status}
-                  </span>
-                  {index === 0 ? <span className="jc-task-focus">焦点</span> : null}
-                </div>
-                <div className="jc-task-card-title">{title}</div>
-                <div className="jc-task-card-meta">
-                  {job.started_at ? (
-                    <time dateTime={job.started_at}>开始 {formatJobTime(job.started_at)}</time>
-                  ) : job.created_at ? (
-                    <time dateTime={job.created_at}>排队 {formatJobTime(job.created_at)}</time>
-                  ) : null}
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      ) : (
-        <>
       <header className="jc-header">
         <div className="jc-title-block">
-          {multiTask ? (
-            <button
-              type="button"
-              className="jc-back"
-              onClick={() => setTaskView('list')}
-              aria-label="返回任务列表"
-            >
-              <ChevronLeft size={14} /> 任务列表
-            </button>
-          ) : null}
           <span className="jc-label">当前任务</span>
           {/* started_at (actual exec start) vs created_at (queue time) — Constraint #10.
               Show both, distinctly, when present. */}
@@ -333,99 +243,32 @@ export function JobCenter({
         </div>
       ) : null}
 
-      {/*
-        Phase 2: in-drawer list↔detail toggle. The body switches between the
-        vertical 执行波次 list and the embedded step detail (rendered INLINE,
-        no createPortal overlay). `drawerOpen` (driven by selectedStepId) is the
-        toggle; the detail's back button calls closeDrawer to return to the
-        list. Both views live inside this one drawer — no stacked overlays.
-      */}
-      {drawerOpen && selectedStepId ? (
-        <StepExecutionDrawer
-          embedded
-          open
-          onBack={closeDrawer}
-          onClose={closeDrawer}
-          step={selectedStep}
-          summary={selectedSummary}
-          stageLabel={selectedStageLabel}
-          attempts={selectedAttempts}
-          selectedAttempt={selectedAttempt}
-          onSelectAttempt={onSelectAttempt}
-          records={recordsView}
-          onLoadOlder={loadOlder}
-          hasOlder={hasOlder}
-          loadingOlder={false}
-          onCancel={() => onCancel && onCancel(activeJob.id)}
-          onRetry={() => onRetry && onRetry(activeJob.id)}
-          onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
-          onSaveSnapshot={(stepId, snapshot) =>
-            onSaveSnapshot && onSaveSnapshot(activeJob.id, stepId, snapshot)
-          }
-          artifacts={artifacts || []}
-          getArtifactContent={getArtifactContent}
-        />
-      ) : (
-        <div className="jc-waves">
-          {hasCollaborationPlan
-            ? collaborationLanes.map(group => (
-                <section className="jc-wave" key={group.lane.id}>
-                  <h3 className="jc-wave-title">{group.lane.label}</h3>
-                  <div className="jc-wave-cards">
-                    {group.cards.map(view => {
-                      const attempt =
-                        (view.summary && (view.summary.attempt ?? view.summary.latest_attempt)) ??
-                        (view.step && (view.step.attempt ?? view.step.latest_attempt)) ??
-                        null
-                      return (
-                        <StepCard
-                          key={view.agent.key}
-                          kind={view.kind}
-                          label={view.label}
-                          agent={view.agent}
-                          step={view.step}
-                          summary={view.summary}
-                          selected={!!view.stepId && selectedStepId === view.stepId}
-                          unreadCount={view.stepId && getUnreadCount ? getUnreadCount(view.stepId, attempt) : 0}
-                          onSelect={() => openDrawerForStepId(view.stepId)}
-                        />
-                      )
-                    })}
-                  </div>
-                </section>
-              ))
-            : (
-                <section className="jc-wave">
-                  <h3 className="jc-wave-title">执行阶段</h3>
-                  <div className="jc-wave-cards">
-                    {cardView.map(view => {
-                      const { kind, label, stepId, step, summary: sm } = view
-                      const attempt =
-                        (sm && (sm.attempt ?? sm.latest_attempt)) ??
-                        (step && (step.attempt ?? step.latest_attempt)) ??
-                        null
-                      // Unread and selected both key off the REAL step_id.
-                      const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
-                      return (
-                        <StepCard
-                          key={kind}
-                          kind={kind}
-                          label={label}
-                          step={step}
-                          summary={sm}
-                          selected={!!stepId && selectedStepId === stepId}
-                          unreadCount={unread}
-                          onSelect={openDrawerFor}
-                        />
-                      )
-                    })}
-                  </div>
-                </section>
-              )}
-        </div>
-      )}
+      {/* 3x2 matrix of the six fixed stages. Replaces the old vertical list. */}
+      <div className="jc-step-matrix">
+        {cardView.map(view => {
+          const { kind, label, stepId, step, summary: sm } = view
+          const attempt =
+            (sm && (sm.attempt ?? sm.latest_attempt)) ??
+            (step && (step.attempt ?? step.latest_attempt)) ??
+            null
+          // Unread and selected both key off the REAL step_id.
+          const unread = stepId && getUnreadCount ? getUnreadCount(stepId, attempt) : 0
+          return (
+            <StepCard
+              key={kind}
+              kind={kind}
+              label={label}
+              step={step}
+              summary={sm}
+              selected={!!stepId && selectedStepId === stepId}
+              unreadCount={unread}
+              onSelect={openDrawerFor}
+            />
+          )
+        })}
+      </div>
 
-      {jobStatus === 'failed' && !drawerOpen && (
+      {jobStatus === 'failed' && (
         <div className="jc-actions">
           <button
             type="button"
@@ -446,7 +289,7 @@ export function JobCenter({
         </div>
       )}
 
-      {jobStatus === 'completed' && (activeJob.runtime_url || activeJob.url) && !drawerOpen ? (
+      {jobStatus === 'completed' && (activeJob.runtime_url || activeJob.url) ? (
         <div className="jc-completed">
           <CheckCircle2 size={18} />
           <a
@@ -459,10 +302,30 @@ export function JobCenter({
           </a>
         </div>
       ) : null}
-        </>
-      )}
 
       {loading && <div className="jc-loading-hint">同步任务状态中...</div>}
+
+      {/* Right-side overlay drawer. Does NOT consume center-column space; it
+          overlays the agent-list region. */}
+      <StepExecutionDrawer
+        open={drawerOpen && !!selectedStepId}
+        onClose={closeDrawer}
+        step={selectedStep}
+        summary={selectedSummary}
+        stageLabel={selectedStageLabel}
+        attempts={selectedAttempts}
+        selectedAttempt={selectedAttempt}
+        onSelectAttempt={onSelectAttempt}
+        records={recordsView}
+        onLoadOlder={loadOlder}
+        hasOlder={hasOlder}
+        loadingOlder={false}
+        onCancel={() => onCancel && onCancel(activeJob.id)}
+        onRetry={() => onRetry && onRetry(activeJob.id)}
+        onRepairFromFailure={() => onRepairFromFailure && onRepairFromFailure(activeJob.id)}
+        artifacts={artifacts || []}
+        getArtifactContent={getArtifactContent}
+      />
     </section>
   )
 }

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/ccstatus"
-	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -168,17 +167,6 @@ func createJobViaAPI(t *testing.T, r *Router, prompt string) *httptest.ResponseR
 	})
 }
 
-func stepByKindForTest(t *testing.T, steps []model.JobStep, kind model.StepKind) model.JobStep {
-	t.Helper()
-	for _, step := range steps {
-		if step.Kind == kind {
-			return step
-		}
-	}
-	t.Fatalf("missing step %s in %+v", kind, steps)
-	return model.JobStep{}
-}
-
 func doJSON(t *testing.T, r *Router, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var rd *bytes.Reader
@@ -198,11 +186,8 @@ func doJSON(t *testing.T, r *Router, method, path string, body any) *httptest.Re
 	return rec
 }
 
-// TestCreateJobCreatesFixedSteps verifies that POST /api/jobs seeds the default
-// collaboration plan's agent steps (the testConfirmedRequirement carries no
-// public-web/security trigger, so exactly the 12 base agents) in plan order,
-// each with the right agent key, all pending. The first step is the plan head
-// (collaboration_orchestration) and the job points its current_step_kind at it.
+// TestCreateJobCreatesFixedSteps verifies that POST /api/jobs seeds the six
+// fixed pipeline steps in the canonical order and leaves them all pending.
 func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})
 
@@ -217,8 +202,8 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	if job.Status != model.JobStatusQueued {
 		t.Fatalf("status = %q, want queued", job.Status)
 	}
-	if job.CurrentStepKind != model.StepKind("collaboration_orchestration") {
-		t.Fatalf("current_step_kind = %q, want collaboration_orchestration", job.CurrentStepKind)
+	if job.CurrentStepKind != model.StepRequirementAnalysis {
+		t.Fatalf("current_step_kind = %q, want requirement_analysis", job.CurrentStepKind)
 	}
 	if job.UserPrompt != "生成航母编队月度航迹复盘" {
 		t.Fatalf("user_prompt = %q", job.UserPrompt)
@@ -233,42 +218,20 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 		t.Fatalf("decode steps: %v", err)
 	}
 
-	// The default plan's agent roles in order (no security reviewer: the test
-	// confirmed requirement has no public_web / auth / upload trigger).
-	wantKinds := []model.StepKind{
-		model.StepKind("collaboration_orchestration"),
-		model.StepKind("requirement_analysis"),
-		model.StepKind("domain_analysis"),
-		model.StepKind("design_contract"),
-		model.StepKind("data_integration"),
-		model.StepKind("solution_design"),
-		model.StepKind("code_generation"),
-		model.StepKind("code_review"),
-		model.StepKind("test_verification"),
-		model.StepKind("product_acceptance"),
-		model.StepKind("image_build"),
-		model.StepKind("deployment"),
+	want := []model.StepKind{
+		model.StepRequirementAnalysis,
+		model.StepSolutionDesign,
+		model.StepCodeGeneration,
+		model.StepTestVerification,
+		model.StepImageBuild,
+		model.StepDeployment,
 	}
-	if len(steps) != len(wantKinds) {
-		t.Fatalf("len(steps) = %d, want %d", len(steps), len(wantKinds))
-	}
-	wantAgents := map[model.StepKind]string{
-		model.StepKind("collaboration_orchestration"): "collaboration-orchestrator",
-		model.StepKind("requirement_analysis"):        "requirement-analyst",
-		model.StepKind("domain_analysis"):             "domain-analyst",
-		model.StepKind("design_contract"):             "designer",
-		model.StepKind("data_integration"):            "data-integration",
-		model.StepKind("solution_design"):             "solution-designer",
-		model.StepKind("code_generation"):             "code-generator",
-		model.StepKind("code_review"):                 "code-reviewer",
-		model.StepKind("test_verification"):           "tester",
-		model.StepKind("product_acceptance"):          "product-acceptance",
-		model.StepKind("image_build"):                 "image-builder",
-		model.StepKind("deployment"):                  "deployer",
+	if len(steps) != len(want) {
+		t.Fatalf("len(steps) = %d, want %d", len(steps), len(want))
 	}
 	for i, s := range steps {
-		if s.Kind != wantKinds[i] {
-			t.Fatalf("step[%d].kind = %q, want %q", i, s.Kind, wantKinds[i])
+		if s.Kind != want[i] {
+			t.Fatalf("step[%d].kind = %q, want %q", i, s.Kind, want[i])
 		}
 		if s.Seq != i+1 {
 			t.Fatalf("step[%d].seq = %d, want %d", i, s.Seq, i+1)
@@ -276,184 +239,20 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 		if s.Status != model.StepStatusPending {
 			t.Fatalf("step[%d].status = %q, want pending", i, s.Status)
 		}
+	}
+
+	wantAgents := map[model.StepKind]string{
+		model.StepRequirementAnalysis: "requirement-analyst",
+		model.StepSolutionDesign:      "solution-designer",
+		model.StepCodeGeneration:      "code-generator",
+		model.StepTestVerification:    "tester",
+		model.StepImageBuild:          "image-builder",
+		model.StepDeployment:          "deployer",
+	}
+	for _, s := range steps {
 		if got := wantAgents[s.Kind]; s.AgentKey != got {
 			t.Fatalf("step %q agent_key = %q, want %q", s.Kind, s.AgentKey, got)
 		}
-	}
-}
-
-// TestCreateJobSeedsCollaborationPlanSteps verifies that POST /api/jobs now
-// seeds the dynamic collaboration plan (12 agents, 13 with security reviewer)
-// instead of the legacy fixed 6 steps: the job carries a CollaborationPlanJSON,
-// its steps carry agent snapshots, and the plan's dependency edges persist.
-func TestCreateJobSeedsCollaborationPlanSteps(t *testing.T) {
-	_, r, st := newJobsTestServer(t, config.Config{})
-
-	rec := createJobViaAPI(t, r, "生成公网数据研判智能体")
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	var job model.Job
-	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	if job.CollaborationPlanJSON == "" {
-		t.Fatalf("CollaborationPlanJSON empty")
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps: %v", err)
-	}
-	if len(steps) < 12 {
-		t.Fatalf("steps = %d, want collaboration plan steps", len(steps))
-	}
-	if steps[0].AgentKey != "collaboration-orchestrator" || steps[0].SnapshotJSON == "" {
-		t.Fatalf("first step = %+v, want collaboration orchestrator with snapshot", steps[0])
-	}
-	edges, err := st.ListJobStepEdges(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobStepEdges: %v", err)
-	}
-	if len(edges) == 0 {
-		t.Fatalf("expected dependency edges")
-	}
-}
-
-func TestCreateJobSeedsSnapshotsWithSelectedSkillFileContents(t *testing.T) {
-	workspace := t.TempDir()
-	skillPath := filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
-		t.Fatalf("mkdir skill: %v", err)
-	}
-	if err := os.WriteFile(skillPath, []byte("# software factory app\n本次任务可查看的技能内容"), 0o644); err != nil {
-		t.Fatalf("write skill: %v", err)
-	}
-	_, r, st := newJobsTestServer(t, config.Config{WorkspaceRoot: workspace})
-
-	rec := createJobViaAPI(t, r, "生成复盘智能体")
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	var job model.Job
-	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps: %v", err)
-	}
-	codeStep := stepByKindForTest(t, steps, model.StepCodeGeneration)
-	for _, want := range []string{"\"name\":\"代码生成\"", "\"description\":\"写入应用代码并生成 manifest。\"", ".claude/skills/software-factory-app/SKILL.md", "本次任务可查看的技能内容"} {
-		if !strings.Contains(codeStep.SnapshotJSON, want) {
-			t.Fatalf("code-generator snapshot missing %q:\n%s", want, codeStep.SnapshotJSON)
-		}
-	}
-}
-
-func TestCreateJobRedactsAndCapsSelectedSkillFileContents(t *testing.T) {
-	workspace := t.TempDir()
-	skillPath := filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
-		t.Fatalf("mkdir skill: %v", err)
-	}
-	content := "# software factory app\n" +
-		"ANTHROPIC_API_KEY=sk-live-secret\n" +
-		"Authorization: Bearer bearer-secret\n" +
-		"password: hunter2\n" +
-		strings.Repeat("界", maxSkillSnapshotContentBytes)
-	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write skill: %v", err)
-	}
-	_, r, st := newJobsTestServer(t, config.Config{WorkspaceRoot: workspace})
-
-	rec := createJobViaAPI(t, r, "生成复盘智能体")
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	var job model.Job
-	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps: %v", err)
-	}
-	codeStep := stepByKindForTest(t, steps, model.StepCodeGeneration)
-	for _, leak := range []string{"sk-live-secret", "bearer-secret", "hunter2"} {
-		if strings.Contains(codeStep.SnapshotJSON, leak) {
-			t.Fatalf("snapshot leaked secret %q:\n%s", leak, codeStep.SnapshotJSON)
-		}
-	}
-	for _, want := range []string{"ANTHROPIC_API_KEY=[REDACTED]", "Authorization: [REDACTED]", "password: [REDACTED]", "[TRUNCATED: skill content exceeds snapshot cap]"} {
-		if !strings.Contains(codeStep.SnapshotJSON, want) {
-			t.Fatalf("snapshot missing %q:\n%s", want, codeStep.SnapshotJSON)
-		}
-	}
-}
-
-func TestHydrateSnapshotSkillContentsRejectsUnsafeSkillKeys(t *testing.T) {
-	workspace := t.TempDir()
-	validPath := filepath.Join(workspace, ".claude", "skills", "software-factory-app", "SKILL.md")
-	driveLikePath := filepath.Join(workspace, ".claude", "skills", "C:escape", "SKILL.md")
-	for _, path := range []string{validPath, driveLikePath} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir skill %s: %v", path, err)
-		}
-	}
-	if err := os.WriteFile(validPath, []byte("valid skill content"), 0o644); err != nil {
-		t.Fatalf("write valid skill: %v", err)
-	}
-	if err := os.WriteFile(driveLikePath, []byte("drive-like skill key must not load"), 0o644); err != nil {
-		t.Fatalf("write drive-like skill: %v", err)
-	}
-
-	got := hydrateSnapshotSkillContents(collaboration.Snapshot{
-		SelectedSkills: []string{"software-factory-app", "C:escape", "../secret", "nested/key", `nested\key`},
-	}, workspace)
-	if len(got.SkillOverrides) != 1 {
-		t.Fatalf("skill overrides = %+v, want only the safe single-segment skill", got.SkillOverrides)
-	}
-	if got.SkillOverrides[0].Path != ".claude/skills/software-factory-app/SKILL.md" {
-		t.Fatalf("skill override path = %q", got.SkillOverrides[0].Path)
-	}
-	if strings.Contains(got.SkillOverrides[0].Content, "drive-like") {
-		t.Fatalf("unsafe drive-like skill content loaded: %+v", got.SkillOverrides)
-	}
-}
-
-func TestGetJobCollaborationPlan(t *testing.T) {
-	_, r, _ := newJobsTestServer(t, config.Config{})
-	rec := createJobViaAPI(t, r, "生成公网数据研判智能体")
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	var job model.Job
-	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-
-	planRec := doJSON(t, r, http.MethodGet, "/api/jobs/"+job.ID+"/collaboration-plan", nil)
-	if planRec.Code != http.StatusOK {
-		t.Fatalf("plan status = %d, body=%s", planRec.Code, planRec.Body.String())
-	}
-	var body struct {
-		Plan  map[string]any      `json:"plan"`
-		Edges []model.JobStepEdge `json:"edges"`
-		Steps []model.JobStep     `json:"steps"`
-	}
-	if err := json.NewDecoder(planRec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode plan response: %v", err)
-	}
-	if body.Plan["schemaVersion"] == nil || len(body.Steps) == 0 || len(body.Edges) == 0 {
-		t.Fatalf("unexpected plan response: %+v", body)
-	}
-}
-
-func TestGetJobCollaborationPlanMissingJob(t *testing.T) {
-	_, r, _ := newJobsTestServer(t, config.Config{})
-	rec := doJSON(t, r, http.MethodGet, "/api/jobs/missing/collaboration-plan", nil)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -525,8 +324,8 @@ func TestGetJob(t *testing.T) {
 // cc-status availability flag.
 type getJobResponse struct {
 	model.Job
-	CCStatusAvailable bool      `json:"cc_status_available"`
-	PendingQuestions  []getJobQ `json:"pending_questions"`
+	CCStatusAvailable bool        `json:"cc_status_available"`
+	PendingQuestions  []getJobQ   `json:"pending_questions"`
 }
 
 // getJobQ is the minimal shape of a persisted clarifying question.
@@ -546,9 +345,7 @@ func TestGetJobSurfacesWaitingQuestions(t *testing.T) {
 	var created model.Job
 	_ = json.NewDecoder(create.Body).Decode(&created)
 
-	// Mark the job's CURRENT step (whatever the seeded plan head is) waiting so
-	// the pending-questions surface path exercises the real current_step_kind.
-	step, err := st.GetStepByKind(context.Background(), created.ID, created.CurrentStepKind)
+	step, err := st.GetStepByKind(context.Background(), created.ID, model.StepRequirementAnalysis)
 	if err != nil || step == nil {
 		t.Fatalf("get step: %v", err)
 	}
@@ -666,7 +463,7 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
 		t.Fatalf("decode job: %v", err)
 	}
-	step, err := st.GetStepByKind(context.Background(), job.ID, job.CurrentStepKind)
+	step, err := st.GetStepByKind(context.Background(), job.ID, model.StepRequirementAnalysis)
 	if err != nil || step == nil {
 		t.Fatalf("get step: %#v %v", step, err)
 	}
@@ -688,7 +485,7 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	if updated.Status != model.JobStatusQueued {
 		t.Fatalf("job status = %s, want queued", updated.Status)
 	}
-	updatedStep, err := st.GetStepByKind(context.Background(), job.ID, job.CurrentStepKind)
+	updatedStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepRequirementAnalysis)
 	if err != nil || updatedStep == nil {
 		t.Fatalf("get updated step: %#v %v", updatedStep, err)
 	}
@@ -700,104 +497,6 @@ func TestAnswerJobResumesWaitingUserJob(t *testing.T) {
 	// the step re-runs blind and re-asks the same clarification.
 	if updatedStep.UserPrompt != "确认按近一个月" {
 		t.Fatalf("step.UserPrompt after answer = %q, want the user's answer", updatedStep.UserPrompt)
-	}
-}
-
-func TestAnswerJobRoutesToProvidedWaitingStep(t *testing.T) {
-	_, r, st := newJobsTestServer(t, config.Config{})
-	create := createJobViaAPI(t, r, "p")
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d", create.Code)
-	}
-	var job model.Job
-	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil || len(steps) < 2 {
-		t.Fatalf("ListJobSteps len=%d err=%v", len(steps), err)
-	}
-	target := steps[1]
-	if err := st.MarkStepWaitingUser(context.Background(), target.ID, `{"questions":[{"id":"q"}]}`); err != nil {
-		t.Fatalf("mark target waiting: %v", err)
-	}
-	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
-		t.Fatalf("mark job waiting: %v", err)
-	}
-
-	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/answer", map[string]any{
-		"answer": "选择 B", "stepId": target.ID, "attempt": target.Attempt,
-	})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-	updatedJob, err := st.GetJob(context.Background(), job.ID)
-	if err != nil || updatedJob == nil {
-		t.Fatalf("GetJob updated: %#v %v", updatedJob, err)
-	}
-	if updatedJob.CurrentStepKind != target.Kind {
-		t.Fatalf("CurrentStepKind = %s, want target kind %s", updatedJob.CurrentStepKind, target.Kind)
-	}
-	updatedSteps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps updated: %v", err)
-	}
-	for _, step := range updatedSteps {
-		if step.ID == target.ID {
-			if step.Status != model.StepStatusPending || step.NeedsUserInput {
-				t.Fatalf("target step after answer = %#v, want pending without needs_user_input", step)
-			}
-			if step.UserPrompt != "选择 B" {
-				t.Fatalf("target UserPrompt = %q", step.UserPrompt)
-			}
-		} else if step.UserPrompt == "选择 B" {
-			t.Fatalf("answer leaked to unrelated step %#v", step)
-		}
-	}
-}
-
-func TestAnswerJobRejectsStaleStepAttempt(t *testing.T) {
-	_, r, st := newJobsTestServer(t, config.Config{})
-	create := createJobViaAPI(t, r, "p")
-	if create.Code != http.StatusCreated {
-		t.Fatalf("create status = %d", create.Code)
-	}
-	var job model.Job
-	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil || len(steps) == 0 {
-		t.Fatalf("ListJobSteps len=%d err=%v", len(steps), err)
-	}
-	target := steps[0]
-	if err := st.IncrementStepAttempt(context.Background(), target.ID); err != nil {
-		t.Fatalf("increment attempt: %v", err)
-	}
-	if err := st.IncrementStepAttempt(context.Background(), target.ID); err != nil {
-		t.Fatalf("increment attempt again: %v", err)
-	}
-	steps, _ = st.ListJobSteps(context.Background(), job.ID)
-	target = steps[0]
-	if err := st.MarkStepWaitingUser(context.Background(), target.ID, `{"questions":[{"id":"q"}]}`); err != nil {
-		t.Fatalf("mark target waiting: %v", err)
-	}
-	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
-		t.Fatalf("mark job waiting: %v", err)
-	}
-
-	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/answer", map[string]any{
-		"answer": "stale", "stepId": target.ID, "attempt": target.Attempt - 1,
-	})
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("answer status = %d, want 409; body=%s", rec.Code, rec.Body.String())
-	}
-	updated, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps updated: %v", err)
-	}
-	if updated[0].Status != model.StepStatusWaitingUser || updated[0].UserPrompt != "" {
-		t.Fatalf("stale answer mutated step: %#v", updated[0])
 	}
 }
 
@@ -854,13 +553,13 @@ func TestCancelJob(t *testing.T) {
 		t.Fatalf("ended_at not set")
 	}
 
-	// The in-flight step (the seeded plan head) must also be canceled.
+	// The in-flight step (requirement_analysis) must also be canceled.
 	stepsRec := doJSON(t, r, http.MethodGet, "/api/jobs/"+job.ID+"/steps", nil)
 	var steps []model.JobStep
 	_ = json.NewDecoder(stepsRec.Body).Decode(&steps)
 	var cur model.JobStep
 	for _, s := range steps {
-		if s.Kind == job.CurrentStepKind {
+		if s.Kind == model.StepRequirementAnalysis {
 			cur = s
 		}
 	}
@@ -1283,88 +982,5 @@ func TestStepRecordEventPublishedOnRecordCallback(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no event received within 1s")
-	}
-}
-
-// TestPatchJobStepSnapshotUpdatesOnlyTaskSnapshot verifies PATCH
-// /api/jobs/:id/steps/:stepID/snapshot persists an edited snapshot to
-// job_steps.snapshot_json (the per-task copy) without touching anything else.
-func TestPatchJobStepSnapshotUpdatesOnlyTaskSnapshot(t *testing.T) {
-	_, r, st := newJobsTestServer(t, config.Config{})
-	rec := createJobViaAPI(t, r, "生成复盘智能体")
-	var job model.Job
-	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil || len(steps) == 0 {
-		t.Fatalf("steps err=%v len=%d", err, len(steps))
-	}
-	body := map[string]any{
-		"snapshot": map[string]any{
-			"agentKey":       steps[0].AgentKey,
-			"name":           "协作编排（本次调整）",
-			"description":    "只影响本次任务",
-			"lane":           "analysis",
-			"instructions":   "本次任务使用调整后的说明",
-			"selectedSkills": []string{},
-			"skillOverrides": []map[string]string{},
-		},
-	}
-	patch := doJSON(t, r, http.MethodPatch, "/api/jobs/"+job.ID+"/steps/"+steps[0].ID+"/snapshot", body)
-	if patch.Code != http.StatusOK {
-		t.Fatalf("patch status = %d, body=%s", patch.Code, patch.Body.String())
-	}
-	updated, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps: %v", err)
-	}
-	if !strings.Contains(updated[0].SnapshotJSON, "本次调整") {
-		t.Fatalf("snapshot not updated: %s", updated[0].SnapshotJSON)
-	}
-}
-
-// TestPatchJobStepSnapshotRejectsStartedStep verifies the server-side status
-// gate: a snapshot is editable ONLY while its step is still pending. Once the
-// step has started (running/succeeded/failed/waiting_user/canceled/skipped or
-// any historical attempt), the snapshot is read-only and a PATCH must return
-// 409 Conflict. This protects against a stale UI writing into an already-
-// started or terminal step (data-integrity invariant from the plan).
-func TestPatchJobStepSnapshotRejectsStartedStep(t *testing.T) {
-	_, r, st := newJobsTestServer(t, config.Config{})
-	rec := createJobViaAPI(t, r, "生成复盘智能体")
-	var job model.Job
-	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	steps, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil || len(steps) == 0 {
-		t.Fatalf("steps err=%v len=%d", err, len(steps))
-	}
-	// Flip the first step out of pending so it is read-only. MarkStepRunning is
-	// the canonical transition into "started"; any non-pending status must be
-	// rejected identically.
-	if err := st.MarkStepRunning(context.Background(), steps[0].ID); err != nil {
-		t.Fatalf("MarkStepRunning: %v", err)
-	}
-	body := map[string]any{
-		"snapshot": map[string]any{
-			"agentKey":       steps[0].AgentKey,
-			"name":           "本次调整",
-			"description":    "只影响本次任务",
-			"selectedSkills": []string{},
-		},
-	}
-	patch := doJSON(t, r, http.MethodPatch, "/api/jobs/"+job.ID+"/steps/"+steps[0].ID+"/snapshot", body)
-	if patch.Code != http.StatusConflict {
-		t.Fatalf("patch status = %d, want 409 (body=%s)", patch.Code, patch.Body.String())
-	}
-	// Confirm the write was NOT persisted.
-	updated, err := st.ListJobSteps(context.Background(), job.ID)
-	if err != nil {
-		t.Fatalf("ListJobSteps: %v", err)
-	}
-	if strings.Contains(updated[0].SnapshotJSON, "本次调整") {
-		t.Fatalf("snapshot unexpectedly written for started step: %s", updated[0].SnapshotJSON)
 	}
 }

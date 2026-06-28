@@ -1,7 +1,0 @@
-# Persist task thinking outside the visible work trace
-
-Generation-task agents will persist raw `thinking_delta` for dialogue-history replay, but the persisted task thinking stream is separate from visible work-trace events and step execution records. This preserves the existing audit boundary where work traces and execution records contain only safe, summarized activity, while allowing the conversation surface to show task-attributed model thinking when the product explicitly requires it.
-
-The implementation will use a dedicated task-thinking event store rather than `work_trace_events`, `step_execution_records`, or ordinary dialogue messages. Each event is attributed by `dialogue_id`, `task_id`, `step_id`, `attempt`, `agent_key`, a per-dialogue replay sequence, and a per-step-attempt sequence; the content is the provider `thinking_delta` stream after credential redaction and byte capping, without summary rewriting. The task-thinking stream follows the dialogue lifecycle: archive keeps it replayable, dialogue deletion removes it, and it is excluded from audit exports or work-trace replay unless a future export flow explicitly asks for task thinking.
-
-The UI hydrates task thinking through task-attributed conversation APIs/SSE, not through the visible work-trace stream. Producers must continue dropping `thinking_delta` from work-trace and execution-record paths so the existing security gates remain fail-closed.

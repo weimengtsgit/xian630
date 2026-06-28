@@ -82,20 +82,6 @@ const (
 	StepTestVerification    StepKind = "test_verification"
 	StepImageBuild          StepKind = "image_build"
 	StepDeployment          StepKind = "deployment"
-
-	// Collaboration-pipeline step kinds. These are the dynamic-plan gates: the
-	// first three are the early analysis/contract steps, and the last three are
-	// the blocking review gates whose failures may trigger a bounded auto-repair
-	// loop back to code_generation. They are NOT part of FixedSteps() (the legacy
-	// six-step path), so legacy executor tests are unaffected; a job carrying a
-	// CollaborationPlanJSON advances through its seeded steps by Seq order.
-	StepCollaborationOrchestration StepKind = "collaboration_orchestration"
-	StepDomainAnalysis             StepKind = "domain_analysis"
-	StepDesignContract             StepKind = "design_contract"
-	StepDataIntegration            StepKind = "data_integration"
-	StepCodeReview                 StepKind = "code_review"
-	StepSecurityReview             StepKind = "security_review"
-	StepProductAcceptance          StepKind = "product_acceptance"
 )
 
 type StepStatus string
@@ -128,12 +114,7 @@ const (
 	ErrorCCStatusUnavailable              ErrorCode = "cc_status_unavailable"
 	ErrorCanceled                         ErrorCode = "canceled"
 	ErrorExecutionRecordPersistenceFailed ErrorCode = "execution_record_persistence_failed"
-	// ErrorBlockingReview is the error code for a blocking review gate
-	// (code_review / security_review / product_acceptance) whose agent output
-	// returned status:"blocked". It is the only code a blocking-review failure
-	// carries, and it is repairable under the bounded auto-repair policy.
-	ErrorBlockingReview ErrorCode = "blocking_review"
-	ErrorUnknown        ErrorCode = "unknown"
+	ErrorUnknown                          ErrorCode = "unknown"
 )
 
 // ExecutionRecordKind is the kind tag of a StepExecutionRecord: system
@@ -210,15 +191,15 @@ type Application struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// AgentCategory partitions agents by how they are produced: the registry-seeded
-// software-development pipeline agents (kind-driven) versus business-processing
-// agents created from a confirmed dialogue.
+// AgentCategory partitions agents by how they are produced: the six fixed
+// software-development pipeline agents (registry-seeded, kind-driven) versus
+// business-processing agents created from a confirmed dialogue.
 type AgentCategory string
 
 const (
-	// AgentCategorySoftwareDevelopment is the category for collaboration
-	// pipeline agents. They are registry-seeded and dispatched by StepKind; a
-	// manually-created agent cannot claim it.
+	// AgentCategorySoftwareDevelopment is the category for the six pipeline
+	// agents (requirement_analysis … deployment). They are registry-seeded and
+	// dispatched by StepKind; a manually-created agent cannot claim it.
 	AgentCategorySoftwareDevelopment AgentCategory = "software_development"
 	// AgentCategoryBusinessProcessing is the category for agents produced from
 	// a confirmed business-processing dialogue. They carry a non-empty Prompt.
@@ -237,7 +218,7 @@ type Agent struct {
 	// (dialogue-created). See AgentCategory.
 	Category AgentCategory `json:"category"`
 	// Prompt is the system prompt for a business_processing agent. Empty for
-	// software-development pipeline agents.
+	// the six software-development pipeline agents.
 	Prompt    string `json:"prompt"`
 	Enabled   bool   `json:"enabled"`
 	SortOrder int    `json:"sort_order"`
@@ -282,14 +263,11 @@ type Job struct {
 	BaseVersionID string `json:"base_version_id,omitempty"`
 	// Kind is the job kind (e.g. "generate", "revise"). Reserved for later tasks;
 	// surfaced now so the column is read/written rather than orphaned.
-	Kind string `json:"kind,omitempty"`
-	// CollaborationPlanJSON is the persisted, user-confirmed collaboration-agent
-	// plan for this generation task. Empty means legacy fixed-step job.
-	CollaborationPlanJSON string     `json:"collaboration_plan_json,omitempty"`
-	CreatedAt             time.Time  `json:"created_at"`
-	StartedAt             *time.Time `json:"started_at,omitempty"`
-	EndedAt               *time.Time `json:"ended_at,omitempty"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	Kind      string     `json:"kind,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type JobStep struct {
@@ -309,18 +287,6 @@ type JobStep struct {
 	ErrorMessage      string     `json:"error_message,omitempty"`
 	ClaudeSessionID   string     `json:"claude_session_id,omitempty"`
 	CCStatusSessionID string     `json:"cc_status_session_id,omitempty"`
-	// SnapshotJSON is the per-task collaboration-agent configuration snapshot
-	// used by this step. Empty means legacy fixed-step behavior.
-	SnapshotJSON string `json:"snapshot_json,omitempty"`
-}
-
-// JobStepEdge is one directed dependency edge between two job steps: ToStepID
-// may only start after FromStepID has finished. The plan's topological order is
-// the set of edges for a job.
-type JobStepEdge struct {
-	JobID      string `json:"job_id"`
-	FromStepID string `json:"from_step_id"`
-	ToStepID   string `json:"to_step_id"`
 }
 
 // Artifact is a single output produced by a job step: a requirements doc, a
@@ -599,7 +565,6 @@ type WorkTraceEvent struct {
 	VersionID     string    `json:"version_id,omitempty"`
 	StepID        string    `json:"step_id,omitempty"`
 	Attempt       int       `json:"attempt,omitempty"`
-	AgentKey      string    `json:"agent_key,omitempty"`
 	Type          string    `json:"type"`
 	PayloadJSON   string    `json:"payload_json"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -630,23 +595,3 @@ const (
 	WorkTraceError         WorkTraceType = "error"               // error surfaced
 	WorkTraceAssistant     WorkTraceType = "assistant_output"    // assistant text output
 )
-
-// TaskThinkingEvent is one durable, immutable row of raw provider thinking
-// captured during task execution. Unlike WorkTraceEvent, this holds the
-// full, unredacted (except credentials) thinking stream for debugging and
-// audit, never surfaced to the UI. DialogueSequence is per dialogue_id and
-// assigned by the store (MAX+1 in one transaction). StepSequence is per
-// (task_id, step_id, attempt) and also assigned by the store.
-type TaskThinkingEvent struct {
-	ID               string    `json:"id"`
-	DialogueID       string    `json:"dialogue_id"`
-	TaskID           string    `json:"task_id,omitempty"`
-	StepID           string    `json:"step_id,omitempty"`
-	Attempt          int       `json:"attempt,omitempty"`
-	AgentKey         string    `json:"agent_key,omitempty"`
-	DialogueSequence int64     `json:"dialogue_sequence"`
-	StepSequence     int       `json:"step_sequence"`
-	Content          string    `json:"content"`
-	Redacted         bool      `json:"redacted"`
-	CreatedAt        time.Time `json:"created_at"`
-}

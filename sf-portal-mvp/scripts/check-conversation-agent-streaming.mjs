@@ -130,52 +130,6 @@ assert.equal(byId.data_policy.options[0].recommended, true, 'recommendation badg
 
 // ---- 2b. The child's persisted analysis (thinking process) is retained -------
 //
-// A persisted agent thinking message should replay as a Chinese 思考摘要 item,
-// using the following safe Chinese analysis as the summary while keeping the raw
-// thinking available for the original view.
-const replayedThinkingView = {
-  session: { id: 'dlg_thinking_replay', status: 'drafting_application', intent: 'application_generation', route_locked: true, initial_prompt: '做一个员工请假审批流程' },
-  messages: [],
-  route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
-  child: {
-    id: 'clar_thinking_replay', status: 'waiting_user', round: 1, max_rounds: 6,
-    requirement: { appType: 'operations_management', appName: '员工请假审批', coreScenario: '请假申请与审批' },
-    messages: [
-      { id: 'rt_u1', role: 'user', kind: 'prompt', content: '做一个员工请假审批流程' },
-      { id: 'rt_t1', role: 'agent', kind: 'thinking', content: 'The model is reasoning in English about leave approval.' },
-      { id: 'rt_a1', role: 'agent', kind: 'analysis_work_log', content: '已识别为员工请假审批流程，需要确认审批层级。' },
-      { id: 'rt_q1', role: 'agent', kind: 'question', metadata_json: JSON.stringify({
-        id: 'approval_level', label: '审批层级', options: [{ value: 'manager', label: '直属主管' }], recommendation: ['manager'],
-      }) },
-    ],
-  },
-}
-const replayedThinkingTimeline = buildDialogueTimeline(replayedThinkingView)
-const replayedThinkingIndex = replayedThinkingTimeline.findIndex(it => it.type === 'thinking_summary')
-const replayedAnalysisIndex = replayedThinkingTimeline.findIndex(it => it.type === 'analysis_stream' && it.content === '已识别为员工请假审批流程，需要确认审批层级。')
-assert.ok(replayedThinkingIndex >= 0, 'persisted thinking must render as a thinking_summary item')
-assert.ok(replayedThinkingIndex < replayedAnalysisIndex, 'persisted thinking summary must stay before the following analysis')
-assert.equal(replayedThinkingTimeline[replayedThinkingIndex].content, 'The model is reasoning in English about leave approval.')
-assert.equal(replayedThinkingTimeline[replayedThinkingIndex].summary, '已识别为员工请假审批流程，需要确认审批层级。')
-
-const orphanThinkingTimeline = buildDialogueTimeline({
-  session: { id: 'dlg_orphan_thinking', status: 'drafting_application', intent: 'application_generation', route_locked: true },
-  messages: [], route: {},
-  child: {
-    id: 'clar_orphan_thinking', status: 'waiting_user', round: 1, max_rounds: 6,
-    requirement: {},
-    messages: [
-      { id: 'ot_u1', role: 'user', kind: 'prompt', content: '生成智能体' },
-      { id: 'ot_t1', role: 'agent', kind: 'thinking', content: 'Final reasoning without analysis.' },
-      { id: 'ot_q1', role: 'agent', kind: 'question', metadata_json: JSON.stringify({ id: 'q', label: '确认项', options: [{ value: 'yes', label: '是' }] }) },
-    ],
-  },
-})
-const orphanThinking = orphanThinkingTimeline.find(it => it.type === 'thinking_summary')
-assert.ok(orphanThinking, 'persisted thinking without following analysis must still render')
-assert.equal(orphanThinking.content, 'Final reasoning without analysis.')
-assert.equal(orphanThinking.summary, '', 'orphan thinking must not fabricate a Chinese summary')
-
 // The application-generation flow persists its analysis_work_log in the CHILD
 // clarification thread (not the parent). Without surfacing it, the streaming
 // live block is cleared on every reload and the thinking process vanishes. The
@@ -393,37 +347,19 @@ assert.equal(guardedSt.liveThinking, null, 'a .delta event must NOT populate liv
 
 // buildDialogueTimeline renders a live_thinking 思考过程 block when liveThinking
 // is present (above the analysis), parallel to the live_analysis block.
-const liveThinkTimeline = buildDialogueTimeline(
-  null,
-  { id: 'opt_t', content: 'hi' },
-  { key: 'turn:t1', content: '已识别为员工请假审批流程，需要确认审批层级。', kind: 'round' },
-  { key: 'thinking:t1', content: 'The model is reasoning in English...', kind: 'round' },
-)
+const liveThinkTimeline = buildDialogueTimeline(null, { id: 'opt_t', content: 'hi' }, null, { key: 'thinking:t1', content: '思考中…', kind: 'round' })
 const liveThinkItem = liveThinkTimeline.find(it => it.type === 'live_thinking')
 assert.ok(liveThinkItem, 'liveThinking renders a live_thinking item')
-assert.equal(liveThinkItem.content, 'The model is reasoning in English...', 'raw thinking content is preserved')
-assert.equal(liveThinkItem.summary, '已识别为员工请假审批流程，需要确认审批层级。', 'live_thinking exposes a Chinese summary from safe analysis')
+assert.equal(liveThinkItem.content, '思考中…', 'live_thinking content preserved')
 
 // Static guard: the live item is rendered as plaintext, never dangerouslySetInnerHTML.
 // Strip comments so a doc comment mentioning the forbidden API does not trip it.
 const workbenchSrc3 = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
-const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
 assert.equal(
   /dangerouslySetInnerHTML/.test(workbenchSrc3.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')),
   false,
   'ConversationWorkbench must never use dangerouslySetInnerHTML',
 )
-assert.match(workbenchSrc3, /ThinkingSummary/, 'ConversationWorkbench must render thinking through ThinkingSummary')
-assert.match(workbenchSrc3, /思考摘要/, 'thinking summary UI must use the 思考摘要 label')
-assert.match(workbenchSrc3, /原始思考过程/, 'raw thinking must be behind an 原始思考过程 disclosure')
-// The composer must stay active when a job pauses for clarification (waiting_user),
-// so the user can answer the job-step clarification prompt via free text.
-assert.match(workbenchSrc3, /waiting_user/, 'continuousLoop must include waiting_user so the composer stays active during job-step clarification')
-// Live (pending) thinking must be expanded by default with a fixed-height scroll
-// area; completed thinking_summary must collapse raw thinking by default.
-assert.match(workbenchSrc3, /item\.pending/, 'ThinkingSummary must branch on item.pending for live vs completed state')
-assert.match(workbenchCss, /\.cw-raw-thinking-stream/, 'streaming raw thinking must use a fixed-height scroll container')
-assert.match(workbenchCss, /max-height:\s*200px/, 'streaming raw thinking container must have a fixed max-height')
 
 console.log('check-conversation-agent-streaming: live analysis streaming + fold OK')
 
@@ -447,15 +383,6 @@ const eventsSrc = readFileSync(new URL('../src/api/events.js', import.meta.url),
 assert.ok(
   eventsSrc.includes("'dialogue.clarification.delta'"),
   'events.js must register dialogue.clarification.delta on the global SSE bus',
-)
-// *.thinking events must be registered on the global SSE bus so the workbench
-// folds live thinking incrementally — without these, thinking only appears after
-// the persisted analysis lands (the bug where thinking is batched, not streamed).
-assert.ok(
-  eventsSrc.includes("'dialogue.route.thinking'") &&
-    eventsSrc.includes("'dialogue.draft.thinking'") &&
-    eventsSrc.includes("'dialogue.clarification.thinking'"),
-  'events.js must register all dialogue *.thinking events on the global SSE bus',
 )
 // Legacy bare clarification.message.delta must STILL be registered so the
 // standalone clarification surface (useClarification / ClarificationPanel) keeps
@@ -509,15 +436,19 @@ assert.equal(cGuarded.liveAnalysis.content.includes('RAW'), false, 'no thinking_
 console.log('check-conversation-agent-streaming: dialogue clarification delta reachability OK')
 
 // ============================================================================
-// Task 5: User-facing 应用 label (D4)
+// Task 5: User-facing 智能体 label (D4)
 //
-// The user-facing noun for the produced product is 应用. 协作智能体 and
-// 纳管智能体 remain valid agent concepts, but generated/preset software products
-// must not be presented as 业务智能体 or 生成智能体.
+// The user-facing noun for the produced product is 智能体; the internal entity
+// stays 应用. We assert the workbench's RENDERED (user-facing) product strings
+// use 智能体, while leaving internal identifiers (appType, appName,
+// resolvedApplication, onOpenApp, ...), API paths, and code comments that refer
+// to the internal 应用 entity untouched.
 //
-// Strategy: scan the workbench source, strip line/block comments, then assert
-// the rendered product phrases use 应用 and the obsolete product-agent phrases
-// are absent.
+// Strategy: scan the workbench source, strip line/block comments so an internal
+// reference in a comment never trips the check, then assert that none of the
+// known user-facing product phrases (the route card, empty hint, app list
+// heading, open-app action, delete-confirm copy, history fallback, requirement
+// summary field labels) still carry the old 应用 noun.
 // ============================================================================
 const wbRaw = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
 // Strip // line comments and /* */ block comments so only executable/rendered
@@ -529,181 +460,31 @@ const wbRendered = wbRaw
 
 // The renamed user-facing phrases MUST be present (proves the rename happened).
 const expectedUserFacing = [
-  '生成新应用',
-  '复用已有应用',
-  '推荐应用',
-]
-for (const phrase of expectedUserFacing) {
-  assert.ok(
-    wbRendered.includes(phrase),
-    `ConversationWorkbench must use the user-facing noun 应用 for the produced product (missing: "${phrase}")`,
-  )
-}
-
-// The old user-facing product phrases MUST be gone from rendered source.
-const forbiddenUserFacing = [
   '生成新智能体',
   '通过需求澄清生成助手智能体或业务智能体',
   '复用已有智能体',
   '推荐智能体',
 ]
+for (const phrase of expectedUserFacing) {
+  assert.ok(
+    wbRendered.includes(phrase),
+    `ConversationWorkbench must use the user-facing noun 智能体 for the produced product (missing: "${phrase}")`,
+  )
+}
+
+// The old user-facing product phrases MUST be gone from rendered source.
+const forbiddenUserFacing = [
+  '生成新应用',
+  '助手应用或业务应用',
+  '复用已有应用',
+  '打开匹配的现有应用',
+  '<strong>推荐应用</strong>',
+]
 for (const phrase of forbiddenUserFacing) {
   assert.equal(
     wbRendered.includes(phrase), false,
-    `ConversationWorkbench must not show the old product noun 智能体 to users (still present: "${phrase}")`,
+    `ConversationWorkbench must not show the old product noun 应用 to users (still present: "${phrase}")`,
   )
 }
 
-console.log('check-conversation-agent-streaming: user-facing 应用 label OK')
-
-// ============================================================================
-// Live thinking streaming: tail append + pending placeholder
-//
-// Two defects in the new-agent (child clarification) flow:
-//   1. Streamed thinking/analysis appeared after the FIRST user message (inserted
-//      before the child thread) instead of at the tail. Now live_thinking /
-//      live_analysis append at the END of buildDialogueTimeline, after all
-//      persisted child content, before resolved_outcome.
-//   2. No "thinking…" placeholder after send when no live content has streamed
-//      yet. Now a pending live_thinking item ("正在思考…") renders when a turn
-//      is in flight (pendingTurn truthy) and no live content exists.
-// ============================================================================
-
-// ---- 1. Live items appear at the TAIL, after child persisted content -------
-//
-// A view with a child clarification thread (user prompt + analysis + question)
-// AND live thinking/analysis must place the live items AFTER the last child
-// persisted item, not before the child thread.
-{
-  const tailView = {
-    session: {
-      id: 'dlg_tail', status: 'drafting_application', intent: 'application_generation',
-      route_locked: true, initial_prompt: '生成智能体',
-    },
-    messages: [
-      { id: 'tu1', role: 'user', kind: 'prompt', content: '生成智能体' },
-    ],
-    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
-    child: {
-      id: 'clar_tail', status: 'waiting_user', round: 1, max_rounds: 6,
-      requirement: { appType: 'command_dashboard', appName: '测试应用', coreScenario: '测试' },
-      messages: [
-        { id: 'tcu1', role: 'user', kind: 'prompt', content: '生成智能体' },
-        { id: 'tca1', role: 'agent', kind: 'analysis_work_log', content: '分析已完成，等待确认' },
-        {
-          id: 'tcq1', role: 'agent', kind: 'question',
-          metadata_json: JSON.stringify({
-            id: 'tq1', label: '确认项',
-            options: [{ value: 'yes', label: '是' }],
-          }),
-        },
-      ],
-    },
-  }
-  const tailTimeline = buildDialogueTimeline(
-    tailView,
-    null,
-    { key: 't1', content: '实时分析内容', kind: 'round' },
-    { key: 'think:t1', content: '实时思考内容', kind: 'round' },
-  )
-  // The child's last persisted item is the question group.
-  const questionGroupIndex = tailTimeline.findIndex(it => it.type === 'question_group')
-  const liveThinkingIdx = tailTimeline.findIndex(it => it.type === 'live_thinking' && !it.pending)
-  const liveAnalysisIdx = tailTimeline.findIndex(it => it.type === 'live_analysis')
-  assert.ok(questionGroupIndex >= 0, 'precondition: child question group exists')
-  assert.ok(liveThinkingIdx > questionGroupIndex, 'live_thinking must appear AFTER the child question group (tail append)')
-  assert.ok(liveAnalysisIdx > questionGroupIndex, 'live_analysis must appear AFTER the child question group (tail append)')
-  // Live items must appear before resolved_outcome / system_status (which are
-  // the very last items). For a non-resolved, non-terminal session there are
-  // none, so the live items are at the actual tail.
-  const resolvedIdx = tailTimeline.findIndex(it => it.type === 'resolved_outcome')
-  if (resolvedIdx >= 0) {
-    assert.ok(liveThinkingIdx < resolvedIdx, 'live_thinking before resolved_outcome')
-    assert.ok(liveAnalysisIdx < resolvedIdx, 'live_analysis before resolved_outcome')
-  }
-}
-
-// ---- 2. Pending placeholder when pendingTurn exists, no live content --------
-//
-// When a turn is in flight (pendingTurn truthy) and no liveThinking /
-// liveAnalysis content has streamed yet, the builder must append a pending
-// live_thinking item with content "正在思考…" so the workbench never looks
-// frozen between send and the first delta.
-{
-  const pendingView = {
-    session: {
-      id: 'dlg_pending', status: 'drafting_application', intent: 'application_generation',
-      route_locked: true, initial_prompt: 'hi',
-    },
-    messages: [{ id: 'pu1', role: 'user', content: 'hi' }],
-    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
-  }
-  const pendingTimeline = buildDialogueTimeline(
-    pendingView, null, null, null, [], { turnId: 't1', dialogueId: 'dlg_pending' },
-  )
-  const pendingItem = pendingTimeline.find(it => it.type === 'live_thinking' && it.pending)
-  assert.ok(pendingItem, 'a pending live_thinking item must render when pendingTurn exists and no live content')
-  assert.equal(pendingItem.content, '正在思考…', 'pending placeholder copy is 正在思考…')
-  assert.equal(pendingItem.summary, '', 'pending placeholder has empty summary')
-  assert.equal(pendingItem.pending, true, 'pending flag is true')
-  assert.equal(pendingItem.kind, 'round', 'pending placeholder is round kind')
-}
-
-// ---- 3. No pending placeholder when real live content exists ----------------
-//
-// Once real thinking OR analysis streams, the pending placeholder must NOT
-// appear (it is naturally replaced by the real content).
-{
-  const liveView = {
-    session: {
-      id: 'dlg_live_repl', status: 'drafting_application', intent: 'application_generation',
-      route_locked: true, initial_prompt: 'hi',
-    },
-    messages: [{ id: 'lu1', role: 'user', content: 'hi' }],
-    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
-  }
-  // Real thinking present → no pending placeholder.
-  const withThinking = buildDialogueTimeline(
-    liveView, null, null,
-    { key: 'think:t1', content: '思考中…', kind: 'round' },
-    [], { turnId: 't1' },
-  )
-  const pendingWithThinking = withThinking.find(it => it.type === 'live_thinking' && it.pending)
-  assert.ok(!pendingWithThinking, 'no pending placeholder when real liveThinking content exists')
-  const realThink = withThinking.find(it => it.type === 'live_thinking' && !it.pending)
-  assert.ok(realThink, 'real live_thinking renders instead of the placeholder')
-
-  // Real analysis present → no pending placeholder.
-  const withAnalysis = buildDialogueTimeline(
-    liveView, null,
-    { key: 't1', content: '分析中…', kind: 'round' },
-    null, [], { turnId: 't1' },
-  )
-  const pendingWithAnalysis = withAnalysis.find(it => it.type === 'live_thinking' && it.pending)
-  assert.ok(!pendingWithAnalysis, 'no pending placeholder when real liveAnalysis content exists')
-
-  // No pendingTurn → no placeholder even without live content.
-  const noPending = buildDialogueTimeline(liveView, null, null, null, [], null)
-  const pendingNoTurn = noPending.find(it => it.type === 'live_thinking' && it.pending)
-  assert.ok(!pendingNoTurn, 'no pending placeholder when pendingTurn is absent')
-}
-
-// ---- 4. Backward compatibility: pendingTurn defaults to null ----------------
-//
-// Existing callers that do not pass pendingTurn must not break, and must not
-// see a spurious placeholder.
-{
-  const compatView = {
-    session: {
-      id: 'dlg_compat', status: 'drafting_application', intent: 'application_generation',
-      route_locked: true, initial_prompt: 'hi',
-    },
-    messages: [{ id: 'cu1', role: 'user', content: 'hi' }],
-    route: { intent: 'application_generation', confidence: 'high', needsRouteConfirmation: false, userFacingReason: '' },
-  }
-  const compatTimeline = buildDialogueTimeline(compatView)
-  const compatPending = compatTimeline.find(it => it.type === 'live_thinking' && it.pending)
-  assert.ok(!compatPending, 'no pending placeholder when pendingTurn is omitted (backward compatible)')
-}
-
-console.log('check-conversation-agent-streaming: live thinking tail + pending placeholder OK')
+console.log('check-conversation-agent-streaming: user-facing 智能体 label OK')

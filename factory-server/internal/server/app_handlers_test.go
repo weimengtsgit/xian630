@@ -210,50 +210,6 @@ func TestListApplicationsFailClosedOnMissingCatalog(t *testing.T) {
 	}
 }
 
-func TestListManagedAgentsReturnsCatalogConfiguredLinks(t *testing.T) {
-	st, err := store.Open(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-
-	root := t.TempDir()
-	writeServerCatalog(t, root, `{
-  "version": 1,
-  "scenes": {
-    "east-sea-situation": { "surface": "application", "order": 1 },
-    "ops-copilot": {
-      "surface": "managed_agent",
-      "order": 1,
-      "name": "运维智能体",
-      "description": "排查部署和告警问题",
-      "url": "https://example.com/ops",
-      "keywords": ["运维", "部署"]
-    }
-  }
-}`)
-	writeServerSceneManifest(t, root, "east-sea-situation")
-
-	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
-	req := httptest.NewRequest(http.MethodGet, "/api/managed-agents", nil)
-	rec := httptest.NewRecorder()
-	srv.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	var agents []scanner.ManagedAgent
-	if err := json.NewDecoder(rec.Body).Decode(&agents); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(agents) != 1 {
-		t.Fatalf("managed agents = %d, want 1: %+v", len(agents), agents)
-	}
-	if agents[0].Slug != "ops-copilot" || agents[0].URL != "https://example.com/ops" {
-		t.Fatalf("unexpected managed agent: %+v", agents[0])
-	}
-}
-
 func contains(items []string, want string) bool {
 	for _, s := range items {
 		if s == want {

@@ -149,11 +149,8 @@ func TestRouteIntentPromptHidesBusinessProcessingAgentRoute(t *testing.T) {
 	if strings.Contains(prompt, "For a `business_processing_agent` route") {
 		t.Fatalf("prompt still instructs the model to produce a business route: %s", prompt)
 	}
-	if !strings.Contains(prompt, "assistant agent") && !strings.Contains(prompt, "助手智能体") {
-		t.Fatalf("prompt must tell agent/assistant requests to become application_generation with 智能体 wording: %s", prompt)
-	}
-	if strings.Contains(prompt, "assistant application") || strings.Contains(prompt, "助手应用") {
-		t.Fatalf("prompt must not use old application wording for agent/assistant requests: %s", prompt)
+	if !strings.Contains(prompt, "assistant application") && !strings.Contains(prompt, "助手应用") {
+		t.Fatalf("prompt must tell agent/assistant requests to become application_generation: %s", prompt)
 	}
 }
 
@@ -227,11 +224,8 @@ func TestRouteIntentNormalizesDormantBusinessIntentToApplicationGeneration(t *te
 	if out.Intent != IntentApplicationGeneration {
 		t.Fatalf("intent = %q, want application_generation", out.Intent)
 	}
-	if !strings.Contains(out.UserFacingReason, "助手智能体") {
-		t.Fatalf("reason should use 智能体 product noun, got %q", out.UserFacingReason)
-	}
 	if strings.Contains(out.UserFacingReason, "业务处理") || strings.Contains(out.UserFacingReason, "Agent") {
-		t.Fatalf("reason should be assistant-agent framing, got %q", out.UserFacingReason)
+		t.Fatalf("reason should be assistant-application framing, got %q", out.UserFacingReason)
 	}
 	for _, ev := range events {
 		b, _ := json.Marshal(ev)
@@ -262,12 +256,6 @@ func TestRouteIntentRequiresConfirmationForApplicationGeneration(t *testing.T) {
 	if !out.NeedsRouteConfirmation {
 		t.Fatal("application_generation must provide a route-selection action")
 	}
-	if strings.Contains(out.UserFacingReason, "新应用") {
-		t.Fatalf("application_generation reason must not leak old product noun: %q", out.UserFacingReason)
-	}
-	if !strings.Contains(out.UserFacingReason, "新智能体") {
-		t.Fatalf("application_generation reason should use 智能体 product noun, got %q", out.UserFacingReason)
-	}
 }
 
 func TestRouteIntentNormalizesEmptyExistingApplicationToGeneration(t *testing.T) {
@@ -297,9 +285,6 @@ func TestRouteIntentNormalizesEmptyExistingApplicationToGeneration(t *testing.T)
 	}
 	if strings.Contains(out.UserFacingReason, "已有应用") {
 		t.Fatalf("empty existing-application reason leaked into generation route: %q", out.UserFacingReason)
-	}
-	if !strings.Contains(out.UserFacingReason, "新智能体") {
-		t.Fatalf("fallback generation reason should use 智能体 product noun, got %q", out.UserFacingReason)
 	}
 }
 

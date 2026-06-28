@@ -248,7 +248,7 @@ func (r Runner) routePrompt(inputPath string) string {
 		`{"intent":"existing_application | application_generation","confidence":"high | ambiguous","existingApplicationSlugs":["candidate-application-slug"],"internalBlueprintSlug":"candidate-blueprint-slug-or-empty","userFacingReason":"concise positive user-facing explanation","needsRouteConfirmation":true}. ` +
 		"Do not output action, blueprint, app, recommendation, or any other wrapper object. " +
 		"Use only the candidate applications and blueprints supplied in the input; never invent slugs or resource names, never state nothing is reusable, never describe a blueprint as a template, never expose hidden reasoning. " +
-		"Do not emit business_processing_agent in the current phase. If the user asks to create an agent or assistant and no existing app is a strong fit, route to application_generation as a runnable assistant agent（助手智能体）."
+		"Do not emit business_processing_agent in the current phase. If the user asks to create an agent or assistant and no existing app is a strong fit, route to application_generation as a runnable assistant application."
 }
 
 func (r Runner) draftPrompt(inputPath string) string {
@@ -337,7 +337,7 @@ func adaptLegacyRouteOutput(out RouteOutput, raw string) RouteOutput {
 		out.UserFacingReason = strings.TrimSpace(legacy.Reason)
 	}
 	if out.UserFacingReason == "" && out.Intent == IntentApplicationGeneration {
-		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新智能体。"
+		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
 	}
 	return out
 }
@@ -351,36 +351,18 @@ func normalizeRouteOutput(out RouteOutput) RouteOutput {
 	if out.Intent == IntentBusinessProcessingAgent {
 		out.Intent = IntentApplicationGeneration
 		out.ExistingApplicationSlugs = nil
-		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的助手智能体。"
+		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的助手应用。"
 	}
 	if out.Intent == IntentExistingApplication && len(out.ExistingApplicationSlugs) == 0 {
 		out.Intent = IntentApplicationGeneration
-		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新智能体。"
+		out.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
 	}
 	if out.Intent == IntentApplicationGeneration {
 		// Application generation has no immediately actionable application card.
 		// Keep its route selection visible so the user can start clarification.
 		out.NeedsRouteConfirmation = true
-		out.UserFacingReason = normalizeApplicationGenerationReason(out.UserFacingReason)
 	}
 	return out
-}
-
-func normalizeApplicationGenerationReason(reason string) string {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return "我会先澄清你的需求，并生成一个可运行的新智能体。"
-	}
-	replacer := strings.NewReplacer(
-		"生成新应用", "生成新智能体",
-		"生成一个可运行的新应用", "生成一个可运行的新智能体",
-		"可运行的新应用", "可运行的新智能体",
-		"生成一个可运行的助手应用", "生成一个可运行的助手智能体",
-		"可运行的助手应用", "可运行的助手智能体",
-		"助手应用", "助手智能体",
-		"业务应用", "业务智能体",
-	)
-	return replacer.Replace(reason)
 }
 
 func normalizeDraftOutput(out BusinessDraftOutput) BusinessDraftOutput {

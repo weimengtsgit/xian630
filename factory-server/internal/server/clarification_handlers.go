@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
-	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
@@ -226,16 +225,12 @@ func (s *Server) createClarification(w http.ResponseWriter, r *http.Request) {
 		Data:      sess,
 	})
 
-	// Run round 1 outside the request path. Events stream live to any
-	// pre-subscribed SSE client; on failure the session is marked failed (no job).
-	s.runAsync(func(asyncCtx context.Context) {
-		s.runRoundAndPersist(asyncCtx, sessID, 1)
-	})
-	updated, _ := s.store.GetClarificationSession(ctx, sessID)
-	if updated == nil {
-		updated = &sess
-	}
-	if updated.Status == model.ClarificationStatusFailed {
+	// Run round 1 synchronously. Events stream live to any pre-subscribed SSE
+	// client via publishClarificationEvent during the request. On failure the
+	// session is marked failed (no job) and we still return 200 with the session.
+	updated, _, ok := s.runRoundAndPersist(ctx, sessID, 1)
+	if !ok {
+		// Failure path already set status=failed + published clarification.failed.
 		writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 		return
 	}
@@ -349,7 +344,7 @@ func (s *Server) listClarificationMessages(w http.ResponseWriter, r *http.Reques
 // addClarificationMessage handles POST /api/clarifications/:id/messages. It
 // appends a user message then runs the next round (round = current+1, capped at
 // max_rounds; at the cap the session transitions to ready_to_confirm instead of
-// running again). The next model round is scheduled outside the request path.
+// running again).
 func (s *Server) addClarificationMessage(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	sess, err := s.store.GetClarificationSession(r.Context(), id)
@@ -389,12 +384,13 @@ func (s *Server) addClarificationMessage(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx := r.Context()
-	_ = s.store.SetClarificationStatus(ctx, id, model.ClarificationStatusActive, "", "")
-	s.runAsync(func(asyncCtx context.Context) {
-		s.advanceAfterUserTurn(asyncCtx, id, sess)
-	})
-	updated, _ := s.store.GetClarificationSession(ctx, id)
+	updated, ok := s.advanceAfterUserTurn(ctx, id, sess)
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
+	if !ok {
+		// Round failed: the view already carries status=failed. Nothing else to
+		// do — a job is never created on this path.
+		return
+	}
 }
 
 // answerClarification handles POST /api/clarifications/:id/answers. It persists
@@ -453,12 +449,12 @@ func (s *Server) answerClarification(w http.ResponseWriter, r *http.Request) {
 	// answer + merged requirement must be visible to the next clarifier round,
 	// otherwise the conversation stalls before ready_to_confirm.
 	ctx := r.Context()
-	_ = s.store.SetClarificationStatus(ctx, id, model.ClarificationStatusActive, "", "")
-	s.runAsync(func(asyncCtx context.Context) {
-		s.advanceAfterUserTurn(asyncCtx, id, updated)
-	})
-	fresh, _ := s.store.GetClarificationSession(ctx, id)
-	writeJSON(w, http.StatusOK, s.viewFromSession(fresh))
+	advanced, ok := s.advanceAfterUserTurn(ctx, id, updated)
+	writeJSON(w, http.StatusOK, s.viewFromSession(advanced))
+	if !ok {
+		// Round failed: the view already carries status=failed.
+		return
+	}
 }
 
 // answerClarificationBatch handles POST /api/clarifications/:id/answers/batch.
@@ -524,12 +520,11 @@ func (s *Server) answerClarificationBatch(w http.ResponseWriter, r *http.Request
 		Data:      clarification.PublicRequirement(req),
 	})
 
-	_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusActive, "", "")
-	s.runAsync(func(asyncCtx context.Context) {
-		s.advanceAfterUserTurn(asyncCtx, id, updated)
-	})
-	fresh, _ := s.store.GetClarificationSession(r.Context(), id)
-	writeJSON(w, http.StatusOK, s.viewFromSession(fresh))
+	advanced, ok := s.advanceAfterUserTurn(r.Context(), id, updated)
+	writeJSON(w, http.StatusOK, s.viewFromSession(advanced))
+	if !ok {
+		return
+	}
 }
 
 // patchClarificationRequirement handles PATCH /api/clarifications/:id/requirement.
@@ -594,7 +589,6 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
-	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	// Always (re)compute the profile from the application type and internal
 	// blueprint refs — never trust the client-supplied skill list — while
@@ -663,10 +657,11 @@ func (s *Server) retryClarificationRound(w http.ResponseWriter, r *http.Request)
 		retryRound = 1
 	}
 
-	s.runAsync(func(asyncCtx context.Context) {
-		s.runRoundAndPersist(asyncCtx, id, retryRound)
-	})
-	updated, _ := s.store.GetClarificationSession(r.Context(), id)
+	updated, _, ok := s.runRoundAndPersist(r.Context(), id, retryRound)
+	if !ok {
+		writeJSON(w, http.StatusOK, s.viewFromSession(updated))
+		return
+	}
 	writeJSON(w, http.StatusOK, s.viewFromSession(updated))
 }
 
@@ -754,7 +749,6 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		// profile from appType so a client can never inject one at confirm time,
 		// plus internal blueprint refs, while preserving the persisted `data`
 		// skill group across the recompute.
-		incoming.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, req.JudgementBoundary)
 		incoming.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 		incoming.GenerationProfile = recomputeGenerationProfile(incoming, req.GenerationProfile)
 		req = incoming
@@ -794,43 +788,33 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 	if displayName == "" {
 		displayName = deriveJobDisplayName(sess.InitialPrompt)
 	}
-
-	// Build the default collaboration plan from the confirmed requirement and
-	// materialize it into job_steps + job_step_edges. The plan is persisted onto
-	// the job row so the UI and executor can drive it. CurrentStepKind points at
-	// the FIRST plan agent's role so the job is executable from its plan head.
-	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: string(reqBytes)})
-	planJSON, err := plan.JSON()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build collaboration plan")
-		return
-	}
-	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build collaboration steps")
-		return
-	}
-	currentStep := model.StepRequirementAnalysis
-	if len(plan.Agents) > 0 {
-		currentStep = model.StepKind(plan.Agents[0].Role)
-	}
-
 	job := model.Job{
 		ID:                       jobID,
 		UserPrompt:               sess.InitialPrompt,
 		AppName:                  displayName,
 		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          currentStep,
+		CurrentStepKind:          model.StepRequirementAnalysis,
 		ClarificationSessionID:   id,
 		ConfirmedRequirementJSON: string(reqBytes),
-		CollaborationPlanJSON:    planJSON,
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	// Seed the job + steps + edges + clarification link in ONE transaction: on
-	// failure there is NO orphaned job and the session is moved to a diagnosable
-	// failed state (never left ready_to_confirm with no linked job).
-	if err := s.store.SeedClarificationJobWithEdges(r.Context(), job, steps, edges, id); err != nil {
+	steps := make([]model.JobStep, 0, len(stepPlan))
+	for i, sp := range stepPlan {
+		steps = append(steps, model.JobStep{
+			ID:       "step_" + idpkg.New(),
+			JobID:    jobID,
+			Kind:     sp.kind,
+			Seq:      i + 1,
+			AgentKey: sp.agentKey,
+			Status:   model.StepStatusPending,
+			Attempt:  0,
+		})
+	}
+	// Seed the job + steps + clarification link in ONE transaction: on failure
+	// there is NO orphaned job and the session is moved to a diagnosable failed
+	// state (never left ready_to_confirm with no linked job).
+	if err := s.store.SeedClarificationJob(r.Context(), job, steps, id); err != nil {
 		_ = s.store.SetClarificationStatus(r.Context(), id, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return
@@ -882,9 +866,10 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 // round that was attempted, sets status=failed, records the error code/message,
 // and publishes clarification.failed; NO job is created.
 //
-// Callers may run this from a background task so HTTP requests are not held open
-// while the model is queued or rate-limited. Events are published to the hub
-// during the round, so any SSE client already subscribed receives them live.
+// The round is run SYNCHRONOUSLY: the request blocks until the round completes
+// (fast with the test fake, ~seconds with the real CLI). Events are published to
+// the hub DURING the request, so any SSE client already subscribed to
+// /api/events receives them live. This matches the plan's testable shape.
 //
 // Round persistence: the `round` column is advanced (via
 // Store.UpdateClarificationRound) to the round that actually ran, so the
@@ -939,7 +924,6 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	}
 
 	cfg := s.loadSceneCatalog(ctx)
-	roundThinking := ""
 	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
 		filtered := s.filterClarificationEvent(cfg, ev)
 		s.publishClarificationEvent(filtered)
@@ -962,7 +946,6 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			})
 		}
 		if dialogueID != "" && filtered.Type == "clarification.message.thinking" {
-			roundThinking = filtered.Delta
 			s.publishDialogueEvent(dialogue.StreamEvent{
 				Type:       "dialogue.clarification.thinking",
 				DialogueID: dialogueID,
@@ -1006,9 +989,6 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	// not fail: a single bad slug should not abort the round; the executor drops
 	// unsafe refs for Reads regardless (wave-1 path-builder containment).
 	out.Requirement = mergeRequirementDefaults(out.Requirement, input.CurrentRequirement)
-	if len(out.CollaborationAdjustments) > 0 {
-		out.Requirement.CollaborationAdjustments = append([]clarification.CollaborationAdjustment(nil), out.CollaborationAdjustments...)
-	}
 	out.Requirement.BlueprintRefs = s.sanitizeBlueprintRefs(out.Requirement.BlueprintRefs)
 	// The LLM may suggest business fields and safe blueprint refs, but the skill
 	// profile is always Factory-derived from those refs, while preserving the
@@ -1019,20 +999,6 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	if err := s.store.UpdateClarificationRequirement(ctx, sessID, string(reqBytes)); err != nil {
 		return sess, roundN, false
 	}
-	analysisAt := now
-	if strings.TrimSpace(roundThinking) != "" {
-		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
-			ID:        "cmsg_" + idpkg.New(),
-			SessionID: sessID,
-			Role:      "agent",
-			Kind:      "thinking",
-			Content:   roundThinking,
-			CreatedAt: now,
-		}); err != nil {
-			return sess, roundN, false
-		}
-		analysisAt = now.Add(time.Millisecond)
-	}
 	for _, wl := range out.WorkLog {
 		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
 			ID:        "cmsg_" + idpkg.New(),
@@ -1040,12 +1006,11 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			Role:      "agent",
 			Kind:      "analysis_work_log",
 			Content:   wl.Content,
-			CreatedAt: analysisAt,
+			CreatedAt: now,
 		}); err != nil {
-			return sess, roundN, false
+			return sess, round, false
 		}
 	}
-	questionAt := analysisAt.Add(time.Millisecond)
 	for _, q := range out.Questions {
 		qBytes, _ := json.Marshal(q)
 		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
@@ -1054,7 +1019,7 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			Role:         "agent",
 			Kind:         "question",
 			MetadataJSON: string(qBytes),
-			CreatedAt:    questionAt,
+			CreatedAt:    now,
 		}); err != nil {
 			return sess, roundN, false
 		}
@@ -1339,15 +1304,11 @@ func mergeRequirementDefaults(next, current clarification.Requirement) clarifica
 	if len(next.AcceptanceFocus) == 0 {
 		next.AcceptanceFocus = append([]string(nil), current.AcceptanceFocus...)
 	}
-	next.JudgementBoundary = mergeJudgementBoundaryDefaults(next.JudgementBoundary, current.JudgementBoundary)
 	if len(next.GenerationProfile) == 0 {
 		next.GenerationProfile = cloneStringListMap(current.GenerationProfile)
 	}
 	if len(next.BlueprintRefs) == 0 {
 		next.BlueprintRefs = append([]string(nil), current.BlueprintRefs...)
-	}
-	if len(next.CollaborationAdjustments) == 0 {
-		next.CollaborationAdjustments = append([]clarification.CollaborationAdjustment(nil), current.CollaborationAdjustments...)
 	}
 	return next
 }
@@ -1359,24 +1320,6 @@ func cloneStringListMap(in map[string][]string) map[string][]string {
 	out := make(map[string][]string, len(in))
 	for key, values := range in {
 		out[key] = append([]string(nil), values...)
-	}
-	return out
-}
-
-func cloneJudgementBoundary(in clarification.JudgementBoundary) clarification.JudgementBoundary {
-	return clarification.JudgementBoundary{
-		DataSources: append([]string(nil), in.DataSources...),
-		Summary:     in.Summary,
-	}
-}
-
-func mergeJudgementBoundaryDefaults(next, current clarification.JudgementBoundary) clarification.JudgementBoundary {
-	out := cloneJudgementBoundary(next)
-	if len(out.DataSources) == 0 {
-		out.DataSources = append([]string(nil), current.DataSources...)
-	}
-	if strings.TrimSpace(out.Summary) == "" {
-		out.Summary = current.Summary
 	}
 	return out
 }
@@ -1455,33 +1398,12 @@ func applyAnswerToRequirement(req *clarification.Requirement, questionID, value 
 		req.MainEntities = mergeAnswerList(req.MainEntities, value)
 	case "acceptanceFocus", "acceptance_focus":
 		req.AcceptanceFocus = mergeAnswerList(req.AcceptanceFocus, value)
-	case "judgementBoundary.dataSources", "judgement_boundary.data_sources", "judgementDataSources", "judgement_data_sources", "dataSources", "data_sources":
-		req.JudgementBoundary.DataSources = mergeAnswerList(req.JudgementBoundary.DataSources, value)
-	case "judgementBoundary.summary", "judgement_boundary.summary", "judgementBoundarySummary", "judgement_boundary_summary":
-		if value != "" {
-			req.JudgementBoundary.Summary = value
-		}
-	case "judgementBoundary", "judgement_boundary":
-		mergeJudgementBoundaryAnswer(req, value)
 	case "blueprintRefs", "blueprint_refs":
 		req.BlueprintRefs = mergeAnswerList(req.BlueprintRefs, value)
 		req.GenerationProfile = recomputeGenerationProfile(*req)
 	default:
 		// Unknown question id — the answer is recorded as a message only.
 	}
-}
-
-func mergeJudgementBoundaryAnswer(req *clarification.Requirement, value string) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return
-	}
-	var boundary clarification.JudgementBoundary
-	if err := json.Unmarshal([]byte(value), &boundary); err == nil {
-		req.JudgementBoundary = boundary
-		return
-	}
-	req.JudgementBoundary.Summary = value
 }
 
 func mergeAnswerList(existing []string, value string) []string {

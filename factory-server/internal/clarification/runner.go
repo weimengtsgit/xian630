@@ -411,7 +411,6 @@ func requirementWithoutBlueprintRefs(r Requirement) requirementView {
 		MainEntities:      r.MainEntities,
 		DataPolicy:        r.DataPolicy,
 		AcceptanceFocus:   r.AcceptanceFocus,
-		JudgementBoundary: r.JudgementBoundary,
 		GenerationProfile: r.GenerationProfile,
 	}
 }
@@ -520,7 +519,7 @@ func normalizeHighImpact(items []HighImpactItem) []HighImpactItem {
 			opts = opts[:3]
 		}
 		seen[id] = struct{}{}
-		out = append(out, HighImpactItem{ID: id, Label: label, Recommendation: HighImpactRecommendation(strings.TrimSpace(string(it.Recommendation))), Options: opts})
+		out = append(out, HighImpactItem{ID: id, Label: label, Recommendation: strings.TrimSpace(it.Recommendation), Options: opts})
 	}
 	if len(out) == 0 {
 		return nil
@@ -1023,16 +1022,6 @@ func setRequirementField(req *Requirement, field string, value any) error {
 				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
 			}
 			fv.Set(reflect.ValueOf(m))
-		case reflect.Struct:
-			b, err := json.Marshal(value)
-			if err != nil {
-				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
-			}
-			holder := reflect.New(fv.Type())
-			if err := json.Unmarshal(b, holder.Interface()); err != nil {
-				return fmt.Errorf("field %s: %w", field, ErrConsolidationValueInvalid)
-			}
-			fv.Set(holder.Elem())
 		default:
 			return fmt.Errorf("field %s unsupported kind %s: %w", field, fv.Kind(), ErrConsolidationValueInvalid)
 		}
@@ -1058,8 +1047,6 @@ func requirementFieldEmpty(req Requirement, field string) bool {
 			return fv.String() == ""
 		case reflect.Slice, reflect.Map:
 			return fv.Len() == 0
-		case reflect.Struct:
-			return reflect.DeepEqual(fv.Interface(), reflect.Zero(fv.Type()).Interface())
 		}
 	}
 	return true

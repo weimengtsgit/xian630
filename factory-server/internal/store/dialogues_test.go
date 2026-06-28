@@ -386,29 +386,3 @@ func TestLegacyClarificationBackfillExceedsListCap(t *testing.T) {
 		t.Fatalf("dialogue count after re-run = %d, want %d (not idempotent or missing rows)", gotCount, total)
 	}
 }
-
-// TestDeleteDialogueSessionRemovesTaskThinking verifies deleting a dialogue also
-// removes all associated task_thinking_events.
-func TestDeleteDialogueSessionRemovesTaskThinking(t *testing.T) {
-	st := newTestStore(t)
-	ctx := context.Background()
-	now := time.Now()
-	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
-		ID: "dlg_del", InitialPrompt: "x", Status: model.DialogueStatusRouting,
-		Intent: model.DialogueIntentRouting, CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if _, err := st.AppendTaskThinking(ctx, model.TaskThinkingEvent{
-		DialogueID: "dlg_del", TaskID: "job", StepID: "s", Content: "thinking",
-	}); err != nil {
-		t.Fatalf("append task thinking: %v", err)
-	}
-	if err := st.DeleteDialogueSession(ctx, "dlg_del"); err != nil {
-		t.Fatalf("DeleteDialogueSession: %v", err)
-	}
-	events, _ := st.ListTaskThinking(ctx, "dlg_del", 0, 500)
-	if len(events) != 0 {
-		t.Fatalf("task thinking events still exist: %#v", events)
-	}
-}

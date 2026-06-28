@@ -92,11 +92,6 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.kind: %w", err)
 	}
-	if err := s.ensureColumn(ctx, "jobs", "collaboration_plan_json",
-		`ALTER TABLE jobs ADD COLUMN collaboration_plan_json TEXT NOT NULL DEFAULT ''`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate jobs.collaboration_plan_json: %w", err)
-	}
 	if err := s.ensureColumn(ctx, "applications", "display_order",
 		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
 		db.Close()
@@ -140,16 +135,6 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE job_steps ADD COLUMN pending_questions TEXT NOT NULL DEFAULT ''`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate job_steps.pending_questions: %w", err)
-	}
-	if err := s.ensureColumn(ctx, "job_steps", "snapshot_json",
-		`ALTER TABLE job_steps ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT ''`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate job_steps.snapshot_json: %w", err)
-	}
-	if err := s.ensureColumn(ctx, "work_trace_events", "agent_key",
-		`ALTER TABLE work_trace_events ADD COLUMN agent_key TEXT NOT NULL DEFAULT ''`); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate work_trace_events.agent_key: %w", err)
 	}
 	return s, nil
 }

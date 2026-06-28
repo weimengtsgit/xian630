@@ -3,35 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
-	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
-
-const maxSkillSnapshotContentBytes = 64 * 1024
-
-var safeSnapshotSkillKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-
-type skillSnapshotCredentialRule struct {
-	pattern     *regexp.Regexp
-	replacement string
-}
-
-var skillSnapshotCredentialRules = []skillSnapshotCredentialRule{
-	{regexp.MustCompile(`(?i)(authorization)\s*:\s*([^"\r\n][^\r\n]*)`), `${1}: [REDACTED]`},
-	{regexp.MustCompile(`(?i)(authorization)\s*[:=]?\s*bearer\s+([^\s,]+)`), `${1}: Bearer [REDACTED]`},
-	{regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|authorization)(\s*[:=]\s*|"\s*:\s*"|'\s*:\s*')("([^"]*)"|'([^']*)'|([^\s,"']+))`), `${1}${2}[REDACTED]`},
-}
 
 // stepPlan is the fixed six-step pipeline seeded for every new job, in order.
 // kind → agent_key follows design §4. Both code-generator/requirement-analyst
@@ -46,109 +25,6 @@ var stepPlan = []struct {
 	{model.StepTestVerification, "tester"},
 	{model.StepImageBuild, "image-builder"},
 	{model.StepDeployment, "deployer"},
-}
-
-// collaborationSteps builds the job_steps + job_step_edges that materialize a
-// collaboration plan into runnable rows. Each plan agent becomes one pending
-// JobStep (Kind = the agent's role, AgentKey = the agent key, SnapshotJSON = the
-// frozen agent configuration); each plan edge becomes one JobStepEdge keyed by
-// the materialized step ids. The first step's role is returned implicitly via
-// plan.Agents[0].Role — callers set CurrentStepKind from it so a freshly seeded
-// job points at the executable head of the plan.
-func collaborationSteps(jobID string, plan collaboration.Plan, workspaceRoot string) ([]model.JobStep, []model.JobStepEdge, error) {
-	keyToStepID := make(map[string]string, len(plan.Agents))
-	steps := make([]model.JobStep, 0, len(plan.Agents))
-	for i, agent := range plan.Agents {
-		stepID := "step_" + idpkg.New()
-		keyToStepID[agent.Key] = stepID
-		snapshot := hydrateSnapshotSkillContents(agent.Snapshot, workspaceRoot)
-		snapshotBytes, err := json.Marshal(snapshot)
-		if err != nil {
-			return nil, nil, err
-		}
-		steps = append(steps, model.JobStep{
-			ID: stepID, JobID: jobID, Kind: model.StepKind(agent.Role), Seq: i + 1,
-			AgentKey: agent.Key, Status: model.StepStatusPending, Attempt: 0,
-			SnapshotJSON: string(snapshotBytes),
-		})
-	}
-	edges := make([]model.JobStepEdge, 0, len(plan.Edges))
-	for _, edge := range plan.Edges {
-		fromID := keyToStepID[edge.From]
-		toID := keyToStepID[edge.To]
-		if fromID == "" || toID == "" {
-			return nil, nil, fmt.Errorf("unknown collaboration edge %s -> %s", edge.From, edge.To)
-		}
-		edges = append(edges, model.JobStepEdge{JobID: jobID, FromStepID: fromID, ToStepID: toID})
-	}
-	return steps, edges, nil
-}
-
-func hydrateSnapshotSkillContents(snapshot collaboration.Snapshot, workspaceRoot string) collaboration.Snapshot {
-	if len(snapshot.SelectedSkills) == 0 {
-		return snapshot
-	}
-	root := workspaceRoot
-	if strings.TrimSpace(root) == "" {
-		root = "."
-	}
-	if abs, err := filepath.Abs(root); err == nil {
-		root = abs
-	}
-	seen := map[string]bool{}
-	for _, override := range snapshot.SkillOverrides {
-		seen[filepath.ToSlash(override.Path)] = true
-	}
-	for _, skill := range snapshot.SelectedSkills {
-		key := strings.TrimSpace(skill)
-		if !safeSnapshotSkillKey.MatchString(key) {
-			continue
-		}
-		skillsRoot := filepath.Join(root, ".claude", "skills")
-		rel := filepath.ToSlash(filepath.Join(".claude", "skills", key, "SKILL.md"))
-		if seen[rel] {
-			continue
-		}
-		fullPath := filepath.Clean(filepath.Join(skillsRoot, key, "SKILL.md"))
-		rootRel, err := filepath.Rel(skillsRoot, fullPath)
-		if err != nil || rootRel == ".." || strings.HasPrefix(rootRel, ".."+string(filepath.Separator)) || filepath.IsAbs(rootRel) {
-			continue
-		}
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			continue
-		}
-		snapshot.SkillOverrides = append(snapshot.SkillOverrides, collaboration.SkillOverride{
-			Path:    rel,
-			Content: limitSkillSnapshotContent(redactSkillSnapshotContent(string(content))),
-			Scope:   "task",
-		})
-		seen[rel] = true
-	}
-	return snapshot
-}
-
-func redactSkillSnapshotContent(content string) string {
-	for _, rule := range skillSnapshotCredentialRules {
-		content = rule.pattern.ReplaceAllString(content, rule.replacement)
-	}
-	return content
-}
-
-func limitSkillSnapshotContent(content string) string {
-	if len(content) <= maxSkillSnapshotContentBytes {
-		return content
-	}
-	const marker = "\n[TRUNCATED: skill content exceeds snapshot cap]\n"
-	keep := maxSkillSnapshotContentBytes - len(marker)
-	if keep <= 0 {
-		return marker
-	}
-	out := content[:keep]
-	for !utf8.ValidString(out) && len(out) > 0 {
-		out = out[:len(out)-1]
-	}
-	return out + marker
 }
 
 // createJobBody is the request body accepted by POST /api/jobs. As of Task 5,
@@ -188,45 +64,36 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
-
-	// Build the default collaboration plan from the confirmed requirement, then
-	// materialize it into job_steps + job_step_edges. The plan is persisted onto
-	// the job row (CollaborationPlanJSON) so the UI can render the lane/card view
-	// (Task 4) and the executor can drive it (Task 6). CurrentStepKind points at
-	// the FIRST plan agent's role so the job is executable from its plan head.
-	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: body.ConfirmedRequirementJSON})
-	planJSON, err := plan.JSON()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build collaboration plan")
-		return
-	}
-	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build collaboration steps")
-		return
-	}
-	currentStep := model.StepRequirementAnalysis
-	if len(plan.Agents) > 0 {
-		currentStep = model.StepKind(plan.Agents[0].Role)
-	}
-
 	job := model.Job{
 		ID:                       jobID,
 		UserPrompt:               body.Prompt,
 		AppName:                  deriveJobDisplayName(body.Prompt),
 		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          currentStep,
+		CurrentStepKind:          model.StepRequirementAnalysis,
 		ClarificationSessionID:   body.ClarificationSessionID,
 		ConfirmedRequirementJSON: body.ConfirmedRequirementJSON,
-		CollaborationPlanJSON:    planJSON,
 		CreatedAt:                now,
 		UpdatedAt:                now,
 	}
-	// Seed the job, its steps, AND its edges in ONE transaction so a freshly
-	// created collaboration-plan job is never left with steps but no edges.
-	if err := s.store.SeedJobWithEdges(r.Context(), job, steps, edges); err != nil {
+	if err := s.store.CreateJob(r.Context(), job); err != nil {
 		writeError(w, http.StatusInternalServerError, "create job")
 		return
+	}
+
+	for i, sp := range stepPlan {
+		step := model.JobStep{
+			ID:       "step_" + idpkg.New(),
+			JobID:    jobID,
+			Kind:     sp.kind,
+			Seq:      i + 1,
+			AgentKey: sp.agentKey,
+			Status:   model.StepStatusPending,
+			Attempt:  0,
+		}
+		if err := s.store.CreateJobStep(r.Context(), step); err != nil {
+			writeError(w, http.StatusInternalServerError, "create step")
+			return
+		}
 	}
 
 	msg := model.ConversationMessage{
@@ -371,46 +238,6 @@ func (s *Server) jobExecutionSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summaries)
 }
 
-// getJobCollaborationPlan handles GET /api/jobs/:id/collaboration-plan. It
-// returns the job together with its parsed collaboration plan, materialized
-// steps, and dependency edges so the UI can render the lane/card view. A missing
-// job is 404; invalid plan JSON is 500.
-func (s *Server) getJobCollaborationPlan(w http.ResponseWriter, r *http.Request) {
-	id := Param(r, "id")
-	job, err := s.store.GetJob(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get job")
-		return
-	}
-	if job == nil {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	steps, err := s.store.ListJobSteps(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list steps")
-		return
-	}
-	edges, err := s.store.ListJobStepEdges(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list step edges")
-		return
-	}
-	var plan any = map[string]any{}
-	if strings.TrimSpace(job.CollaborationPlanJSON) != "" {
-		if err := json.Unmarshal([]byte(job.CollaborationPlanJSON), &plan); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "invalid collaboration plan"})
-			return
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"job":   job,
-		"plan":  plan,
-		"steps": steps,
-		"edges": edges,
-	})
-}
-
 // jobStepExecutionRecords handles GET
 // /api/jobs/:id/steps/:stepID/execution-records — the drawer pagination snapshot.
 // It is scoped to one (job, step, attempt) tuple. attempt defaults to the step's
@@ -540,17 +367,12 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 // answerJobBody is accepted by POST /api/jobs/:id/answer; either "answer" or
 // "content" is accepted for interoperability with older clients.
 type answerJobBody struct {
-	Answer      string `json:"answer"`
-	Content     string `json:"content"`
-	StepID      string `json:"stepId"`
-	StepIDSnake string `json:"step_id"`
-	Attempt     int    `json:"attempt"`
+	Answer  string `json:"answer"`
+	Content string `json:"content"`
 }
 
 // answerJob handles POST /api/jobs/:id/answer — appends a user conversation
-// message to the job's thread. When the request carries stepId/attempt it is a
-// task-internal clarification answer and is routed to exactly that waiting step;
-// omitted stepId preserves the legacy current-step behavior.
+// message to the job's thread.
 func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	job, err := s.store.GetJob(r.Context(), id)
@@ -572,48 +394,6 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	if content == "" {
 		content = body.Content
 	}
-	stepID := strings.TrimSpace(body.StepID)
-	if stepID == "" {
-		stepID = strings.TrimSpace(body.StepIDSnake)
-	}
-
-	var targetStep *model.JobStep
-	if stepID != "" {
-		if job.Status != model.JobStatusWaitingUser {
-			writeError(w, http.StatusConflict, "job is not waiting for user input")
-			return
-		}
-		steps, err := s.store.ListJobSteps(r.Context(), id)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list steps")
-			return
-		}
-		for i := range steps {
-			if steps[i].ID == stepID {
-				targetStep = &steps[i]
-				break
-			}
-		}
-		if targetStep == nil {
-			writeError(w, http.StatusNotFound, "step not found")
-			return
-		}
-		if targetStep.Status != model.StepStatusWaitingUser || !targetStep.NeedsUserInput {
-			writeError(w, http.StatusConflict, "step is not waiting for user input")
-			return
-		}
-		if body.Attempt > 0 && targetStep.Attempt != body.Attempt {
-			writeError(w, http.StatusConflict, "stale step attempt")
-			return
-		}
-	} else if job.Status == model.JobStatusWaitingUser {
-		step, err := s.store.GetStepByKind(r.Context(), id, job.CurrentStepKind)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "get step")
-			return
-		}
-		targetStep = step
-	}
 
 	msg := model.ConversationMessage{
 		ID:        "conv_" + idpkg.New(),
@@ -626,52 +406,29 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add conversation")
 		return
 	}
-	if stepID != "" && job.DialogueID != "" && targetStep != nil {
-		metadata, _ := json.Marshal(map[string]any{
-			"taskId":   id,
-			"stepId":   targetStep.ID,
-			"attempt":  targetStep.Attempt,
-			"agentKey": targetStep.AgentKey,
-		})
-		dlgMsg := model.DialogueMessage{
-			ID:           "msg_" + idpkg.New(),
-			DialogueID:   job.DialogueID,
-			Role:         "user",
-			Kind:         "task_clarification_answer",
-			Content:      content,
-			MetadataJSON: string(metadata),
-			CreatedAt:    time.Now(),
-		}
-		if err := s.store.AppendDialogueMessage(r.Context(), dlgMsg); err != nil {
-			writeError(w, http.StatusInternalServerError, "append dialogue answer")
+	if job.Status == model.JobStatusWaitingUser {
+		step, err := s.store.GetStepByKind(r.Context(), id, job.CurrentStepKind)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get step")
 			return
 		}
-	}
-	if job.Status == model.JobStatusWaitingUser && targetStep != nil {
-		// Persist the user's answer onto the step's user_prompt so the re-run can
-		// read it (the generative-step prompts append step.UserPrompt as a
-		// clarification). Without this the step re-runs with identical input and
-		// re-asks the same question.
-		if strings.TrimSpace(content) != "" {
-			if err := s.store.SetStepUserPrompt(r.Context(), targetStep.ID, content); err != nil {
-				writeError(w, http.StatusInternalServerError, "set step answer")
+		if step != nil {
+			// Persist the user's answer onto the step's user_prompt so the
+			// re-run can read it (the generative-step prompts append
+			// step.UserPrompt as a clarification). Without this the step
+			// re-runs with identical input and re-asks the same question.
+			if strings.TrimSpace(content) != "" {
+				if err := s.store.SetStepUserPrompt(r.Context(), step.ID, content); err != nil {
+					writeError(w, http.StatusInternalServerError, "set step answer")
+					return
+				}
+			}
+			if err := s.store.ResetStepToPending(r.Context(), step.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "reset step")
 				return
 			}
+			s.publishStepUpdated(r.Context(), step.ID)
 		}
-		if err := s.store.ResetStepToPending(r.Context(), targetStep.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "reset step")
-			return
-		}
-		// Step-scoped answers may target a waiting step that is not the job's current
-		// pointer. Move current_step_kind before re-queueing so the executor reruns
-		// the step the user actually answered.
-		if stepID != "" {
-			if err := s.store.AdvanceJobStep(r.Context(), id, targetStep.Kind); err != nil {
-				writeError(w, http.StatusInternalServerError, "point job to step")
-				return
-			}
-		}
-		s.publishStepUpdated(r.Context(), targetStep.ID)
 		if err := s.store.MarkJobQueued(r.Context(), id); err != nil {
 			writeError(w, http.StatusInternalServerError, "queue job")
 			return
@@ -719,66 +476,4 @@ func (s *Server) repairFromFailure(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)
-}
-
-// patchJobStepSnapshot handles PATCH
-// /api/jobs/:id/steps/:stepID/snapshot — overwrites the per-task snapshot
-// (job_steps.snapshot_json) for one step. This edits ONLY this generation
-// task's copy; it never writes back to the global agents/skills registry.
-// Response contract: 200 {step_id, snapshot}, 400 invalid/empty JSON,
-// 404 step not found, 409 step has started (snapshot read-only), 500 store error.
-func (s *Server) patchJobStepSnapshot(w http.ResponseWriter, r *http.Request) {
-	jobID := Param(r, "id")
-	stepID := Param(r, "stepID")
-
-	var body struct {
-		Snapshot json.RawMessage `json:"snapshot"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	if len(body.Snapshot) == 0 || !json.Valid(body.Snapshot) {
-		writeError(w, http.StatusBadRequest, "snapshot must be valid json")
-		return
-	}
-
-	// Validate the step exists AND belongs to this job. ListJobSteps is the
-	// existing API that returns the job's steps; matching by id confirms both
-	// existence and ownership in one call. It also returns the step's full row
-	// (including Status), so the read-only gate below is server-authoritative
-	// even if the UI is stale.
-	steps, err := s.store.ListJobSteps(r.Context(), jobID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list steps")
-		return
-	}
-	var step *model.JobStep
-	for i := range steps {
-		if steps[i].ID == stepID {
-			step = &steps[i]
-			break
-		}
-	}
-	if step == nil {
-		writeError(w, http.StatusNotFound, "step not found")
-		return
-	}
-
-	// Status gate (data-integrity invariant): a snapshot is editable ONLY while
-	// its step is still pending — i.e. before the upcoming attempt starts. Any
-	// other status (running/waiting_user/succeeded/failed/canceled/skipped, plus
-	// historical attempts) is read-only. Reject with 409 so a stale UI cannot
-	// mutate a snapshot that an in-flight or terminal attempt already consumed.
-	if step.Status != model.StepStatusPending {
-		writeError(w, http.StatusConflict, "snapshot is read-only after the step has started")
-		return
-	}
-
-	if err := s.store.SetStepSnapshot(r.Context(), stepID, string(body.Snapshot)); err != nil {
-		writeError(w, http.StatusInternalServerError, "update snapshot")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"step_id": stepID, "snapshot": json.RawMessage(body.Snapshot)})
 }

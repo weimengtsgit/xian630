@@ -12,21 +12,7 @@ func TestDefaultRegistryContainsFixedAgents(t *testing.T) {
 	for _, agent := range as {
 		keys[agent.Key] = true
 	}
-	for _, key := range []string{
-		"collaboration-orchestrator",
-		"requirement-analyst",
-		"domain-analyst",
-		"designer",
-		"data-integration",
-		"solution-designer",
-		"code-generator",
-		"code-reviewer",
-		"security-reviewer",
-		"tester",
-		"product-acceptance",
-		"image-builder",
-		"deployer",
-	} {
+	for _, key := range []string{"requirement-analyst", "solution-designer", "code-generator", "tester", "image-builder", "deployer"} {
 		if !keys[key] {
 			t.Fatalf("missing agent key %s", key)
 		}
@@ -34,31 +20,24 @@ func TestDefaultRegistryContainsFixedAgents(t *testing.T) {
 }
 
 // TestDefaultRegistryStableIDsAndOrder asserts the stable id, sort_order,
-// claude_agent_name and category values that the design pins for the
-// collaboration pipeline agents. The combined build-deploy agent was split back
-// into image-builder (image_build role) and deployer (deployment role).
+// claude_agent_name and category values that the design pins for the six
+// factory pipeline agents. The combined build-deploy agent was split back into
+// image-builder (image_build role) and deployer (deployment role).
 func TestDefaultRegistryStableIDsAndOrder(t *testing.T) {
 	as := DefaultRegistry()
-	if len(as) != 13 {
-		t.Fatalf("len = %d, want 13", len(as))
+	if len(as) != 6 {
+		t.Fatalf("len = %d, want 6", len(as))
 	}
 	want := []struct {
 		id, key, claude string
 		sortOrder       int
 	}{
-		{"agent_collaboration_orchestrator", "collaboration-orchestrator", "collaboration-orchestrator", 1},
-		{"agent_requirement_analyst", "requirement-analyst", "requirement-analyst", 2},
-		{"agent_domain_analyst", "domain-analyst", "domain-analyst", 3},
-		{"agent_designer", "designer", "designer", 4},
-		{"agent_data_integration", "data-integration", "data-integration", 5},
-		{"agent_solution_designer", "solution-designer", "solution-designer", 6},
-		{"agent_code_generator", "code-generator", "code-generator", 7},
-		{"agent_code_reviewer", "code-reviewer", "code-reviewer", 8},
-		{"agent_security_reviewer", "security-reviewer", "security-reviewer", 9},
-		{"agent_tester", "tester", "tester", 10},
-		{"agent_product_acceptance", "product-acceptance", "product-acceptance", 11},
-		{"agent_image_builder", "image-builder", "image-builder", 12},
-		{"agent_deployer", "deployer", "deployer", 13},
+		{"agent_requirement_analyst", "requirement-analyst", "requirement-analyst", 1},
+		{"agent_solution_designer", "solution-designer", "solution-designer", 2},
+		{"agent_code_generator", "code-generator", "code-generator", 3},
+		{"agent_tester", "tester", "tester", 4},
+		{"agent_image_builder", "image-builder", "image-builder", 5},
+		{"agent_deployer", "deployer", "deployer", 6},
 	}
 	for i, w := range want {
 		got := as[i]
@@ -73,20 +52,6 @@ func TestDefaultRegistryStableIDsAndOrder(t *testing.T) {
 		if got.Category != model.AgentCategorySoftwareDevelopment {
 			t.Fatalf("agent %s: Category = %q, want %q", got.Key, got.Category, model.AgentCategorySoftwareDevelopment)
 		}
-	}
-}
-
-func TestDefaultRegistryCarriesSelectedSkills(t *testing.T) {
-	as := DefaultRegistry()
-	skills := map[string]string{}
-	for _, a := range as {
-		skills[a.Key] = a.SkillsJSON
-	}
-	if skills["designer"] != `["defense-operations-ui","command-dashboard"]` {
-		t.Fatalf("designer skills = %q", skills["designer"])
-	}
-	if skills["code-generator"] != `["software-factory-app"]` {
-		t.Fatalf("code-generator skills = %q", skills["code-generator"])
 	}
 }
 

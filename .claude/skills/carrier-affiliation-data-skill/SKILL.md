@@ -383,8 +383,7 @@ carrier code.
 ## Failure Rules
 
 Return `ok=false` when the core data needed for the requested scenario cannot
-be obtained; in the generated app this terminal MUST render the **Degraded State**
-from `software-factory-app`（banner + 结构预览，**无数造数值** + 数据源链接 + 重试），而不是一行裸错误串。Recommended error codes:
+be obtained. Recommended error codes:
 
 - `SOURCE_AUTH_MISSING`
 - `SOURCE_AUTH_FAILED`

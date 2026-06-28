@@ -109,7 +109,6 @@ export function StepCard({
   selected,
   unreadCount,
   onSelect,
-  agent,
 }) {
   const status = (step && (step.status || step.state)) || 'pending'
   const displayName = label || STAGE_LABELS[kind] || kind
@@ -155,7 +154,6 @@ export function StepCard({
 
       <div className="sc-card-title">
         <span className="sc-stage-name">{displayName}</span>
-        {agent && agent.name ? <span className="sc-agent-name">{agent.name}</span> : null}
         {attempt != null ? <span className="sc-attempt">第 {attempt} 次</span> : null}
         <ChevronRight size={14} className="sc-chevron" />
       </div>

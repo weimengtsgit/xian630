@@ -60,11 +60,10 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Manual agent creation is intentionally restrictive: the software-
-	// development category is owned by the registry-seeded collaboration
-	// pipeline agents, so a manually-created agent cannot claim it; a
-	// business-processing agent must carry a non-empty system prompt. The normal
-	// creator of business agents is the dialogue confirmation path, not the
-	// browser.
+	// development category is owned by the six registry-seeded pipeline agents,
+	// so a manually-created agent cannot claim it; a business-processing agent
+	// must carry a non-empty system prompt. The normal creator of business
+	// agents is the dialogue confirmation path, not the browser.
 	category := model.AgentCategoryBusinessProcessing
 	if c := strings.TrimSpace(body.Category); c != "" {
 		category = model.AgentCategory(c)
@@ -186,11 +185,11 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteAgent handles DELETE /api/agents/:id. Only business_processing agents
-// (user/dialogue-created) may be deleted; registry-seeded software_development
-// pipeline agents are protected (409) — they are re-seeded on every startup, so
-// a hard delete is both pointless and would break the pipeline. Clears
-// created_agent_id on dialogues referencing the agent (no dangling pointer) and
-// publishes agent.deleted.
+// (user/dialogue-created) may be deleted; the six registry-seeded
+// software_development pipeline agents are protected (409) — they are re-seeded
+// on every startup, so a hard delete is both pointless and would break the
+// pipeline. Clears created_agent_id on dialogues referencing the agent (no
+// dangling pointer) and publishes agent.deleted.
 func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	agent, err := s.store.GetAgent(r.Context(), id)
