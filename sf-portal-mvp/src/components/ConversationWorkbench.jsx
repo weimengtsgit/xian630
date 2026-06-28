@@ -688,7 +688,8 @@ function TaskExecutionBlock({ item }) {
   const summary = String(item.summary || '')
   const safeExecution = String(item.safeExecution || '')
   const error = String(item.error || '')
-  const copyText = [safeExecution, summary].filter(Boolean).join('\n\n')
+  const taskThinking = String(item.taskThinking || '')
+  const copyText = [safeExecution, summary, taskThinking].filter(Boolean).join('\n\n')
   return (
     <CopyableBlock text={copyText} className="cw-task-wrap" copyLabel="复制任务块">
       <div className={`cw-item cw-task-block cw-task-status-${status}`}>
@@ -704,6 +705,12 @@ function TaskExecutionBlock({ item }) {
         </button>
         {expanded ? (
           <div className="cw-task-body">
+            {taskThinking ? (
+              <section className="cw-task-section cw-task-thinking-section">
+                <h5>任务思考过程{item.taskThinkingRedacted ? <em className="cw-redacted-note">已脱敏/截断</em> : null}</h5>
+                <pre className="cw-live-text">{taskThinking}</pre>
+              </section>
+            ) : null}
             {safeExecution ? (
               <section className="cw-task-section">
                 <h5>安全执行过程</h5>

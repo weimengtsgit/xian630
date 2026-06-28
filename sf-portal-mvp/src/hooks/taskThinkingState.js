@@ -70,7 +70,7 @@ export function applyTaskThinkingEvents(state, events) {
   return (Array.isArray(events) ? events : []).reduce(applyTaskThinkingEvent, state)
 }
 
-function thinkingKey(taskId, stepId, attempt) {
+export function thinkingKey(taskId, stepId, attempt) {
   return `${taskId || ''}::${stepId || ''}::${Number(attempt || 0) || 0}`
 }
 

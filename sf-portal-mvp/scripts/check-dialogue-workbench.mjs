@@ -723,11 +723,11 @@ assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry 
   // attached to the matching block.
   const dupStepAnalysis = timeline.find(it => it.type === 'live_analysis' && it.kind === 'step')
   assert.equal(dupStepAnalysis, undefined, 'absorbed step stream is NOT re-emitted as a standalone live_analysis')
-  // Task thinking is not step-attributed yet; it must remain in the independent
-  // live_thinking surface until Phase 4 adds task_thinking_events.
+  // Task thinking is now part of Phase 4, task blocks always have the fields
   const thinking = timeline.find(it => it.type === 'live_thinking')
   assert.ok(thinking, 'round-level live_thinking remains independent')
-  assert.equal('taskThinking' in block2, false, 'task blocks do not claim unreachable step-attributed thinking data')
+  assert.equal(block2.taskThinking, '', 'taskThinking is empty when no taskThinkingItems provided')
+  assert.equal(block2.taskThinkingRedacted, false, 'taskThinkingRedacted is false when no taskThinkingItems provided')
 }
 
 // Task-internal clarification cards preserve provenance and are placed
@@ -772,6 +772,22 @@ assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry 
   assert.equal(timeline[0].id === 'ans_done', false, 'task clarification answer must not render above the task block as a generic parent message')
 }
 
+// ---- Task 5: task thinking in task blocks ----------------------------
+{
+  const block = {
+    id: 'taskblock_job_step', type: 'task_execution_block', jobId: 'job_1', stepId: 'step_1', attempt: 2,
+    agentKey: 'designer', name: '方案设计', status: 'running', expanded: true, folded: false,
+  }
+  const view = { session: { id: 'dlg_think', status: 'task_running', intent: 'application_generation' }, messages: [], route: {} }
+  const timeline = buildDialogueTimeline(view, null, null, null, [], null, [block], [
+    { id: 'think_1', dialogueId: 'dlg_think', taskId: 'job_1', stepId: 'step_1', attempt: 2, agentKey: 'designer', dialogueSequence: 1, stepSequence: 1, content: '先分析', redacted: false },
+    { id: 'think_2', dialogueId: 'dlg_think', taskId: 'job_1', stepId: 'step_1', attempt: 2, agentKey: 'designer', dialogueSequence: 2, stepSequence: 2, content: '再实现', redacted: true },
+  ])
+  const got = timeline.find(item => item.type === 'task_execution_block')
+  assert.equal(got.taskThinking, '先分析再实现')
+  assert.equal(got.taskThinkingRedacted, true)
+}
+
 // Existing 1–2-arg callers stay green: no blocks ⇒ no task_execution_block items.
 {
   const view = { session: { id: 'dlg_x', status: 'active', intent: 'application_generation' }, messages: [], route: { intent: 'application_generation', needsRouteConfirmation: false } }
@@ -789,7 +805,7 @@ assert.match(workbenchJsx, /const expanded = userExpandedOverride \?\? !!item\.e
 assert.match(appJsx, /buildTaskBlocks\(jobs\.steps, jobs\.summary\)/, 'App must build task blocks from useJobs steps+summary and feed them to the dialogue hook')
 assert.match(appJsx, /setJobStepBlocks/, 'App must bridge the task blocks into the dialogue hook via setJobStepBlocks')
 assert.match(dialogueHookJs, /setJobStepBlocks/, 'useDialogueSessions must expose setJobStepBlocks')
-assert.match(dialogueHookJs, /jobStepBlocks\)/, 'useDialogueSessions must pass jobStepBlocks into buildDialogueTimeline')
+assert.match(dialogueHookJs, /jobStepBlocks.*\)/, 'useDialogueSessions must pass jobStepBlocks into buildDialogueTimeline')
 assert.match(apiClientJs, /answerJob:\s*\(id, answer, scope = \{\}\)/, 'factoryApi.answerJob must accept optional clarification scope')
 assert.match(apiClientJs, /stepId:\s*scope\.stepId/, 'factoryApi.answerJob must send stepId when scope is provided')
 assert.match(appJsx, /selectedClarificationScope/, 'App must remember the clarification card the user selected')

@@ -13,6 +13,8 @@
 // a timeline item. Any extra key on a persisted message's metadata_json is
 // ignored. Blueprint refs / internal slugs / catalog availability never appear.
 
+import { buildThinkingByStepAttempt, thinkingKey } from './taskThinkingState.js';
+
 export const initialDialogueState = () => ({
   selectedDialogueId: null,
   view: null,
@@ -236,7 +238,7 @@ function safeExecutionKey(stepId, attempt) {
 // the optimistic/persisted user message. It is SUPPRESSED when the persisted view
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
-export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = [], pendingTurn = null, jobStepBlocks = []) {
+export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = [], pendingTurn = null, jobStepBlocks = [], taskThinkingItems = []) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
 
@@ -523,6 +525,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   const pushedClarificationIds = new Set()
   if (taskBlocks.length > 0) {
     const safeExecutionByStepAttempt = buildSafeExecutionByStepAttempt(workTraceItems)
+    const thinkingByStepAttempt = buildThinkingByStepAttempt(taskThinkingItems)
     const liveStepId = liveAnalysis && liveAnalysis.kind === 'step' && liveAnalysis.key
       ? String(liveAnalysis.key).split(':').pop()
       : ''
@@ -539,11 +542,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     }
     for (const rawBlock of taskBlocks) {
       if (!rawBlock) continue
+      const thinking = thinkingByStepAttempt[thinkingKey(rawBlock.jobId, rawBlock.stepId, rawBlock.attempt)] || null
       const block = {
         ...rawBlock,
         safeExecution: safeExecutionByStepAttempt[safeExecutionKey(rawBlock.stepId, rawBlock.attempt)] ||
           safeExecutionByStepAttempt[safeExecutionKey(rawBlock.stepId, null)] ||
           '',
+        taskThinking: thinking ? thinking.content : '',
+        taskThinkingRedacted: !!(thinking && thinking.redacted),
       }
       items.push(block)
       pushClarifications(safeExecutionKey(block.stepId, block.attempt))
