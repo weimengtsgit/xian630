@@ -97,10 +97,10 @@ func streamClaudeEventsWithThinking(ctx context.Context, emit StepRecordEmitter,
 // agent works turn by turn. Any field absent from these structs is dropped by
 // json.Unmarshal.
 type claudeStreamEvent struct {
-	Type          string `json:"type"`
-	Name          string `json:"name"`  // top-level tool_use shape
-	Input         map[string]any `json:"input"` // top-level tool_use shape
-	ThinkingDelta string `json:"thinking_delta"` // thinking_delta type
+	Type          string         `json:"type"`
+	Name          string         `json:"name"`           // top-level tool_use shape
+	Input         map[string]any `json:"input"`          // top-level tool_use shape
+	ThinkingDelta string         `json:"thinking_delta"` // thinking_delta type
 	Message       struct {
 		Content []contentBlock `json:"content"`
 	} `json:"message"`
@@ -197,9 +197,9 @@ func cleanRelPath(p string) string {
 // decoded further — their message.content[] blocks become records (verified
 // against a live capture):
 //
-//   - thinking_delta → routed to TaskThinkingEmitter only (Constraint #9)
-//   - thinking block → DROPPED (Constraint #9). The hidden reasoning is never
-//     surfaced as a record or a trace.
+//   - thinking_delta / nested thinking block → routed to TaskThinkingEmitter
+//     only (Constraint #9). Hidden reasoning is never surfaced as a record or a
+//     trace.
 //   - text block → an assistant_output TRACE (WorkTraceAssistant) carrying a
 //     redacted, capped observation of the prose.
 //   - tool_use Write/Edit → file_delta record + a tool TRACE with line counts.
@@ -233,9 +233,12 @@ func emitStreamLine(ctx context.Context, emit StepRecordEmitter, trace TraceEmit
 	for _, b := range ev.Message.Content {
 		switch b.Type {
 		case "thinking":
-			// Constraint #9 HARD SECURITY: hidden reasoning is dropped at the
-			// source. No record, no trace, no routing — it can never reach the
-			// store, SSE, or frontend. Intentionally a no-op.
+			// Constraint #9 HARD SECURITY: nested thinking is routed ONLY through
+			// the dedicated task-thinking emitter. It never becomes an execution
+			// record or visible work trace.
+			if b.Thinking != "" {
+				_ = thinking.Think(ctx, b.Thinking)
+			}
 			continue
 		case "text":
 			// Assistant prose → a redacted, capped observation trace. The gate

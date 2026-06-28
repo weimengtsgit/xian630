@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -51,6 +52,24 @@ func TestListTaskThinkingHonorsReplayCursor(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ID != "b" {
 		t.Fatalf("rows after cursor = %#v, want only b", rows)
+	}
+}
+
+func TestAppendTaskThinkingTruncatesAtUTF8Boundary(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	content := strings.Repeat("界", 4096) // 12KB of multibyte UTF-8 text
+	row, err := st.AppendTaskThinking(ctx, model.TaskThinkingEvent{
+		ID: "utf8", DialogueID: "dlg_utf8", TaskID: "job", StepID: "s", Content: content,
+	})
+	if err != nil {
+		t.Fatalf("AppendTaskThinking: %v", err)
+	}
+	if !utf8.ValidString(row.Content) {
+		t.Fatalf("truncated content is invalid UTF-8")
+	}
+	if !strings.HasSuffix(row.Content, taskThinkingTruncationMarker) {
+		t.Fatalf("truncated content missing marker: %q", row.Content[len(row.Content)-32:])
 	}
 }
 

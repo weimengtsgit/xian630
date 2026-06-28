@@ -290,12 +290,14 @@ CREATE TABLE IF NOT EXISTS work_trace_events (
 CREATE INDEX IF NOT EXISTS idx_work_trace_replay
 ON work_trace_events(dialogue_id, sequence);
 
--- Task-thinking events: the durable, HIDDEN, immutable audit trail of raw
--- provider thinking captured during task execution. Unlike work_trace_events,
--- this table holds the full thinking stream (minus redacted credentials) for
--- debugging and audit, and is NEVER surfaced to the UI. dialogue_sequence
--- is per dialogue_id, allocated MAX(dialogue_sequence)+1 inside one transaction;
--- step_sequence is per (task_id, step_id, attempt).
+-- Task-thinking events: the durable, immutable stream of raw provider thinking
+-- captured during task execution. Unlike work_trace_events and
+-- step_execution_records, this table is excluded from visible work trace,
+-- execution audit/export surfaces, and ordinary dialogue messages. It is surfaced
+-- only in the conversation UI's task_execution_block (任务思考过程) after credential
+-- redaction/capping. dialogue_sequence is per dialogue_id, allocated
+-- MAX(dialogue_sequence)+1 inside one transaction; step_sequence is per
+-- (task_id, step_id, attempt).
 CREATE TABLE IF NOT EXISTS task_thinking_events (
     id                TEXT    PRIMARY KEY,
     dialogue_id       TEXT    NOT NULL,

@@ -632,11 +632,13 @@ const (
 )
 
 // TaskThinkingEvent is one durable, immutable row of raw provider thinking
-// captured during task execution. Unlike WorkTraceEvent, this holds the
-// full, unredacted (except credentials) thinking stream for debugging and
-// audit, never surfaced to the UI. DialogueSequence is per dialogue_id and
-// assigned by the store (MAX+1 in one transaction). StepSequence is per
-// (task_id, step_id, attempt) and also assigned by the store.
+// captured during task execution. Unlike WorkTraceEvent and StepExecutionRecord,
+// this row is excluded from visible work trace, execution audit/export surfaces,
+// and ordinary dialogue messages. It is surfaced only in the conversation UI's
+// task_execution_block (任务思考过程) after credential redaction/capping.
+// DialogueSequence is per dialogue_id and assigned by the store (MAX+1 in one
+// transaction). StepSequence is per (task_id, step_id, attempt) and also assigned
+// by the store.
 type TaskThinkingEvent struct {
 	ID               string    `json:"id"`
 	DialogueID       string    `json:"dialogue_id"`

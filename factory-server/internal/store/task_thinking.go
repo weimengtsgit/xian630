@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -145,6 +146,9 @@ func sanitizeTaskThinkingContent(content string) (string, bool) {
 		keep := taskThinkingMaxContentBytes - len(marker)
 		if keep < 0 {
 			keep = 0
+		}
+		for keep > 0 && !utf8.Valid(b[:keep]) {
+			keep--
 		}
 		content = string(b[:keep]) + taskThinkingTruncationMarker
 		redacted = true
