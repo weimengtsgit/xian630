@@ -149,6 +149,15 @@ func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, "application project unavailable")
 		return model.Application{}, "", false
 	}
+	generatedRoot := filepath.Join(s.cfg.WorkspaceRoot, "generated-apps")
+	absGeneratedRoot, err := filepath.Abs(generatedRoot)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "resolve generated apps root")
+		return model.Application{}, "", false
+	}
+	if real, err := filepath.EvalSymlinks(absGeneratedRoot); err == nil {
+		absGeneratedRoot = real
+	}
 	root := filepath.Join(s.cfg.WorkspaceRoot, filepath.FromSlash(app.Path))
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -158,7 +167,20 @@ func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Reque
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
+	if !pathWithinRoot(absGeneratedRoot, abs) {
+		writeError(w, http.StatusForbidden, "application project unavailable")
+		return model.Application{}, "", false
+	}
 	return *app, abs, true
+}
+
+func pathWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	relSlash := filepath.ToSlash(rel)
+	return relSlash == "." || (!filepath.IsAbs(rel) && !strings.HasPrefix(relSlash, "../") && relSlash != "..")
 }
 
 func resolveProjectFilePath(root, rel string) (string, string, bool) {
@@ -180,8 +202,7 @@ func resolveProjectFilePath(root, rel string) (string, string, bool) {
 	if err != nil {
 		realFile = joined
 	}
-	relToRoot, err := filepath.Rel(realRoot, realFile)
-	if err != nil || strings.HasPrefix(filepath.ToSlash(relToRoot), "../") || filepath.IsAbs(relToRoot) {
+	if !pathWithinRoot(realRoot, realFile) {
 		return "", "", false
 	}
 	return realFile, cleanSlash, true

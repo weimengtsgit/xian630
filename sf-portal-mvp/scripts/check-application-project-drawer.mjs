@@ -10,6 +10,8 @@ const panelCss = readFileSync(new URL('../src/components/ApplicationProjectPanel
 assert.match(appJsx, /applicationProjectId/, 'App must derive an applicationProjectId for the 应用项目 drawer')
 assert.match(appJsx, /resolvedApplication[\s\S]*\.id/, 'applicationProjectId must prefer resolvedApplication.id')
 assert.match(appJsx, /seededJob[\s\S]*application_id[\s\S]*created_app_id/, 'applicationProjectId must fall back to seededJob application ids')
+assert.match(appJsx, /hasBoundApplication\s*=\s*!!applicationProjectId/, 'hasBoundApplication must require a concrete project application id, not only a seeded job')
+assert.doesNotMatch(appJsx, /hasBoundApplication\s*=\s*!!\(view && \(view\.resolvedApplication \|\| view\.seededJob\)\)/, 'hasBoundApplication must not enable the drawer for seeded jobs without app ids')
 assert.match(appJsx, /applicationProps=\{\{[\s\S]*applicationId: applicationProjectId/, 'App must pass applicationProps into WorkbenchDrawer')
 
 assert.match(clientJs, /getApplicationProjectTree/, 'factoryApi must expose getApplicationProjectTree')

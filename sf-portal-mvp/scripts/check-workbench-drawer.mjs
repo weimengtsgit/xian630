@@ -41,7 +41,7 @@ assert.match(workbenchCss, /\.cw-drawer-btn\.is-active|\.is-active[\s\S]*cw-draw
 // The button is disabled when the composed view has no bound application.
 assert.match(workbenchJsx, /disabled=\{!hasBoundApplication\}/, 'the 应用项目 button must be disabled when no application is bound')
 assert.match(appJsx, /hasBoundApplication/, 'App must derive a hasBoundApplication flag')
-assert.match(appJsx, /view\.resolvedApplication \|\| view\.seededJob/, 'hasBoundApplication must be true when the view has a resolvedApplication OR a seededJob')
+assert.match(appJsx, /hasBoundApplication\s*=\s*!!applicationProjectId/, 'hasBoundApplication must require a concrete application project id')
 
 // ---- 任务执行 presence badge ------------------------------------------------
 

@@ -90,6 +90,41 @@ func TestApplicationProjectFileRejectsUnsafePaths(t *testing.T) {
 	}
 }
 
+func TestApplicationProjectRejectsSymlinkedProjectRootEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(outside, "docs", "secret.md"), "# Secret")
+	if err := os.MkdirAll(filepath.Join(root, "generated-apps"), 0o755); err != nil {
+		t.Fatalf("mkdir generated-apps: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "generated-apps", "demo")); err != nil {
+		t.Fatalf("symlink project root: %v", err)
+	}
+
+	st, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	app := model.Application{ID: "app_demo", Slug: "demo", Name: "Demo", Source: model.AppSourceGenerated, Path: "generated-apps/demo", Status: model.AppStatusStopped}
+	if err := st.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("upsert app: %v", err)
+	}
+	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
+	r := srv.routes()
+
+	for _, target := range []string{
+		"/api/apps/app_demo/project-tree",
+		"/api/apps/app_demo/project-file?path=docs/secret.md",
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s status=%d want 403 body=%s", target, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestApplicationProjectFilePreviewsTextJsonBinaryAndLarge(t *testing.T) {
 	r, _, _, _ := newProjectTestServer(t)
 	cases := []struct{ path, kind string }{

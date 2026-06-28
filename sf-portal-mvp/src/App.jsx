@@ -151,14 +151,15 @@ function App() {
     setDrawerEntry(prev => (prev === entry ? null : entry))
   }
 
-  // The 应用项目 entry is disabled until the current dialogue has a bound
-  // application project (resolvedApplication OR seededJob in the composed view).
+  // The 应用项目 entry is disabled until the current dialogue has a concrete
+  // generated application id. A seeded job alone can exist before code_generation
+  // has registered the project, so it is not enough to enable the drawer.
   const view = dialogue.view
-  const hasBoundApplication = !!(view && (view.resolvedApplication || view.seededJob))
   const applicationProjectId =
     (view && view.resolvedApplication && view.resolvedApplication.id) ||
     (view && view.seededJob && (view.seededJob.application_id || view.seededJob.created_app_id)) ||
     ''
+  const hasBoundApplication = !!applicationProjectId
 
   // Regenerate stays available to the (future) business/managed-agent page; kept
   // wired through apps/start/stop/rebuild so Phase 2+ can reattach it without
