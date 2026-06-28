@@ -123,9 +123,11 @@ export function ConversationWorkbench({
   const composerActive = versionDeployed || continuousLoop
   // Change-summary confirmation: a trace event of type change_confirmation or
   // dialogue.change.proposed surfaces a confirm panel (the continuous loop).
-  const changeProposal = traceItems.find(
-    it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
-  )
+  const changeProposal = versionDeployed
+    ? traceItems.find(
+      it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
+    )
+    : null
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))

@@ -333,7 +333,11 @@ func (w *TurnWorker) completeTurn(ctx context.Context, dialogueID string, turn *
 	}
 	status := model.DialogueStatusActive
 	if out.Intent == model.TurnIntentApplicationModification {
-		status = model.DialogueStatusChangeConfirmation
+		if w.dialogueHasResolvedApplication(ctx, dialogueID) {
+			status = model.DialogueStatusChangeConfirmation
+		} else {
+			status = model.DialogueStatusTaskRunning
+		}
 	}
 	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, status)
 	if w.server != nil {
@@ -405,6 +409,10 @@ func (w *TurnWorker) buildTurnInput(ctx context.Context, dialogueID string, turn
 func (w *TurnWorker) applyTurnIntent(ctx context.Context, dialogueID string, turn *model.DialogueTurn, out dialogue.TurnOutput) bool {
 	switch out.Intent {
 	case model.TurnIntentApplicationModification:
+		if !w.dialogueHasResolvedApplication(ctx, dialogueID) {
+			_ = w.serverUpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusTaskRunning)
+			return true
+		}
 		_ = w.serverUpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusChangeConfirmation)
 		if w.server != nil {
 			payload, _ := json.Marshal(map[string]string{
@@ -443,6 +451,11 @@ func (w *TurnWorker) applyTurnIntent(ctx context.Context, dialogueID string, tur
 		w.appendTurnReply(ctx, dialogueID, turn, out)
 	}
 	return true
+}
+
+func (w *TurnWorker) dialogueHasResolvedApplication(ctx context.Context, dialogueID string) bool {
+	dlg, err := w.store.GetDialogueSession(ctx, dialogueID)
+	return err == nil && dlg != nil && strings.TrimSpace(dlg.ResolvedApplicationID) != ""
 }
 
 func (w *TurnWorker) appendTurnReply(ctx context.Context, dialogueID string, turn *model.DialogueTurn, out dialogue.TurnOutput) {

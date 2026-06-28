@@ -2283,6 +2283,48 @@ func TestDialogueAcceptsModificationAfterDeployment(t *testing.T) {
 	}
 }
 
+func TestDialogueDoesNotProposeChangeBeforeInitialApplicationReady(t *testing.T) {
+	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
+		Intent: model.TurnIntentApplicationModification,
+		Summary: dialogue.TurnSummary{
+			UserFacingText:     "保留 XX 智能体作为正式名称",
+			ChangeDescription: "保留 XX 智能体作为正式名称",
+		},
+	}))
+	ctx := context.Background()
+	now := time.Now()
+	dlg := model.DialogueSession{
+		ID:            "dlg_initial_running",
+		InitialPrompt: "生成一个智能应用商店",
+		Status:        model.DialogueStatusTaskRunning,
+		Intent:        model.DialogueIntentApplicationGeneration,
+		RouteLocked:   true,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("seed task-running dialogue: %v", err)
+	}
+
+	accepted := acceptMessage(t, r, "dlg_initial_running", "保留 XX 智能体作为正式名称")
+	clf.releaseOne()
+	waitForTurnStatus(t, st, accepted["turnId"], model.TurnStatusCompleted)
+
+	got, _ := st.GetDialogueSession(ctx, "dlg_initial_running")
+	if got == nil || got.Status == model.DialogueStatusChangeConfirmation {
+		t.Fatalf("dialogue status = %+v, must not enter change_confirmation before initial app is ready", got)
+	}
+	traces, err := st.ListDialogueTrace(ctx, "dlg_initial_running", 0, 100)
+	if err != nil {
+		t.Fatalf("list work trace: %v", err)
+	}
+	for _, tr := range traces {
+		if tr.Type == string(model.WorkTraceChangeConfirm) {
+			t.Fatalf("unexpected change confirmation trace before initial app is ready: %+v", tr)
+		}
+	}
+}
+
 // TestConfirmDialogueChangeRollsBackRevisionSeedFailure protects the continuing
 // modification path: a failed revision-step insert must not leave an orphaned
 // revision job behind. Initial-generation confirmation already has this
