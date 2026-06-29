@@ -79,7 +79,7 @@
 }
 
 .ceg-card-is-revealing {
-  animation: cegAgentReveal 0.9s cubic-bezier(0.2, 0.82, 0.22, 1);
+  animation: cegAgentReveal 1.05s cubic-bezier(0.22, 0.72, 0.18, 1);
   box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.34), 0 0 22px rgba(104, 221, 255, 0.28), 0 12px 28px rgba(0, 0, 0, 0.28);
   overflow: hidden;
   will-change: clip-path, opacity, transform, filter;
@@ -92,7 +92,7 @@
   border-radius: 8px;
   background: linear-gradient(90deg, transparent 0%, rgba(104, 221, 255, 0.08) 36%, rgba(104, 221, 255, 0.32) 52%, rgba(104, 221, 255, 0.06) 68%, transparent 100%);
   transform: translateX(-110%);
-  animation: cegAgentRevealSweep 0.72s ease-out both;
+  animation: cegAgentRevealSweep 0.96s cubic-bezier(0.22, 0.72, 0.18, 1) both;
   pointer-events: none;
 }
 
@@ -100,18 +100,29 @@
   0% {
     opacity: 0;
     clip-path: inset(0 100% 0 0);
-    transform: translateX(-14px) scale(0.96);
-    filter: saturate(1.12) brightness(1.08);
+    transform: translateX(-10px) scale(0.985);
+    filter: saturate(1.08) brightness(1.06);
   }
-  42% {
+  25% {
+    opacity: 0.72;
+    clip-path: inset(0 64% 0 0);
+    transform: translateX(-6px) scale(0.992);
+    filter: saturate(1.14) brightness(1.1);
+  }
+  50% {
     opacity: 1;
-    clip-path: inset(0 34% 0 0);
-    transform: translateX(3px) scale(1.015);
-    filter: saturate(1.28) brightness(1.16);
+    clip-path: inset(0 30% 0 0);
+    transform: translateX(-2px) scale(1.004);
+    filter: saturate(1.2) brightness(1.13);
   }
-  72% {
+  75% {
+    clip-path: inset(0 6% 0 0);
+    transform: translateX(0) scale(1.002);
+    filter: saturate(1.1) brightness(1.05);
+  }
+  88% {
     clip-path: inset(0 0 0 0);
-    transform: translateX(0) scale(0.995);
+    transform: translateX(0) scale(1);
   }
   100% {
     opacity: 1;

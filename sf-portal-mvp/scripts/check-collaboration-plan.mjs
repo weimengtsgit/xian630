@@ -74,6 +74,7 @@ assert.match(graphCss, /\.ceg-card-is-revealed/, 'graph css should define reveal
 assert.match(graphCss, /\.ceg-card-is-revealing/, 'graph css should define a summoned-card enter animation')
 assert.match(graphCss, /@keyframes cegAgentReveal/, 'graph css should define a keyframed agent reveal animation')
 assert.match(graphCss, /@keyframes cegAgentReveal(?:(?!@keyframes)[\s\S])*clip-path:\s*inset\(0 100% 0 0\)(?:(?!@keyframes)[\s\S])*clip-path:\s*inset\(0 0 0 0\)/, 'agent reveal animation should wipe cards in from left to right')
+assert.match(graphCss, /@keyframes cegAgentReveal(?:(?!@keyframes)[\s\S])*25%(?:(?!@keyframes)[\s\S])*clip-path:\s*inset\(0 64% 0 0\)(?:(?!@keyframes)[\s\S])*50%(?:(?!@keyframes)[\s\S])*clip-path:\s*inset\(0 30% 0 0\)(?:(?!@keyframes)[\s\S])*75%(?:(?!@keyframes)[\s\S])*clip-path:\s*inset\(0 6% 0 0\)/, 'agent reveal animation should use gradual intermediate wipe frames')
 assert.match(graphCss, /@keyframes cegFlowDown/, 'graph css should define vertical animated flow lines')
 assert.match(graphCss, /\.ceg-card-state-running/, 'graph css should style running cards')
 assert.match(drawer, /sed-snapshot-skill-files/, 'step drawer should show snapshot skill files')
