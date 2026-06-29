@@ -57,13 +57,13 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
   const groups = useMemo(() => (tree && Array.isArray(tree.groups) ? tree.groups : []), [tree])
   const canEditDraft = !!(dialogueId && preview && preview.kind === 'markdown' && preview.checksum)
   const startDraft = () => {
-    if (!canEditDraft) return
+    if (!canEditDraft || preview.draft?.isStale) return
     setDraftText(preview.draft && preview.draft.content ? preview.draft.content : preview.content || '')
     setEditing(true)
     setMode('source')
   }
   const saveDraft = async () => {
-    if (!canEditDraft || draftSaving) return
+    if (!canEditDraft || draftSaving || preview.draft?.isStale) return
     setDraftSaving(true)
     try {
       await factoryApi.saveApplicationProjectDraft(applicationId, { dialogueId, path: preview.path, sourceChecksum: preview.checksum, content: draftText })
@@ -204,7 +204,7 @@ function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, set
       ) : null}
       {canEditDraft ? (
         <div className="app-project-draft-actions">
-          <button type="button" onClick={startDraft}>{preview.draft ? '继续编辑草稿' : '编辑草稿'}</button>
+          {!preview.draft?.isStale ? <button type="button" onClick={startDraft}>{preview.draft ? '继续编辑草稿' : '编辑草稿'}</button> : null}
           {editing ? <button type="button" onClick={saveDraft} disabled={draftSaving}>保存草稿</button> : null}
           {preview.draft && preview.draft.status === 'draft' && !preview.draft.isStale ? <button type="button" onClick={applyDraft} disabled={draftSaving}>应用为变更需求</button> : null}
           {preview.draft && preview.draft.status === 'proposed' ? <span className="app-project-proposed">已应用为变更需求，等待中心会话确认。</span> : null}

@@ -42,6 +42,8 @@ assert.match(panelJsx, /等待中心会话确认/, 'ApplicationProjectPanel must
 assert.match(panelJsx, /源文档已更新，请丢弃草稿后重新编辑/, 'ApplicationProjectPanel must show stale draft guidance')
 assert.match(panelJsx, /重新以当前源文档创建草稿/, 'ApplicationProjectPanel must offer stale draft restart from current source')
 assert.match(panelJsx, /restartDraftFromCurrentSource/, 'ApplicationProjectPanel must implement restartDraftFromCurrentSource handler')
+assert.match(panelJsx, /const startDraft = \(\) => \{\s+if \(!canEditDraft \|\| preview\.draft\?\.isStale\) return/, 'ApplicationProjectPanel must not continue editing a stale draft')
+assert.match(panelJsx, /const saveDraft = async \(\) => \{\s+if \(!canEditDraft \|\| draftSaving \|\| preview\.draft\?\.isStale\) return/, 'ApplicationProjectPanel must not save a stale draft through the normal save path')
 assert.doesNotMatch(panelJsx, /dangerouslySetInnerHTML/, 'Markdown preview must not use dangerouslySetInnerHTML')
 
 for (const cls of ['application-project-panel', 'app-project-groups', 'app-project-tree-node', 'app-project-preview', 'app-project-preview-tabs', 'app-project-metadata']) {
