@@ -69,6 +69,11 @@
   cursor: pointer;
 }
 .app-project-preview-tabs button.is-active { border-color: #68ddff; color: #edfaff; background: rgba(104, 221, 255, 0.16); }
+.app-project-draft-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 8px; }
+.app-project-draft-actions button { border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 5px; background: rgba(11, 29, 44, 0.72); color: #d7eef8; font-size: 11px; padding: 4px 8px; cursor: pointer; }
+.app-project-draft-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.app-project-stale { color: #ffc457; font-size: 11px; }
+.app-project-draft-editor { width: 100%; min-height: 180px; resize: vertical; border: 1px solid rgba(111, 218, 255, 0.24); border-radius: 6px; background: rgba(0, 8, 14, 0.62); color: #edfaff; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
 
 .app-project-source,
 .app-project-markdown pre {

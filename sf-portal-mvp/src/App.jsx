@@ -275,7 +275,9 @@ function App() {
             applicationProps={{
               application: view && view.resolvedApplication ? view.resolvedApplication : null,
               applicationId: applicationProjectId,
+              dialogueId: dialogue.session && dialogue.session.id,
               seededJob: view && view.seededJob ? view.seededJob : null,
+              onDraftApplied: () => dialogue.session && dialogue.selectDialogue(dialogue.session.id),
             }}
           />
         </div>

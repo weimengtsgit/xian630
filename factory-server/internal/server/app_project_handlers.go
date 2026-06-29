@@ -2,7 +2,11 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"mime"
 	"net/http"
 	"os"
@@ -12,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
+	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
@@ -45,16 +51,28 @@ type appProjectNode struct {
 }
 
 type appProjectFileResponse struct {
-	Path       string `json:"path"`
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	Mime       string `json:"mime"`
-	Size       int64  `json:"size"`
-	ModifiedAt string `json:"modifiedAt,omitempty"`
-	Content    string `json:"content"`
-	Formatted  string `json:"formatted,omitempty"`
-	Truncated  bool   `json:"truncated"`
-	Limit      int64  `json:"limit,omitempty"`
+	Path       string               `json:"path"`
+	Name       string               `json:"name"`
+	Kind       string               `json:"kind"`
+	Mime       string               `json:"mime"`
+	Size       int64                `json:"size"`
+	ModifiedAt string               `json:"modifiedAt,omitempty"`
+	Checksum   string               `json:"checksum,omitempty"`
+	Draft      *appProjectDraftInfo `json:"draft,omitempty"`
+	Content    string               `json:"content"`
+	Formatted  string               `json:"formatted,omitempty"`
+	Truncated  bool                 `json:"truncated"`
+	Limit      int64                `json:"limit,omitempty"`
+}
+
+type appProjectDraftInfo struct {
+	ID              string `json:"id"`
+	Status          string `json:"status"`
+	Content         string `json:"content,omitempty"`
+	SourceChecksum  string `json:"sourceChecksum"`
+	IsStale         bool   `json:"isStale"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
+	ConversionError string `json:"conversionError,omitempty"`
 }
 
 func (s *Server) applicationProjectTree(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +93,7 @@ func (s *Server) applicationProjectTree(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) applicationProjectFile(w http.ResponseWriter, r *http.Request) {
-	_, root, ok := s.resolveGeneratedAppProject(w, r)
+	app, root, ok := s.resolveGeneratedAppProject(w, r)
 	if !ok {
 		return
 	}
@@ -118,6 +136,18 @@ func (s *Server) applicationProjectFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	resp.Mime = http.DetectContentType(data)
+	if filepath.Ext(cleanRel) == ".md" {
+		resp.Checksum = contentChecksum(data)
+		if dialogueID := r.URL.Query().Get("dialogueId"); dialogueID != "" {
+			if !s.dialogueOwnsApplication(r.Context(), dialogueID, app.ID) {
+				writeError(w, http.StatusForbidden, "dialogue does not own application")
+				return
+			}
+			if draft, _ := s.store.GetLatestProjectDocumentDraft(r.Context(), app.ID, dialogueID, cleanRel); draft != nil && draft.Status != model.ProjectDocumentDraftStatusDiscarded {
+				resp.Draft = draftInfo(*draft, resp.Checksum)
+			}
+		}
+	}
 	kind := classifyProjectPreview(cleanRel, data)
 	resp.Kind = kind
 	if kind == "binary" {
@@ -132,6 +162,176 @@ func (s *Server) applicationProjectFile(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type projectDraftBody struct {
+	DialogueID     string `json:"dialogueId"`
+	Path           string `json:"path"`
+	SourceChecksum string `json:"sourceChecksum"`
+	Content        string `json:"content"`
+}
+
+func (s *Server) saveApplicationProjectDraft(w http.ResponseWriter, r *http.Request) {
+	app, root, ok := s.resolveGeneratedAppProject(w, r)
+	if !ok {
+		return
+	}
+	var body projectDraftBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.DialogueID == "" {
+		writeError(w, http.StatusBadRequest, "missing dialogue id")
+		return
+	}
+	if !s.dialogueOwnsApplication(r.Context(), body.DialogueID, app.ID) {
+		writeError(w, http.StatusForbidden, "dialogue does not own application")
+		return
+	}
+	full, cleanRel, ok := resolveProjectFilePath(root, body.Path)
+	if !ok || !strings.HasPrefix(cleanRel, "docs/") || filepath.Ext(cleanRel) != ".md" {
+		writeError(w, http.StatusForbidden, "draft path unsupported")
+		return
+	}
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read source document")
+		return
+	}
+	current := contentChecksum(raw)
+	if body.SourceChecksum != current {
+		writeError(w, http.StatusConflict, "stale_source")
+		return
+	}
+	if len([]byte(body.Content)) > projectPreviewLimitBytes || !utf8.ValidString(body.Content) {
+		writeError(w, http.StatusBadRequest, "invalid draft content")
+		return
+	}
+	draft, err := s.store.UpsertProjectDocumentDraft(r.Context(), model.ProjectDocumentDraft{ApplicationID: app.ID, DialogueID: body.DialogueID, Path: cleanRel, SourceChecksum: current, Content: body.Content, Status: model.ProjectDocumentDraftStatusDraft})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "save draft")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"draft": draft})
+}
+
+func (s *Server) discardApplicationProjectDraft(w http.ResponseWriter, r *http.Request) {
+	app, _, ok := s.resolveGeneratedAppProject(w, r)
+	if !ok {
+		return
+	}
+	var body projectDraftBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.DialogueID == "" {
+		writeError(w, http.StatusBadRequest, "missing dialogue id")
+		return
+	}
+	if !s.dialogueOwnsApplication(r.Context(), body.DialogueID, app.ID) {
+		writeError(w, http.StatusForbidden, "dialogue does not own application")
+		return
+	}
+	draft, err := s.store.GetLatestProjectDocumentDraft(r.Context(), app.ID, body.DialogueID, body.Path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get draft")
+		return
+	}
+	if draft == nil {
+		writeError(w, http.StatusNotFound, "draft not found")
+		return
+	}
+	if err := s.store.DiscardProjectDocumentDraft(r.Context(), draft.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "discard draft")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"discarded": true})
+}
+
+func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Request) {
+	app, root, ok := s.resolveGeneratedAppProject(w, r)
+	if !ok {
+		return
+	}
+	var body projectDraftBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.DialogueID == "" {
+		writeError(w, http.StatusBadRequest, "missing dialogue id")
+		return
+	}
+	if !s.dialogueOwnsApplication(r.Context(), body.DialogueID, app.ID) {
+		writeError(w, http.StatusForbidden, "dialogue does not own application")
+		return
+	}
+	full, cleanRel, ok := resolveProjectFilePath(root, body.Path)
+	if !ok || !strings.HasPrefix(cleanRel, "docs/") || filepath.Ext(cleanRel) != ".md" {
+		writeError(w, http.StatusForbidden, "draft path unsupported")
+		return
+	}
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read source document")
+		return
+	}
+	current := contentChecksum(raw)
+	draft, err := s.store.GetLatestProjectDocumentDraft(r.Context(), app.ID, body.DialogueID, cleanRel)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get draft")
+		return
+	}
+	if draft == nil || draft.Status != model.ProjectDocumentDraftStatusDraft {
+		writeError(w, http.StatusConflict, "draft not available")
+		return
+	}
+	if draft.SourceChecksum != current {
+		writeError(w, http.StatusConflict, "stale_source")
+		return
+	}
+	added, removed := lineDelta(string(raw), draft.Content)
+	summary := dialogue.TurnSummary{Intent: model.TurnIntentApplicationModification, UserFacingText: "已根据文档草稿生成变更建议，请确认后应用。", ChangeDescription: fmt.Sprintf("基于 %s 的文档草稿生成变更需求：新增 %d 行、删除 %d 行。请按该草稿更新应用。", cleanRel, added, removed)}
+	summaryJSON, _ := json.Marshal(summary)
+	now := time.Now()
+	turnID := "turn_" + idpkg.New()
+	ended := now
+	turn := model.DialogueTurn{ID: turnID, DialogueID: body.DialogueID, Intent: model.TurnIntentApplicationModification, Status: model.TurnStatusCompleted, SummaryJSON: string(summaryJSON), CreatedAt: now, EndedAt: &ended}
+	if err := s.store.CreateDialogueTurn(r.Context(), turn); err != nil {
+		writeError(w, http.StatusInternalServerError, "create draft turn")
+		return
+	}
+	if err := s.store.UpdateDialogueStatus(r.Context(), body.DialogueID, model.DialogueStatusChangeConfirmation, "", ""); err != nil {
+		writeError(w, http.StatusInternalServerError, "update dialogue")
+		return
+	}
+	if err := s.store.MarkProjectDocumentDraftProposed(r.Context(), draft.ID, turnID, now); err != nil {
+		writeError(w, http.StatusInternalServerError, "mark draft proposed")
+		return
+	}
+	s.publishDialogueSimple("dialogue.change.proposed", body.DialogueID, map[string]any{"turn_id": turnID, "draft_id": draft.ID, "document_path": cleanRel, "summary": summary})
+	writeJSON(w, http.StatusOK, map[string]any{"draftId": draft.ID, "turnId": turnID, "status": string(model.DialogueStatusChangeConfirmation), "summary": summary})
+}
+
+func lineDelta(source, draft string) (int, int) {
+	src := map[string]int{}
+	for _, line := range strings.Split(source, "\n") {
+		src[line]++
+	}
+	added, removed := 0, 0
+	for _, line := range strings.Split(draft, "\n") {
+		if src[line] > 0 {
+			src[line]--
+		} else {
+			added++
+		}
+	}
+	for _, n := range src {
+		removed += n
+	}
+	return added, removed
 }
 
 func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Request) (model.Application, string, bool) {
@@ -221,6 +421,28 @@ func projectPathDenied(path string) bool {
 		}
 	}
 	return false
+}
+
+func contentChecksum(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func draftInfo(d model.ProjectDocumentDraft, currentChecksum string) *appProjectDraftInfo {
+	return &appProjectDraftInfo{
+		ID:              d.ID,
+		Status:          string(d.Status),
+		Content:         d.Content,
+		SourceChecksum:  d.SourceChecksum,
+		IsStale:         d.SourceChecksum != currentChecksum,
+		UpdatedAt:       d.UpdatedAt.UTC().Format(time.RFC3339),
+		ConversionError: d.ConversionError,
+	}
+}
+
+func (s *Server) dialogueOwnsApplication(ctx context.Context, dialogueID, appID string) bool {
+	dlg, err := s.store.GetDialogueSession(ctx, dialogueID)
+	return err == nil && dlg != nil && dlg.ResolvedApplicationID == appID
 }
 
 func classifyProjectPreview(path string, data []byte) string {
