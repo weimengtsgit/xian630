@@ -10,6 +10,9 @@ const drawer = readFileSync(new URL('../src/components/StepExecutionDrawer.jsx',
 const state = readFileSync(new URL('../src/hooks/collaborationPlanState.js', import.meta.url), 'utf8')
 const execState = readFileSync(new URL('../src/hooks/executionRecordState.js', import.meta.url), 'utf8')
 const useJobs = readFileSync(new URL('../src/hooks/useJobs.js', import.meta.url), 'utf8')
+const dialogueTimeline = readFileSync(new URL('../src/hooks/dialogueTimeline.js', import.meta.url), 'utf8')
+assert.match(dialogueTimeline, /buildCollaborationExecutionGraphView/, 'dialogue timeline should build collaboration execution graph view data')
+assert.match(dialogueTimeline, /graph:\s*buildCollaborationExecutionGraphView/, 'collaboration timeline item should carry graph view data')
 
 assert.match(jobCenter, /collaborationLanes/, 'JobCenter should render collaboration lanes when a plan is available')
 assert.match(jobCenter, /getJobCollaborationPlan|collaborationPlan/, 'JobCenter should consume collaboration plan data')
@@ -59,15 +62,24 @@ const confirmedDialogueTimeline = buildDialogueTimeline({
   },
   collaborationPlanPreview: {
     lanes: dynamicPlan.plan.lanes,
-    agents: dynamicPlan.plan.agents,
-    edges: [{ from: 'agent-1', to: 'agent-2' }, { from: 'agent-1', to: 'agent-2' }],
+    agents: [
+      { key: 'collaboration-orchestrator', name: '协作编排', role: 'collaboration_orchestration', lane: 'analysis' },
+      ...dynamicPlan.plan.agents,
+    ],
+    edges: [
+      { from: 'collaboration-orchestrator', to: 'agent-1' },
+      { from: 'agent-1', to: 'agent-2' },
+      { from: 'agent-1', to: 'agent-2' },
+    ],
     highImpactWarnings: [{ agentKey: 'agent-3', action: 'confirm_participation', message: '需要质量门禁' }],
   },
 })
 const previewItem = confirmedDialogueTimeline.find(item => item.type === 'collaboration_plan_preview')
 assert.ok(previewItem, 'confirmed dialogue timeline should retain the collaboration preview inside the conversation')
-assert.equal(previewItem.preview.agents.length, 13, 'retained collaboration preview should include every planned agent')
+assert.equal(previewItem.preview.agents.length, 14, 'retained collaboration preview should include every planned agent plus orchestrator')
 assert.equal(previewItem.preview.adjustments[0].message, '需要质量门禁', 'retained collaboration preview should map high-impact warnings to adjustments')
+assert.ok(previewItem.graph, 'collaboration timeline item should include graph data for rendering')
+assert.equal(previewItem.graph.cards.find(card => card.agentKey === 'collaboration-orchestrator').kind, 'orchestrator', 'timeline graph should keep the orchestrator hub card')
 
 const graphPreview = {
   lanes: [

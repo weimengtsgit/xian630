@@ -14,6 +14,7 @@
 // ignored. Blueprint refs / internal slugs / catalog availability never appear.
 
 import { buildThinkingByStepAttempt, thinkingKey } from './taskThinkingState.js';
+import { buildCollaborationExecutionGraphView } from './collaborationExecutionGraphState.js';
 
 export const initialDialogueState = () => ({
   selectedDialogueId: null,
@@ -412,6 +413,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       id: `${view.session.id || 'dlg'}_collaboration_plan_preview`,
       type: 'collaboration_plan_preview',
       preview: collaborationPreview,
+      graph: buildCollaborationExecutionGraphView(collaborationPreview, jobStepBlocks),
     })
   }
 
