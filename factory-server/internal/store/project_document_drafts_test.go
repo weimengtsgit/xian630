@@ -82,3 +82,45 @@ func TestListProjectDocumentDraftsScopesByApplicationAndDialogue(t *testing.T) {
 		t.Fatalf("rows = %#v", rows)
 	}
 }
+
+func TestGetProjectDocumentDraftByID(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	// Create a draft
+	draft, err := st.UpsertProjectDocumentDraft(ctx, model.ProjectDocumentDraft{
+		ApplicationID:  "app_1",
+		DialogueID:     "dlg_1",
+		Path:           "docs/01-requirements.md",
+		SourceChecksum: "sha256:source-a",
+		Content:        "# Draft A",
+		Status:         model.ProjectDocumentDraftStatusDraft,
+	})
+	if err != nil {
+		t.Fatalf("UpsertProjectDocumentDraft: %v", err)
+	}
+	if draft.ID == "" {
+		t.Fatalf("draft id empty after upsert")
+	}
+
+	// Get by ID - should succeed
+	found, err := st.GetProjectDocumentDraftByID(ctx, draft.ID)
+	if err != nil {
+		t.Fatalf("GetProjectDocumentDraftByID: %v", err)
+	}
+	if found == nil {
+		t.Fatalf("GetProjectDocumentDraftByID: got nil, want draft")
+	}
+	if found.ID != draft.ID || found.Content != "# Draft A" {
+		t.Fatalf("found = %#v, want matching draft", found)
+	}
+
+	// Get by non-existent ID - should return nil
+	notFound, err := st.GetProjectDocumentDraftByID(ctx, "non-existent-draft-id")
+	if err != nil {
+		t.Fatalf("GetProjectDocumentDraftByID for non-existent: %v", err)
+	}
+	if notFound != nil {
+		t.Fatalf("GetProjectDocumentDraftByID for non-existent: got %#v, want nil", notFound)
+	}
+}

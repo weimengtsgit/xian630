@@ -97,6 +97,21 @@ FROM project_document_drafts WHERE application_id=? AND dialogue_id=? ORDER BY u
 	return out, rows.Err()
 }
 
+// GetProjectDocumentDraftByID retrieves a document draft by its unique ID. It returns nil if the draft doesn't exist.
+func (s *Store) GetProjectDocumentDraftByID(ctx context.Context, draftID string) (*model.ProjectDocumentDraft, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id,application_id,dialogue_id,path,source_checksum,content,status,conversion_error,created_at,updated_at,proposed_turn_id,proposed_at
+FROM project_document_drafts WHERE id=?`, draftID)
+	var d model.ProjectDocumentDraft
+	if err := scanProjectDocumentDraft(row, &d); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &d, nil
+}
+
 func (s *Store) MarkProjectDocumentDraftProposed(ctx context.Context, draftID, turnID string, proposedAt time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE project_document_drafts SET status=?, proposed_turn_id=?, proposed_at=?, updated_at=? WHERE id=?`, string(model.ProjectDocumentDraftStatusProposed), turnID, ms(proposedAt), ms(proposedAt), draftID)
 	return err

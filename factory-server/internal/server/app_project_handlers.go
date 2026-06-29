@@ -294,7 +294,18 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 	}
 	added, removed := lineDelta(string(raw), draft.Content)
 	excerpt := draftExcerpt(string(raw), draft.Content, 600)
-	summary := dialogue.TurnSummary{Intent: model.TurnIntentApplicationModification, UserFacingText: "已根据文档草稿生成变更建议，请确认后应用。", ChangeDescription: fmt.Sprintf("基于 %s 的文档草稿生成变更需求：新增 %d 行、删除 %d 行。关键修改内容：%s", cleanRel, added, removed, excerpt)}
+	summary := dialogue.TurnSummary{
+		Intent:              model.TurnIntentApplicationModification,
+		UserFacingText:      "已根据文档草稿生成变更建议，请确认后应用。",
+		ChangeDescription:   fmt.Sprintf("基于 %s 的文档草稿生成变更需求：新增 %d 行、删除 %d 行。关键修改内容：%s", cleanRel, added, removed, excerpt),
+		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
+			DraftID:        draft.ID,
+			ApplicationID:  app.ID,
+			DialogueID:     body.DialogueID,
+			Path:           cleanRel,
+			SourceChecksum: draft.SourceChecksum,
+		},
+	}
 	summaryJSON, _ := json.Marshal(summary)
 	now := time.Now()
 	turnID := "turn_" + idpkg.New()
