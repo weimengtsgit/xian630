@@ -227,6 +227,28 @@ func TestApplicationProjectDraftRejectsDialogueWithoutAppOwnership(t *testing.T)
 	}
 }
 
+func TestApplicationProjectDraftApplySummaryIncludesDraftContent(t *testing.T) {
+	r, st, _, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	draft := "# Overview\n\n将告警阈值改为 150 海里\n新增舰队筛选条件"
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": draft})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	turn, err := st.GetLatestCompletedDialogueTurnByIntent(context.Background(), "dlg_1", model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		t.Fatalf("latest turn: %#v %v", turn, err)
+	}
+	if !strings.Contains(turn.SummaryJSON, "150 海里") || !strings.Contains(turn.SummaryJSON, "舰队筛选") {
+		t.Fatalf("summary lost draft content: %s", turn.SummaryJSON)
+	}
+}
+
 func TestApplicationProjectDraftRejectsStaleChecksum(t *testing.T) {
 	r, st, _, _ := newProjectTestServer(t)
 	seedProjectDialogue(t, st, "dlg_1", "app_demo")

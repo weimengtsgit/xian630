@@ -192,7 +192,8 @@ function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, set
         <div className="app-project-draft-actions">
           <button type="button" onClick={startDraft}>{preview.draft ? '继续编辑草稿' : '编辑草稿'}</button>
           {editing ? <button type="button" onClick={saveDraft} disabled={draftSaving}>保存草稿</button> : null}
-          {preview.draft && !preview.draft.isStale ? <button type="button" onClick={applyDraft} disabled={draftSaving}>应用为变更需求</button> : null}
+          {preview.draft && preview.draft.status === 'draft' && !preview.draft.isStale ? <button type="button" onClick={applyDraft} disabled={draftSaving}>应用为变更需求</button> : null}
+          {preview.draft && preview.draft.status === 'proposed' ? <span className="app-project-proposed">已应用为变更需求，等待中心会话确认。</span> : null}
           {preview.draft ? <button type="button" onClick={discardDraft} disabled={draftSaving}>丢弃草稿</button> : null}
           {preview.draft && preview.draft.isStale ? <span className="app-project-stale">源文档已更新，请丢弃草稿后重新编辑。</span> : null}
         </div>

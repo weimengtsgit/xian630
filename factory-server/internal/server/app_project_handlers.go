@@ -293,7 +293,8 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 		return
 	}
 	added, removed := lineDelta(string(raw), draft.Content)
-	summary := dialogue.TurnSummary{Intent: model.TurnIntentApplicationModification, UserFacingText: "已根据文档草稿生成变更建议，请确认后应用。", ChangeDescription: fmt.Sprintf("基于 %s 的文档草稿生成变更需求：新增 %d 行、删除 %d 行。请按该草稿更新应用。", cleanRel, added, removed)}
+	excerpt := draftExcerpt(string(raw), draft.Content, 600)
+	summary := dialogue.TurnSummary{Intent: model.TurnIntentApplicationModification, UserFacingText: "已根据文档草稿生成变更建议，请确认后应用。", ChangeDescription: fmt.Sprintf("基于 %s 的文档草稿生成变更需求：新增 %d 行、删除 %d 行。关键修改内容：%s", cleanRel, added, removed, excerpt)}
 	summaryJSON, _ := json.Marshal(summary)
 	now := time.Now()
 	turnID := "turn_" + idpkg.New()
@@ -313,6 +314,34 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 	}
 	s.publishDialogueSimple("dialogue.change.proposed", body.DialogueID, map[string]any{"turn_id": turnID, "draft_id": draft.ID, "document_path": cleanRel, "summary": summary})
 	writeJSON(w, http.StatusOK, map[string]any{"draftId": draft.ID, "turnId": turnID, "status": string(model.DialogueStatusChangeConfirmation), "summary": summary})
+}
+
+func draftExcerpt(source, draft string, limit int) string {
+	src := map[string]int{}
+	for _, line := range strings.Split(source, "\n") {
+		src[strings.TrimSpace(line)]++
+	}
+	var changed []string
+	for _, line := range strings.Split(draft, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if src[trimmed] > 0 {
+			src[trimmed]--
+			continue
+		}
+		changed = append(changed, trimmed)
+	}
+	if len(changed) == 0 {
+		changed = []string{strings.TrimSpace(draft)}
+	}
+	text := strings.Join(changed, "；")
+	if len([]rune(text)) > limit {
+		runes := []rune(text)
+		text = string(runes[:limit]) + "…"
+	}
+	return text
 }
 
 func lineDelta(source, draft string) (int, int) {
