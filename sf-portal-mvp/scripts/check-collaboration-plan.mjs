@@ -93,6 +93,34 @@ assert.equal(previewItem.preview.adjustments[0].message, '需要质量门禁', '
 assert.ok(previewItem.graph, 'collaboration timeline item should include graph data for rendering')
 assert.equal(previewItem.graph.cards.find(card => card.agentKey === 'collaboration-orchestrator').kind, 'orchestrator', 'timeline graph should keep the orchestrator hub card')
 
+const timelineWithCollaborationSteps = buildDialogueTimeline({
+  session: { id: 'dlg-taskblocks', status: 'task_running', intent: 'application_generation' },
+  messages: [{ id: 'u2', role: 'user', kind: 'prompt', content: '请做一个 todo 应用' }],
+  collaborationPlanPreview: {
+    lanes: dynamicPlan.plan.lanes,
+    agents: [
+      { key: 'collaboration-orchestrator', name: '协作编排', role: 'collaboration_orchestration', lane: 'analysis' },
+      ...dynamicPlan.plan.agents,
+    ],
+    edges: [
+      { from: 'collaboration-orchestrator', to: 'agent-1' },
+      { from: 'agent-1', to: 'agent-2' },
+    ],
+  },
+}, null, null, null, [], null, dynamicPlan.plan.agents.map((agent, index) => ({
+  id: `step-${index + 1}`,
+  job_id: 'job-collab',
+  agent_key: agent.key,
+  kind: agent.role,
+  seq: index + 1,
+  status: 'succeeded',
+})))
+assert.equal(
+  timelineWithCollaborationSteps.some(item => item.type === 'task_execution_block'),
+  false,
+  'conversation timeline should not append long per-agent task cards after the collaboration execution graph',
+)
+
 const graphPreview = {
   lanes: [
     { id: 'analysis', label: '分析' },

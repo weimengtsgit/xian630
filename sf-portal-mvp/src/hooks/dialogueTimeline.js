@@ -416,6 +416,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       graph: buildCollaborationExecutionGraphView(collaborationPreview, jobStepBlocks),
     })
   }
+  const suppressTaskBlocksInConversation = !!collaborationPreview
 
   // 5. Business-agent drafting surface.
   // 5a. Open business-draft clarifying questions (parent agent question messages
@@ -533,7 +534,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   //      jobStepBlocks comes from hook state and must remain immutable/pure.
   let absorbedStepId = null
   const pushedClarificationIds = new Set()
-  if (taskBlocks.length > 0) {
+  if (taskBlocks.length > 0 && !suppressTaskBlocksInConversation) {
     const safeExecutionByStepAttempt = buildSafeExecutionByStepAttempt(workTraceItems)
     const thinkingByStepAttempt = buildThinkingByStepAttempt(taskThinkingItems)
     const liveStepId = liveAnalysis && liveAnalysis.kind === 'step' && liveAnalysis.key

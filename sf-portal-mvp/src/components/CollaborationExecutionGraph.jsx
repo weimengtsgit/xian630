@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
+import { CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
