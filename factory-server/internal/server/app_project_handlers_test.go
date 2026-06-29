@@ -249,6 +249,34 @@ func TestApplicationProjectDraftApplySummaryIncludesDraftContent(t *testing.T) {
 	}
 }
 
+func TestApplicationProjectDraftApplySummaryIncludesDeletedContent(t *testing.T) {
+	r, st, root, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	longPrefix := strings.Repeat("普通背景行\n", 120)
+	sourcePath := filepath.Join(root, "generated-apps", "demo", "docs", "overview.md")
+	source := longPrefix + "必须删除的高风险限制：不再支持旧阈值\n保留内容\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	draft := longPrefix + "保留内容\n"
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": draft})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	turn, err := st.GetLatestCompletedDialogueTurnByIntent(context.Background(), "dlg_1", model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		t.Fatalf("latest turn: %#v %v", turn, err)
+	}
+	if !strings.Contains(turn.SummaryJSON, "必须删除的高风险限制") {
+		t.Fatalf("summary lost deleted content: %s", turn.SummaryJSON)
+	}
+}
+
 func TestApplicationProjectDraftRejectsStaleChecksum(t *testing.T) {
 	r, st, _, _ := newProjectTestServer(t)
 	seedProjectDialogue(t, st, "dlg_1", "app_demo")

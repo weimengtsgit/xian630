@@ -319,9 +319,12 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 func draftExcerpt(source, draft string, limit int) string {
 	src := map[string]int{}
 	for _, line := range strings.Split(source, "\n") {
-		src[strings.TrimSpace(line)]++
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			src[trimmed]++
+		}
 	}
-	var changed []string
+	var added []string
 	for _, line := range strings.Split(draft, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
@@ -331,8 +334,16 @@ func draftExcerpt(source, draft string, limit int) string {
 			src[trimmed]--
 			continue
 		}
-		changed = append(changed, trimmed)
+		added = append(added, "+ "+trimmed)
 	}
+	var removed []string
+	for line, count := range src {
+		for i := 0; i < count; i++ {
+			removed = append(removed, "- "+line)
+		}
+	}
+	sort.Strings(removed)
+	changed := append(added, removed...)
 	if len(changed) == 0 {
 		changed = []string{strings.TrimSpace(draft)}
 	}
