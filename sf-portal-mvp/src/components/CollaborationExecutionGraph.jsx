@@ -243,8 +243,8 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
   const waitText = card.waitingFor && card.waitingFor.length > 0
     ? `等待：${card.waitingFor.slice(0, 2).join('、')}${card.waitingFor.length > 2 ? `等 ${card.waitingFor.length} 个上游` : ''}`
     : ''
-  const descriptionText = card.description || card.summary || waitText || '等待编排流转'
-  const detailId = `ceg-card-detail-${card.id}`
+  const tooltipText = card.description || card.summary || waitText || '等待编排流转'
+  const tooltipId = `ceg-card-tooltip-${card.id}`
   return (
     <button
       type="button"
@@ -257,7 +257,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
       aria-disabled={!canOpenTask && card.kind !== 'origin'}
       data-agent-key={card.agentKey}
       aria-label={`${card.title}，${card.stateLabel}${canOpenTask ? '，打开任务详情' : ''}`}
-      aria-describedby={detailId}
+      aria-describedby={tooltipId}
     >
       <span className="ceg-card-icon">
         <Icon size={18} className={card.state === 'running' ? 'ceg-spin' : ''} />
@@ -270,14 +270,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
       <span className="ceg-card-desc">{card.summary || waitText || card.description || '等待编排流转'}</span>
       <span className="ceg-card-state">{card.stateLabel}</span>
       {waitText ? <span className="ceg-card-wait">{waitText}</span> : null}
-      <span id={detailId} className="ceg-card-detail" role="tooltip">
-        <span className="ceg-card-detail-title">{card.title}</span>
-        <span className="ceg-card-detail-role">{card.subtitle}</span>
-        <span className="ceg-card-detail-desc">{descriptionText}</span>
-        {card.summary && card.summary !== descriptionText ? <span className="ceg-card-detail-line">进展：{card.summary}</span> : null}
-        {waitText && waitText !== descriptionText ? <span className="ceg-card-detail-line">{waitText}</span> : null}
-        <span className="ceg-card-detail-state">状态：{card.stateLabel}</span>
-      </span>
+      <span id={tooltipId} className="ceg-card-tooltip" role="tooltip">{tooltipText}</span>
     </button>
   )
 }
