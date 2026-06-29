@@ -18,6 +18,7 @@ export function useJobs() {
   const [steps, setSteps] = useState([])
   // Per-step snapshot: latest attempt + latest record (from execution-summary).
   const [summary, setSummary] = useState([])
+  const [collaborationPlan, setCollaborationPlan] = useState(null)
   // Detail records (paginated per step+attempt), keyed by `${stepId}::${attempt}`.
   // Loaded ONLY when the drawer opens for a step+attempt — never on first load.
   const [recordsByStepAttempt, setRecordsByStepAttempt] = useState({})
@@ -59,6 +60,7 @@ export function useJobs() {
     setActiveJob(null)
     setSteps([])
     setSummary([])
+    setCollaborationPlan(null)
     setArtifacts([])
     setSelectedStepId(null)
     setSelectedAttempt(null)
@@ -81,10 +83,11 @@ export function useJobs() {
     setStreamRecords([])
     setLastReadByStepAttempt({})
 
-    const [stepsData, summaryData, artifactsData] = await Promise.all([
+    const [stepsData, summaryData, artifactsData, collaborationPlanData] = await Promise.all([
       factoryApi.getJobSteps(jobId).catch(() => []),
       factoryApi.getJobExecutionSummary(jobId).catch(() => []),
       factoryApi.getJobArtifacts(jobId).catch(() => []),
+      factoryApi.getJobCollaborationPlan(jobId).catch(() => null),
     ])
     // A history-dialogue switch may have selected another task while the old
     // request was in flight. Never paint the old job's details into the new
@@ -93,6 +96,7 @@ export function useJobs() {
     const stepsList = Array.isArray(stepsData) ? stepsData : stepsData.steps || []
     setSteps(stepsList)
     setSummary(Array.isArray(summaryData) ? summaryData : summaryData.steps || [])
+    setCollaborationPlan(collaborationPlanData)
     const arts = Array.isArray(artifactsData) ? artifactsData : artifactsData.artifacts || []
     setArtifacts(arts)
   }, [clearActiveJob])
@@ -383,6 +387,7 @@ export function useJobs() {
     activeJob,
     steps,
     summary,
+    collaborationPlan,
     artifacts,
     loading,
     error,
