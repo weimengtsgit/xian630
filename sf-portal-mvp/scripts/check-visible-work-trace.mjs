@@ -66,6 +66,12 @@ const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkben
 const jobCenterJsx = readFileSync(new URL('../src/components/JobCenter.jsx', import.meta.url), 'utf8')
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 
+// App.jsx calls these hook methods during initial effects. If the hook contract
+// drifts during a merge, React crashes on mount and leaves the portal blank.
+assert.match(appJsx, /dialogue\.setJobStepBlocks\(/, 'App must feed task step blocks into the dialogue hook')
+assert.match(useDialogueJs, /setJobStepBlocks/, 'useDialogueSessions must return setJobStepBlocks for App mount wiring')
+assert.match(useDialogueJs, /jobStepBlocks/, 'useDialogueSessions must retain jobStepBlocks when rebuilding the timeline')
+
 // The client MUST expose the new endpoints.
 assert.match(clientJs, /getDialogueTrace/, 'client must expose getDialogueTrace (REST replay)')
 assert.match(clientJs, /cancelDialogueTurn/, 'client must expose cancelDialogueTurn')
