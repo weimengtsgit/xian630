@@ -1119,6 +1119,7 @@ func (e *Executor) buildRepairPrompt(ctx context.Context, job model.Job, failedS
 	var b strings.Builder
 	b.WriteString("repair_from_failure\n")
 	b.WriteString("本次不是重新生成应用，而是定向修复失败。只修复导致当前失败的问题，不要重写应用，不要改变原需求、方案、业务逻辑、数据来源、页面结构或无关样式。\n")
+	b.WriteString("如果失败来自 schema_validation_failed，注意 audit scans the entire generated project，而不只扫描本次 createdFiles；必须修复 error_message 里列出的每一个 offending file。若旧产物中有过时的数据层文件（例如 src/data/ontology.js）仍包含违规字段，请直接覆盖为合规实现或安全 re-export，overwrite stale data-layer files，不要让旧文件残留继续触发审计。\n")
 	b.WriteString("修复完成后，在 output.json 的 warnings 或 output.md 中简要说明修改文件和修复摘要。\n\n")
 	b.WriteString("failed_step: ")
 	b.WriteString(string(failedStep.Kind))

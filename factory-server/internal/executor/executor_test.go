@@ -432,6 +432,46 @@ func TestExecutorRepairFromFailureRewindsTestFailureToCodeGeneration(t *testing.
 	}
 }
 
+func TestExecutorRepairFromFailureAllowsCodeGenerationSchemaFailure(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepCodeGeneration: {
+			Status:    model.StepStatusFailed,
+			ErrorCode: model.ErrorSchemaValidationFailed,
+			ErrorMessage: "schema_validation_failed: carrier ontology field contract violation\n" +
+				"  - src/data/ontology.js: forbidden ontology field curLongitude; use documented longitude/latitude",
+		},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	drain(t, context.Background(), e)
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusFailed || job.CurrentStepKind != model.StepCodeGeneration {
+		t.Fatalf("pre-repair job = %s/%s, want failed/code_generation", job.Status, job.CurrentStepKind)
+	}
+
+	updated, err := e.RepairFromFailure(context.Background(), id)
+	if err != nil {
+		t.Fatalf("RepairFromFailure: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued {
+		t.Fatalf("updated status = %s, want queued", updated.Status)
+	}
+	code := stepByKind(t, mustSteps(t, st, id), model.StepCodeGeneration)
+	for _, want := range []string{
+		"repair_from_failure",
+		"code_generation",
+		"schema_validation_failed",
+		"src/data/ontology.js",
+		"audit scans the entire generated project",
+		"overwrite stale data-layer files",
+	} {
+		if !strings.Contains(code.UserPrompt, want) {
+			t.Fatalf("repair prompt missing %q:\n%s", want, code.UserPrompt)
+		}
+	}
+}
+
 func TestExecutorRepairFromFailureRejectsNonRepairableFailure(t *testing.T) {
 	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
 		model.StepSolutionDesign: {Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "bad design"},

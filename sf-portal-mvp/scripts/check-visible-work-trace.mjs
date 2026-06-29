@@ -66,6 +66,12 @@ const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkben
 const jobCenterJsx = readFileSync(new URL('../src/components/JobCenter.jsx', import.meta.url), 'utf8')
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 
+// App.jsx calls these hook methods during initial effects. If the hook contract
+// drifts during a merge, React crashes on mount and leaves the portal blank.
+assert.match(appJsx, /dialogue\.setJobStepBlocks\(/, 'App must feed task step blocks into the dialogue hook')
+assert.match(useDialogueJs, /setJobStepBlocks/, 'useDialogueSessions must return setJobStepBlocks for App mount wiring')
+assert.match(useDialogueJs, /jobStepBlocks/, 'useDialogueSessions must retain jobStepBlocks when rebuilding the timeline')
+
 // The client MUST expose the new endpoints.
 assert.match(clientJs, /getDialogueTrace/, 'client must expose getDialogueTrace (REST replay)')
 assert.match(clientJs, /cancelDialogueTurn/, 'client must expose cancelDialogueTurn')
@@ -93,6 +99,11 @@ assert.match(workbenchJsx, /已生效，可继续描述修改需求/, 'after a v
 assert.match(workbenchJsx, /取消本轮|cancel.*turn|onCancelTurn/, 'workbench must render a cancel-current-turn control')
 assert.match(workbenchJsx, /pending.*turn|turnId|本轮.*处理中|处理中.*轮/, 'workbench must render a pending-turn indicator')
 assert.match(workbenchJsx, /变更.*确认|change.*confirm|onConfirmChange/, 'workbench must render a change-summary confirmation control')
+assert.match(
+  workbenchJsx,
+  /const changeProposal = versionDeployed\s*\?/,
+  'change confirmation must only render after an initial application version is deployed',
+)
 assert.match(workbenchJsx, /回滚|rollback|onRollback/, 'workbench must render a rollback control (confirm-gated)')
 assert.match(workbenchJsx, /归档|archive|onArchive/, 'workbench must render an archive control')
 

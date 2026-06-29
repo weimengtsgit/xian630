@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, X, Minimize2, Sparkles } from 'lucide-react'
 import './ChatDialog.css'
 
-export function ChatDialog({ isOpen, onClose, onMinimize }) {
+export function ChatDialog({ isOpen, onClose, onMinimize, onUserSubmit }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -19,6 +19,9 @@ export function ChatDialog({ isOpen, onClose, onMinimize }) {
 
   const handleSend = () => {
     if (!input.trim()) return
+
+    // 提交用户输入，提炼关键字后流入流水线首端卡片
+    onUserSubmit?.(input.trim())
 
     const userMessage = { role: 'user', content: input }
     setMessages(prev => [...prev, userMessage])
