@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 
@@ -277,63 +277,145 @@ function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys, isReve
   const active = activeKey && list.some(edge => relatedKeys.has(edge.from) && relatedKeys.has(edge.to))
   const fromCards = fromWave && Array.isArray(fromWave.cards) ? fromWave.cards : []
   const toCards = toWave && Array.isArray(toWave.cards) ? toWave.cards : []
+  const model = buildConnectorModel(list, fromCards, toCards)
   return (
-    <div className={`ceg-connector${active ? ' is-active' : ''}`} aria-hidden="true">
-      {list.length > 0 ? list.map((edge, index) => {
-        const fromY = cardSlotPercent(fromCards, edge.from)
-        const toY = cardSlotPercent(toCards, edge.to)
-        return (
-          <EdgeSegments
-            key={edge.id || `${edge.from}->${edge.to}-${index}`}
-            edge={edge}
-            fromY={fromY}
-            toY={toY}
-            isRevealing={isRevealMode}
-          />
-        )
-      }) : <EdgeSegments edge={{ state: 'inactive' }} fromY={50} toY={50} />}
-      {list.length > 0 ? list.map((edge, index) => (
-        <span
-          key={`${edge.id || `${edge.from}->${edge.to}`}-arrow-${index}`}
-          className={`ceg-edge-arrow ceg-edge-${edge.state || 'inactive'}${isRevealMode ? ' ceg-edge-is-revealing' : ''}`}
-          style={{ top: `${cardSlotPercent(toCards, edge.to)}%` }}
+    <div className={`ceg-connector ceg-connector-mode-${model.connectorMode} ceg-connector-state-${model.connectorState}${active ? ' is-active' : ''}`} aria-hidden="true">
+      {model.segments.map(segment => (
+        <EdgeSegment
+          key={segment.id}
+          segment={segment}
+          isRevealing={isRevealMode}
         />
-      )) : <span className="ceg-edge-arrow ceg-edge-inactive" style={{ top: '50%' }} />}
+      ))}
+      {model.arrows.map(arrow => (
+        <span
+          key={arrow.id}
+          className={`ceg-edge-arrow ceg-edge-${arrow.state || 'inactive'}${isRevealMode ? ' ceg-edge-is-revealing' : ''}`}
+          style={{ top: `${arrow.top}%` }}
+        />
+      ))}
     </div>
   )
 }
 
-function EdgeSegments({ edge, fromY, toY, isRevealing }) {
-  const state = edge.state || 'inactive'
-  const stateClass = `ceg-edge-${state}`
+function EdgeSegment({ segment, isRevealing }) {
+  const stateClass = `ceg-edge-${segment.state || 'inactive'}`
   const revealClass = isRevealing ? 'ceg-edge-is-revealing' : ''
-  const linear = Math.abs(fromY - toY) < 1
-  if (linear) {
-    return (
-      <span
-        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass} ${revealClass}`}
-        style={{ left: '0%', width: '100%', top: `${fromY}%` }}
-      />
-    )
-  }
-  const minY = Math.min(fromY, toY)
-  const height = Math.abs(toY - fromY)
   return (
-    <Fragment>
-      <span
-        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass} ${revealClass}`}
-        style={{ left: '0%', width: '48%', top: `${fromY}%` }}
-      />
-      <span
-        className={`ceg-edge-seg ceg-edge-vertical ${stateClass} ${revealClass}`}
-        style={{ left: '48%', top: `${minY}%`, height: `${height}%` }}
-      />
-      <span
-        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass} ${revealClass}`}
-        style={{ left: '48%', width: '52%', top: `${toY}%` }}
-      />
-    </Fragment>
+    <span
+      className={`ceg-edge-seg ceg-edge-${segment.kind} ${stateClass} ${revealClass}`}
+      style={segment.style}
+    >
+      <span className="ceg-edge-flow-layer" />
+    </span>
   )
+}
+
+function buildConnectorModel(edges, fromCards, toCards) {
+  const mapped = (Array.isArray(edges) ? edges : []).map((edge, index) => ({
+    id: edge.id || `${edge.from}->${edge.to}-${index}`,
+    from: edge.from,
+    to: edge.to,
+    state: edge.state || 'inactive',
+    fromY: cardSlotPercent(fromCards, edge.from),
+    toY: cardSlotPercent(toCards, edge.to),
+  }))
+  if (mapped.length === 0) {
+    return {
+      connectorMode: 'linear',
+      connectorState: 'inactive',
+      segments: [horizontalSegment('fallback-line', 'inactive', 0, 100, 50)],
+      arrows: [{ id: 'fallback-arrow', state: 'inactive', top: 50 }],
+    }
+  }
+
+  const fromSlots = uniqueSlots(mapped.map(edge => edge.fromY))
+  const toSlots = uniqueSlots(mapped.map(edge => edge.toY))
+  const connectorMode = classifyConnectorMode(fromSlots.length, toSlots.length)
+  const connectorState = connectorStateForEdges(mapped)
+  const segments = []
+  const arrows = mapped.map(edge => ({ id: `${edge.id}-arrow`, state: edge.state, top: edge.toY }))
+  const centerX = 48
+
+  if (connectorMode === 'linear' && Math.abs(mapped[0].fromY - mapped[0].toY) < 1) {
+    segments.push(horizontalSegment(`${mapped[0].id}-line`, mapped[0].state, 0, 100, mapped[0].fromY))
+    return { connectorMode, connectorState, segments, arrows }
+  }
+
+  if (connectorMode === 'fork') {
+    const fromY = fromSlots[0]
+    const minY = Math.min(fromY, ...toSlots)
+    const maxY = Math.max(fromY, ...toSlots)
+    segments.push(horizontalSegment('fork-trunk', connectorState, 0, centerX, fromY))
+    segments.push(verticalSegment('fork-spine', connectorState, centerX, minY, maxY))
+    for (const edge of mapped) {
+      segments.push(horizontalSegment(`${edge.id}-branch`, edge.state, centerX, 100, edge.toY))
+    }
+    return { connectorMode, connectorState, segments, arrows }
+  }
+
+  if (connectorMode === 'merge') {
+    const toY = toSlots[0]
+    const minY = Math.min(toY, ...fromSlots)
+    const maxY = Math.max(toY, ...fromSlots)
+    for (const edge of mapped) {
+      segments.push(horizontalSegment(`${edge.id}-branch`, edge.state, 0, centerX, edge.fromY))
+    }
+    segments.push(verticalSegment('merge-spine', connectorState, centerX, minY, maxY))
+    segments.push(horizontalSegment('merge-trunk', connectorState, centerX, 100, toY))
+    return { connectorMode, connectorState, segments, arrows }
+  }
+
+  for (const edge of mapped) {
+    if (Math.abs(edge.fromY - edge.toY) < 1) {
+      segments.push(horizontalSegment(`${edge.id}-line`, edge.state, 0, 100, edge.fromY))
+    } else {
+      segments.push(horizontalSegment(`${edge.id}-from`, edge.state, 0, centerX, edge.fromY))
+      segments.push(verticalSegment(`${edge.id}-spine`, edge.state, centerX, edge.fromY, edge.toY))
+      segments.push(horizontalSegment(`${edge.id}-to`, edge.state, centerX, 100, edge.toY))
+    }
+  }
+  return { connectorMode, connectorState, segments, arrows }
+}
+
+function classifyConnectorMode(fromCount, toCount) {
+  if (fromCount <= 1 && toCount <= 1) return 'linear'
+  if (fromCount <= 1 && toCount > 1) return 'fork'
+  if (fromCount > 1 && toCount <= 1) return 'merge'
+  return 'mesh'
+}
+
+function connectorStateForEdges(edges) {
+  const states = edges.map(edge => edge.state || 'inactive')
+  if (states.includes('blocked')) return 'blocked'
+  if (states.includes('flowing')) return 'flowing'
+  if (states.length > 0 && states.every(state => state === 'planned')) return 'planned'
+  if (states.length > 0 && states.every(state => state === 'completed')) return 'completed'
+  return 'inactive'
+}
+
+function uniqueSlots(values) {
+  return [...new Set(values.map(value => Math.round(value * 100) / 100))]
+}
+
+function horizontalSegment(id, state, left, right, top) {
+  return {
+    id,
+    state,
+    kind: 'horizontal',
+    style: { left: `${left}%`, width: `${Math.max(0, right - left)}%`, top: `${top}%` },
+  }
+}
+
+function verticalSegment(id, state, left, fromTop, toTop) {
+  const top = Math.min(fromTop, toTop)
+  const height = Math.abs(toTop - fromTop)
+  return {
+    id,
+    state,
+    kind: 'vertical',
+    style: { left: `${left}%`, top: `${top}%`, height: `${height}%` },
+  }
 }
 
 function cardSlotPercent(cards, agentKey) {

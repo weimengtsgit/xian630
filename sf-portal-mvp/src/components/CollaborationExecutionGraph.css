@@ -29,17 +29,34 @@
 .ceg-card-state-failed .ceg-card-state, .ceg-card-state-waiting_user .ceg-card-state { color: #ffd98a; background: rgba(92, 58, 8, 0.5); }
 .ceg-card-state-skipped .ceg-card-state { color: #a5bdca; }
 .ceg-connector { position: relative; width: 78px; min-height: 116px; align-self: stretch; flex: 0 0 78px; }
-.ceg-edge-seg { position: absolute; border-radius: 2px; opacity: 0.92; }
+.ceg-edge-seg { position: absolute; overflow: hidden; border-radius: 2px; opacity: 0.86; background: rgba(143, 176, 191, 0.24); box-shadow: 0 0 0 1px rgba(6, 18, 29, 0.16); }
 .ceg-edge-horizontal { height: 3px; transform: translateY(-50%); }
 .ceg-edge-vertical { width: 3px; transform: translateX(-50%); }
-.ceg-edge-horizontal.ceg-edge-planned, .ceg-edge-horizontal.ceg-edge-flowing, .ceg-edge-horizontal.ceg-edge-completed { background: repeating-linear-gradient(90deg, rgba(104, 221, 255, 0.85) 0 10px, rgba(104, 221, 255, 0.12) 10px 20px); background-size: 20px 100%; animation: cegFlowRight 0.9s linear infinite; }
-.ceg-edge-vertical.ceg-edge-planned, .ceg-edge-vertical.ceg-edge-flowing, .ceg-edge-vertical.ceg-edge-completed { background: repeating-linear-gradient(180deg, rgba(104, 221, 255, 0.85) 0 10px, rgba(104, 221, 255, 0.12) 10px 20px); background-size: 100% 20px; animation: cegFlowDown 0.9s linear infinite; }
-.ceg-edge-horizontal.ceg-edge-inactive, .ceg-edge-vertical.ceg-edge-inactive { background: rgba(143, 176, 191, 0.26); }
-.ceg-edge-horizontal.ceg-edge-blocked { background: repeating-linear-gradient(90deg, rgba(252, 211, 77, 0.8) 0 10px, rgba(252, 211, 77, 0.12) 10px 20px); background-size: 20px 100%; animation: cegFlowRight 0.9s linear infinite; }
-.ceg-edge-vertical.ceg-edge-blocked { background: repeating-linear-gradient(180deg, rgba(252, 211, 77, 0.8) 0 10px, rgba(252, 211, 77, 0.12) 10px 20px); background-size: 100% 20px; animation: cegFlowDown 0.9s linear infinite; }
+.ceg-edge-flow-layer { position: absolute; inset: 0; opacity: 0; border-radius: inherit; pointer-events: none; }
+.ceg-edge-horizontal .ceg-edge-flow-layer { background-size: 20px 100%; animation: cegFlowRight 0.9s linear infinite; }
+.ceg-edge-vertical .ceg-edge-flow-layer { background-size: 100% 20px; animation: cegFlowDown 0.9s linear infinite; }
+.ceg-edge-planned { background: rgba(104, 221, 255, 0.18); }
+.ceg-edge-planned .ceg-edge-flow-layer { opacity: 0.48; background-image: repeating-linear-gradient(90deg, rgba(104, 221, 255, 0.68) 0 8px, rgba(104, 221, 255, 0.08) 8px 18px); }
+.ceg-edge-vertical.ceg-edge-planned .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(104, 221, 255, 0.68) 0 8px, rgba(104, 221, 255, 0.08) 8px 18px); }
+.ceg-edge-inactive { opacity: 0.52; background: rgba(143, 176, 191, 0.2); }
+.ceg-edge-inactive .ceg-edge-flow-layer { display: none; }
+.ceg-edge-flowing { opacity: 1; background: rgba(104, 221, 255, 0.34); box-shadow: 0 0 9px rgba(104, 221, 255, 0.32); }
+.ceg-edge-flowing .ceg-edge-flow-layer { opacity: 0.95; background-image: repeating-linear-gradient(90deg, rgba(104, 221, 255, 1) 0 10px, rgba(104, 221, 255, 0.12) 10px 20px); animation-duration: 0.68s; }
+.ceg-edge-vertical.ceg-edge-flowing .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(104, 221, 255, 1) 0 10px, rgba(104, 221, 255, 0.12) 10px 20px); }
+.ceg-edge-completed { opacity: 0.9; background: rgba(92, 220, 170, 0.28); }
+.ceg-edge-completed .ceg-edge-flow-layer { opacity: 0.38; background-image: repeating-linear-gradient(90deg, rgba(126, 231, 135, 0.78) 0 10px, rgba(126, 231, 135, 0.08) 10px 22px); animation-duration: 1.5s; }
+.ceg-edge-vertical.ceg-edge-completed .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(126, 231, 135, 0.78) 0 10px, rgba(126, 231, 135, 0.08) 10px 22px); }
+.ceg-edge-blocked { opacity: 0.94; background: rgba(252, 211, 77, 0.3); box-shadow: 0 0 9px rgba(252, 211, 77, 0.22); }
+.ceg-edge-blocked .ceg-edge-flow-layer { opacity: 0.82; background-image: repeating-linear-gradient(90deg, rgba(252, 211, 77, 0.95) 0 8px, rgba(252, 211, 77, 0.08) 8px 18px); animation-duration: 1.05s; }
+.ceg-edge-vertical.ceg-edge-blocked .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(252, 211, 77, 0.95) 0 8px, rgba(252, 211, 77, 0.08) 8px 18px); }
 .ceg-edge-arrow { position: absolute; right: 0; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 9px solid rgba(143, 176, 191, 0.48); transform: translateY(-50%); }
 .ceg-edge-arrow.ceg-edge-planned, .ceg-edge-arrow.ceg-edge-flowing, .ceg-edge-arrow.ceg-edge-completed { border-left-color: rgba(104, 221, 255, 0.78); filter: drop-shadow(0 0 4px rgba(104, 221, 255, 0.5)); }
+.ceg-edge-arrow.ceg-edge-completed { border-left-color: rgba(126, 231, 135, 0.76); filter: drop-shadow(0 0 4px rgba(126, 231, 135, 0.42)); }
 .ceg-edge-arrow.ceg-edge-blocked { border-left-color: rgba(252, 211, 77, 0.8); }
+.ceg-connector-state-flowing .ceg-edge-arrow { filter: drop-shadow(0 0 7px rgba(104, 221, 255, 0.72)); }
+.ceg-connector-state-completed .ceg-edge-seg { box-shadow: 0 0 7px rgba(126, 231, 135, 0.18); }
+.ceg-connector-state-inactive .ceg-edge-arrow { opacity: 0.48; }
+.ceg-connector-state-blocked .ceg-edge-arrow { filter: drop-shadow(0 0 6px rgba(252, 211, 77, 0.5)); }
 .ceg-connector.is-active .ceg-edge-seg { box-shadow: 0 0 10px rgba(104, 221, 255, 0.42); opacity: 1; }
 .ceg-spin { animation: cegSpin 1s linear infinite; }
 @keyframes cegFlowRight { from { background-position: 0 0; } to { background-position: 20px 0; } }
@@ -134,14 +151,16 @@
 
 /* Edge reveal effect */
 .ceg-edge-is-revealing {
-  animation: cegEdgeReveal 0.3s ease-out;
+  animation: cegLineDraw 0.46s ease-out both;
 }
 
-@keyframes cegEdgeReveal {
+@keyframes cegLineDraw {
   0% {
+    clip-path: inset(0 100% 0 0);
     opacity: 0;
   }
   100% {
+    clip-path: inset(0 0 0 0);
     opacity: 0.92;
   }
 }
@@ -164,6 +183,10 @@
   }
 
   .ceg-edge-is-revealing {
+    animation: none !important;
+  }
+
+  .ceg-edge-flow-layer {
     animation: none !important;
   }
 
