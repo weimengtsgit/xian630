@@ -17,6 +17,7 @@ const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkben
 const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
 const drawerJsx = readFileSync(new URL('../src/components/WorkbenchDrawer.jsx', import.meta.url), 'utf8')
 const drawerCss = readFileSync(new URL('../src/components/WorkbenchDrawer.css', import.meta.url), 'utf8')
+const jobCenterJsx = readFileSync(new URL('../src/components/JobCenter.jsx', import.meta.url), 'utf8')
 
 // ---- the 3 header buttons exist + are mutually exclusive --------------------
 
@@ -113,6 +114,10 @@ assert.match(workbenchJsx, /onOpenTaskStep/, 'ConversationWorkbench should pass 
 assert.doesNotMatch(workbenchJsx, /onToggleDrawerEntry && onToggleDrawerEntry\('task'\)/, 'graph card click must not only toggle the task drawer without selecting a step')
 assert.match(appJsx, /openTaskStepFromGraph/, 'App should own graph-card task-step navigation')
 assert.match(appJsx, /setDrawerEntry\('task'\)[\s\S]*jobs\.selectStepAttempt\(stepId,\s*attempt\)/, 'graph-card navigation should open task drawer and select the real step attempt')
+assert.match(appJsx, /setTaskStepOpenRequest\(\{ stepId,\s*attempt,\s*requestedAt:/, 'graph-card navigation should request direct entry into the selected task step detail')
+assert.match(appJsx, /stepOpenRequest:\s*taskStepOpenRequest/, 'App should pass graph-card detail-open requests into JobCenter task props')
+assert.match(jobCenterJsx, /stepOpenRequest/, 'JobCenter should accept graph-card detail-open requests')
+assert.match(jobCenterJsx, /setTaskView\('detail'\)[\s\S]*setDrawerOpen\(true\)/, 'graph-card detail-open requests should enter the task step detail instead of only highlighting the card')
 assert.match(graphJsx, /relatedCardKeys/, 'graph component should compute related upstream and downstream cards for hover focus')
 assert.match(graphJsx, /onOpenTask\(card\)/, 'graph component should call onOpenTask with the clicked card')
 assert.match(graphJsx, /aria-disabled=\{!canOpenTask && card\.kind !== 'origin'\}/, 'pre-confirmation non-origin cards should remain hoverable while not opening task details')

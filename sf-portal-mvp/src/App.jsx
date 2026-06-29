@@ -35,6 +35,7 @@ function App() {
   const [sessionNavCollapsed, setSessionNavCollapsed] = useState(false)
   const [drawerEntry, setDrawerEntry] = useState(null)
   const [currentPage, setCurrentPage] = useState('workbench')
+  const [taskStepOpenRequest, setTaskStepOpenRequest] = useState(null)
   const workbenchClass = [
     'workbench',
     sessionNavCollapsed ? 'session-nav-collapsed' : '',
@@ -159,8 +160,11 @@ function App() {
       (step && (step.attempt ?? step.latest_attempt)) ??
       (card.step && (card.step.attempt ?? card.step.latest_attempt)) ??
       1
+    const taskId = (step && (step.job_id || step.jobId)) || (card.step && (card.step.job_id || card.step.jobId)) || ''
+    if (taskId) setSelectedTaskId(taskId)
     setDrawerEntry('task')
     jobs.selectStepAttempt(stepId, attempt)
+    setTaskStepOpenRequest({ stepId, attempt, requestedAt: Date.now() })
   }, [jobs.summary, jobs.steps, jobs.selectStepAttempt])
 
   // The 工作空间 entry is disabled until the current dialogue has a concrete
@@ -273,6 +277,7 @@ function App() {
               selectedStepId: jobs.selectedStepId,
               selectedAttempt: jobs.selectedAttempt,
               selectStepAttempt: jobs.selectStepAttempt,
+              stepOpenRequest: taskStepOpenRequest,
               getRecords: jobs.getRecords,
               getUnreadCount: jobs.getUnreadCount,
               loadStepRecords: jobs.loadStepRecords,
