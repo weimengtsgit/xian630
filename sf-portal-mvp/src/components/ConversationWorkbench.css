@@ -38,7 +38,7 @@
 .cw-status { font-size: 11px; color: #68ddff; }
 
 /* Phase 1: the 3 top-right drawer-entry buttons (任务执行 / 协作智能体 /
- * 应用项目). They open the unified right 工作台抽屉 and are mutually exclusive —
+ * 工作空间). They open the unified right 工作台抽屉 and are mutually exclusive —
  * the active one is highlighted; clicking it closes the drawer. */
 .cw-drawer-btn {
   position: relative;

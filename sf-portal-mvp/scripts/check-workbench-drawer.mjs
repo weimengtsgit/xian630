@@ -1,10 +1,10 @@
 // Phase 1 (workbench-drawer migration) regression check for the new right-side
 // 工作台抽屉 layout. The brief requires a dedicated check script that pins:
-//   - the 3 mutually-exclusive header buttons (任务执行 / 协作智能体 / 应用项目)
+//   - the 3 mutually-exclusive header buttons (任务执行 / 协作智能体 / 工作空间)
 //   - the WorkbenchDrawer overlay host rendering the active entry's content
 //   - the toggle mutual-exclusivity (clicking the active entry closes the
 //     drawer; clicking a different one switches to it)
-//   - 应用项目 disabled until the dialogue has a bound application
+//   - 工作空间 disabled until the dialogue has a bound application
 //   - 任务执行 keeps a presence badge while a focus task exists
 //
 // Runs under node with NO React import. It exercises the toggle reducer as a
@@ -28,18 +28,21 @@ assert.match(appJsx, /setDrawerEntry\(prev => \(prev === entry \? null : entry\)
 // ConversationWorkbench renders the 3 buttons, each bound to its entry key.
 assert.match(workbenchJsx, /drawerEntry === 'task' \? ' is-active' : ''/, 'the 任务执行 button must highlight when it is the active entry')
 assert.match(workbenchJsx, /drawerEntry === 'agents' \? ' is-active' : ''/, 'the 协作智能体 button must highlight when it is the active entry')
-assert.match(workbenchJsx, /drawerEntry === 'application' \? ' is-active' : ''/, 'the 应用项目 button must highlight when it is the active entry')
+assert.match(workbenchJsx, /drawerEntry === 'application' \? ' is-active' : ''/, 'the 工作空间 button must highlight when it is the active entry')
 assert.match(workbenchJsx, /onToggleDrawerEntry\('task'\)/, 'the 任务执行 button must toggle the task entry')
 assert.match(workbenchJsx, /onToggleDrawerEntry\('agents'\)/, 'the 协作智能体 button must toggle the agents entry')
-assert.match(workbenchJsx, /onToggleDrawerEntry\('application'\)/, 'the 应用项目 button must toggle the application entry')
+assert.match(workbenchJsx, /onToggleDrawerEntry\('application'\)/, 'the 工作空间 button must toggle the application entry')
+assert.match(workbenchJsx, /aria-label="工作空间"/, 'the application drawer button should be labelled 工作空间')
+assert.match(workbenchJsx, /cw-drawer-btn-label">工作空间</, 'the application drawer button should display 工作空间')
+assert.doesNotMatch(workbenchJsx, /aria-label="应用项目"|cw-drawer-btn-label">应用项目</, 'the old 应用项目 button copy should not remain visible')
 // Active buttons are reachable as a styled group + share a class.
 assert.match(workbenchJsx, /cw-drawer-btn/, 'each header button must use the cw-drawer-btn class')
 assert.match(workbenchCss, /\.cw-drawer-btn\.is-active|\.is-active[\s\S]*cw-drawer-btn|cw-drawer-btn\.is-active/, 'the active drawer button must have a highlighted style')
 
-// ---- 应用项目 disabled gate -------------------------------------------------
+// ---- 工作空间 disabled gate -------------------------------------------------
 
 // The button is disabled when the composed view has no bound application.
-assert.match(workbenchJsx, /disabled=\{!hasBoundApplication\}/, 'the 应用项目 button must be disabled when no application is bound')
+assert.match(workbenchJsx, /disabled=\{!hasBoundApplication\}/, 'the 工作空间 button must be disabled when no application is bound')
 assert.match(appJsx, /hasBoundApplication/, 'App must derive a hasBoundApplication flag')
 assert.match(appJsx, /hasBoundApplication\s*=\s*!!applicationProjectId/, 'hasBoundApplication must require a concrete application project id')
 

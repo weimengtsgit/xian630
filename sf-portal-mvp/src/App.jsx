@@ -163,7 +163,7 @@ function App() {
     jobs.selectStepAttempt(stepId, attempt)
   }, [jobs.summary, jobs.steps, jobs.selectStepAttempt])
 
-  // The 应用项目 entry is disabled until the current dialogue has a concrete
+  // The 工作空间 entry is disabled until the current dialogue has a concrete
   // generated application id. A seeded job alone can exist before code_generation
   // has registered the project, so it is not enough to enable the drawer.
   const view = dialogue.view

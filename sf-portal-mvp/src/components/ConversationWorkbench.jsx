@@ -166,8 +166,8 @@ export function ConversationWorkbench({
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
           {/* Phase 1: the 3 top-right drawer-entry buttons. Mutually exclusive —
-              clicking the active one closes the drawer; 应用项目 is disabled until
-              the current dialogue has a bound application project. 任务执行 keeps a
+              clicking the active one closes the drawer; 工作空间 is disabled until
+              the current dialogue has a bound generated application. 任务执行 keeps a
               presence-dot badge while a focus task exists, even when another entry
               is open (full agent-chip strip is later). */}
           <button
@@ -195,12 +195,12 @@ export function ConversationWorkbench({
             type="button"
             className={`cw-drawer-btn${drawerEntry === 'application' ? ' is-active' : ''}`}
             onClick={() => onToggleDrawerEntry('application')}
-            title={hasBoundApplication ? '应用项目' : '当前会话未绑定应用项目'}
-            aria-label="应用项目"
+            title={hasBoundApplication ? '工作空间' : '当前会话未绑定工作空间'}
+            aria-label="工作空间"
             aria-pressed={drawerEntry === 'application'}
             disabled={!hasBoundApplication}
           >
-            <span className="cw-drawer-btn-label">应用项目</span>
+            <span className="cw-drawer-btn-label">工作空间</span>
           </button>
           <button
             type="button"
