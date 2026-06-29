@@ -62,7 +62,7 @@
 }
 
 .ceg-card-is-revealing {
-  animation: cegAgentReveal 0.62s cubic-bezier(0.2, 0.82, 0.22, 1);
+  animation: cegAgentReveal 0.9s cubic-bezier(0.2, 0.82, 0.22, 1);
   box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.34), 0 0 22px rgba(104, 221, 255, 0.28), 0 12px 28px rgba(0, 0, 0, 0.28);
 }
 

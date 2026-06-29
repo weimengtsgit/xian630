@@ -4,10 +4,10 @@ import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
-const REVEAL_INITIAL_DELAY_MS = 250
-const REVEAL_STEP_DELAY_MS = 240
-const REVEAL_CARD_ANIMATION_MS = 620
-const REVEAL_REPLAY_PAUSE_MS = 1400
+const REVEAL_INITIAL_DELAY_MS = 450
+const REVEAL_STEP_DELAY_MS = 520
+const REVEAL_CARD_ANIMATION_MS = 900
+const REVEAL_REPLAY_PAUSE_MS = 2200
 
 const STATE_ICON = {
   pending_confirmation: HelpCircle,
