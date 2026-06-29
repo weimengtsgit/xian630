@@ -3,7 +3,7 @@ import { ChevronRight, FileText, Folder, Loader2 } from 'lucide-react'
 import { factoryApi } from '../api/client'
 import './ApplicationProjectPanel.css'
 
-export function ApplicationProjectPanel({ applicationId }) {
+export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftApplied }) {
   const [tree, setTree] = useState(null)
   const [treeError, setTreeError] = useState('')
   const [loadingTree, setLoadingTree] = useState(false)
@@ -13,6 +13,9 @@ export function ApplicationProjectPanel({ applicationId }) {
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [mode, setMode] = useState('preview')
+  const [editing, setEditing] = useState(false)
+  const [draftText, setDraftText] = useState('')
+  const [draftSaving, setDraftSaving] = useState(false)
 
   useEffect(() => {
     setTree(null)
@@ -22,7 +25,7 @@ export function ApplicationProjectPanel({ applicationId }) {
     if (!applicationId) return undefined
     let canceled = false
     setLoadingTree(true)
-    factoryApi.getApplicationProjectTree(applicationId)
+    factoryApi.getApplicationProjectTree(applicationId, dialogueId)
       .then(data => {
         if (canceled) return
         setTree(data)
@@ -35,7 +38,7 @@ export function ApplicationProjectPanel({ applicationId }) {
       .catch(err => { if (!canceled) setTreeError(err.message || String(err)) })
       .finally(() => { if (!canceled) setLoadingTree(false) })
     return () => { canceled = true }
-  }, [applicationId])
+  }, [applicationId, dialogueId])
 
   useEffect(() => {
     setPreview(null)
@@ -44,14 +47,72 @@ export function ApplicationProjectPanel({ applicationId }) {
     if (!applicationId || !selectedPath) return undefined
     let canceled = false
     setLoadingPreview(true)
-    factoryApi.getApplicationProjectFile(applicationId, selectedPath)
+    factoryApi.getApplicationProjectFile(applicationId, selectedPath, dialogueId)
       .then(data => { if (!canceled) setPreview(data) })
       .catch(err => { if (!canceled) setPreviewError(err.message || String(err)) })
       .finally(() => { if (!canceled) setLoadingPreview(false) })
     return () => { canceled = true }
-  }, [applicationId, selectedPath])
+  }, [applicationId, selectedPath, dialogueId])
 
   const groups = useMemo(() => (tree && Array.isArray(tree.groups) ? tree.groups : []), [tree])
+  const canEditDraft = !!(dialogueId && preview && preview.kind === 'markdown' && preview.checksum)
+  const startDraft = () => {
+    if (!canEditDraft || preview.draft?.isStale) return
+    setDraftText(preview.draft && preview.draft.content ? preview.draft.content : preview.content || '')
+    setEditing(true)
+    setMode('source')
+  }
+  const saveDraft = async () => {
+    if (!canEditDraft || draftSaving || preview.draft?.isStale) return
+    setDraftSaving(true)
+    try {
+      await factoryApi.saveApplicationProjectDraft(applicationId, { dialogueId, path: preview.path, sourceChecksum: preview.checksum, content: draftText })
+      const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
+      setPreview(next)
+      setEditing(false)
+    } finally {
+      setDraftSaving(false)
+    }
+  }
+  const discardDraft = async () => {
+    if (!preview?.draft || draftSaving) return
+    setDraftSaving(true)
+    try {
+      await factoryApi.discardApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
+      setPreview(next)
+      setEditing(false)
+    } finally {
+      setDraftSaving(false)
+    }
+  }
+  const applyDraft = async () => {
+    if (!preview?.draft || preview.draft.isStale || draftSaving) return
+    setDraftSaving(true)
+    try {
+      await factoryApi.applyApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
+      setPreview(next)
+      setEditing(false)
+      if (onDraftApplied) await onDraftApplied()
+    } finally {
+      setDraftSaving(false)
+    }
+  }
+  const restartDraftFromCurrentSource = async () => {
+    if (!preview?.draft || !preview.draft.isStale || draftSaving) return
+    setDraftSaving(true)
+    try {
+      await factoryApi.discardApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
+      setPreview(next)
+      setDraftText(next.content || '')
+      setEditing(true)
+      setMode('source')
+    } finally {
+      setDraftSaving(false)
+    }
+  }
 
   if (!applicationId) {
     return <div className="application-project-panel app-project-empty">项目尚未准备好。</div>
@@ -81,7 +142,7 @@ export function ApplicationProjectPanel({ applicationId }) {
       <section className="app-project-preview">
         {loadingPreview ? <p className="app-project-empty"><Loader2 size={13} className="spin" /> 加载预览...</p> : null}
         {previewError ? <p className="app-project-error">{previewError}</p> : null}
-        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} /> : null}
+        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} draftSaving={draftSaving} /> : null}
         {!preview && !loadingPreview && !previewError ? <p className="app-project-empty">选择文件查看预览。</p> : null}
       </section>
     </div>
@@ -124,7 +185,7 @@ function ProjectNode({ node, expanded, setExpanded, selectedPath, onSelect }) {
   )
 }
 
-function Preview({ preview, mode, setMode }) {
+function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, restartDraftFromCurrentSource, draftSaving }) {
   const sourceModes = preview.kind === 'markdown'
     ? [['preview', '预览'], ['source', '源码']]
     : preview.kind === 'json'
@@ -141,6 +202,18 @@ function Preview({ preview, mode, setMode }) {
           {sourceModes.map(([id, label]) => <button key={id} type="button" className={mode === id ? 'is-active' : ''} onClick={() => setMode(id)}>{label}</button>)}
         </div>
       ) : null}
+      {canEditDraft ? (
+        <div className="app-project-draft-actions">
+          {!preview.draft?.isStale ? <button type="button" onClick={startDraft}>{preview.draft ? '继续编辑草稿' : '编辑草稿'}</button> : null}
+          {editing ? <button type="button" onClick={saveDraft} disabled={draftSaving}>保存草稿</button> : null}
+          {preview.draft && preview.draft.status === 'draft' && !preview.draft.isStale ? <button type="button" onClick={applyDraft} disabled={draftSaving}>应用为变更需求</button> : null}
+          {preview.draft && preview.draft.status === 'proposed' ? <span className="app-project-proposed">已应用为变更需求，等待中心会话确认。</span> : null}
+          {preview.draft ? <button type="button" onClick={discardDraft} disabled={draftSaving}>丢弃草稿</button> : null}
+          {preview.draft && preview.draft.isStale ? <button type="button" onClick={restartDraftFromCurrentSource} disabled={draftSaving}>重新以当前源文档创建草稿</button> : null}
+          {preview.draft && preview.draft.isStale ? <span className="app-project-stale">源文档已更新，请丢弃草稿后重新编辑。</span> : null}
+        </div>
+      ) : null}
+      {editing ? <textarea className="app-project-draft-editor" value={draftText} onChange={event => setDraftText(event.target.value)} /> : null}
       {preview.kind === 'large' ? <Metadata preview={preview} message={`文件超过 ${formatBytes(preview.limit)}，本阶段仅显示元数据。`} /> : null}
       {preview.kind === 'binary' ? <Metadata preview={preview} message="二进制或未知文件，本阶段仅显示元数据。" /> : null}
       {preview.kind === 'markdown' && mode === 'preview' ? <MarkdownPreview content={preview.content || ''} /> : null}

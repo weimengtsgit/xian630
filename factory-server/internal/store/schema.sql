@@ -317,3 +317,21 @@ CREATE INDEX IF NOT EXISTS idx_task_thinking_replay
 ON task_thinking_events(dialogue_id, dialogue_sequence);
 CREATE INDEX IF NOT EXISTS idx_task_thinking_step
 ON task_thinking_events(task_id, step_id, attempt, step_sequence);
+
+CREATE TABLE IF NOT EXISTS project_document_drafts (
+    id                TEXT PRIMARY KEY,
+    application_id    TEXT NOT NULL,
+    dialogue_id       TEXT NOT NULL,
+    path              TEXT NOT NULL,
+    source_checksum   TEXT NOT NULL,
+    content           TEXT NOT NULL,
+    status            TEXT NOT NULL,
+    conversion_error  TEXT NOT NULL DEFAULT '',
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    proposed_turn_id  TEXT NOT NULL DEFAULT '',
+    proposed_at       INTEGER,
+    UNIQUE(application_id, dialogue_id, path, source_checksum)
+);
+CREATE INDEX IF NOT EXISTS idx_project_document_drafts_scope
+ON project_document_drafts(application_id, dialogue_id, path);

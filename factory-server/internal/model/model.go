@@ -631,6 +631,33 @@ const (
 	WorkTraceAssistant     WorkTraceType = "assistant_output"    // assistant text output
 )
 
+// ProjectDocumentDraftStatus is the lifecycle state of a saved Markdown document
+// draft. Drafts are stored separately from generated project documents and never
+// overwrite machine contracts or the running application until a later confirmed
+// generation task consumes the proposed change.
+type ProjectDocumentDraftStatus string
+
+const (
+	ProjectDocumentDraftStatusDraft     ProjectDocumentDraftStatus = "draft"
+	ProjectDocumentDraftStatusProposed  ProjectDocumentDraftStatus = "proposed"
+	ProjectDocumentDraftStatusDiscarded ProjectDocumentDraftStatus = "discarded"
+)
+
+type ProjectDocumentDraft struct {
+	ID              string                     `json:"id"`
+	ApplicationID   string                     `json:"application_id"`
+	DialogueID      string                     `json:"dialogue_id"`
+	Path            string                     `json:"path"`
+	SourceChecksum  string                     `json:"source_checksum"`
+	Content         string                     `json:"content,omitempty"`
+	Status          ProjectDocumentDraftStatus `json:"status"`
+	ConversionError string                     `json:"conversion_error,omitempty"`
+	CreatedAt       time.Time                  `json:"created_at"`
+	UpdatedAt       time.Time                  `json:"updated_at"`
+	ProposedTurnID  string                     `json:"proposed_turn_id,omitempty"`
+	ProposedAt      *time.Time                 `json:"proposed_at,omitempty"`
+}
+
 // TaskThinkingEvent is one durable, immutable row of raw provider thinking
 // captured during task execution. Unlike WorkTraceEvent and StepExecutionRecord,
 // this row is excluded from visible work trace, execution audit/export surfaces,

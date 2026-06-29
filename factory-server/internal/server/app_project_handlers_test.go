@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -156,6 +157,186 @@ func TestApplicationProjectFilePreviewsTextJsonBinaryAndLarge(t *testing.T) {
 	}
 }
 
+func TestApplicationProjectMarkdownPreviewAndDraftSave(t *testing.T) {
+	r, st, root, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/apps/app_demo/project-file?path=docs/overview.md&dialogueId=dlg_1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var preview appProjectFileResponse
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Checksum == "" {
+		t.Fatalf("checksum empty: %#v", preview)
+	}
+	orig, _ := os.ReadFile(filepath.Join(root, "generated-apps", "demo", "docs", "overview.md"))
+
+	rec = doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": "# Edited"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save draft status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	after, _ := os.ReadFile(filepath.Join(root, "generated-apps", "demo", "docs", "overview.md"))
+	if string(after) != string(orig) {
+		t.Fatalf("source doc changed: %s", after)
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/apps/app_demo/project-file?path=docs/overview.md&dialogueId=dlg_1", nil))
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Draft == nil || preview.Draft.Content != "# Edited" || preview.Draft.IsStale {
+		t.Fatalf("draft overlay = %#v", preview.Draft)
+	}
+}
+
+func TestApplicationProjectDiscardedDraftIsNotReturnedInPreview(t *testing.T) {
+	r, st, _, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": "# Edited"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save draft status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, body := range []map[string]any{{"dialogueId": "dlg_1", "path": "docs/overview.md"}} {
+		rec = doJSON(t, r, http.MethodDelete, "/api/apps/app_demo/project-drafts", body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("discard status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	preview = getMarkdownPreview(t, r, "dlg_1")
+	if preview.Draft != nil {
+		t.Fatalf("discarded draft returned in preview: %#v", preview.Draft)
+	}
+}
+
+func TestApplicationProjectDraftRejectsDialogueWithoutAppOwnership(t *testing.T) {
+	r, st, _, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_other", "other_app")
+	preview := getMarkdownPreview(t, r, "")
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_other", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": "# Edited"})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("save status=%d want 403 body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": "# Edited"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty dialogue status=%d want 400 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestApplicationProjectDraftApplySummaryIncludesDraftContent(t *testing.T) {
+	r, st, _, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	draft := "# Overview\n\n将告警阈值改为 150 海里\n新增舰队筛选条件"
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": draft})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	turn, err := st.GetLatestCompletedDialogueTurnByIntent(context.Background(), "dlg_1", model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		t.Fatalf("latest turn: %#v %v", turn, err)
+	}
+	if !strings.Contains(turn.SummaryJSON, "150 海里") || !strings.Contains(turn.SummaryJSON, "舰队筛选") {
+		t.Fatalf("summary lost draft content: %s", turn.SummaryJSON)
+	}
+}
+
+func TestApplicationProjectDraftApplySummaryIncludesDeletedContent(t *testing.T) {
+	r, st, root, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	longPrefix := strings.Repeat("普通背景行\n", 120)
+	sourcePath := filepath.Join(root, "generated-apps", "demo", "docs", "overview.md")
+	source := longPrefix + "必须删除的高风险限制：不再支持旧阈值\n保留内容\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	draft := longPrefix + "保留内容\n"
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": draft})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	turn, err := st.GetLatestCompletedDialogueTurnByIntent(context.Background(), "dlg_1", model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		t.Fatalf("latest turn: %#v %v", turn, err)
+	}
+	if !strings.Contains(turn.SummaryJSON, "必须删除的高风险限制") {
+		t.Fatalf("summary lost deleted content: %s", turn.SummaryJSON)
+	}
+}
+
+func TestApplicationProjectDraftApplySummaryIncludesDraftRef(t *testing.T) {
+	r, st, _, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	draftContent := "# Overview\n\n将告警阈值改为 150 海里\n新增舰队筛选条件"
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": preview.Checksum, "content": draftContent})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	turn, err := st.GetLatestCompletedDialogueTurnByIntent(context.Background(), "dlg_1", model.TurnIntentApplicationModification)
+	if err != nil || turn == nil {
+		t.Fatalf("latest turn: %#v %v", turn, err)
+	}
+
+	// Check that the summary contains the draft ref fields
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(turn.SummaryJSON), &summary); err != nil {
+		t.Fatalf("unmarshal summary: %v", err)
+	}
+
+	draftChange, ok := summary["documentDraftChange"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary missing documentDraftChange: %s", turn.SummaryJSON)
+	}
+
+	if draftChange["draftId"] == "" {
+		t.Fatalf("draftId missing: %#v", draftChange)
+	}
+	if draftChange["applicationId"] != "app_demo" {
+		t.Fatalf("applicationId mismatch: got %q want app_demo", draftChange["applicationId"])
+	}
+	if draftChange["dialogueId"] != "dlg_1" {
+		t.Fatalf("dialogueId mismatch: got %q want dlg_1", draftChange["dialogueId"])
+	}
+	if draftChange["path"] != "docs/overview.md" {
+		t.Fatalf("path mismatch: got %q want docs/overview.md", draftChange["path"])
+	}
+	if draftChange["sourceChecksum"] == "" {
+		t.Fatalf("sourceChecksum missing: %#v", draftChange)
+	}
+
+	// Also verify the change description is still there
+	if !strings.Contains(turn.SummaryJSON, "150 海里") {
+		t.Fatalf("summary lost change description: %s", turn.SummaryJSON)
+	}
+}
+
+func TestApplicationProjectDraftRejectsStaleChecksum(t *testing.T) {
+	r, st, _, _ := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", "app_demo")
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{"dialogueId": "dlg_1", "path": "docs/overview.md", "sourceChecksum": "sha256:stale", "content": "# Edited"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestApplicationProjectRejectsPresetAndMissingApps(t *testing.T) {
 	r, _, _, _ := newProjectTestServer(t)
 	for _, target := range []struct {
@@ -167,6 +348,32 @@ func TestApplicationProjectRejectsPresetAndMissingApps(t *testing.T) {
 		if rec.Code != target.code {
 			t.Fatalf("%s status=%d want %d", target.path, rec.Code, target.code)
 		}
+	}
+}
+
+func getMarkdownPreview(t *testing.T, r *Router, dialogueID string) appProjectFileResponse {
+	t.Helper()
+	url := "/api/apps/app_demo/project-file?path=docs/overview.md"
+	if dialogueID != "" {
+		url += "&dialogueId=" + dialogueID
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var preview appProjectFileResponse
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatal(err)
+	}
+	return preview
+}
+
+func seedProjectDialogue(t *testing.T, st *store.Store, dialogueID, appID string) {
+	t.Helper()
+	now := time.Now()
+	if err := st.CreateDialogueSession(context.Background(), model.DialogueSession{ID: dialogueID, InitialPrompt: "p", Status: model.DialogueStatusResolved, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true, ResolvedApplicationID: appID, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
 	}
 }
 

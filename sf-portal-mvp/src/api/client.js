@@ -85,8 +85,11 @@ async function requestText(path, options = {}) {
 
 export const factoryApi = {
   listApps: () => request('/api/apps'),
-  getApplicationProjectTree: appId => request(`/api/apps/${appId}/project-tree`),
-  getApplicationProjectFile: (appId, path) => request(`/api/apps/${appId}/project-file?path=${encodeURIComponent(path)}`),
+  getApplicationProjectTree: (appId, dialogueId = '') => request(`/api/apps/${appId}/project-tree${dialogueId ? `?dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
+  getApplicationProjectFile: (appId, path, dialogueId = '') => request(`/api/apps/${appId}/project-file?path=${encodeURIComponent(path)}${dialogueId ? `&dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
+  saveApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts`, { method: 'PUT', body: JSON.stringify(body) }),
+  discardApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts`, { method: 'DELETE', body: JSON.stringify(body) }),
+  applyApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts/apply`, { method: 'POST', body: JSON.stringify(body) }),
   listManagedAgents: () => request('/api/managed-agents'),
   startApp: id => request(`/api/apps/${id}/start`, { method: 'POST' }),
   stopApp: id => request(`/api/apps/${id}/stop`, { method: 'POST' }),
