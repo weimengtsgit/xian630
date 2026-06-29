@@ -35,7 +35,7 @@ assert.match(graphComponent, /function EdgeSegments/, 'graph component should ro
 assert.match(graphComponent, /cardSlotPercent/, 'graph component should align dependency paths to card slots in each wave')
 assert.doesNotMatch(graphComponent, /function mergedEdgeState/, 'graph component should not collapse all dependency edges in a wave into one merged state')
 assert.match(graphComponent, /card\.summary \|\| waitText \|\| card\.description/, 'graph cards should prefer live task summary before static agent description')
-assert.match(graphComponent, /ceg-adjustments/, 'graph component should show collaboration adjustment records')
+assert.doesNotMatch(graphComponent, /ceg-adjustments/, 'graph component should not render a separate long adjustment card below the execution graph')
 assert.match(graphCss, /@keyframes cegFlowRight/, 'graph css should define horizontal animated flow lines')
 assert.match(graphCss, /@keyframes cegFlowDown/, 'graph css should define vertical animated flow lines')
 assert.match(graphCss, /\.ceg-card-state-running/, 'graph css should style running cards')

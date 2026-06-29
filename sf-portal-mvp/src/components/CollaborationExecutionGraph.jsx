@@ -72,16 +72,6 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
           )
         })}
       </div>
-      {Array.isArray(graph.adjustments) && graph.adjustments.length > 0 ? (
-        <div className="ceg-adjustments">
-          <AlertTriangle size={13} />
-          <ul>
-            {graph.adjustments.map((adjustment, index) => (
-              <li key={`${adjustment.message || 'adjustment'}-${index}`}>{adjustment.message || '协作计划已调整'}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
     </section>
   )
 }

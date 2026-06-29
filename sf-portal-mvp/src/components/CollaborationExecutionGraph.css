@@ -41,8 +41,6 @@
 .ceg-edge-arrow.ceg-edge-planned, .ceg-edge-arrow.ceg-edge-flowing, .ceg-edge-arrow.ceg-edge-completed { border-left-color: rgba(104, 221, 255, 0.78); filter: drop-shadow(0 0 4px rgba(104, 221, 255, 0.5)); }
 .ceg-edge-arrow.ceg-edge-blocked { border-left-color: rgba(252, 211, 77, 0.8); }
 .ceg-connector.is-active .ceg-edge-seg { box-shadow: 0 0 10px rgba(104, 221, 255, 0.42); opacity: 1; }
-.ceg-adjustments { display: flex; align-items: flex-start; gap: 6px; padding: 7px 8px; border: 1px solid rgba(252, 211, 77, 0.28); border-radius: 6px; background: rgba(92, 58, 8, 0.34); color: #fde68a; font-size: 11px; line-height: 1.4; }
-.ceg-adjustments ul { margin: 0; padding-left: 14px; }
 .ceg-spin { animation: cegSpin 1s linear infinite; }
 @keyframes cegFlowRight { from { background-position: 0 0; } to { background-position: 20px 0; } }
 @keyframes cegFlowDown { from { background-position: 0 0; } to { background-position: 0 20px; } }
