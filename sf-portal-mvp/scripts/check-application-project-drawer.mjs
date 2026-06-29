@@ -46,6 +46,15 @@ assert.match(panelJsx, /const startDraft = \(\) => \{\s+if \(!canEditDraft \|\| 
 assert.match(panelJsx, /const saveDraft = async \(\) => \{\s+if \(!canEditDraft \|\| draftSaving \|\| preview\.draft\?\.isStale\) return/, 'ApplicationProjectPanel must not save a stale draft through the normal save path')
 assert.doesNotMatch(panelJsx, /dangerouslySetInnerHTML/, 'Markdown preview must not use dangerouslySetInnerHTML')
 
+// New assertions for stale diff rebase UI
+assert.match(panelJsx, /app-project-diff/, 'ApplicationProjectPanel must include diff view for stale drafts')
+assert.match(panelCss, /app-project-diff-line-added/, 'ApplicationProjectPanel must style added lines in diff')
+assert.match(panelCss, /app-project-diff-line-removed/, 'ApplicationProjectPanel must style removed lines in diff')
+assert.match(panelJsx, /以草稿内容继续/, 'ApplicationProjectPanel must offer continue with stale draft content action')
+assert.match(panelJsx, /continueDraftFromStaleContent/, 'ApplicationProjectPanel must implement continueDraftFromStaleContent handler')
+assert.match(panelJsx, /const staleDraftContent = preview\.draft\.content/, 'continueDraftFromStaleContent must capture stale draft content before discard')
+assert.match(panelJsx, /preview\.draft && preview\.draft\.status === 'draft' && !preview\.draft\.isStale/, 'ApplicationProjectPanel must only show apply button for non-stale drafts')
+
 for (const cls of ['application-project-panel', 'app-project-groups', 'app-project-tree-node', 'app-project-preview', 'app-project-preview-tabs', 'app-project-metadata']) {
   assert.match(panelCss, new RegExp(`\\.${cls}`), `ApplicationProjectPanel.css must style .${cls}`)
 }

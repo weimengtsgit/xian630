@@ -105,3 +105,72 @@
 }
 .app-project-error { color: #ff9a9a; }
 .app-project-metadata { padding: 10px; border-radius: 6px; background: rgba(143, 176, 191, 0.08); }
+
+.app-project-stale-info {
+  margin: 8px 0;
+  border: 1px solid rgba(255, 196, 87, 0.3);
+  border-radius: 6px;
+  background: rgba(255, 196, 87, 0.05);
+  overflow: hidden;
+}
+
+.app-project-stale-checksums {
+  display: flex;
+  gap: 16px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #ffc457;
+  border-bottom: 1px solid rgba(255, 196, 87, 0.2);
+  background: rgba(255, 196, 87, 0.08);
+}
+
+.app-project-stale-checksums code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.app-project-diff {
+  max-height: 200px;
+  overflow: auto;
+}
+
+.app-project-diff-lines {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.app-project-diff-line {
+  display: flex;
+  padding: 1px 8px;
+}
+
+.app-project-diff-line-same {
+  background: transparent;
+  color: #8fb0bf;
+}
+
+.app-project-diff-line-added {
+  background: rgba(127, 235, 155, 0.12);
+  color: #7feb9b;
+}
+
+.app-project-diff-line-removed {
+  background: rgba(255, 154, 154, 0.12);
+  color: #ff9a9a;
+}
+
+.app-project-diff-line-gutter {
+  display: inline-block;
+  width: 16px;
+  user-select: none;
+  font-weight: 600;
+}
+
+.app-project-diff-line-text {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

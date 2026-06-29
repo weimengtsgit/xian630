@@ -113,6 +113,21 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
       setDraftSaving(false)
     }
   }
+  const continueDraftFromStaleContent = async () => {
+    if (!preview?.draft || !preview.draft.isStale || draftSaving) return
+    const staleDraftContent = preview.draft.content
+    setDraftSaving(true)
+    try {
+      await factoryApi.discardApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
+      setPreview(next)
+      setDraftText(staleDraftContent || '')
+      setEditing(true)
+      setMode('source')
+    } finally {
+      setDraftSaving(false)
+    }
+  }
 
   if (!applicationId) {
     return <div className="application-project-panel app-project-empty">项目尚未准备好。</div>
@@ -142,7 +157,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
       <section className="app-project-preview">
         {loadingPreview ? <p className="app-project-empty"><Loader2 size={13} className="spin" /> 加载预览...</p> : null}
         {previewError ? <p className="app-project-error">{previewError}</p> : null}
-        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} draftSaving={draftSaving} /> : null}
+        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} continueDraftFromStaleContent={continueDraftFromStaleContent} draftSaving={draftSaving} /> : null}
         {!preview && !loadingPreview && !previewError ? <p className="app-project-empty">选择文件查看预览。</p> : null}
       </section>
     </div>
@@ -185,7 +200,7 @@ function ProjectNode({ node, expanded, setExpanded, selectedPath, onSelect }) {
   )
 }
 
-function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, restartDraftFromCurrentSource, draftSaving }) {
+function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, restartDraftFromCurrentSource, continueDraftFromStaleContent, draftSaving }) {
   const sourceModes = preview.kind === 'markdown'
     ? [['preview', '预览'], ['source', '源码']]
     : preview.kind === 'json'
@@ -210,16 +225,26 @@ function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, set
           {preview.draft && preview.draft.status === 'proposed' ? <span className="app-project-proposed">已应用为变更需求，等待中心会话确认。</span> : null}
           {preview.draft ? <button type="button" onClick={discardDraft} disabled={draftSaving}>丢弃草稿</button> : null}
           {preview.draft && preview.draft.isStale ? <button type="button" onClick={restartDraftFromCurrentSource} disabled={draftSaving}>重新以当前源文档创建草稿</button> : null}
+          {preview.draft && preview.draft.isStale ? <button type="button" onClick={continueDraftFromStaleContent} disabled={draftSaving}>以草稿内容继续</button> : null}
           {preview.draft && preview.draft.isStale ? <span className="app-project-stale">源文档已更新，请丢弃草稿后重新编辑。</span> : null}
+        </div>
+      ) : null}
+      {preview.draft && preview.draft.isStale ? (
+        <div className="app-project-stale-info">
+          <div className="app-project-stale-checksums">
+            <span>当前校验: <code>{preview.checksum?.slice(0, 12)}...</code></span>
+            <span>草稿基于: <code>{preview.draft.sourceChecksum?.slice(0, 12)}...</code></span>
+          </div>
+          <LineDiffView sourceText={preview.content} draftText={preview.draft.content} />
         </div>
       ) : null}
       {editing ? <textarea className="app-project-draft-editor" value={draftText} onChange={event => setDraftText(event.target.value)} /> : null}
       {preview.kind === 'large' ? <Metadata preview={preview} message={`文件超过 ${formatBytes(preview.limit)}，本阶段仅显示元数据。`} /> : null}
       {preview.kind === 'binary' ? <Metadata preview={preview} message="二进制或未知文件，本阶段仅显示元数据。" /> : null}
-      {preview.kind === 'markdown' && mode === 'preview' ? <MarkdownPreview content={preview.content || ''} /> : null}
-      {preview.kind === 'markdown' && mode === 'source' ? <pre className="app-project-source">{preview.content}</pre> : null}
-      {preview.kind === 'json' ? <pre className="app-project-source">{mode === 'source' ? preview.content : preview.formatted || preview.content}</pre> : null}
-      {preview.kind === 'text' ? <pre className="app-project-source">{preview.content}</pre> : null}
+      {preview.kind === 'markdown' && mode === 'preview' && !editing ? <MarkdownPreview content={preview.content || ''} /> : null}
+      {preview.kind === 'markdown' && mode === 'source' && !editing ? <pre className="app-project-source">{preview.content}</pre> : null}
+      {preview.kind === 'json' && !editing ? <pre className="app-project-source">{mode === 'source' ? preview.content : preview.formatted || preview.content}</pre> : null}
+      {preview.kind === 'text' && !editing ? <pre className="app-project-source">{preview.content}</pre> : null}
     </div>
   )
 }
@@ -273,4 +298,65 @@ function formatBytes(value) {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`
   return `${(n / 1024 / 1024).toFixed(1)} MiB`
+}
+
+// LCS-based line diff helper
+function computeLineDiff(sourceText, draftText) {
+  const sourceLines = (sourceText || '').split('\n')
+  const draftLines = (draftText || '').split('\n')
+
+  // Compute LCS table
+  const m = sourceLines.length
+  const n = draftLines.length
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (sourceLines[i - 1] === draftLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+      }
+    }
+  }
+
+  // Backtrack to build diff
+  const diff = []
+  let i = m
+  let j = n
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && sourceLines[i - 1] === draftLines[j - 1]) {
+      diff.unshift({ type: 'same', line: sourceLines[i - 1] })
+      i--
+      j--
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ type: 'added', line: draftLines[j - 1] })
+      j--
+    } else if (i > 0) {
+      diff.unshift({ type: 'removed', line: sourceLines[i - 1] })
+      i--
+    }
+  }
+
+  return diff
+}
+
+function LineDiffView({ sourceText, draftText }) {
+  const diff = useMemo(() => computeLineDiff(sourceText, draftText), [sourceText, draftText])
+
+  return (
+    <div className="app-project-diff">
+      <div className="app-project-diff-lines">
+        {diff.map((item, index) => (
+          <div key={index} className={`app-project-diff-line app-project-diff-line-${item.type}`}>
+            <span className="app-project-diff-line-gutter">
+              {item.type === 'same' ? ' ' : item.type === 'added' ? '+' : '-'}
+            </span>
+            <span className="app-project-diff-line-text">{item.line}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
