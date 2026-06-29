@@ -98,6 +98,8 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
       onClick={() => canOpenTask && onOpenTask && onOpenTask(card)}
       disabled={!canOpenTask && card.kind !== 'origin'}
       data-agent-key={card.agentKey}
+      aria-label={`${card.title}，${card.stateLabel}${canOpenTask ? '，打开任务详情' : ''}`}
+      title={canOpenTask ? '打开任务执行详情' : card.kind === 'origin' ? '用户输入起点' : '确认后可打开任务详情'}
     >
       <span className="ceg-card-icon">
         <Icon size={18} className={card.state === 'running' ? 'ceg-spin' : ''} />

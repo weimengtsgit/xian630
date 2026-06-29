@@ -96,4 +96,12 @@ assert.equal(toggle('agents', 'application'), 'application', 'switching between 
 assert.equal(toggle('application', 'application'), null, 're-clicking application closes the drawer')
 assert.equal(toggle(null, 'unknown'), null, 'an unknown entry key is a no-op')
 
+// ---- navigation assertions (Task 4) ------------------------------------------------
+const graphJsx = readFileSync(new URL('../src/components/CollaborationExecutionGraph.jsx', import.meta.url), 'utf8')
+assert.match(workbenchJsx, /onOpenTaskDrawer/, 'ConversationWorkbench should pass task-drawer navigation into timeline items')
+assert.match(workbenchJsx, /onToggleDrawerEntry && onToggleDrawerEntry\('task'\)/, 'graph card click should open the task execution drawer')
+assert.match(graphJsx, /relatedCardKeys/, 'graph component should compute related upstream and downstream cards for hover focus')
+assert.match(graphJsx, /onOpenTask\(card\)/, 'graph component should call onOpenTask with the clicked card')
+assert.match(graphJsx, /disabled=\{!canOpenTask && card\.kind !== 'origin'\}/, 'pre-confirmation non-origin cards should not pretend to open task details')
+
 console.log('check-workbench-drawer: OK')
