@@ -81,27 +81,50 @@
 .ceg-card-is-revealing {
   animation: cegAgentReveal 0.9s cubic-bezier(0.2, 0.82, 0.22, 1);
   box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.34), 0 0 22px rgba(104, 221, 255, 0.28), 0 12px 28px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  will-change: clip-path, opacity, transform, filter;
+}
+
+.ceg-card-is-revealing::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: linear-gradient(90deg, transparent 0%, rgba(104, 221, 255, 0.08) 36%, rgba(104, 221, 255, 0.32) 52%, rgba(104, 221, 255, 0.06) 68%, transparent 100%);
+  transform: translateX(-110%);
+  animation: cegAgentRevealSweep 0.72s ease-out both;
+  pointer-events: none;
 }
 
 @keyframes cegAgentReveal {
   0% {
     opacity: 0;
+    clip-path: inset(0 100% 0 0);
     transform: translateX(-14px) scale(0.96);
     filter: saturate(1.12) brightness(1.08);
   }
   42% {
     opacity: 1;
+    clip-path: inset(0 34% 0 0);
     transform: translateX(3px) scale(1.015);
     filter: saturate(1.28) brightness(1.16);
   }
   72% {
+    clip-path: inset(0 0 0 0);
     transform: translateX(0) scale(0.995);
   }
   100% {
     opacity: 1;
+    clip-path: inset(0 0 0 0);
     transform: translateX(0) scale(1);
     filter: none;
   }
+}
+
+@keyframes cegAgentRevealSweep {
+  0% { opacity: 0; transform: translateX(-110%); }
+  34% { opacity: 0.95; }
+  100% { opacity: 0; transform: translateX(110%); }
 }
 
 /* Orchestrator pulsing effect during reveal */
