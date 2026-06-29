@@ -1,8 +1,9 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
+const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
 
 const STATE_ICON = {
   pending_confirmation: HelpCircle,
@@ -40,7 +41,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     for (const wave of graph.waves) {
       if (wave.index <= 1) continue // 跳过波次 0（用户输入）和 1（编排器）
       for (const card of wave.cards) {
-        if (card.agentKey !== USER_INPUT_KEY && card.agentKey !== 'collaboration-orchestrator') {
+        if (card.agentKey !== USER_INPUT_KEY && card.agentKey !== ORCHESTRATOR_KEY) {
           order.push(card.agentKey)
         }
       }
@@ -55,11 +56,11 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     return window.matchMedia('(prefers-reduced-motion: reduce)').matches
   }, [])
 
-  // 检查是否是 reveal 模式
-  const isRevealMode = !graph?.confirmed
+  // Reveal plays for both the planned graph and the accepted execution graph.
+  const isRevealRunning = !revealComplete && !prefersReducedMotion
 
   // 初始化和重置 reveal 状态
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!graph) {
       lastGraphIdentityRef.current = null
       if (revealTimerRef.current) {
@@ -83,16 +84,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       revealTimerRef.current = null
     }
 
-    // 如果是确认后的图，立即显示所有卡片
-    if (graph.confirmed) {
-      const allKeys = new Set(graph.cards?.map(c => c.agentKey) || [])
-      setRevealedKeys(allKeys)
-      setRevealComplete(true)
-      return
-    }
-
-    // 未确认的图：初始化 reveal 状态
-    const initialKeys = new Set([USER_INPUT_KEY, 'collaboration-orchestrator'])
+    const initialKeys = new Set([USER_INPUT_KEY, ORCHESTRATOR_KEY])
     setRevealedKeys(initialKeys)
     setRevealComplete(false)
 
@@ -141,16 +133,16 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
 
   // 检查边是否可见
   const isEdgeVisible = useCallback((edge) => {
-    if (!isRevealMode) return true
+    if (!isRevealRunning) return true
     return revealedKeys.has(edge.to)
-  }, [isRevealMode, revealedKeys])
+  }, [isRevealRunning, revealedKeys])
 
   // 获取卡片的 reveal 状态类
   const getCardRevealClass = useCallback((agentKey) => {
-    if (!isRevealMode) return 'ceg-card-is-revealed'
+    if (!isRevealRunning) return 'ceg-card-is-revealed'
     if (!revealedKeys.has(agentKey)) return 'ceg-card-is-hidden'
     return 'ceg-card-is-revealed'
-  }, [isRevealMode, revealedKeys])
+  }, [isRevealRunning, revealedKeys])
 
   if (!graph || !Array.isArray(graph.waves) || graph.waves.length === 0) return null
 
@@ -171,10 +163,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       <div className="ceg-canvas">
         {graph.waves.map((wave, waveIndex) => {
           const nextWave = graph.waves[waveIndex + 1]
-          const visibleCards = isRevealMode
+          const visibleCards = isRevealRunning
             ? wave.cards.filter(card => revealedKeys.has(card.agentKey))
             : wave.cards
-          if (isRevealMode && visibleCards.length === 0) return null
+          if (isRevealRunning && visibleCards.length === 0) return null
           const visibleEdges = graph.edges.filter(edge => {
             const from = cardsByKey[edge.from]
             const to = cardsByKey[edge.to]
@@ -195,19 +187,19 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
                     onLeave={() => setActiveKey('')}
                     onOpenTask={onOpenTask}
                     revealClass={getCardRevealClass(card.agentKey)}
-                    isOrchestrating={isRevealMode && !revealComplete && card.agentKey === 'collaboration-orchestrator'}
+                    isOrchestrating={isRevealRunning && card.agentKey === ORCHESTRATOR_KEY}
                   />
                 ))}
               </div>
             </div>
-            {waveIndex < graph.waves.length - 1 && (!isRevealMode || visibleEdges.length > 0) ? (
+            {waveIndex < graph.waves.length - 1 && (!isRevealRunning || visibleEdges.length > 0) ? (
               <WaveConnector
                 fromWave={wave}
                 toWave={nextWave}
                 edges={visibleEdges}
                 activeKey={activeKey}
                 relatedKeys={relatedKeys}
-                isRevealMode={isRevealMode}
+                isRevealMode={isRevealRunning}
               />
             ) : null}
           </div>

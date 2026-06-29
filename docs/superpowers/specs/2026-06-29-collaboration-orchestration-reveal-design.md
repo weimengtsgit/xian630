@@ -17,8 +17,8 @@ model.
 - Before the user clicks `确认并生成`, play a one-time reveal animation whenever
   the graph is opened or rendered.
 - After the reveal finishes, keep all planned cards visible in the same layout.
-- After `确认并生成`, keep the graph structure stable and update only card and
-  edge states from real task execution data.
+- After `确认并生成`, keep the graph structure stable, replay the same one-time
+  reveal animation, and use real task execution data for card and edge states.
 - Before confirmation, cards may hover and highlight related dependencies but
   must not open task details because real task steps do not exist yet.
 - After confirmation, cards with `stepId` may open the task drawer and select the
@@ -51,8 +51,10 @@ the graph remains fully expanded and stops the reveal motion.
 
 ### Post-confirmation Execution View
 
-Once real task steps are present, the graph no longer plays the reveal animation.
-The layout stays stable, while card and edge states reflect execution:
+Once real task steps are present, the graph replays the same one-time reveal
+animation so the accepted execution graph still feels summoned by the
+orchestrator. The layout stays stable after the reveal completes, while card and
+edge states reflect execution:
 
 - completed cards show `已完成`
 - running cards show `执行中`
@@ -96,9 +98,10 @@ The reveal state can be local React state:
 
 For confirmed graphs:
 
-- all keys are considered visible
-- `revealComplete` is effectively true
-- no timers are scheduled
+- initialize visible keys to `用户输入` and `协作编排`
+- schedule subsequent cards with the same reveal timing
+- use real task state labels while each card is revealed
+- finish with all cards visible and no active orchestration pulse
 
 For unconfirmed graphs:
 
@@ -157,7 +160,9 @@ Add CSS classes rather than inline animation logic:
 - `.ceg-edge-is-revealing`
 
 The orchestrator should have an active pulse only in pre-confirmation reveal
-mode. The existing segmented line style should remain aligned with
+mode and post-confirmation replay mode. The pulse should be visible enough to
+read as orchestration work, and may include a scan/sweep layer in addition to a
+border pulse. The existing segmented line style should remain aligned with
 `sf-portal/src/components/AgentsPanel.css`.
 
 ## Testing
@@ -166,14 +171,14 @@ Update `scripts/check-collaboration-plan.mjs` to assert:
 
 - the graph component has reveal state or reveal helper logic
 - unconfirmed graph rendering supports hidden/revealing card classes
-- confirmed graph rendering bypasses reveal and shows execution state
+- confirmed graph rendering replays reveal once while showing execution state
 - task blocks are still suppressed when the collaboration graph is present
 
 Manual/browser smoke should verify:
 
 - unconfirmed graph starts with only user input and orchestrator visible
 - agents appear one by one and then remain visible
-- after confirmation, layout stays stable and no reveal replay occurs
+- after confirmation, reveal replays once, then layout stays stable
 - hover remains available before confirmation
 - task drawer navigation still works after confirmation
 

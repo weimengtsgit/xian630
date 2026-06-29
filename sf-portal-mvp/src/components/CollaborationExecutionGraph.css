@@ -63,6 +63,7 @@
 
 /* Orchestrator pulsing effect during reveal */
 .ceg-is-orchestrating {
+  overflow: hidden;
   position: relative;
 }
 
@@ -73,6 +74,17 @@
   border-radius: 8px;
   border: 1px solid rgba(167, 139, 250, 0.7);
   animation: cegOrchestratePulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.ceg-is-orchestrating::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: linear-gradient(105deg, transparent 0%, rgba(167, 139, 250, 0.06) 38%, rgba(104, 221, 255, 0.28) 50%, rgba(167, 139, 250, 0.06) 62%, transparent 100%);
+  transform: translateX(-120%);
+  animation: cegOrchestrateScan 1.8s ease-in-out infinite;
   pointer-events: none;
 }
 
@@ -87,6 +99,11 @@
     transform: scale(1.02);
     border-color: rgba(167, 139, 250, 0.9);
   }
+}
+
+@keyframes cegOrchestrateScan {
+  0% { transform: translateX(-120%); }
+  48%, 100% { transform: translateX(120%); }
 }
 
 /* Edge reveal effect */
@@ -113,6 +130,10 @@
   }
 
   .ceg-is-orchestrating::before {
+    animation: none !important;
+  }
+
+  .ceg-is-orchestrating::after {
     animation: none !important;
   }
 
