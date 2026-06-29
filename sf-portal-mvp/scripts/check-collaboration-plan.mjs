@@ -43,7 +43,7 @@ assert.match(graphComponent, /AlertTriangle/, 'graph component should import Ale
 assert.match(graphComponent, /revealedKeys/, 'graph component should have reveal state tracking')
 assert.match(graphComponent, /revealingKeys/, 'graph component should track cards that are currently playing their summon animation')
 assert.match(graphComponent, /revealComplete/, 'graph component should track reveal completion')
-assert.match(graphComponent, /REVEAL_REPLAY_PAUSE_MS/, 'graph reveal should be able to replay the orchestration sequence for visual inspection')
+assert.doesNotMatch(graphComponent, /REVEAL_REPLAY_PAUSE_MS|resetReveal/, 'graph reveal should play once per graph identity and should not loop the orchestration sequence')
 assert.match(graphComponent, /ceg-card-is-hidden/, 'graph component should support hidden cards before reveal')
 assert.match(graphComponent, /ceg-card-is-revealed/, 'graph component should support revealed cards')
 assert.match(graphComponent, /ceg-card-is-revealing/, 'graph component should attach a dedicated enter animation class to newly summoned cards')

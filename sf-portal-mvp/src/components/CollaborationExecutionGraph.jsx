@@ -7,7 +7,6 @@ const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
 const REVEAL_INITIAL_DELAY_MS = 450
 const REVEAL_STEP_DELAY_MS = 520
 const REVEAL_CARD_ANIMATION_MS = 900
-const REVEAL_REPLAY_PAUSE_MS = 2200
 
 const STATE_ICON = {
   pending_confirmation: HelpCircle,
@@ -122,20 +121,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
 
     // 开始逐个 reveal 卡片
     let currentIndex = 0
-    const resetReveal = () => {
-      currentIndex = 0
-      setActiveKey('')
-      setRevealedKeys(new Set(initialKeys))
-      setRevealingKeys(new Set())
-      setRevealComplete(false)
-      scheduleRevealTimer(revealNext, REVEAL_INITIAL_DELAY_MS)
-    }
-
     const revealNext = () => {
       if (currentIndex >= revealOrder.length) {
         setRevealingKeys(new Set())
         setRevealComplete(true)
-        scheduleRevealTimer(resetReveal, REVEAL_REPLAY_PAUSE_MS)
         return
       }
 
