@@ -138,6 +138,10 @@ assert.match(workbenchJsx, /cw-custom-input/, 'custom clarification input must u
 assert.match(workbenchJsx, /cw-custom-submit/, 'custom clarification add button must use a styled button class')
 assert.match(workbenchCss, /\.cw-options button[\s\S]*cursor:\s*pointer/, 'question options must visibly afford clicking')
 assert.match(workbenchCss, /selected\.cw-option-recommended|cw-option-recommended\.selected/, 'selected recommended options must keep visible selected state')
+assert.match(workbenchJsx, /<div className="cw-composer-row">[\s\S]*<textarea[\s\S]*className="cw-send"/, 'composer textarea and send button must live in a dedicated row')
+assert.match(workbenchCss, /\.cw-composer\s*\{[\s\S]*flex-direction:\s*column[\s\S]*align-items:\s*stretch/, 'composer must stack scope hint above the input row')
+assert.match(workbenchCss, /\.cw-composer-row\s*\{[\s\S]*display:\s*flex[\s\S]*align-items:\s*flex-end/, 'composer row must align textarea and send button horizontally')
+assert.match(workbenchCss, /\.cw-composer-row textarea\s*\{[\s\S]*min-width:\s*0/, 'composer textarea must be allowed to shrink inside the row without collapsing')
 // History list + delete-confirm now live in SessionNav. Assert the SAME
 // behaviors there (scrollable list, delete button, in-app confirm card,
 // pendingDelete state, no window.confirm) — not deleted to force green.
@@ -154,9 +158,11 @@ assert.match(sessionNavCss, /\.session-nav-delete-confirm\s*\{[\s\S]*position:\s
 assert.match(sessionNavCss, /\.session-nav-delete-actions/, 'custom delete confirmation must style action buttons')
 assert.match(apiClientJs, /deleteDialogue/, 'API client must expose dialogue history deletion')
 assert.match(eventsJs, /clarification\.deleted/, 'SSE event registry must include clarification.deleted')
-assert.match(sessionNavJsx, /updated_at/, 'SessionNav history row must show updated time')
-assert.match(sessionNavJsx, /coreScenario/, 'SessionNav history row must show requirement summary')
-assert.match(sessionNavJsx, /resolvedApplication|createdAgent|seededJob/, 'SessionNav history row must show resolved outcome')
+assert.match(workbenchJsx, /deploymentStatusInfo/, 'ConversationWorkbench must derive deployment status info for the selected task')
+assert.match(workbenchJsx, /cw-deployment-info/, 'ConversationWorkbench must render deployment info in the workbench body')
+assert.match(workbenchJsx, /当前部署版本/, 'deployment info must label the current deployment version')
+assert.match(workbenchJsx, /coreScenario/, 'deployment info must use the requirement coreScenario as the summary')
+assert.match(workbenchCss, /\.cw-deployment-info/, 'deployment info must have dedicated workbench body styles')
 
 const appsPanelJsx = readFileSync(new URL('../src/components/ApplicationsPanel.jsx', import.meta.url), 'utf8')
 const useApplicationsJs = readFileSync(new URL('../src/hooks/useApplications.js', import.meta.url), 'utf8')

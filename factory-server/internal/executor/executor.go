@@ -36,6 +36,9 @@ type StepResult struct {
 	ErrorCode      model.ErrorCode  // set when failed
 	ErrorMessage   string
 	NeedsUserInput bool
+	// FrozenRequirementJSON carries the requirement_analysis step's canonical
+	// output so the job row becomes the source of truth for later steps and UI.
+	FrozenRequirementJSON string
 	// Questions is the clarifying questions a step raised when pausing for user
 	// input (waiting_user). Persisted on the step so the job detail can surface
 	// them; empty for non-waiting results.
@@ -78,8 +81,9 @@ type Executor struct {
 	// allowlist + cap + sensitive-key stripping + persist-before-publish; and
 	// the SSE forwarder re-validates persisted rows. Thinking never reaches here
 	// (dropped at the source in stream.go).
-	OnTrace func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
-	RunLog  *runlog.Logger
+	OnTrace        func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	OnTaskThinking func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
+	RunLog         *runlog.Logger
 
 	// cancels maps a running jobID → the CancelFunc of its in-flight step's ctx,
 	// guarded by cancelsMu. runJobStep adds on start and removes on end (defer);
@@ -119,8 +123,9 @@ type stepEmitter struct {
 	store    recordAppender
 	onRecord func(context.Context, runner.ExecutionRecordUpdate)
 
-	jobID  string
-	stepID string
+	jobID    string
+	stepID   string
+	agentKey string
 
 	// Trace-attribution context: the dialogue the job belongs to (the gate's
 	// sequence-partition key) + the task id (job id) + attempt, stamped onto
@@ -130,6 +135,7 @@ type stepEmitter struct {
 	dialogueID string
 	attempt    int
 	onTrace    func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	onThinking func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
 
 	mu       sync.Mutex
 	nextSeq  int
@@ -141,15 +147,21 @@ type stepEmitter struct {
 // before the runner runs), so records are tagged with the same attempt the
 // job_steps row carries. dialogueID is the job's dialogue link (the trace
 // sequence-partition key); empty for legacy jobs.
-func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int) *stepEmitter {
+func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int, agentKey ...string) *stepEmitter {
+	key := ""
+	if len(agentKey) > 0 {
+		key = agentKey[0]
+	}
 	return &stepEmitter{
 		store:      e.store,
 		onRecord:   e.OnRecord,
 		jobID:      jobID,
 		stepID:     stepID,
+		agentKey:   key,
 		dialogueID: dialogueID,
 		attempt:    attempt,
 		onTrace:    e.OnTrace,
+		onThinking: e.OnTaskThinking,
 		nextSeq:    1,
 	}
 }
@@ -247,10 +259,34 @@ func (s *stepEmitter) Trace(ctx context.Context, traceType, payload string) erro
 		TaskID:      s.jobID,
 		StepID:      s.stepID,
 		Attempt:     s.attempt,
+		AgentKey:    s.agentKey,
 		Type:        traceType,
 		PayloadJSON: payload,
 	}
 	_, _ = s.onTrace(ctx, ev) // best-effort: a gate error never aborts the run
+	return nil
+}
+
+// Think is the runner.TaskThinkingEmitter implementation: it forwards one raw
+// thinking delta to the server's recordAndPublishTaskThinking gate via
+// OnTaskThinking, stamped with this step's dialogue + task + step + attempt
+// attribution. This is the ONLY path that thinking ever takes; it MUST NEVER
+// reach StepRecordEmitter or TraceEmitter (Constraint #9). It is idempotent-safe:
+// a nil OnTaskThinking, an empty dialogue id, or a gate error never aborts the
+// agent run (best-effort, like Emit and Trace).
+func (s *stepEmitter) Think(ctx context.Context, content string) error {
+	if s.onThinking == nil || s.dialogueID == "" || content == "" {
+		return nil
+	}
+	ev := model.TaskThinkingEvent{
+		DialogueID: s.dialogueID,
+		TaskID:     s.jobID,
+		StepID:     s.stepID,
+		Attempt:    s.attempt,
+		AgentKey:   s.agentKey,
+		Content:    content,
+	}
+	_, _ = s.onThinking(ctx, ev) // best-effort: a gate error never aborts the run
 	return nil
 }
 
@@ -443,7 +479,7 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	// persistence; the runner only forwards safe records through it. System
 	// lifecycle records are emitted through the same emitter so they interleave
 	// with activity records by sequence.
-	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt)
+	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt, currentStep.AgentKey)
 	emitter.emit(runCtx, model.ExecutionRecordSystem, systemRecordStarted)
 
 	res, runErr := e.runner.Run(runCtx, *current, currentStep, emitter)
@@ -508,6 +544,11 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepResult) error {
 	switch res.Status {
 	case model.StepStatusSucceeded:
+		if strings.TrimSpace(res.FrozenRequirementJSON) != "" {
+			if err := e.store.UpdateJobConfirmedRequirement(ctx, jobID, res.FrozenRequirementJSON); err != nil {
+				return err
+			}
+		}
 		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
 			return err
 		}
@@ -712,7 +753,7 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	// shows the retry decision inline. Best-effort: a failure here does not block
 	// the retry (the job is already re-queued).
 	if step != nil {
-		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt)
+		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt, step.AgentKey)
 		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
 	}
 	updated, err := e.store.GetJob(ctx, jobID)
@@ -790,7 +831,7 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 		return model.Job{}, fmt.Errorf("requeue job: %w", err)
 	}
 
-	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt)
+	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
 	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStep.ID, failedStep.Attempt); err == nil {
 		emitter.nextSeq = maxSeq + 1
 	}
@@ -808,6 +849,9 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 }
 
 func repairableFailureKind(kind model.StepKind, code model.ErrorCode) bool {
+	if kind == model.StepCodeGeneration && code == model.ErrorSchemaValidationFailed {
+		return true
+	}
 	if kind == model.StepTestVerification || kind == model.StepImageBuild {
 		return true
 	}
@@ -901,7 +945,7 @@ func (e *Executor) maybeAutoRepair(ctx context.Context, jobID, failedStepID stri
 	}
 
 	// Emit a system record on the failed step's attempt documenting the repair.
-	emitter := e.newStepEmitter(jobID, failedStepID, job.DialogueID, failedStep.Attempt)
+	emitter := e.newStepEmitter(jobID, failedStepID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
 	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStepID, failedStep.Attempt); err == nil {
 		emitter.nextSeq = maxSeq + 1
 	}

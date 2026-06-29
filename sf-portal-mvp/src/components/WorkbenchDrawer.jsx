@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { AgentsPanel } from './AgentsPanel'
 import { JobCenter } from './JobCenter'
+import { ApplicationProjectPanel } from './ApplicationProjectPanel'
 import './WorkbenchDrawer.css'
 
 // WorkbenchDrawer is the unified right-side 工作台抽屉 host (Phase 1 of the
@@ -30,13 +31,13 @@ export function WorkbenchDrawer({
   activeEntry,
   onClose,
   agentsProps,
-  focusTaskActive,
   // Phase 2: task-observability props threaded from App (useJobs + focusTask).
   // `taskProps.jobs` is the ranked dialogue task list (ALL tasks, focus first);
   // `taskProps.activeJob` is the selected task (focus by default); the rest are
   // the accessors JobCenter needs (steps, summary, collaborationPlan, records/
   // artifacts accessors, cancel/retry/repair-from-failure, snapshot save).
   taskProps,
+  applicationProps,
 }) {
   if (!activeEntry) return null
   const title = ENTRY_TITLES[activeEntry] || ''
@@ -67,7 +68,7 @@ export function WorkbenchDrawer({
             // hide affordance.
           />
         ) : null}
-        {activeEntry === 'application' ? <ApplicationProjectPlaceholder /> : null}
+        {activeEntry === 'application' ? <ApplicationProjectPanel {...(applicationProps || {})} /> : null}
       </div>
     </aside>
   )
@@ -77,13 +78,4 @@ const ENTRY_TITLES = {
   task: '任务执行',
   agents: '协作智能体',
   application: '应用项目',
-}
-
-function ApplicationProjectPlaceholder() {
-  return (
-    <div className="workbench-drawer-placeholder">
-      <p>当前应用暂无可浏览的项目文件。</p>
-      <small>生成完成后可在此查看项目文档、代码与配置（Phase 5 迁入）。</small>
-    </div>
-  )
 }

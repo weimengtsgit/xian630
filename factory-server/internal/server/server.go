@@ -68,6 +68,12 @@ type Server struct {
 	// Start and is also startable from tests so they can drive it.
 	turnWorker *TurnWorker
 	runLog     *runlog.Logger
+
+	// documentDraftConverter converts document drafts to user-facing change summaries.
+	// In production, this is the deterministic converter. Tests may override this
+	// with fakes or LLM-backed implementations.
+	documentDraftConverter     dialogue.DocumentDraftConverter
+	documentDraftConverterName string
 }
 
 type claudeCommandAdapter struct {
@@ -248,6 +254,16 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// same dialogue.Runner implements TurnClassifier via ClassifyTurn). Tests
 	// override s.turnClassifier directly with a fake.
 	s.turnClassifier = s.dialogueRouter
+	// Document draft converter uses the deterministic implementation in production.
+	// Tests may override s.documentDraftConverter directly with fakes or
+	// LLM-backed implementations.
+	if cfg.EnableDocumentDraftLLMConverter {
+		s.documentDraftConverter = dialogue.NewLLMDocumentDraftConverter(s.dialogueRouter)
+		s.documentDraftConverterName = "llm"
+	} else {
+		s.documentDraftConverter = dialogue.NewDeterministicDocumentDraftConverter()
+		s.documentDraftConverterName = "deterministic"
+	}
 	s.turnWorker = NewTurnWorker(s, st, s.turnClassifier)
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
 		Store:        st,
@@ -306,6 +322,15 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// stream.go:emitStreamLine). No trace data is published any other way.
 	s.exec.OnTrace = func(ctx context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
 		return s.recordAndPublishWorkTrace(ctx, ev)
+	}
+	// OnTaskThinking routes every raw thinking delta the runner produces through
+	// the centralized persist-before-publish gate (recordAndPublishTaskThinking).
+	// This is the ONLY path that thinking ever takes; it MUST NEVER reach
+	// StepRecordEmitter or TraceEmitter (Constraint #9). The gate enforces
+	// persist-before-publish and sequence assignment; the SSE forwarder re-validates
+	// persisted rows. Thinking never reaches any other path.
+	s.exec.OnTaskThinking = func(ctx context.Context, ev model.TaskThinkingEvent) (model.TaskThinkingEvent, error) {
+		return s.recordAndPublishTaskThinking(ctx, ev)
 	}
 	s.async = async
 	return s
@@ -416,6 +441,11 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/apps", s.listApps)
 	r.Handle("GET", "/api/managed-agents", s.listManagedAgents)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
+	r.Handle("GET", "/api/apps/:id/project-tree", s.applicationProjectTree)
+	r.Handle("GET", "/api/apps/:id/project-file", s.applicationProjectFile)
+	r.Handle("PUT", "/api/apps/:id/project-drafts", s.saveApplicationProjectDraft)
+	r.Handle("DELETE", "/api/apps/:id/project-drafts", s.discardApplicationProjectDraft)
+	r.Handle("POST", "/api/apps/:id/project-drafts/apply", s.applyApplicationProjectDraft)
 	r.Handle("POST", "/api/apps/:id/start", s.startApp)
 	r.Handle("POST", "/api/apps/:id/stop", s.stopApp)
 	r.Handle("POST", "/api/apps/:id/rebuild", s.rebuildApp)
@@ -489,6 +519,11 @@ func (s *Server) routes() *Router {
 	// stream above stays for legacy consumers.
 	r.Handle("GET", "/api/dialogues/:id/work-trace", s.dialogueTraceEvents)
 	r.Handle("GET", "/api/dialogues/:id/work-trace/stream", s.dialogueTraceStream)
+
+	// Dialogue-scoped task-thinking transport (Task 2). REST hydration + SSE
+	// stream, both filtered to :id, sequence-replayable, persist-before-publish.
+	r.Handle("GET", "/api/dialogues/:id/task-thinking", s.dialogueTaskThinkingEvents)
+	r.Handle("GET", "/api/dialogues/:id/task-thinking/stream", s.dialogueTaskThinkingStream)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

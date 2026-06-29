@@ -101,7 +101,7 @@ assert.match(
   'JobCenter must render an embedded StepExecutionDrawer when a step is selected (in-drawer detail)',
 )
 assert.match(jobCenterJsx, /onBack=\{closeDrawer\}/, 'the embedded detail must expose a back action to return to the wave list')
-assert.match(drawerJsx, /embedded = false/, 'StepExecutionDrawer must accept an embedded prop (default false)')
+assert.match(drawerJsx, /embedded = true/, 'StepExecutionDrawer must accept an embedded prop (default true)')
 assert.match(drawerJsx, /sed-panel-embedded/, 'embedded mode must render a .sed-panel-embedded container (inline, no portal overlay)')
 assert.match(drawerJsx, /ArrowLeft/, 'embedded mode must show a back affordance (ArrowLeft icon)')
 assert.match(drawerJsx, /sed-back/, 'embedded mode must render a .sed-back back button')

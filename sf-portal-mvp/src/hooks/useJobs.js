@@ -298,10 +298,10 @@ export function useJobs() {
   )
 
   const answerJob = useCallback(
-    async (id, answer) => {
+    async (id, answer, scope = {}) => {
       setError(null)
       try {
-        await factoryApi.answerJob(id, answer)
+        await factoryApi.answerJob(id, answer, scope)
         await refresh()
       } catch (err) {
         setError(err.message || String(err))

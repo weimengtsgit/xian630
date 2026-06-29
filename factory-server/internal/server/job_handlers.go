@@ -540,12 +540,17 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 // answerJobBody is accepted by POST /api/jobs/:id/answer; either "answer" or
 // "content" is accepted for interoperability with older clients.
 type answerJobBody struct {
-	Answer  string `json:"answer"`
-	Content string `json:"content"`
+	Answer      string `json:"answer"`
+	Content     string `json:"content"`
+	StepID      string `json:"stepId"`
+	StepIDSnake string `json:"step_id"`
+	Attempt     int    `json:"attempt"`
 }
 
 // answerJob handles POST /api/jobs/:id/answer — appends a user conversation
-// message to the job's thread.
+// message to the job's thread. When the request carries stepId/attempt it is a
+// task-internal clarification answer and is routed to exactly that waiting step;
+// omitted stepId preserves the legacy current-step behavior.
 func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	id := Param(r, "id")
 	job, err := s.store.GetJob(r.Context(), id)
@@ -567,6 +572,48 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	if content == "" {
 		content = body.Content
 	}
+	stepID := strings.TrimSpace(body.StepID)
+	if stepID == "" {
+		stepID = strings.TrimSpace(body.StepIDSnake)
+	}
+
+	var targetStep *model.JobStep
+	if stepID != "" {
+		if job.Status != model.JobStatusWaitingUser {
+			writeError(w, http.StatusConflict, "job is not waiting for user input")
+			return
+		}
+		steps, err := s.store.ListJobSteps(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list steps")
+			return
+		}
+		for i := range steps {
+			if steps[i].ID == stepID {
+				targetStep = &steps[i]
+				break
+			}
+		}
+		if targetStep == nil {
+			writeError(w, http.StatusNotFound, "step not found")
+			return
+		}
+		if targetStep.Status != model.StepStatusWaitingUser || !targetStep.NeedsUserInput {
+			writeError(w, http.StatusConflict, "step is not waiting for user input")
+			return
+		}
+		if body.Attempt > 0 && targetStep.Attempt != body.Attempt {
+			writeError(w, http.StatusConflict, "stale step attempt")
+			return
+		}
+	} else if job.Status == model.JobStatusWaitingUser {
+		step, err := s.store.GetStepByKind(r.Context(), id, job.CurrentStepKind)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "get step")
+			return
+		}
+		targetStep = step
+	}
 
 	msg := model.ConversationMessage{
 		ID:        "conv_" + idpkg.New(),
@@ -579,29 +626,52 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add conversation")
 		return
 	}
-	if job.Status == model.JobStatusWaitingUser {
-		step, err := s.store.GetStepByKind(r.Context(), id, job.CurrentStepKind)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "get step")
+	if stepID != "" && job.DialogueID != "" && targetStep != nil {
+		metadata, _ := json.Marshal(map[string]any{
+			"taskId":   id,
+			"stepId":   targetStep.ID,
+			"attempt":  targetStep.Attempt,
+			"agentKey": targetStep.AgentKey,
+		})
+		dlgMsg := model.DialogueMessage{
+			ID:           "msg_" + idpkg.New(),
+			DialogueID:   job.DialogueID,
+			Role:         "user",
+			Kind:         "task_clarification_answer",
+			Content:      content,
+			MetadataJSON: string(metadata),
+			CreatedAt:    time.Now(),
+		}
+		if err := s.store.AppendDialogueMessage(r.Context(), dlgMsg); err != nil {
+			writeError(w, http.StatusInternalServerError, "append dialogue answer")
 			return
 		}
-		if step != nil {
-			// Persist the user's answer onto the step's user_prompt so the
-			// re-run can read it (the generative-step prompts append
-			// step.UserPrompt as a clarification). Without this the step
-			// re-runs with identical input and re-asks the same question.
-			if strings.TrimSpace(content) != "" {
-				if err := s.store.SetStepUserPrompt(r.Context(), step.ID, content); err != nil {
-					writeError(w, http.StatusInternalServerError, "set step answer")
-					return
-				}
-			}
-			if err := s.store.ResetStepToPending(r.Context(), step.ID); err != nil {
-				writeError(w, http.StatusInternalServerError, "reset step")
+	}
+	if job.Status == model.JobStatusWaitingUser && targetStep != nil {
+		// Persist the user's answer onto the step's user_prompt so the re-run can
+		// read it (the generative-step prompts append step.UserPrompt as a
+		// clarification). Without this the step re-runs with identical input and
+		// re-asks the same question.
+		if strings.TrimSpace(content) != "" {
+			if err := s.store.SetStepUserPrompt(r.Context(), targetStep.ID, content); err != nil {
+				writeError(w, http.StatusInternalServerError, "set step answer")
 				return
 			}
-			s.publishStepUpdated(r.Context(), step.ID)
 		}
+		if err := s.store.ResetStepToPending(r.Context(), targetStep.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset step")
+			return
+		}
+		// Step-scoped answers may target a waiting step that is not the job's current
+		// pointer. Move current_step_kind before re-queueing so the executor reruns
+		// the step the user actually answered.
+		if stepID != "" {
+			if err := s.store.AdvanceJobStep(r.Context(), id, targetStep.Kind); err != nil {
+				writeError(w, http.StatusInternalServerError, "point job to step")
+				return
+			}
+		}
+		s.publishStepUpdated(r.Context(), targetStep.ID)
 		if err := s.store.MarkJobQueued(r.Context(), id); err != nil {
 			writeError(w, http.StatusInternalServerError, "queue job")
 			return

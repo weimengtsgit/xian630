@@ -146,6 +146,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate job_steps.snapshot_json: %w", err)
 	}
+	if err := s.ensureColumn(ctx, "work_trace_events", "agent_key",
+		`ALTER TABLE work_trace_events ADD COLUMN agent_key TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate work_trace_events.agent_key: %w", err)
+	}
 	return s, nil
 }
 

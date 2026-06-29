@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/projectdocs"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -155,15 +156,17 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	case model.StepRequirementAnalysis:
 		out, err := runner.ValidateRequirementAnalysis(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepSolutionDesign:
 		out, err := runner.ValidateSolutionDesign(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepCodeGeneration:
 		res := c.finishCodeGeneration(ctx, trace, job, step, ws.OutputPath(), baseline)
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return res, nil
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance:
 		// Blocking review gate: decode the gate's JSON status. status:"blocked"
 		// → failed with ErrorBlockingReview (the bounded-repair policy treats this
@@ -172,7 +175,8 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		// lenient (prose/```json-wrapped output tolerated) the same way the
 		// generative steps are.
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return finishReviewGate(ctx, trace, step, ws.OutputPath()), nil
+		res := finishReviewGate(ctx, trace, step, ws.OutputPath())
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	default:
 		// The remaining admitted gate kinds (collaboration_orchestration,
 		// domain_analysis, design_contract, data_integration) are analysis/
@@ -181,7 +185,8 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		// instead of leaking prose into output.json and failing as invalid JSON.
 		out, err := validateCollaborationProducer(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	}
 }
 
@@ -541,7 +546,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
-	return StepResult{Status: model.StepStatusSucceeded}
+	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
 }
 
 func (c *ClaudeStepRunner) failureFromError(err error) StepResult {
@@ -559,6 +564,47 @@ func (c *ClaudeStepRunner) failureFromError(err error) StepResult {
 		code = model.ErrorFileConstraintViolated
 	}
 	return StepResult{Status: model.StepStatusFailed, ErrorCode: code, ErrorMessage: err.Error()}
+}
+
+func (c *ClaudeStepRunner) projectDocsAfterStep(ctx context.Context, trace runner.TraceEmitter, job model.Job, step model.JobStep, outputPath string, res StepResult) StepResult {
+	if res.Status != model.StepStatusSucceeded || c.Store == nil {
+		return res
+	}
+	root := ""
+	if step.Kind == model.StepCodeGeneration {
+		var out struct {
+			ProjectDir string `json:"projectDir"`
+		}
+		if err := runner.ReadAndDecode(outputPath, &out); err == nil && out.ProjectDir != "" {
+			root = filepath.Join(c.Workspace, filepath.FromSlash(out.ProjectDir))
+		}
+	}
+	if root == "" {
+		jobID := job.ApplicationID
+		if jobID == "" {
+			jobID = job.CreatedAppID
+		}
+		if jobID != "" {
+			if app, err := c.Store.GetApplication(ctx, jobID); err == nil && app != nil && app.Path != "" {
+				root = filepath.Join(c.Workspace, filepath.FromSlash(app.Path))
+			}
+		}
+	}
+	if root == "" {
+		return res
+	}
+	artifactID := ""
+	artifacts, _ := c.Store.ListArtifactsByJob(ctx, job.ID)
+	for _, art := range artifacts {
+		if art.Kind == "output_json" && art.StepID == step.ID && art.Attempt == step.Attempt {
+			artifactID = art.ID
+			break
+		}
+	}
+	if _, err := (projectdocs.Generator{}).ProjectStep(projectdocs.Source{ProjectRoot: root, JobID: job.ID, StepID: step.ID, Attempt: step.Attempt, AgentKey: step.AgentKey, StepKind: string(step.Kind), SourceArtifactID: artifactID, OutputPath: outputPath}); err != nil && trace != nil {
+		_ = trace.Trace(ctx, string(model.WorkTraceWarning), `{"message":"project document projection failed"}`)
+	}
+	return res
 }
 
 // captureAuditArtifacts writes REDACTED, capped audit copies of the attempt's

@@ -1156,9 +1156,61 @@ func (s *Server) confirmDialogueChange(w http.ResponseWriter, r *http.Request) {
 	}
 	var summary dialogue.TurnSummary
 	_ = json.Unmarshal([]byte(turn.SummaryJSON), &summary)
-	prompt := strings.TrimSpace(summary.ChangeDescription)
-	if prompt == "" {
-		prompt = "修改应用"
+
+	// Build the prompt, including full draft content if available
+	var prompt string
+	if summary.DocumentDraftChange != nil {
+		// Load and validate the draft
+		draft, err := s.store.GetProjectDocumentDraftByID(ctx, summary.DocumentDraftChange.DraftID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "load document draft")
+			return
+		}
+		if draft == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft not found"})
+			return
+		}
+
+		// Validate draft ownership and state
+		if draft.ApplicationID != dlg.ResolvedApplicationID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft application mismatch"})
+			return
+		}
+		if draft.DialogueID != dialogueID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft dialogue mismatch"})
+			return
+		}
+		if draft.ID != summary.DocumentDraftChange.DraftID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft ID mismatch"})
+			return
+		}
+		if draft.Path != summary.DocumentDraftChange.Path {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft path mismatch"})
+			return
+		}
+		if draft.SourceChecksum != summary.DocumentDraftChange.SourceChecksum {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft source checksum mismatch"})
+			return
+		}
+		if draft.Status != model.ProjectDocumentDraftStatusProposed {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft not in proposed state"})
+			return
+		}
+
+		// Build prompt with full draft content
+		prompt = fmt.Sprintf(
+			"用户已确认基于文档草稿的变更需求。\n\n文档路径：%s\n源文档校验：%s\n\n变更概要：%s\n\n完整草稿内容：\n---\n%s\n---",
+			draft.Path,
+			draft.SourceChecksum,
+			summary.ChangeDescription,
+			draft.Content,
+		)
+	} else {
+		// Legacy behavior without draft
+		prompt = strings.TrimSpace(summary.ChangeDescription)
+		if prompt == "" {
+			prompt = "修改应用"
+		}
 	}
 	now := time.Now()
 	jobID := "job_" + idpkg.New()

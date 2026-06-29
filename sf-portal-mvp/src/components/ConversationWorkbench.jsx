@@ -51,6 +51,8 @@ export function ConversationWorkbench({
   workTrace,
   pendingTurn,
   focusTask,
+  clarificationScope,
+  onSelectClarificationScope,
   traceSteps,
   drawerEntry,
   onToggleDrawerEntry,
@@ -59,6 +61,7 @@ export function ConversationWorkbench({
   onConfirmChange,
   onRollback,
   onArchive,
+  onOpenApplicationStore,
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
@@ -119,6 +122,8 @@ export function ConversationWorkbench({
   const changeProposal = traceItems.find(
     it => it.type === 'change_confirmation' || it.type === 'dialogue.change.proposed' || it.type === 'change.proposed',
   )
+  const currentDeployment = deploymentStatusInfo({ view, focusTask, steps: traceSteps, traceItems })
+  const focusRequirement = requirementFromJob(focusTask)
   const collaborationPreview = view && view.collaborationPlanPreview
   const collaborationPreviewAgents = collaborationPreview && Array.isArray(collaborationPreview.agents)
     ? collaborationPreview.agents
@@ -150,6 +155,11 @@ export function ConversationWorkbench({
   const collaborationPreviewLooseAgents = collaborationPreviewAgents.filter(
     agent => agent && !collaborationPreviewLanes.some(lane => lane.id === agent.lane),
   )
+  const clarificationScopeLabel = clarificationScope
+    ? [clarificationScope.stepName || clarificationScope.stepId, clarificationScope.agentKey]
+      .filter(Boolean)
+      .join(' / ')
+    : ''
   if (collaborationPreviewLooseAgents.length > 0) {
     collaborationPreviewLaneRows.push({
       lane: { id: 'unassigned', label: '其他' },
@@ -225,6 +235,15 @@ export function ConversationWorkbench({
           >
             <span className="cw-drawer-btn-label">应用项目</span>
           </button>
+          <button
+            type="button"
+            className="cw-store-btn"
+            onClick={onOpenApplicationStore}
+            title="应用商店"
+            aria-label="应用商店"
+          >
+            <span className="cw-drawer-btn-label">应用商店</span>
+          </button>
         </div>
       </header>
 
@@ -234,7 +253,7 @@ export function ConversationWorkbench({
 
       <div className="cw-body">
         {timeline.length === 0 && traceItems.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有智能体，还是生成新智能体。</div>
+          <div className="cw-empty">输入需求后，将自动识别是复用已有应用，还是生成新应用。</div>
         ) : null}
         {timeline.map(item => (
           <TimelineItem
@@ -243,12 +262,15 @@ export function ConversationWorkbench({
             draftAnswers={draftAnswers}
             setDraftAnswers={setDraftAnswers}
             submitting={submitting}
+            focusRequirement={focusRequirement}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
-            onPickClarification={value => {
+            onSelectClarificationScope={onSelectClarificationScope}
+            onPickClarification={(scope, value) => {
               if (!value) return
+              if (onSelectClarificationScope) onSelectClarificationScope(scope)
               setInput(prev => {
                 const trimmed = String(prev).trim()
                 // Append rather than overwrite so multi-question clarifications
@@ -355,6 +377,15 @@ export function ConversationWorkbench({
             ) : null}
           </section>
         ) : null}
+        {currentDeployment ? (
+            <div className="cw-deployment-info">
+              <GitCommit size={14} />
+              <span>
+              <b>当前部署版本 {currentDeployment.version}</b>
+                {currentDeployment.summary ? <em>摘要：{currentDeployment.summary}</em> : null}
+            </span>
+            </div>
+        ) : null}
       </div>
 
       {/* Pending-turn indicator + cancel-current-turn control (202 ack path). */}
@@ -413,17 +444,24 @@ export function ConversationWorkbench({
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
           <>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder={composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
-              disabled={submitting}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
-            />
-            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
-              {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-            </button>
+            {clarificationScope ? (
+              <div className="cw-composer-scope">
+                正在回复任务内澄清{clarificationScopeLabel ? `：${clarificationScopeLabel}` : ''}。请先回答该问题。
+              </div>
+            ) : null}
+            <div className="cw-composer-row">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                placeholder={clarificationScope ? '回复当前任务内澄清' : composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
+                disabled={submitting}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
+              />
+              <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
+                {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+              </button>
+            </div>
           </>
         )}
       </footer>
@@ -479,7 +517,7 @@ function CopyableBlock({ text, children, className = '', copyLabel = '复制' })
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onPickClarification }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification }) {
   if (item.type === 'user_message') {
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
@@ -500,7 +538,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     // fills the composer (the reply goes through the normal send → answerJob
     // path, which resets the step so the agent reads the user's answer).
     return (
-      <ClarificationPromptCard item={item} onPick={onPickClarification} submitting={submitting} />
+      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} submitting={submitting} />
     )
   }
   if (item.type === 'analysis_stream') {
@@ -508,6 +546,13 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
     // the full text. Rendered as plaintext only (never dangerouslySetInnerHTML).
     return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} />
+  }
+  if (item.type === 'task_execution_block') {
+    // Phase 3: one block per executing task step. Running/waiting/failed steps
+    // render EXPANDED with the safe-execution text plus the step summary;
+    // completed/canceled steps fold into a one-line summary row. Step-attributed
+    // task-thinking waits for Phase 4 persistence.
+    return <TaskExecutionBlock item={item} />
   }
   if (item.type === 'live_analysis') {
     // D1/D2: the transient streaming safe analysis work log. Monospace,
@@ -548,7 +593,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, onSelec
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={item.requirement} />
+  if (item.type === 'requirement_summary') return <RequirementSummary requirement={focusRequirement || item.requirement} />
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
@@ -627,6 +672,86 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
   )
 }
 
+// TaskExecutionBlock renders one executing task step in the conversation flow
+// (Phase 3 §Conversation Task Blocks). Display policy: running/waiting_user/
+// failed expand by default (the builder sets expanded:true); completed/canceled
+// fold into a one-line summary row. The user can always toggle. Expanded body
+// shows the reconstructed safe-execution stream (安全执行过程), the step
+// summary (步骤摘要), and any error. Task thinking stays in the independent
+// live_thinking surface until Phase 4 adds step-attributed thinking events.
+const TASK_STEP_STATUS_LABEL = {
+  pending: '等待中',
+  running: '进行中',
+  waiting_user: '等待用户',
+  succeeded: '已完成',
+  completed: '已完成',
+  failed: '已失败',
+  canceled: '已取消',
+  cancelled: '已取消',
+  skipped: '已跳过',
+}
+
+function TaskExecutionBlock({ item }) {
+  const [userExpandedOverride, setUserExpandedOverride] = useState(null)
+  useEffect(() => {
+    setUserExpandedOverride(null)
+  }, [item.id])
+  const expanded = userExpandedOverride ?? !!item.expanded
+  const status = item.status || 'pending'
+  const label = TASK_STEP_STATUS_LABEL[status] || status
+  const summary = String(item.summary || '')
+  const safeExecution = String(item.safeExecution || '')
+  const error = String(item.error || '')
+  const taskThinking = String(item.taskThinking || '')
+  const copyText = [safeExecution, summary, taskThinking].filter(Boolean).join('\n\n')
+  return (
+    <CopyableBlock text={copyText} className="cw-task-wrap" copyLabel="复制任务块">
+      <div className={`cw-item cw-task-block cw-task-status-${status}`}>
+        <button
+          type="button"
+          className="cw-task-toggle"
+          onClick={() => setUserExpandedOverride(v => !(v ?? !!item.expanded))}
+          aria-expanded={expanded}
+        >
+          <span className="cw-task-name">{item.name}</span>
+          <span className={`cw-task-badge cw-task-badge-${status}`}>{label}</span>
+          <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+        </button>
+        {expanded ? (
+          <div className="cw-task-body">
+            {taskThinking ? (
+              <section className="cw-task-section cw-task-thinking-section">
+                <h5>任务思考过程{item.taskThinkingRedacted ? <em className="cw-redacted-note">已脱敏/截断</em> : null}</h5>
+                <pre className="cw-live-text">{taskThinking}</pre>
+              </section>
+            ) : null}
+            {safeExecution ? (
+              <section className="cw-task-section">
+                <h5>安全执行过程</h5>
+                <pre className="cw-live-text">{safeExecution}</pre>
+              </section>
+            ) : null}
+            {summary ? (
+              <section className="cw-task-section">
+                <h5>步骤摘要</h5>
+                <pre className="cw-live-text">{summary}</pre>
+              </section>
+            ) : null}
+            {error ? (
+              <section className="cw-task-section cw-task-error">
+                <h5>错误信息</h5>
+                <pre className="cw-live-text">{error}</pre>
+              </section>
+            ) : null}
+          </div>
+        ) : summary ? (
+          <p className="cw-task-summary-row">{summary}</p>
+        ) : null}
+      </div>
+    </CopyableBlock>
+  )
+}
+
 function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, submitting }) {
   return (
     <div className="cw-route-choice">
@@ -634,13 +759,13 @@ function RouteChoiceCard({ reason, canReuseExistingApplication, onSelectRoute, s
       <div className="cw-route-options">
         {canReuseExistingApplication ? (
           <button type="button" disabled={submitting} onClick={() => onSelectRoute('existing_application')}>
-            <b>复用已有智能体</b>
-            <small>打开匹配的现有智能体</small>
+            <b>复用已有应用</b>
+            <small>打开匹配的现有应用</small>
           </button>
         ) : null}
         <button type="button" disabled={submitting} onClick={() => onSelectRoute('application_generation')}>
-          <b>生成新智能体</b>
-          <small>通过需求澄清生成助手智能体或业务智能体</small>
+          <b>生成新应用</b>
+          <small>通过需求澄清生成助手应用或业务应用</small>
         </button>
       </div>
     </div>
@@ -652,7 +777,7 @@ function AppRecommendationList({ cards, onOpenApp, submitting }) {
   if (list.length === 0) return null
   return (
     <div className="cw-apps">
-      <strong>推荐智能体</strong>
+      <strong>推荐应用</strong>
       <div className="cw-app-list">
         {list.map(card => (
           <AppRecommendationCard key={card.applicationId || card.slug} card={card} onOpenApp={onOpenApp} submitting={submitting} />
@@ -684,9 +809,9 @@ function AppRecommendationCard({ card, onOpenApp, submitting }) {
       {card.matchReason ? <small className="cw-app-reason">{card.matchReason}</small> : null}
       <div className="cw-app-actions">
         {running && canOpen ? (
-          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开智能体">
+          <button type="button" className="cw-app-action" onClick={open} disabled={submitting} title="打开应用">
             <ExternalLink size={14} />
-            <span>打开智能体</span>
+            <span>打开应用</span>
           </button>
         ) : stopped ? (
           <button type="button" className="cw-app-action cw-app-action-primary" onClick={open} disabled={submitting} title="启动并打开">
@@ -824,53 +949,99 @@ function QuestionCard({ q, value, setValue }) {
   )
 }
 
+function shortId(value) {
+  const text = String(value || '')
+  if (text.length <= 10) return text
+  return `${text.slice(0, 6)}…${text.slice(-3)}`
+}
+
 // ClarificationPromptCard renders a job-step clarification (solution_design /
 // code_generation pausing for user input) as a distinct, attention-grabbing card
 // in the conversation flow. Unlike the pre-job QuestionCard (which has its own
 // submit + draftAnswers state), a job-step clarification is answered via the
 // normal composer: picking an option (or typing) fills the composer, and sending
 // goes through answerJob → the step resets and the agent reads the reply.
-function ClarificationPromptCard({ item, onPick, submitting }) {
+function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
   const questions = Array.isArray(item.questions) ? item.questions : []
+  const open = item.status === 'open'
+  const [expanded, setExpanded] = useState(item.expanded !== false)
   // Whether ANY question offers structured options. The agent does not always
   // emit an options array (sometimes it writes (A)/(B)/(C) into the question
   // text instead). When there are no pickable options, the hint must NOT say
   // "点击上方选项" — it would mislead the user.
   const hasAnyOptions = questions.some(q => Array.isArray(q.options) && q.options.length > 0)
+  const firstQuestion = questions[0] && questions[0].question
+  const finalAnswer = String(item.finalAnswer || '')
+  const attribution = [
+    item.taskId ? `任务 ${shortId(item.taskId)}` : '',
+    item.stepName || item.stepId ? `步骤 ${item.stepName || shortId(item.stepId)}` : '',
+    item.agentKey ? `智能体 ${item.agentKey}` : '',
+    item.attempt ? `第 ${item.attempt} 次尝试` : '',
+  ].filter(Boolean).join(' · ')
+  const scope = { taskId: item.taskId, stepId: item.stepId, attempt: item.attempt, agentKey: item.agentKey, stepName: item.stepName }
+  const selectScope = () => {
+    if (!open || typeof onSelectScope !== 'function') return
+    onSelectScope(scope)
+  }
   const pick = value => {
-    if (submitting || typeof onPick !== 'function') return
-    onPick(value)
+    if (!open || submitting || typeof onPick !== 'function') return
+    onPick(scope, value)
   }
   return (
-    <div className="cw-item cw-agent cw-clarification">
-      <span className="cw-item-label">需要你澄清</span>
-      {questions.map((q, qi) => (
-        <div key={q.id || qi} className="cw-clarification-q">
-          <p className="cw-clarification-text">{q.question}</p>
-          {q.options && q.options.length > 0 ? (
-            <div className="cw-options">
-              {q.options.map(opt => (
-                <button
-                  key={opt.value || opt.label}
-                  type="button"
-                  className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
-                  onClick={() => pick(opt.label || opt.value)}
-                  disabled={submitting}
-                >
-                  <span className="cw-option-head">
-                    <b>{opt.label || opt.value}</b>
-                    {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
-                  </span>
-                </button>
-              ))}
+    <div
+      className={`cw-item cw-agent cw-clarification${open ? ' cw-clarification-open' : ' cw-clarification-answered'}`}
+      onMouseDown={selectScope}
+      onFocusCapture={selectScope}
+    >
+      <button
+        type="button"
+        className="cw-clarification-toggle"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-item-label">{open ? '任务内澄清请求' : `已澄清：${firstQuestion || '任务内澄清'}`}</span>
+        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {attribution ? <small className="cw-clarification-attribution">{attribution}</small> : null}
+      {expanded ? (
+        <>
+          {questions.map((q, qi) => (
+            <div key={q.id || qi} className="cw-clarification-q">
+              <p className="cw-clarification-text">{q.question}</p>
+              {q.options && q.options.length > 0 ? (
+                <div className="cw-options">
+                  {q.options.map(opt => (
+                    <button
+                      key={opt.value || opt.label}
+                      type="button"
+                      className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
+                      onClick={() => pick(opt.label || opt.value)}
+                      disabled={!open || submitting}
+                    >
+                      <span className="cw-option-head">
+                        <b>{opt.label || opt.value}</b>
+                        {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
+            </div>
+          ))}
+          {!open && finalAnswer ? (
+            <div className="cw-clarification-final-answer">
+              <strong>最终回答</strong>
+              <p>{finalAnswer}</p>
             </div>
           ) : null}
-          {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
-        </div>
-      ))}
-      <small className="cw-clarification-hint">
-        {hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'}
-      </small>
+          <small className="cw-clarification-hint">
+            {open
+              ? hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'
+              : '该澄清已归档为只读。'}
+          </small>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -897,11 +1068,47 @@ function CustomAnswer({ onSubmit }) {
   )
 }
 
+function deploymentStatusInfo({ view, focusTask, steps, traceItems }) {
+  const deploymentStep = (Array.isArray(steps) ? steps : []).find(step => {
+    const kind = step && step.kind
+    const agentKey = step && (step.agentKey || step.agent_key)
+    return kind === 'deployment' && (step.status === 'running' || step.status === 'succeeded') && (!agentKey || agentKey === 'deployer')
+  })
+  if (!deploymentStep) return null
+  const requirement = (view && view.child && view.child.requirement) || requirementFromJob(focusTask) || {}
+  const summary = String(requirement.coreScenario || '').trim()
+  return {
+    version: deploymentVersionLabel({ view, focusTask, traceItems }),
+    summary,
+  }
+}
+
+function requirementFromJob(job) {
+  const raw = job && (job.confirmed_requirement_json || job.confirmedRequirementJSON)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch (_) {
+    return null
+  }
+}
+
+function deploymentVersionLabel({ view, focusTask, traceItems }) {
+  const deployedApp = view && view.resolvedApplication
+  const existing = deployedApp && (deployedApp.version || deployedApp.version_label || deployedApp.versionLabel)
+  const match = existing && String(existing).match(/v\s*(\d+)/i)
+  if (match) return `V${match[1]}`
+  const versionEvents = (Array.isArray(traceItems) ? traceItems : []).filter(it => it && it.type === 'version').length
+  const baseVersionID = focusTask && (focusTask.base_version_id || focusTask.baseVersionID)
+  const nextNumber = Math.max(1, versionEvents + 1, baseVersionID ? 2 : 1)
+  return `V${nextNumber}`
+}
+
 function RequirementSummary({ requirement }) {
   const boundary = requirement && requirement.judgementBoundary
   const rows = [
-    ['智能体类型', requirement.appType],
-    ['智能体名称', requirement.appName],
+    ['应用类型', requirement.appType],
+    ['应用名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
     ['研判边界', boundary && boundary.summary],
@@ -928,8 +1135,8 @@ function hasAnswer(value) {
 
 function fieldLabel(field) {
   const map = {
-    appType: '智能体类型',
-    appName: '智能体名称',
+    appType: '应用类型',
+    appName: '应用名称',
     coreScenario: '核心场景',
     primaryView: '主视图',
     dataPolicy: '数据策略',

@@ -1012,6 +1012,27 @@ func TestStepEmitterEmitHoldsLockAcrossAppendAndPublish(t *testing.T) {
 // the invariant are checked directly. It also asserts a plain system record is
 // left untouched, proving redaction is content-based (not kind-based): fixed
 // Chinese status strings never carry credentials and so are never altered.
+func TestStepEmitterTraceStampsAgentKey(t *testing.T) {
+	var got model.WorkTraceEvent
+	emit := &stepEmitter{
+		jobID:      "job_trace",
+		stepID:     "step_trace",
+		agentKey:   "designer",
+		dialogueID: "dlg_trace",
+		attempt:    3,
+		onTrace: func(_ context.Context, ev model.WorkTraceEvent) (model.WorkTraceEvent, error) {
+			got = ev
+			return ev, nil
+		},
+	}
+	if err := emit.Trace(context.Background(), string(model.WorkTraceClarification), `{"questions":[]}`); err != nil {
+		t.Fatalf("Trace: %v", err)
+	}
+	if got.TaskID != "job_trace" || got.StepID != "step_trace" || got.Attempt != 3 || got.AgentKey != "designer" {
+		t.Fatalf("trace attribution = %#v", got)
+	}
+}
+
 func TestStepEmitterEmitRedactsBeforePersistAndPublish(t *testing.T) {
 	app := &capturingAppender{}
 	var pubMu sync.Mutex
@@ -1359,3 +1380,24 @@ func TestExecutorStopsAfterRepeatedBlockingReason(t *testing.T) {
 		t.Fatalf("byReason[%q] = %d, want 1 (per-reason cap stops the 2nd)", wantKey, got)
 	}
 }
+
+	func TestStepEmitterThinkStampsTaskAttribution(t *testing.T) {
+		var got model.TaskThinkingEvent
+		emit := &stepEmitter{
+			jobID:      "job_t",
+			stepID:     "step_t",
+			agentKey:   "designer",
+			dialogueID: "dlg_t",
+			attempt:    4,
+			onThinking: func(_ context.Context, ev model.TaskThinkingEvent) (model.TaskThinkingEvent, error) {
+				got = ev
+				return ev, nil
+			},
+		}
+		if err := emit.Think(context.Background(), "private"); err != nil {
+			t.Fatalf("Think: %v", err)
+		}
+		if got.DialogueID != "dlg_t" || got.TaskID != "job_t" || got.StepID != "step_t" || got.Attempt != 4 || got.AgentKey != "designer" || got.Content != "private" {
+			t.Fatalf("thinking attribution = %#v", got)
+		}
+	}

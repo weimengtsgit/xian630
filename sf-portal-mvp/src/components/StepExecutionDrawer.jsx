@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import {
   X,
   Loader2,
@@ -234,7 +233,7 @@ export function StepExecutionDrawer({
   // 任务执行 drawer. The header shows a back affordance (onBack) instead of a
   // standalone X close. Reuses ALL existing detail logic (tabs, attempt
   // selector, records, artifacts, snapshot editor, cancel/retry/repair).
-  embedded = false,
+  embedded = true,
   onBack,
 }) {
   const [tab, setTab] = useState('overview')
@@ -789,19 +788,4 @@ export function StepExecutionDrawer({
     )
   }
 
-  // Portal to document.body so the drawer is NOT trapped in the .workbench
-  // stacking context (z-index 5). The drawer is position:fixed so its placement
-  // is already viewport-relative, but paint order follows the DOM stacking
-  // context: as a workbench descendant its z-index:60 was capped at 5 and the
-  // .top-bar (z-index 20, a sibling root-level context) painted over the
-  // drawer's top — hiding the close button. Portaling lifts it to the root
-  // stacking context where z-index:60 correctly sits above the top-bar.
-  return createPortal(
-    <aside className="sed-overlay" role="dialog" aria-label="步骤执行详情">
-      <div className="sed-panel">
-        {panelBody}
-      </div>
-    </aside>,
-    document.body,
-  )
 }

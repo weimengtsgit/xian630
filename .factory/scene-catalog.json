@@ -1,9 +1,14 @@
 {
   "version": 1,
   "scenes": {
-    "carrier-formation-replay": { "surface": "application", "order": 1 },
-    "aircraft-carrier-track": { "surface": "application", "order": 2 },
-    "east-sea-situation": { "surface": "application", "order": 3 },
+    "carrier-homeport-tide-window": { "surface": "application", "order": 1 },
+    "carrier-deck-wind-calculator": { "surface": "application", "order": 2 },
+    "merchant-density-grid-alert": { "surface": "application", "order": 3 },
+    "social-sighting-cluster-alert": { "surface": "application", "order": 4 },
+    "carrier-air-wing-affiliation-inference": { "surface": "application", "order": 5 },
+    "carrier-formation-replay": { "surface": "application", "order": 6 },
+    "aircraft-carrier-track": { "surface": "application", "order": 7 },
+    "east-sea-situation": { "surface": "application", "order": 8 },
     "intention-analysis-intelligent-agent": {
       "surface": "managed_agent",
       "order": 1,
@@ -35,11 +40,6 @@
       "description": "动向研判智能体",
       "url": "http://211.91.71.64:8046/carrier-movement",
       "keywords": ["动向", "研判"]
-    },
-    "carrier-homeport-tide-window": { "surface": "blueprint" },
-    "carrier-deck-wind-calculator": { "surface": "blueprint" },
-    "merchant-density-grid-alert": { "surface": "blueprint" },
-    "social-sighting-cluster-alert": { "surface": "blueprint" },
-    "carrier-air-wing-affiliation-inference": { "surface": "blueprint" }
+    }
   }
 }

@@ -85,6 +85,11 @@ async function requestText(path, options = {}) {
 
 export const factoryApi = {
   listApps: () => request('/api/apps'),
+  getApplicationProjectTree: (appId, dialogueId = '') => request(`/api/apps/${appId}/project-tree${dialogueId ? `?dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
+  getApplicationProjectFile: (appId, path, dialogueId = '') => request(`/api/apps/${appId}/project-file?path=${encodeURIComponent(path)}${dialogueId ? `&dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
+  saveApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts`, { method: 'PUT', body: JSON.stringify(body) }),
+  discardApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts`, { method: 'DELETE', body: JSON.stringify(body) }),
+  applyApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts/apply`, { method: 'POST', body: JSON.stringify(body) }),
   listManagedAgents: () => request('/api/managed-agents'),
   startApp: id => request(`/api/apps/${id}/start`, { method: 'POST' }),
   stopApp: id => request(`/api/apps/${id}/stop`, { method: 'POST' }),
@@ -106,7 +111,14 @@ export const factoryApi = {
       body: JSON.stringify({ snapshot }),
     }),
   cancelJob: id => request(`/api/jobs/${id}/cancel`, { method: 'POST' }),
-  answerJob: (id, answer) => request(`/api/jobs/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
+  answerJob: (id, answer, scope = {}) => request(`/api/jobs/${id}/answer`, {
+    method: 'POST',
+    body: JSON.stringify({
+      answer,
+      ...(scope.stepId ? { stepId: scope.stepId } : {}),
+      ...(scope.attempt ? { attempt: scope.attempt } : {}),
+    }),
+  }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
   repairFromFailure: id => request(`/api/jobs/${id}/repair-from-failure`, { method: 'POST' }),
   // Execution observability (Task 4 backend contract):
@@ -185,6 +197,11 @@ export const factoryApi = {
   // Used on open + on a detected replay gap (sequence jump) to re-sync.
   getDialogueTrace: (id, afterSequence) =>
     request(`/api/dialogues/${id}/work-trace${afterSequence != null ? `?afterSequence=${afterSequence}` : ''}`),
+  // getDialogueTaskThinking is the REST hydration endpoint for a dialogue's
+  // task-thinking events, ascending by dialogueSequence, honoring afterSequence.
+  // Returns { events: [...] } or just the array defensively.
+  getDialogueTaskThinking: (id, afterSequence = 0) =>
+    request(`/api/dialogues/${id}/task-thinking?afterSequence=${encodeURIComponent(afterSequence)}`),
   // rollbackApp is the confirm-gated version rollback. The body MUST carry an
   // explicit confirm flag ({confirm: true}) — the backend rejects a rollback
   // without it (destructive, retain-prior-service-on-failure contract).

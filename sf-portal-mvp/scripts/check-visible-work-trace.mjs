@@ -17,9 +17,18 @@ import { readFileSync } from 'node:fs'
 import {
   initialWorkTraceState,
   applyTraceEvent,
+  normalizeTraceEvent,
 } from '../src/hooks/workTraceState.js'
 import { resolveWorkbenchTitle } from '../src/hooks/dialogueTimeline.js'
 import { displayJobTitle } from '../src/hooks/jobSelection.js'
+
+// ---- normalize: provenance fields ------------------------------------------
+{
+  const snake = normalizeTraceEvent({ dialogue_id: 'dlg', sequence: 1, type: 'clarification', agent_key: 'designer', payload_json: '{}' })
+  assert.equal(snake.agentKey, 'designer', 'normalizeTraceEvent must preserve snake_case agent_key')
+  const camel = normalizeTraceEvent({ dialogueId: 'dlg', sequence: 2, type: 'clarification', agentKey: 'coder', payload: {} })
+  assert.equal(camel.agentKey, 'coder', 'normalizeTraceEvent must preserve camelCase agentKey')
+}
 
 // ---- reducer: ordering, isolation, dedup (the verbatim brief test) -----------
 

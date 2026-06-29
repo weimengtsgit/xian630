@@ -261,6 +261,16 @@ func (s *Store) GetJob(ctx context.Context, id string) (*model.Job, error) {
 	return j, nil
 }
 
+// UpdateJobConfirmedRequirement stores the latest server-finalized requirement
+// JSON for a job. Requirement-analysis steps may refine the confirmed
+// requirement after the job is created; downstream steps read this frozen value.
+func (s *Store) UpdateJobConfirmedRequirement(ctx context.Context, jobID, confirmedRequirementJSON string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET confirmed_requirement_json = ?, updated_at = ? WHERE id = ?`,
+		confirmedRequirementJSON, ms(time.Now()), jobID)
+	return err
+}
+
 // ListJobs returns jobs ordered newest-first. When status is non-empty the
 // result is restricted to jobs in that status.
 func (s *Store) ListJobs(ctx context.Context, status string) ([]model.Job, error) {
