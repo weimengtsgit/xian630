@@ -98,14 +98,33 @@
   white-space: nowrap;
 }
 
-/* 任务执行 presence-dot badge: shown while the current dialogue has a focus
- * task, even when another drawer entry is open. Full agent-chip strip is later. */
+/* 任务执行 state badge: shown while the current dialogue has a focus task, even
+ * when another drawer entry is open. */
 .cw-drawer-badge {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #7feb9b;
+  background: #8fb0bf;
   box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9);
+}
+.cw-drawer-badge-state-waiting-user { background: #f3c761; animation: cwTaskBadgePulse 1.2s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9), 0 0 10px rgba(243, 199, 97, 0.58); }
+.cw-drawer-badge-state-running { background: #68ddff; animation: cwTaskBadgePulse 1s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9), 0 0 10px rgba(104, 221, 255, 0.58); }
+.cw-drawer-badge-state-queued { background: #8fb0bf; animation: cwTaskBadgeQueue 1.6s ease-in-out infinite; }
+.cw-drawer-badge-state-failed { background: #ff665e; box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9), 0 0 8px rgba(255, 102, 94, 0.46); }
+.cw-drawer-badge-state-completed { background: #7feb9b; }
+.cw-drawer-badge-state-canceled, .cw-drawer-badge-state-unknown { background: #8fb0bf; opacity: 0.72; }
+@keyframes cwTaskBadgePulse {
+  0%, 100% { transform: scale(1); opacity: 0.84; }
+  50% { transform: scale(1.32); opacity: 1; }
+}
+@keyframes cwTaskBadgeQueue {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cw-drawer-badge {
+    animation: none !important;
+  }
 }
 .cw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .cw-empty { margin: auto; color: rgba(215, 238, 248, 0.58); font-size: 13px; }

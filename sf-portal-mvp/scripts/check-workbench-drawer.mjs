@@ -5,7 +5,7 @@
 //   - the toggle mutual-exclusivity (clicking the active entry closes the
 //     drawer; clicking a different one switches to it)
 //   - 工作空间 disabled until the dialogue has a bound application
-//   - 任务执行 keeps a presence badge while a focus task exists
+//   - 任务执行 keeps a status badge that reflects the current focus task state
 //
 // Runs under node with NO React import. It exercises the toggle reducer as a
 // pure function (mirrored from App.jsx) and asserts static source invariants.
@@ -48,10 +48,18 @@ assert.match(appJsx, /hasBoundApplication\s*=\s*!!applicationProjectId/, 'hasBou
 
 // ---- 任务执行 presence badge ------------------------------------------------
 
-// 任务执行 keeps a presence indicator while a focus task exists, even when
-// another entry is open (full agent-chip strip is Phase 2).
-assert.match(workbenchJsx, /focusTask \? <span className="cw-drawer-badge"/, 'the 任务执行 button must render a presence-dot badge while a focus task exists')
-assert.match(workbenchCss, /\.cw-drawer-badge/, 'the presence-dot badge must have a dedicated style')
+// 任务执行 keeps a state indicator while a focus task exists, even when another
+// entry is open. The badge must reflect status instead of staying green.
+assert.match(workbenchJsx, /taskDrawerBadgeInfo\(focusTask\)/, 'the 任务执行 button must derive badge metadata from the focus task status')
+assert.match(workbenchJsx, /taskBadge \? <span[\s\S]*cw-drawer-badge-state-\$\{taskBadge\.state\}/, 'the 任务执行 button must render a state-specific badge class')
+assert.match(workbenchJsx, /aria-label=\{`任务执行：\$\{taskBadge\.label\}`\}/, 'the 任务执行 badge must expose its status label to assistive tech')
+assert.match(workbenchJsx, /title=\{taskBadge \? `任务执行：\$\{taskBadge\.label\}` : '任务执行'\}/, 'the 任务执行 button title must include the task status')
+assert.doesNotMatch(workbenchJsx, /focusTask \? <span className="cw-drawer-badge"/, 'the old always-green focusTask badge must not remain')
+for (const cls of ['waiting-user', 'running', 'queued', 'failed', 'completed', 'canceled']) {
+  assert.match(workbenchCss, new RegExp(`\\.cw-drawer-badge-state-${cls}`), `the task badge must style ${cls} state`)
+}
+assert.match(workbenchCss, /@keyframes cwTaskBadgePulse/, 'waiting/running task badges should have a pulse animation')
+assert.match(workbenchCss, /@keyframes cwTaskBadgeQueue/, 'queued task badges should have a queue animation')
 
 // ---- WorkbenchDrawer host renders the active entry --------------------------
 

@@ -133,6 +133,7 @@ export function ConversationWorkbench({
       .filter(Boolean)
       .join(' / ')
     : ''
+  const taskBadge = taskDrawerBadgeInfo(focusTask)
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -168,18 +169,17 @@ export function ConversationWorkbench({
           {/* Phase 1: the 3 top-right drawer-entry buttons. Mutually exclusive —
               clicking the active one closes the drawer; 工作空间 is disabled until
               the current dialogue has a bound generated application. 任务执行 keeps a
-              presence-dot badge while a focus task exists, even when another entry
-              is open (full agent-chip strip is later). */}
+              state badge while a focus task exists, even when another entry is open. */}
           <button
             type="button"
             className={`cw-drawer-btn${drawerEntry === 'task' ? ' is-active' : ''}`}
             onClick={() => onToggleDrawerEntry('task')}
-            title="任务执行"
+            title={taskBadge ? `任务执行：${taskBadge.label}` : '任务执行'}
             aria-label="任务执行"
             aria-pressed={drawerEntry === 'task'}
           >
             <span className="cw-drawer-btn-label">任务执行</span>
-            {focusTask ? <span className="cw-drawer-badge" aria-label="有进行中的任务" /> : null}
+            {taskBadge ? <span className={`cw-drawer-badge cw-drawer-badge-state-${taskBadge.state}`} aria-label={`任务执行：${taskBadge.label}`} /> : null}
           </button>
           <button
             type="button"
@@ -424,6 +424,18 @@ function CopyableBlock({ text, children, className = '', copyLabel = '复制' })
       </div>
     </div>
   )
+}
+
+function taskDrawerBadgeInfo(task) {
+  if (!task) return null
+  const status = task.status || ''
+  if (status === 'waiting_user' || status === 'waiting') return { state: 'waiting-user', label: '等待用户处理' }
+  if (status === 'running' || status === 'in_progress') return { state: 'running', label: '执行中' }
+  if (status === 'queued') return { state: 'queued', label: '排队中' }
+  if (status === 'failed') return { state: 'failed', label: '执行失败' }
+  if (status === 'completed' || status === 'succeeded') return { state: 'completed', label: '已完成' }
+  if (status === 'canceled' || status === 'cancelled') return { state: 'canceled', label: '已取消' }
+  return { state: 'unknown', label: '状态未知' }
 }
 
 function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep }) {
