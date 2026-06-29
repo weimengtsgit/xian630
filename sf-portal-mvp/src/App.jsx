@@ -6,7 +6,6 @@ import { ConversationWorkbench } from './components/ConversationWorkbench'
 import { WorkbenchDrawer } from './components/WorkbenchDrawer'
 import { ApplicationStorePage } from './components/ApplicationStorePage'
 import { useApplications } from './hooks/useApplications'
-import { useManagedAgents } from './hooks/useManagedAgents'
 import { useAgents } from './hooks/useAgents'
 import { useJobs } from './hooks/useJobs'
 import { useDialogueSessions } from './hooks/useDialogueSessions'
@@ -28,7 +27,6 @@ const DRAWER_ENTRIES = ['task', 'agents', 'application']
 
 function App() {
   const apps = useApplications()
-  const managedAgents = useManagedAgents()
   const agents = useAgents()
   const jobs = useJobs()
   const dialogue = useDialogueSessions()
@@ -164,9 +162,7 @@ function App() {
   // Regenerate stays available to the (future) business/managed-agent page; kept
   // wired through apps/start/stop/rebuild so Phase 2+ can reattach it without
   // re-deriving the data plumbing. The left ApplicationsPanel is unmounted in
-  // Phase 1 (its list moves to a separate page later) — the hook is retained so
-  // a subsequent page can reuse it.
-  void managedAgents
+  // Phase 1 (its list moves to a separate page later).
 
   return (
     <main className="portal-shell">
@@ -235,7 +231,6 @@ function App() {
           <WorkbenchDrawer
             activeEntry={drawerEntry}
             onClose={() => setDrawerEntry(null)}
-            focusTaskActive={!!dialogue.focusTask}
             agentsProps={{
               agents: agents.agents,
               loading: agents.loading,

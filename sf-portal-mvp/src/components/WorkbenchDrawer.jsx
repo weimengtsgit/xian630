@@ -31,7 +31,6 @@ export function WorkbenchDrawer({
   activeEntry,
   onClose,
   agentsProps,
-  focusTaskActive,
   // Phase 2: task-observability props threaded from App (useJobs + focusTask).
   // `taskProps.jobs` is the ranked dialogue task list (ALL tasks, focus first);
   // `taskProps.activeJob` is the selected task (focus by default); the rest are
