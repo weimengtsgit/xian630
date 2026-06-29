@@ -149,6 +149,20 @@ function App() {
     setDrawerEntry(prev => (prev === entry ? null : entry))
   }
 
+  const openTaskStepFromGraph = useCallback(card => {
+    const stepId = card && card.stepId
+    if (!stepId) return
+    const sm = (Array.isArray(jobs.summary) ? jobs.summary : []).find(item => item && item.step_id === stepId)
+    const step = (Array.isArray(jobs.steps) ? jobs.steps : []).find(item => item && item.id === stepId)
+    const attempt =
+      (sm && (sm.attempt ?? sm.latest_attempt)) ??
+      (step && (step.attempt ?? step.latest_attempt)) ??
+      (card.step && (card.step.attempt ?? card.step.latest_attempt)) ??
+      1
+    setDrawerEntry('task')
+    jobs.selectStepAttempt(stepId, attempt)
+  }, [jobs.summary, jobs.steps, jobs.selectStepAttempt])
+
   // The 应用项目 entry is disabled until the current dialogue has a concrete
   // generated application id. A seeded job alone can exist before code_generation
   // has registered the project, so it is not enough to enable the drawer.
@@ -200,6 +214,7 @@ function App() {
               traceSteps={jobs.steps}
               drawerEntry={drawerEntry}
               onToggleDrawerEntry={toggleDrawerEntry}
+              onOpenTaskStep={openTaskStepFromGraph}
               hasBoundApplication={hasBoundApplication}
               onSend={prompt => {
                 if (activeClarification) {

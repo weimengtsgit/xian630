@@ -98,10 +98,13 @@ assert.equal(toggle(null, 'unknown'), null, 'an unknown entry key is a no-op')
 
 // ---- navigation assertions (Task 4) ------------------------------------------------
 const graphJsx = readFileSync(new URL('../src/components/CollaborationExecutionGraph.jsx', import.meta.url), 'utf8')
-assert.match(workbenchJsx, /onOpenTaskDrawer/, 'ConversationWorkbench should pass task-drawer navigation into timeline items')
-assert.match(workbenchJsx, /onToggleDrawerEntry && onToggleDrawerEntry\('task'\)/, 'graph card click should open the task execution drawer')
+assert.match(workbenchJsx, /onOpenTaskStep/, 'ConversationWorkbench should pass task-step navigation into timeline items')
+assert.doesNotMatch(workbenchJsx, /onToggleDrawerEntry && onToggleDrawerEntry\('task'\)/, 'graph card click must not only toggle the task drawer without selecting a step')
+assert.match(appJsx, /openTaskStepFromGraph/, 'App should own graph-card task-step navigation')
+assert.match(appJsx, /setDrawerEntry\('task'\)[\s\S]*jobs\.selectStepAttempt\(stepId,\s*attempt\)/, 'graph-card navigation should open task drawer and select the real step attempt')
 assert.match(graphJsx, /relatedCardKeys/, 'graph component should compute related upstream and downstream cards for hover focus')
 assert.match(graphJsx, /onOpenTask\(card\)/, 'graph component should call onOpenTask with the clicked card')
-assert.match(graphJsx, /disabled=\{!canOpenTask && card\.kind !== 'origin'\}/, 'pre-confirmation non-origin cards should not pretend to open task details')
+assert.match(graphJsx, /aria-disabled=\{!canOpenTask && card\.kind !== 'origin'\}/, 'pre-confirmation non-origin cards should remain hoverable while not opening task details')
+assert.doesNotMatch(graphJsx, /[\s<]disabled=\{!canOpenTask && card\.kind !== 'origin'\}/, 'pre-confirmation cards must not be disabled because disabled buttons cannot hover or focus')
 
 console.log('check-workbench-drawer: OK')

@@ -57,6 +57,7 @@ export function ConversationWorkbench({
   traceSteps,
   drawerEntry,
   onToggleDrawerEntry,
+  onOpenTaskStep,
   hasBoundApplication,
   onCancelTurn,
   onConfirmChange,
@@ -234,7 +235,7 @@ export function ConversationWorkbench({
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
-            onOpenTaskDrawer={() => onToggleDrawerEntry && onToggleDrawerEntry('task')}
+            onOpenTaskStep={onOpenTaskStep}
             onPickClarification={(scope, value) => {
               if (!value) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
@@ -425,7 +426,7 @@ function CopyableBlock({ text, children, className = '', copyLabel = '复制' })
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskDrawer }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep }) {
   if (item.type === 'user_message') {
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
@@ -488,7 +489,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
       <CollaborationExecutionGraph
         graph={item.graph}
         onOpenTask={card => {
-          if (card && card.stepId && onOpenTaskDrawer) onOpenTaskDrawer(card)
+          if (card && card.stepId && onOpenTaskStep) onOpenTaskStep(card)
         }}
       />
     )

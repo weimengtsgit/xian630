@@ -96,7 +96,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
       onFocus={onEnter}
       onBlur={onLeave}
       onClick={() => canOpenTask && onOpenTask && onOpenTask(card)}
-      disabled={!canOpenTask && card.kind !== 'origin'}
+      aria-disabled={!canOpenTask && card.kind !== 'origin'}
       data-agent-key={card.agentKey}
       aria-label={`${card.title}，${card.stateLabel}${canOpenTask ? '，打开任务详情' : ''}`}
       title={canOpenTask ? '打开任务执行详情' : card.kind === 'origin' ? '用户输入起点' : '确认后可打开任务详情'}
@@ -109,7 +109,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
         <small>{card.subtitle}</small>
       </span>
       {card.highImpact ? <em className="ceg-gate">门禁</em> : null}
-      <span className="ceg-card-desc">{card.description || card.summary || waitText || '等待编排流转'}</span>
+      <span className="ceg-card-desc">{card.summary || waitText || card.description || '等待编排流转'}</span>
       <span className="ceg-card-state">{card.stateLabel}</span>
       {waitText ? <span className="ceg-card-wait">{waitText}</span> : null}
     </button>
@@ -117,25 +117,20 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
 }
 
 function WaveConnector({ edges, activeKey, relatedKeys }) {
-  const state = mergedEdgeState(edges)
-  const active = activeKey && edges.some(edge => relatedKeys.has(edge.from) && relatedKeys.has(edge.to))
+  const list = Array.isArray(edges) ? edges : []
+  const active = activeKey && list.some(edge => relatedKeys.has(edge.from) && relatedKeys.has(edge.to))
   return (
-    <div className={`ceg-connector ceg-edge-${state}${active ? ' is-active' : ''}`} aria-hidden="true">
-      <span className="ceg-line ceg-line-main" />
-      <span className="ceg-line ceg-line-branch ceg-line-top" />
-      <span className="ceg-line ceg-line-branch ceg-line-bottom" />
+    <div className={`ceg-connector${active ? ' is-active' : ''}`} aria-hidden="true">
+      {list.length > 0 ? list.map((edge, index) => (
+        <span
+          key={edge.id || `${edge.from}->${edge.to}-${index}`}
+          className={`ceg-edge-track ceg-edge-${edge.state || 'inactive'}`}
+          style={{ '--ceg-edge-index': index, '--ceg-edge-count': list.length }}
+        />
+      )) : <span className="ceg-edge-track ceg-edge-inactive" style={{ '--ceg-edge-index': 0, '--ceg-edge-count': 1 }} />}
       <span className="ceg-arrow" />
     </div>
   )
-}
-
-function mergedEdgeState(edges) {
-  if (!Array.isArray(edges) || edges.length === 0) return 'inactive'
-  if (edges.some(edge => edge.state === 'blocked')) return 'blocked'
-  if (edges.some(edge => edge.state === 'flowing')) return 'flowing'
-  if (edges.every(edge => edge.state === 'completed')) return 'completed'
-  if (edges.some(edge => edge.state === 'planned')) return 'planned'
-  return 'inactive'
 }
 
 function relatedCardKeys(graph, activeKey) {
