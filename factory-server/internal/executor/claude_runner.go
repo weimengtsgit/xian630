@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/projectdocs"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -43,6 +44,22 @@ type codeGenerationStepOutput struct {
 	Warnings       []string          `json:"warnings,omitempty"`
 }
 
+type collaborationStepSnapshot struct {
+	AgentKey       string                  `json:"agentKey"`
+	Name           string                  `json:"name"`
+	Description    string                  `json:"description"`
+	Lane           string                  `json:"lane"`
+	Instructions   string                  `json:"instructions"`
+	SelectedSkills []string                `json:"selectedSkills"`
+	SkillOverrides []collaborationSkillDoc `json:"skillOverrides"`
+}
+
+type collaborationSkillDoc struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Scope   string `json:"scope"`
+}
+
 func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	if emit == nil {
 		emit = runner.NopEmitter{}
@@ -57,7 +74,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// clarification trace below share one gated path.
 	trace := runner.TraceEmitterFrom(emit)
 	switch step.Kind {
-	case model.StepRequirementAnalysis, model.StepSolutionDesign, model.StepCodeGeneration:
+	case model.StepRequirementAnalysis, model.StepSolutionDesign, model.StepCodeGeneration,
+		model.StepCollaborationOrchestration, model.StepDomainAnalysis, model.StepDesignContract,
+		model.StepDataIntegration, model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance:
 	default:
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "claude runner cannot handle " + string(step.Kind)}, nil
 	}
@@ -86,16 +105,18 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	dataPolicy := parseDataPolicy(confirmedReq)
 	skillPaths := selectedSkillPaths(c.workspace(), profile)
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
+	collaborationSnapshot := parseCollaborationStepSnapshot(step.SnapshotJSON)
 
 	input, err := json.MarshalIndent(map[string]any{
-		"job":                  job,
-		"step":                 step,
-		"confirmedRequirement": confirmedReq,
-		"generationProfile":    profile,
-		"blueprintRefs":        blueprintRefs,
-		"skills":               skillPaths,
-		"blueprintDocs":        blueprintPaths,
-		"repairContext":        step.UserPrompt,
+		"job":                   job,
+		"step":                  step,
+		"confirmedRequirement":  confirmedReq,
+		"generationProfile":     profile,
+		"blueprintRefs":         blueprintRefs,
+		"skills":                skillPaths,
+		"blueprintDocs":         blueprintPaths,
+		"repairContext":         step.UserPrompt,
+		"collaborationSnapshot": collaborationSnapshot,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -109,13 +130,16 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// code_generation's audit.
 	baseline := c.Claude.BaselineStatus(ctx, c.AuditRunner)
 	prompt := c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy)
+	if block := collaborationSnapshotPromptBlock(collaborationSnapshot); block != "" {
+		prompt += block
+	}
 	// step.UserPrompt carries the user's answer when a step is re-run after
 	// pausing for clarification (waiting_user → answerJob → SetStepUserPrompt),
 	// OR a repair-from-failure instruction. For generative steps we surface it
 	// so the agent incorporates the answer instead of re-asking the same
 	// question. Without this the re-run is blind (identical input).
 	if strings.TrimSpace(step.UserPrompt) != "" &&
-		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration) {
+		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration || isCollaborationProducerKind(step.Kind)) {
 		prompt += "\n\n[user_input]\n" + step.UserPrompt + "\n"
 	}
 	if err := c.Claude.Run(ctx, ws, prompt, input, step.Kind == model.StepCodeGeneration, emit); err != nil {
@@ -132,18 +156,118 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	case model.StepRequirementAnalysis:
 		out, err := runner.ValidateRequirementAnalysis(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepSolutionDesign:
 		out, err := runner.ValidateSolutionDesign(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return c.resultFromValidatedOutput(ctx, trace, out, err), nil
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepCodeGeneration:
 		res := c.finishCodeGeneration(ctx, trace, job, step, ws.OutputPath(), baseline)
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		return res, nil
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+	case model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance:
+		// Blocking review gate: decode the gate's JSON status. status:"blocked"
+		// → failed with ErrorBlockingReview (the bounded-repair policy treats this
+		// as a repairable gate); status:"passed" (or absent) → succeeded. The
+		// gate output is produced by the prompt switch's review cases; decoding is
+		// lenient (prose/```json-wrapped output tolerated) the same way the
+		// generative steps are.
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		res := finishReviewGate(ctx, trace, step, ws.OutputPath())
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	default:
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: "unsupported claude step"}, nil
+		// The remaining admitted gate kinds (collaboration_orchestration,
+		// domain_analysis, design_contract, data_integration) are analysis/
+		// contract producers. They share the normal needsUserInput/questions
+		// contract so domain-level uncertainty can pause for user clarification
+		// instead of leaking prose into output.json and failing as invalid JSON.
+		out, err := validateCollaborationProducer(ws.OutputPath())
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	}
+}
+
+func validateCollaborationProducer(outputPath string) (runner.StepOutput, error) {
+	var raw struct {
+		Status         string            `json:"status"`
+		NeedsUserInput bool              `json:"needsUserInput"`
+		Questions      []runner.Question `json:"questions"`
+	}
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return runner.StepOutput{}, err
+	}
+	needsUserInput := raw.NeedsUserInput || strings.EqualFold(strings.TrimSpace(raw.Status), "needs_input")
+	if needsUserInput && len(raw.Questions) == 0 {
+		return runner.StepOutput{}, fmt.Errorf("questions required when collaboration step needs input: %w", runner.ErrSchemaValidationFailed)
+	}
+	return runner.StepOutput{NeedsUserInput: needsUserInput, Questions: raw.Questions}, nil
+}
+
+func parseCollaborationStepSnapshot(raw string) collaborationStepSnapshot {
+	var snapshot collaborationStepSnapshot
+	if strings.TrimSpace(raw) == "" {
+		return snapshot
+	}
+	_ = json.Unmarshal([]byte(raw), &snapshot)
+	return snapshot
+}
+
+func collaborationSnapshotPromptBlock(snapshot collaborationStepSnapshot) string {
+	if strings.TrimSpace(snapshot.Instructions) == "" && len(snapshot.SelectedSkills) == 0 && len(snapshot.SkillOverrides) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[collaboration_agent_snapshot]\n")
+	b.WriteString("这是本次生成任务的协作智能体配置快照，只影响当前任务，不写回全局 .claude/skills。执行本阶段时必须优先遵循本快照。\n")
+	if strings.TrimSpace(snapshot.Name) != "" {
+		b.WriteString("name: ")
+		b.WriteString(snapshot.Name)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(snapshot.Description) != "" {
+		b.WriteString("description: ")
+		b.WriteString(snapshot.Description)
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(snapshot.Instructions) != "" {
+		b.WriteString("instructions:\n")
+		b.WriteString(snapshot.Instructions)
+		b.WriteString("\n")
+	}
+	if len(snapshot.SelectedSkills) > 0 {
+		b.WriteString("selectedSkills:\n")
+		for _, skill := range snapshot.SelectedSkills {
+			if strings.TrimSpace(skill) == "" {
+				continue
+			}
+			b.WriteString("- ")
+			b.WriteString(skill)
+			b.WriteString("\n")
+		}
+	}
+	if len(snapshot.SkillOverrides) > 0 {
+		b.WriteString("skillOverrides:\n")
+		for _, override := range snapshot.SkillOverrides {
+			path := strings.TrimSpace(override.Path)
+			content := strings.TrimSpace(override.Content)
+			if path == "" && content == "" {
+				continue
+			}
+			b.WriteString("--- skill: ")
+			b.WriteString(path)
+			if strings.TrimSpace(override.Scope) != "" {
+				b.WriteString(" scope: ")
+				b.WriteString(override.Scope)
+			}
+			b.WriteString(" ---\n")
+			b.WriteString(limitRepairContext(content, 12000))
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // emitWorkLog decodes the PUBLIC workLog array from the step's output.json and
@@ -257,6 +381,67 @@ func assumptionPayload(warning string) string {
 	return string(b)
 }
 
+// finishReviewGate decodes a blocking-review gate's output.json and maps its
+// status field to a StepResult. The gate prompt asks the agent to emit a JSON
+// object with a top-level "status" of "passed" or "blocked" (plus optional
+// blockingFindings / advisoryFindings arrays). "blocked" → failed with
+// ErrorBlockingReview so the bounded-repair policy can rewind to code_generation;
+// "passed" (or a missing/empty status) → succeeded. The first blocking finding's
+// text becomes the error message so repairReasonKey (kind:code:message) is
+// stable for the SAME underlying block. Decoding is lenient via the shared
+// runner.ReadAndDecode so prose-wrapped / ```json-fenced output is tolerated.
+func finishReviewGate(ctx context.Context, trace runner.TraceEmitter, step model.JobStep, outputPath string) StepResult {
+	var raw reviewGateOutput
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorOutputInvalidJSON, ErrorMessage: err.Error()}
+	}
+	if strings.EqualFold(raw.Status, "blocked") {
+		msg := "blocking review"
+		if len(raw.BlockingFindings) > 0 {
+			f := raw.BlockingFindings[0]
+			if f.Message != "" {
+				msg = f.Message
+			} else if f.Title != "" {
+				msg = f.Title
+			}
+		}
+		// Surface the block as an assumption trace so the dialogue workbench
+		// shows what was blocked, then return the blocking-review failure.
+		if trace != nil {
+			_ = trace.Trace(ctx, string(model.WorkTraceAssumption), reviewBlockedPayload(step, msg))
+		}
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBlockingReview, ErrorMessage: msg}
+	}
+	return StepResult{Status: model.StepStatusSucceeded}
+}
+
+// reviewGateOutput is the decoded shape of a blocking-review gate output.json.
+// Only Status + the first blocking finding's text are load-bearing for the
+// pass/block decision; advisory findings are decoded so they survive a future
+// "advisory-only passed" refinement without re-shaping.
+type reviewGateOutput struct {
+	Status           string `json:"status"`
+	BlockingFindings []struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	} `json:"blockingFindings"`
+	AdvisoryFindings []struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	} `json:"advisoryFindings"`
+}
+
+func reviewBlockedPayload(step model.JobStep, msg string) string {
+	b, err := json.Marshal(struct {
+		Gate   string `json:"gate"`
+		Reason string `json:"reason"`
+	}{Gate: string(step.Kind), Reason: msg})
+	if err != nil {
+		return `{"gate":"","reason":""}`
+	}
+	return string(b)
+}
+
 func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runner.TraceEmitter, job model.Job, step model.JobStep, outputPath string, baseline map[string]bool) StepResult {
 	var raw codeGenerationStepOutput
 	// Decode with the SAME lenient path the validators use (runner.ReadAndDecode):
@@ -361,7 +546,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
-	return StepResult{Status: model.StepStatusSucceeded}
+	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
 }
 
 func (c *ClaudeStepRunner) failureFromError(err error) StepResult {
@@ -379,6 +564,47 @@ func (c *ClaudeStepRunner) failureFromError(err error) StepResult {
 		code = model.ErrorFileConstraintViolated
 	}
 	return StepResult{Status: model.StepStatusFailed, ErrorCode: code, ErrorMessage: err.Error()}
+}
+
+func (c *ClaudeStepRunner) projectDocsAfterStep(ctx context.Context, trace runner.TraceEmitter, job model.Job, step model.JobStep, outputPath string, res StepResult) StepResult {
+	if res.Status != model.StepStatusSucceeded || c.Store == nil {
+		return res
+	}
+	root := ""
+	if step.Kind == model.StepCodeGeneration {
+		var out struct {
+			ProjectDir string `json:"projectDir"`
+		}
+		if err := runner.ReadAndDecode(outputPath, &out); err == nil && out.ProjectDir != "" {
+			root = filepath.Join(c.Workspace, filepath.FromSlash(out.ProjectDir))
+		}
+	}
+	if root == "" {
+		jobID := job.ApplicationID
+		if jobID == "" {
+			jobID = job.CreatedAppID
+		}
+		if jobID != "" {
+			if app, err := c.Store.GetApplication(ctx, jobID); err == nil && app != nil && app.Path != "" {
+				root = filepath.Join(c.Workspace, filepath.FromSlash(app.Path))
+			}
+		}
+	}
+	if root == "" {
+		return res
+	}
+	artifactID := ""
+	artifacts, _ := c.Store.ListArtifactsByJob(ctx, job.ID)
+	for _, art := range artifacts {
+		if art.Kind == "output_json" && art.StepID == step.ID && art.Attempt == step.Attempt {
+			artifactID = art.ID
+			break
+		}
+	}
+	if _, err := (projectdocs.Generator{}).ProjectStep(projectdocs.Source{ProjectRoot: root, JobID: job.ID, StepID: step.ID, Attempt: step.Attempt, AgentKey: step.AgentKey, StepKind: string(step.Kind), SourceArtifactID: artifactID, OutputPath: outputPath}); err != nil && trace != nil {
+		_ = trace.Trace(ctx, string(model.WorkTraceWarning), `{"message":"project document projection failed"}`)
+	}
+	return res
 }
 
 // captureAuditArtifacts writes REDACTED, capped audit copies of the attempt's
@@ -464,6 +690,9 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
+	if isCollaborationProducerKind(step.Kind) {
+		return collaborationProducerPrompt(job, step, ws)
+	}
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
@@ -483,8 +712,52 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
+	case model.StepCodeReview:
+		return "你是软件工厂的代码审查门禁。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。只有影响正确性、可部署性、数据诚实、安全或确认用户行为的问题可以 blocking。"
+	case model.StepProductAcceptance:
+		return "你是软件工厂的产品验收智能体。对照确认需求摘要、设计契约、数据契约和主要用户流程验收。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
+	case model.StepSecurityReview:
+		return "你是软件工厂的安全审查智能体。检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
 	default:
 		return job.UserPrompt
+	}
+}
+
+func isCollaborationProducerKind(kind model.StepKind) bool {
+	switch kind {
+	case model.StepCollaborationOrchestration, model.StepDomainAnalysis, model.StepDesignContract, model.StepDataIntegration:
+		return true
+	default:
+		return false
+	}
+}
+
+func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
+		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
+		"output.json 路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、workLog、warnings。" +
+		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
+		"如果发现必须由用户确认才能避免错误实现，则 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮协作澄清的回答，必须据此推进，不要重复提出已回答过的问题。" +
+		"workLog 必须是面向用户的简短过程摘要数组，每项包含 title 和 summary；warnings 用于记录非阻塞风险。" +
+		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。" +
+		"用户需求：" + job.UserPrompt
+}
+
+func collaborationProducerName(kind model.StepKind) string {
+	switch kind {
+	case model.StepCollaborationOrchestration:
+		return "协作编排"
+	case model.StepDomainAnalysis:
+		return "领域分析"
+	case model.StepDesignContract:
+		return "设计契约"
+	case model.StepDataIntegration:
+		return "数据接入"
+	default:
+		return string(kind)
 	}
 }
 
@@ -538,7 +811,7 @@ func skillsPromptBlock(skillPaths, blueprintPaths []string, dataPolicy string) s
 		}
 		b.WriteString("**严禁**：用 synthetic/mock/fake/demo 数据替代真实请求；用 Math.random、确定性公式或 Math.sin/Math.cos 曲线合成潮汐/风/密度/航迹等核心序列；取数失败后 fallback 到 mock；为「保证构建成功」而硬编码看似真实的数据。")
 		b.WriteString("**文件命名同样受诚实数据审计约束**：src/ 下严禁出现名为 mock / mocks / mockData / mock-data / mock_data / fake / dummy / placeholder 的源文件——审计按文件名判定，即使该文件只放常量/阈值/标签/格式化函数也会被判定生成失败。常量、阈值、标签、格式化等辅助内容请命名为 constants / thresholds / labels / format / ui 等，绝不使用 mock 系文件名。")
-		b.WriteString("真实取数失败时（源不可达、覆盖范围不支持、鉴权缺失），应用必须显示明确的错误或空状态，并把失败原因记入 output.json 的 warnings——交付假数据等同于本次生成失败。")
+		b.WriteString("真实取数失败时（源不可达、覆盖范围不支持、鉴权缺失），应用必须渲染**降级态（Degraded State）**而不是一行裸「数据异常」——这是「所有真实源均失败」时**完整、合规、可交付**的终态，不要为此重试去编造数据，也不要卡死。降级态必须包含：(1) 顶部说明 banner：数据源不可用 + 失败原因 + 已尝试的数据源列表 + 手动重试按钮；(2) 数据视图的结构预览（图表轴标签 / 表格列头 / 卡片标题等「数据回来后会展示什么」的骨架，**严禁填充任何编造数值**，用空数组 / 占位线 / 「—」即可）；(3) 官方数据源链接；(4) 一句「数据恢复后此处将显示…」的说明。降级态组件命名为 EmptyState / DegradedState / DataUnavailable，**不要**使用 mock / fake / dummy / placeholder / sampleData / demoData 等命名（受诚实数据审计约束）。取数必须在**运行时（浏览器端）**进行，`npm run build` 必须能**完全离线**通过，禁止任何构建期取数依赖，保证页面在任何数据状况下都能产出来。降级判定必须快速：真实源**首次探测**即无覆盖或不可达时立即进入降级态，禁止对不可达源逐网格点/逐年份反复探测（用短超时 + 单点探测即可判定覆盖，绝不让用户长时间盯着加载圈等待）。把失败原因与已尝试源记入 output.json 的 warnings——交付假数据（含为「让构建通过」而硬编码的看似真实数值）等同于本次生成失败。")
 		b.WriteString("仅当 dataPolicy=mock_data 或 useMock=true 时才允许使用 mock 数据（且 UI 须明确标注 mock/演示）。")
 		b.WriteString("注意：mock_then_api 表示「真实优先、失败诚实报错」，**不是**失败后回退 mock。")
 	}

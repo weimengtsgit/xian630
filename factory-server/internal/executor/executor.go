@@ -36,6 +36,9 @@ type StepResult struct {
 	ErrorCode      model.ErrorCode  // set when failed
 	ErrorMessage   string
 	NeedsUserInput bool
+	// FrozenRequirementJSON carries the requirement_analysis step's canonical
+	// output so the job row becomes the source of truth for later steps and UI.
+	FrozenRequirementJSON string
 	// Questions is the clarifying questions a step raised when pausing for user
 	// input (waiting_user). Persisted on the step so the job detail can surface
 	// them; empty for non-waiting results.
@@ -78,8 +81,9 @@ type Executor struct {
 	// allowlist + cap + sensitive-key stripping + persist-before-publish; and
 	// the SSE forwarder re-validates persisted rows. Thinking never reaches here
 	// (dropped at the source in stream.go).
-	OnTrace func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
-	RunLog  *runlog.Logger
+	OnTrace        func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	OnTaskThinking func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
+	RunLog         *runlog.Logger
 
 	// cancels maps a running jobID → the CancelFunc of its in-flight step's ctx,
 	// guarded by cancelsMu. runJobStep adds on start and removes on end (defer);
@@ -119,8 +123,9 @@ type stepEmitter struct {
 	store    recordAppender
 	onRecord func(context.Context, runner.ExecutionRecordUpdate)
 
-	jobID  string
-	stepID string
+	jobID    string
+	stepID   string
+	agentKey string
 
 	// Trace-attribution context: the dialogue the job belongs to (the gate's
 	// sequence-partition key) + the task id (job id) + attempt, stamped onto
@@ -130,6 +135,7 @@ type stepEmitter struct {
 	dialogueID string
 	attempt    int
 	onTrace    func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	onThinking func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
 
 	mu       sync.Mutex
 	nextSeq  int
@@ -141,15 +147,21 @@ type stepEmitter struct {
 // before the runner runs), so records are tagged with the same attempt the
 // job_steps row carries. dialogueID is the job's dialogue link (the trace
 // sequence-partition key); empty for legacy jobs.
-func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int) *stepEmitter {
+func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int, agentKey ...string) *stepEmitter {
+	key := ""
+	if len(agentKey) > 0 {
+		key = agentKey[0]
+	}
 	return &stepEmitter{
 		store:      e.store,
 		onRecord:   e.OnRecord,
 		jobID:      jobID,
 		stepID:     stepID,
+		agentKey:   key,
 		dialogueID: dialogueID,
 		attempt:    attempt,
 		onTrace:    e.OnTrace,
+		onThinking: e.OnTaskThinking,
 		nextSeq:    1,
 	}
 }
@@ -247,10 +259,34 @@ func (s *stepEmitter) Trace(ctx context.Context, traceType, payload string) erro
 		TaskID:      s.jobID,
 		StepID:      s.stepID,
 		Attempt:     s.attempt,
+		AgentKey:    s.agentKey,
 		Type:        traceType,
 		PayloadJSON: payload,
 	}
 	_, _ = s.onTrace(ctx, ev) // best-effort: a gate error never aborts the run
+	return nil
+}
+
+// Think is the runner.TaskThinkingEmitter implementation: it forwards one raw
+// thinking delta to the server's recordAndPublishTaskThinking gate via
+// OnTaskThinking, stamped with this step's dialogue + task + step + attempt
+// attribution. This is the ONLY path that thinking ever takes; it MUST NEVER
+// reach StepRecordEmitter or TraceEmitter (Constraint #9). It is idempotent-safe:
+// a nil OnTaskThinking, an empty dialogue id, or a gate error never aborts the
+// agent run (best-effort, like Emit and Trace).
+func (s *stepEmitter) Think(ctx context.Context, content string) error {
+	if s.onThinking == nil || s.dialogueID == "" || content == "" {
+		return nil
+	}
+	ev := model.TaskThinkingEvent{
+		DialogueID: s.dialogueID,
+		TaskID:     s.jobID,
+		StepID:     s.stepID,
+		Attempt:    s.attempt,
+		AgentKey:   s.agentKey,
+		Content:    content,
+	}
+	_, _ = s.onThinking(ctx, ev) // best-effort: a gate error never aborts the run
 	return nil
 }
 
@@ -443,7 +479,7 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 	// persistence; the runner only forwards safe records through it. System
 	// lifecycle records are emitted through the same emitter so they interleave
 	// with activity records by sequence.
-	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt)
+	emitter := e.newStepEmitter(job.ID, step.ID, job.DialogueID, currentStep.Attempt, currentStep.AgentKey)
 	emitter.emit(runCtx, model.ExecutionRecordSystem, systemRecordStarted)
 
 	res, runErr := e.runner.Run(runCtx, *current, currentStep, emitter)
@@ -508,6 +544,11 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepResult) error {
 	switch res.Status {
 	case model.StepStatusSucceeded:
+		if strings.TrimSpace(res.FrozenRequirementJSON) != "" {
+			if err := e.store.UpdateJobConfirmedRequirement(ctx, jobID, res.FrozenRequirementJSON); err != nil {
+				return err
+			}
+		}
 		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
 			return err
 		}
@@ -520,6 +561,16 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 	case model.StepStatusFailed:
 		if err := e.store.MarkStepFailed(ctx, stepID, res.ErrorCode, res.ErrorMessage); err != nil {
 			return err
+		}
+		// Bounded auto-repair: before failing the job terminally, check whether
+		// this failure is a repairable gate that is still under the policy's
+		// repair caps. If so, rewind to code_generation and re-queue instead of
+		// MarkJobFailed. This is the collaboration-pipeline repair loop; legacy
+		// jobs (no CollaborationPlanJSON) never satisfy shouldAutoRepair and fall
+		// straight through to MarkJobFailed, preserving the legacy behavior.
+		if e.maybeAutoRepair(ctx, jobID, stepID, res) {
+			e.notify(ctx, jobID, stepID)
+			return nil
 		}
 		if err := e.store.MarkJobFailed(ctx, jobID); err != nil {
 			return err
@@ -568,7 +619,9 @@ func (e *Executor) finalizeCanceled(ctx context.Context, jobID, stepID string) e
 
 // advanceOrComplete moves the job to the next step or to completed, based on
 // which step just succeeded (looked up from the store, since the executor is
-// stateless across calls). The deployment step is the terminal step. After
+// stateless across calls). When the job carries a CollaborationPlanJSON the
+// next step is determined by the SEEDED steps' topological Seq order (the plan's
+// own traversal); otherwise the legacy FixedSteps() order is used. After
 // advancing, the job is re-queued so the drain loop picks up the next step.
 func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	job, err := e.store.GetJob(ctx, jobID)
@@ -578,6 +631,23 @@ func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	if job == nil {
 		return fmt.Errorf("job %s vanished after step success", jobID)
 	}
+	// Plan-aware traversal: a collaboration-plan job advances by its seeded
+	// steps' Seq order. The current step is the max-Seq step ⇒ completed;
+	// otherwise advance to the next-higher Seq step.
+	if job.CollaborationPlanJSON != "" {
+		next, ok, err := e.nextPlanStepKind(ctx, jobID, job.CurrentStepKind)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return e.store.MarkJobCompleted(ctx, jobID)
+		}
+		if err := e.store.AdvanceJobStep(ctx, jobID, next); err != nil {
+			return err
+		}
+		return e.store.MarkJobQueued(ctx, jobID)
+	}
+	// Legacy six-step traversal (unchanged). The deployment step is terminal.
 	if job.CurrentStepKind == model.StepDeployment {
 		return e.store.MarkJobCompleted(ctx, jobID)
 	}
@@ -594,8 +664,54 @@ func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	return e.store.MarkJobQueued(ctx, jobID)
 }
 
+// nextPlanStepKind returns the step kind that follows currentKind in the job's
+// SEEDED steps' Seq order (ascending). It returns (kind,false,nil) when
+// currentKind is the max-Seq step (the job is complete). Used only for
+// collaboration-plan jobs; legacy jobs use nextStepKind/FixedSteps.
+func (e *Executor) nextPlanStepKind(ctx context.Context, jobID string, currentKind model.StepKind) (model.StepKind, bool, error) {
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return "", false, fmt.Errorf("list job steps: %w", err)
+	}
+	if len(steps) == 0 {
+		return "", false, nil
+	}
+	// Find current step's Seq, then the min Seq strictly greater than it.
+	currentSeq := 0
+	found := false
+	maxSeq := 0
+	for _, s := range steps {
+		if s.Seq > maxSeq {
+			maxSeq = s.Seq
+		}
+		if s.Kind == currentKind {
+			currentSeq = s.Seq
+			found = true
+		}
+	}
+	if !found {
+		// Current kind not among seeded steps — complete defensively.
+		return "", false, nil
+	}
+	if currentSeq >= maxSeq {
+		return "", false, nil
+	}
+	var next model.StepKind
+	nextSeq := 0
+	for _, s := range steps {
+		if s.Seq > currentSeq && (nextSeq == 0 || s.Seq < nextSeq) {
+			nextSeq = s.Seq
+			next = s.Kind
+		}
+	}
+	if nextSeq == 0 {
+		return "", false, nil
+	}
+	return next, true, nil
+}
+
 // nextStepKind returns the step kind that follows k in FixedSteps order, or
-// (kind, false) if k is the last step.
+// (kind, false) if k is the last step. Legacy six-step traversal only.
 func nextStepKind(k model.StepKind) (model.StepKind, bool) {
 	steps := FixedSteps()
 	for i, s := range steps {
@@ -637,7 +753,7 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	// shows the retry decision inline. Best-effort: a failure here does not block
 	// the retry (the job is already re-queued).
 	if step != nil {
-		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt)
+		emitter := e.newStepEmitter(jobID, step.ID, job.DialogueID, step.Attempt, step.AgentKey)
 		emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
 	}
 	updated, err := e.store.GetJob(ctx, jobID)
@@ -715,7 +831,7 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 		return model.Job{}, fmt.Errorf("requeue job: %w", err)
 	}
 
-	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt)
+	emitter := e.newStepEmitter(jobID, failedStep.ID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
 	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStep.ID, failedStep.Attempt); err == nil {
 		emitter.nextSeq = maxSeq + 1
 	}
@@ -733,6 +849,9 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 }
 
 func repairableFailureKind(kind model.StepKind, code model.ErrorCode) bool {
+	if kind == model.StepCodeGeneration && code == model.ErrorSchemaValidationFailed {
+		return true
+	}
 	if kind == model.StepTestVerification || kind == model.StepImageBuild {
 		return true
 	}
@@ -747,6 +866,253 @@ func repairableFailureKind(kind model.StepKind, code model.ErrorCode) bool {
 		return true
 	}
 	return false
+}
+
+// Bounded auto-repair policy (collaboration-pipeline gates).
+//
+// Default repair policy bounds. A job's CollaborationPlanJSON may override these
+// via its repairPolicy block; absent a value the defaults below apply.
+const (
+	defaultMaxAutomaticRepairs                  = 2
+	defaultMaxAutomaticRepairsPerBlockingReason = 1
+)
+
+// maybeAutoRepair is the bounded-repair decision point invoked from finalize's
+// failed branch (after MarkStepFailed, before MarkJobFailed). It returns true
+// when it has rewound the job to code_generation and re-queued it (so finalize
+// must NOT then MarkJobFailed); false when the job should fail terminally as
+// before. Legacy jobs (no CollaborationPlanJSON) always take the false path,
+// preserving the legacy six-step failure behavior.
+//
+// The rewind reuses RepairFromFailure's downstream-reset logic: every step with
+// Seq >= the code_generation step's Seq is reset to pending, code_generation is
+// pointed at, and the job is re-queued. Unlike the manual RepairFromFailure, the
+// AUTO path does NOT require the job to be in the Failed status first (it is
+// still Running when finalize is deciding), and it does NOT build the full
+// repair-from-failure command-output prompt (the gate's blocking message is the
+// repair signal; the next code_generation re-run carries the prior context).
+func (e *Executor) maybeAutoRepair(ctx context.Context, jobID, failedStepID string, res StepResult) bool {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil || job == nil {
+		return false
+	}
+	// Legacy jobs have no collaboration plan and never auto-repair.
+	if job.CollaborationPlanJSON == "" {
+		return false
+	}
+	failedStep, err := e.store.GetStepByKind(ctx, jobID, job.CurrentStepKind)
+	if err != nil || failedStep == nil {
+		return false
+	}
+	if !shouldAutoRepair(*job, *failedStep, res) {
+		return false
+	}
+
+	// Read the policy + current repair counters from the plan document.
+	policy := readRepairPolicy(job.CollaborationPlanJSON)
+	state := readRepairState(job.CollaborationPlanJSON)
+	reasonKey := repairReasonKey(*failedStep, res)
+
+	// Bounded: total repairs AND per-reason count must be under their caps.
+	if state.totalAutomaticRepairs >= policy.maxAutomaticRepairs {
+		return false
+	}
+	if state.byReason[reasonKey] >= policy.maxAutomaticRepairsPerBlockingReason {
+		return false
+	}
+
+	codeStep, err := e.store.GetStepByKind(ctx, jobID, model.StepCodeGeneration)
+	if err != nil || codeStep == nil {
+		return false
+	}
+	repairPrompt := e.buildRepairPrompt(ctx, *job, *failedStep)
+
+	// Under the caps: increment, persist, rewind, re-queue.
+	state.totalAutomaticRepairs++
+	state.byReason[reasonKey]++
+	newPlan, err := writeRepairState(job.CollaborationPlanJSON, state)
+	if err != nil {
+		return false
+	}
+	if err := e.store.SetJobCollaborationPlan(ctx, jobID, newPlan); err != nil {
+		return false
+	}
+	if err := e.store.SetStepUserPrompt(ctx, codeStep.ID, repairPrompt); err != nil {
+		return false
+	}
+	if err := e.rewindToCodeGeneration(ctx, jobID, *failedStep); err != nil {
+		return false
+	}
+
+	// Emit a system record on the failed step's attempt documenting the repair.
+	emitter := e.newStepEmitter(jobID, failedStepID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
+	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, jobID, failedStepID, failedStep.Attempt); err == nil {
+		emitter.nextSeq = maxSeq + 1
+	}
+	emitter.emit(ctx, model.ExecutionRecordSystem, "auto_repair: blocking "+string(failedStep.Kind)+" failure sent back to code_generation (repair #"+itoaRepair(state.totalAutomaticRepairs)+")")
+
+	e.Signal()
+	return true
+}
+
+// rewindToCodeGeneration resets every step with Seq >= code_generation's Seq to
+// pending (so the re-run re-executes code_generation and the downstream gates),
+// advances the job's current_step_kind to code_generation, and re-queues it.
+// Shared shape with RepairFromFailure's rewind, but keyed on the SEEDED steps'
+// Seq order (so it works for both legacy FixedSteps jobs and collaboration-plan
+// jobs whose code_generation may sit at a different Seq).
+func (e *Executor) rewindToCodeGeneration(ctx context.Context, jobID string, failedStep model.JobStep) error {
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("list job steps for rewind: %w", err)
+	}
+	codeSeq := 0
+	for _, s := range steps {
+		if s.Kind == model.StepCodeGeneration {
+			codeSeq = s.Seq
+			break
+		}
+	}
+	if codeSeq == 0 {
+		// No code_generation step (should not happen for a repairable job) —
+		// fall back to the legacy Seq>=3 convention.
+		codeSeq = 3
+	}
+	for _, s := range steps {
+		if s.Seq < codeSeq {
+			continue
+		}
+		if err := e.store.ResetStepToPending(ctx, s.ID); err != nil {
+			return fmt.Errorf("reset step %s: %w", s.Kind, err)
+		}
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, model.StepCodeGeneration); err != nil {
+		return fmt.Errorf("rewind job to code_generation: %w", err)
+	}
+	return e.store.MarkJobQueued(ctx, jobID)
+}
+
+// shouldAutoRepair reports whether a failed step is a repairable gate under the
+// bounded-repair policy. Repairable gates: code_review, security_review,
+// product_acceptance, test_verification, image_build, and deployment ONLY when
+// the failure code is health_check_failed. Port/run infrastructure errors and
+// any non-listed code are NEVER auto-repaired (regenerating won't fix them and
+// would loop). This is the gate predicate; the count caps are enforced by
+// maybeAutoRepair against the persisted repairState.
+func shouldAutoRepair(job model.Job, step model.JobStep, res StepResult) bool {
+	switch step.Kind {
+	case model.StepCodeReview, model.StepSecurityReview, model.StepProductAcceptance,
+		model.StepTestVerification, model.StepImageBuild:
+		return true
+	case model.StepDeployment:
+		return res.ErrorCode == model.ErrorHealthCheckFailed
+	}
+	return false
+}
+
+// repairReasonKey is the identity of a "blocking reason": the tuple
+// (step kind, error code, error message). The SAME gate failing with the SAME
+// code+message is the same blocking reason, so the per-reason cap bounds how
+// many times an identical failure is auto-repaired before the job fails. The
+// shape matches the brief's example "code_review:blocking_review:same:blocking-
+// review:data-contract" (kind:code:message).
+func repairReasonKey(step model.JobStep, res StepResult) string {
+	return string(step.Kind) + ":" + string(res.ErrorCode) + ":" + res.ErrorMessage
+}
+
+// repairPolicy is the decoded repairPolicy block of a collaboration plan.
+type repairPolicy struct {
+	maxAutomaticRepairs                  int
+	maxAutomaticRepairsPerBlockingReason int
+}
+
+func readRepairPolicy(planJSON string) repairPolicy {
+	p := repairPolicy{
+		maxAutomaticRepairs:                  defaultMaxAutomaticRepairs,
+		maxAutomaticRepairsPerBlockingReason: defaultMaxAutomaticRepairsPerBlockingReason,
+	}
+	if planJSON == "" {
+		return p
+	}
+	var doc struct {
+		RepairPolicy struct {
+			MaxAutomaticRepairs                  *int `json:"maxAutomaticRepairs"`
+			MaxAutomaticRepairsPerBlockingReason *int `json:"maxAutomaticRepairsPerBlockingReason"`
+		} `json:"repairPolicy"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &doc); err != nil {
+		return p
+	}
+	if doc.RepairPolicy.MaxAutomaticRepairs != nil && *doc.RepairPolicy.MaxAutomaticRepairs >= 0 {
+		p.maxAutomaticRepairs = *doc.RepairPolicy.MaxAutomaticRepairs
+	}
+	if doc.RepairPolicy.MaxAutomaticRepairsPerBlockingReason != nil && *doc.RepairPolicy.MaxAutomaticRepairsPerBlockingReason >= 0 {
+		p.maxAutomaticRepairsPerBlockingReason = *doc.RepairPolicy.MaxAutomaticRepairsPerBlockingReason
+	}
+	return p
+}
+
+// repairState is the mutable repair counters persisted inside the plan document
+// under the repairState key. byReason maps a repairReasonKey to the number of
+// times that exact reason has been auto-repaired.
+type repairState struct {
+	totalAutomaticRepairs int
+	byReason              map[string]int
+}
+
+func readRepairState(planJSON string) repairState {
+	st := repairState{byReason: map[string]int{}}
+	if planJSON == "" {
+		return st
+	}
+	var doc struct {
+		RepairState struct {
+			TotalAutomaticRepairs int            `json:"totalAutomaticRepairs"`
+			ByReason              map[string]int `json:"byReason"`
+		} `json:"repairState"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &doc); err != nil {
+		return st
+	}
+	st.totalAutomaticRepairs = doc.RepairState.TotalAutomaticRepairs
+	if doc.RepairState.ByReason != nil {
+		st.byReason = doc.RepairState.ByReason
+	}
+	return st
+}
+
+// writeRepairState re-marshals the plan document with the updated repairState
+// block, preserving every other top-level key. The plan is decoded into a
+// generic map so unknown/future fields survive the round-trip.
+func writeRepairState(planJSON string, st repairState) (string, error) {
+	doc := map[string]any{}
+	if planJSON != "" {
+		_ = json.Unmarshal([]byte(planJSON), &doc) // best-effort; a fresh doc is fine on error
+	}
+	doc["repairState"] = map[string]any{
+		"totalAutomaticRepairs": st.totalAutomaticRepairs,
+		"byReason":              st.byReason,
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// itoaRepair is a local non-negative int → string used for the auto-repair
+// system record content. (Kept local so the executor does not import strconv
+// solely for one diagnostic line.)
+func itoaRepair(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	b := []byte{}
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
 }
 
 func (e *Executor) buildRepairPrompt(ctx context.Context, job model.Job, failedStep model.JobStep) string {

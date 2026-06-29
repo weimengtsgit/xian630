@@ -25,6 +25,9 @@ type Config struct {
 	// generated-apps/<slug>/ dir + image tag cannot be written by two runs at
 	// once). Default 3, clamped to [1,16].
 	MaxConcurrentJobs int
+	// EnableDocumentDraftLLMConverter enables the LLM-backed document draft converter.
+	// When false (default), the deterministic converter is always used.
+	EnableDocumentDraftLLMConverter bool
 }
 
 func Resolve(getenv func(string) string) Config {
@@ -33,17 +36,18 @@ func Resolve(getenv func(string) string) Config {
 	}
 	home, _ := os.UserHomeDir()
 	cfg := Config{
-		Addr:             "127.0.0.1:8787",
-		DBPath:           filepath.Join(home, ".software-factory", "state.db"),
-		CCStatusBaseURL:  "http://127.0.0.1:8765",
-		ArtifactRoot:     ".factory-runs",
-		WorkspaceRoot:    ".",
-		LogPath:          filepath.Join(".factory-runs", "factory-server.jsonl"),
-		LogMaxBytes:      10 * 1024 * 1024,
-		LogMaxBackups:    5,
-		ShutdownTimeout:  5 * time.Second,
-		ContainerRuntime: "podman", // default
-		MaxConcurrentJobs: 3,       // default; clamp [1,16] below
+		Addr:                          "127.0.0.1:8787",
+		DBPath:                        filepath.Join(home, ".software-factory", "state.db"),
+		CCStatusBaseURL:               "http://127.0.0.1:8765",
+		ArtifactRoot:                  ".factory-runs",
+		WorkspaceRoot:                 ".",
+		LogPath:                       filepath.Join(".factory-runs", "factory-server.jsonl"),
+		LogMaxBytes:                   10 * 1024 * 1024,
+		LogMaxBackups:                 5,
+		ShutdownTimeout:               5 * time.Second,
+		ContainerRuntime:              "podman", // default
+		MaxConcurrentJobs:             3,        // default; clamp [1,16] below
+		EnableDocumentDraftLLMConverter: false, // default to deterministic
 	}
 	if v := getenv("FACTORY_ADDR"); v != "" {
 		cfg.Addr = v
@@ -96,6 +100,12 @@ func Resolve(getenv func(string) string) Config {
 		cfg.MaxConcurrentJobs = 1
 	} else if cfg.MaxConcurrentJobs > 16 {
 		cfg.MaxConcurrentJobs = 16
+	}
+	if v := getenv("FACTORY_ENABLE_DOCUMENT_DRAFT_LLM_CONVERTER"); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			cfg.EnableDocumentDraftLLMConverter = true
+		}
 	}
 	// Resolve WorkspaceRoot against the process cwd to an ABSOLUTE path. The
 	// workspace feeds the project-local skill/blueprint path builders

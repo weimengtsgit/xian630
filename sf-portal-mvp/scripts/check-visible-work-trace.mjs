@@ -112,11 +112,12 @@ assert.equal(displayJobTitle({ app_name: '航迹复盘', user_prompt: '将阈值
 assert.equal(displayJobTitle({ app_name: '航迹复盘', id: 'job_1' }), 'job_1')
 assert.match(workbenchJsx, /resolveWorkbenchTitle\(view,\s*session\)/, 'workbench must resolve its header title through the pure helper')
 
-// The selected dialogue owns the task panel. It must not be a separate
+// The selected dialogue owns the task drawer. It must not be a separate
 // workbench sibling driven by the global display-job selector: selecting a
 // history dialogue must immediately change the task context and its actions.
-assert.match(workbenchJsx, /taskPanel/, 'ConversationWorkbench must render its focus-task panel internally')
-assert.match(appJsx, /taskPanel=\{[\s\S]*focusTask/, 'App must pass a dialogue focusTask-driven task panel into the workbench')
+assert.match(workbenchJsx, /drawerEntry === 'task'/, 'ConversationWorkbench must expose the task drawer entry')
+assert.match(appJsx, /activeJob\s*=[\s\S]*dialogue\.focusTask/, 'App must derive the drawer activeJob from the dialogue focusTask')
+assert.match(appJsx, /taskProps=\{[\s\S]*activeJob/, 'App must pass dialogue focusTask-driven task props into the drawer')
 assert.doesNotMatch(appJsx, /<JobCenter\s+activeJob=\{jobs\.activeJob\}/, 'JobCenter must not remain a global task panel outside the dialogue workbench')
 
 // WorkTraceList (执行轨迹) is collapsible like FoldedAnalysis: a fold toggle

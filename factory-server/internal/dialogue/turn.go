@@ -24,6 +24,15 @@ type TurnInput struct {
 	LinkedApplicationSlug string               `json:"linkedApplicationSlug,omitempty"`
 }
 
+// DocumentDraftChangeRef links a change summary to a saved document draft.
+type DocumentDraftChangeRef struct {
+	DraftID        string `json:"draftId"`
+	ApplicationID  string `json:"applicationId"`
+	DialogueID     string `json:"dialogueId"`
+	Path           string `json:"path"`
+	SourceChecksum string `json:"sourceChecksum"`
+}
+
 // TurnSummary is the structured result of a modification turn: the change the
 // user is asking for, in human-facing terms, plus a machine-facing change list.
 // Inquiry/control/general turns carry no summary (the round produced no job).
@@ -38,6 +47,14 @@ type TurnSummary struct {
 	ForkTargetInitialPrompt string `json:"forkTargetInitialPrompt,omitempty"`
 	// Reply is the conversational reply for inquiry/general turns.
 	Reply string `json:"reply,omitempty"`
+	// DocumentDraftChange links the summary to a saved document draft for
+	// document-draft-initiated change proposals. Non-nil only when the change
+	// originated from an applied document draft.
+	DocumentDraftChange *DocumentDraftChangeRef `json:"documentDraftChange,omitempty"`
+	// Converter indicates which converter produced the summary: "llm" or "deterministic".
+	Converter string `json:"converter,omitempty"`
+	// ConversionError records any error that occurred during conversion when fallback was used.
+	ConversionError string `json:"conversionError,omitempty"`
 }
 
 // TurnOutput is the validated result of one turn-intent round.

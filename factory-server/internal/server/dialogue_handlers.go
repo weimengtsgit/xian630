@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/clarification"
+	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -78,6 +79,7 @@ type dialoguePatchRequirementBody struct {
 // internal blueprint slug.
 type recommendationCard struct {
 	ApplicationID string `json:"applicationId"`
+	Kind          string `json:"kind,omitempty"`
 	Slug          string `json:"slug"`
 	Name          string `json:"name"`
 	AppType       string `json:"appType"`
@@ -128,17 +130,43 @@ type businessDraftRecord struct {
 
 // dialogueView is the composed response shape returned by every dialogue route.
 type dialogueView struct {
-	Session             model.DialogueSession         `json:"session"`
-	Messages            []model.DialogueMessage       `json:"messages"`
-	Route               routePayload                  `json:"route"`
-	Recommendations     []recommendationCard          `json:"recommendations,omitempty"`
-	AgentDraft          dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
-	AgentDraftStatus    string                        `json:"agentDraftStatus,omitempty"`
-	AgentConsolidation  []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
-	Child               *clarificationView            `json:"child,omitempty"`
-	ResolvedApplication *model.Application            `json:"resolvedApplication,omitempty"`
-	CreatedAgent        *model.Agent                  `json:"createdAgent,omitempty"`
-	SeededJob           *model.Job                    `json:"seededJob,omitempty"`
+	Session                  model.DialogueSession         `json:"session"`
+	Messages                 []model.DialogueMessage       `json:"messages"`
+	Route                    routePayload                  `json:"route"`
+	Recommendations          []recommendationCard          `json:"recommendations,omitempty"`
+	AgentDraft               dialogue.BusinessAgentDraft   `json:"agentDraft,omitempty"`
+	AgentDraftStatus         string                        `json:"agentDraftStatus,omitempty"`
+	AgentConsolidation       []dialogue.ConsolidationEntry `json:"agentConsolidation,omitempty"`
+	Child                    *clarificationView            `json:"child,omitempty"`
+	CollaborationPlanPreview *collaborationPlanPreview     `json:"collaborationPlanPreview,omitempty"`
+	ResolvedApplication      *model.Application            `json:"resolvedApplication,omitempty"`
+	CreatedAgent             *model.Agent                  `json:"createdAgent,omitempty"`
+	SeededJob                *model.Job                    `json:"seededJob,omitempty"`
+}
+
+// collaborationPlanPreview is the confirm-summary preview of the collaboration
+// plan that WOULD run if the user confirms. It is built from
+// collaboration.DefaultPlan(RequirementContext{ConfirmedRequirementJSON}) while
+// the child clarification session is still ready_to_confirm — i.e. BEFORE any
+// task/job is created — so the user can see and (later) adjust the participating
+// agents before generation starts. No job is seeded in this path.
+type collaborationPlanPreview struct {
+	SchemaVersion      int                              `json:"schemaVersion"`
+	Mode               string                           `json:"mode"`
+	Lanes              []collaboration.Lane             `json:"lanes"`
+	Agents             []collaboration.Agent            `json:"agents"`
+	Edges              []collaboration.Edge             `json:"edges"`
+	HighImpactWarnings []collaborationHighImpactWarning `json:"highImpactWarnings,omitempty"`
+}
+
+// collaborationHighImpactWarning is one high-impact participation warning surfaced
+// in the preview (e.g. removing a blocking quality gate). Application of these
+// warnings is deferred to a future skill-driven adjustment flow; this type only
+// carries the data the server would recognize.
+type collaborationHighImpactWarning struct {
+	AgentKey string `json:"agentKey"`
+	Action   string `json:"action"`
+	Message  string `json:"message"`
 }
 
 // ---- helpers --------------------------------------------------------------
@@ -206,7 +234,46 @@ func (s *Server) routingAppCandidates(ctx context.Context, catalog scanner.Scene
 			IsGenerated: app.Source == model.AppSourceGenerated,
 		})
 	}
+	for _, ma := range catalog.ManagedAgents() {
+		app := model.Application{
+			ID:          managedAgentID(ma.Slug),
+			Slug:        ma.Slug,
+			Name:        ma.Name,
+			Type:        "managed_agent",
+			Source:      model.AppSourcePreset,
+			Description: managedAgentSummary(ma),
+			Status:      model.AppStatusRunning,
+			RuntimeURL:  ma.URL,
+		}
+		bySlug[ma.Slug] = &app
+		out = append(out, dialogue.AppSummary{
+			Slug:        ma.Slug,
+			Name:        ma.Name,
+			AppType:     "managed_agent",
+			Summary:     app.Description,
+			IsGenerated: false,
+		})
+	}
 	return out, bySlug
+}
+
+func managedAgentID(slug string) string {
+	return "managed-agent-" + slug
+}
+
+func managedAgentSummary(ma scanner.ManagedAgent) string {
+	parts := []string{ma.Description}
+	if len(ma.Keywords) > 0 {
+		parts = append(parts, strings.Join(ma.Keywords, " "))
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func recommendationKind(app *model.Application) string {
+	if app != nil && strings.HasPrefix(app.ID, "managed-agent-") {
+		return "managed_agent"
+	}
+	return "application"
 }
 
 // blueprintCandidates builds the internal blueprint summaries from the catalog
@@ -296,9 +363,23 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		ExistingApplications: appCandidates,
 		Blueprints:           bpCandidates,
 	}
-	out, err := s.dialogueRouter.RouteIntent(ctx, input, s.publishDialogueEvent)
+	routeThinking := ""
+	out, err := s.dialogueRouter.RouteIntent(ctx, input, func(ev dialogue.StreamEvent) {
+		if ev.Type == "dialogue.route.thinking" {
+			routeThinking = ev.Delta
+		}
+		s.publishDialogueEvent(ev)
+	})
 	if err != nil {
 		return persistedRoute{}, nil, err
+	}
+	if strings.TrimSpace(routeThinking) != "" {
+		if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID: "dmsg_" + idpkg.New(), DialogueID: dlg.ID, Role: "agent", Kind: "thinking",
+			Content: routeThinking, CreatedAt: time.Now(),
+		}); err != nil {
+			return persistedRoute{}, nil, err
+		}
 	}
 	route := persistedRoute{
 		Intent:                   out.Intent,
@@ -340,6 +421,7 @@ func (s *Server) runRouting(ctx context.Context, dlg *model.DialogueSession, use
 		}
 		cards = append(cards, recommendationCard{
 			ApplicationID: app.ID,
+			Kind:          recommendationKind(app),
 			Slug:          app.Slug,
 			Name:          app.Name,
 			AppType:       app.Type,
@@ -412,6 +494,15 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		if err == nil && child != nil {
 			cv := s.viewFromSessionWithMessages(ctx, child)
 			view.Child = &cv
+			// While the child clarification is ready_to_confirm, surface a PREVIEW of
+			// the collaboration plan that WOULD run on confirm. The preview is built
+			// from the same DefaultPlan the confirm path uses, but NO job is created
+			// here — the preview exists so the user can see (and later adjust) the
+			// participating agents before generation begins. High-impact agents in the
+			// plan are projected as warnings so the surface can flag blocking gates.
+			if child.Status == model.ClarificationStatusReadyToConfirm && child.RequirementJSON != "" {
+				view.CollaborationPlanPreview = buildCollaborationPlanPreview(child.RequirementJSON)
+			}
 		}
 	}
 	// Linked results.
@@ -443,11 +534,57 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 	return view, nil
 }
 
+// buildCollaborationPlanPreview constructs the confirm-summary preview of the
+// collaboration plan from a confirmed requirement JSON. It mirrors the plan the
+// confirm path materializes (collaboration.DefaultPlan), projecting it into the
+// preview shape the conversation workbench renders. High-impact agents become
+// high-impact warnings so the surface can flag blocking quality gates (e.g.
+// code-reviewer) before the user confirms. It performs NO job creation.
+func buildCollaborationPlanPreview(confirmedRequirementJSON string) *collaborationPlanPreview {
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: confirmedRequirementJSON})
+	preview := &collaborationPlanPreview{
+		SchemaVersion: plan.SchemaVersion,
+		Mode:          plan.Mode,
+		Lanes:         plan.Lanes,
+		Agents:        plan.Agents,
+		Edges:         plan.Edges,
+	}
+	for _, a := range plan.Agents {
+		if a.HighImpact {
+			preview.HighImpactWarnings = append(preview.HighImpactWarnings, collaborationHighImpactWarning{
+				AgentKey: a.Key,
+				Action:   "confirm_participation",
+				Message:  a.Description,
+			})
+		}
+	}
+	return preview
+}
+
 // cardsFromRoute rebuilds the recommendation cards from the persisted route +
 // the current app store state (so runtime URLs/status are fresh).
 func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []recommendationCard {
 	cards := make([]recommendationCard, 0, len(route.ExistingApplicationSlugs))
+	catalog := s.loadSceneCatalog(ctx)
+	managedBySlug := make(map[string]scanner.ManagedAgent)
+	for _, ma := range catalog.ManagedAgents() {
+		managedBySlug[ma.Slug] = ma
+	}
 	for i, slug := range route.ExistingApplicationSlugs {
+		if ma, ok := managedBySlug[slug]; ok {
+			cards = append(cards, recommendationCard{
+				ApplicationID: managedAgentID(ma.Slug),
+				Kind:          "managed_agent",
+				Slug:          ma.Slug,
+				Name:          ma.Name,
+				AppType:       "managed_agent",
+				MatchReason:   route.UserFacingReason,
+				Status:        string(model.AppStatusRunning),
+				RuntimeURL:    ma.URL,
+				Primary:       i == 0,
+			})
+			continue
+		}
 		apps, err := s.store.ListApplications(ctx)
 		if err != nil {
 			break
@@ -459,6 +596,7 @@ func (s *Server) cardsFromRoute(ctx context.Context, route persistedRoute) []rec
 			app := apps[j]
 			cards = append(cards, recommendationCard{
 				ApplicationID: app.ID,
+				Kind:          recommendationKind(&app),
 				Slug:          app.Slug,
 				Name:          app.Name,
 				AppType:       app.Type,
@@ -621,9 +759,8 @@ var errDialogueNotFound = errors.New("dialogue not found")
 // ---- handlers -------------------------------------------------------------
 
 // createDialogue handles POST /api/dialogues. It persists the first user
-// message, emits dialogue.created, builds routing candidates, invokes intent
-// routing, validates every returned slug, persists a structured route record,
-// emits dialogue.intent.updated (redacted), and returns the view.
+// message, emits dialogue.created, schedules intent routing, and returns the
+// initial view without waiting for the model.
 func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 	var body createDialogueBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -659,31 +796,9 @@ func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishDialogueSimple("dialogue.created", id, dlg)
 
-	// Run pre-lock routing.
-	msgs := []model.DialogueMessage{promptMsg}
-	route, _, rerr := s.runRouting(ctx, &dlg, body.Prompt, msgs)
-	if rerr != nil {
-		// Routing failed: mark the dialogue failed (no route persisted). A
-		// diagnosable session state remains.
-		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_failed", rerr.Error())
-		view, _ := s.composeDialogueView(ctx, id)
-		if view == nil {
-			view = &dialogueView{Session: dlg, Messages: msgs}
-		}
-		writeJSON(w, http.StatusCreated, view)
-		return
-	}
-	if err := s.persistRouteRecordUnlocked(ctx, id, route); err != nil {
-		writeError(w, http.StatusInternalServerError, "persist route")
-		return
-	}
-	// Re-read so the view reflects the persisted route.
-	updated, _ := s.store.GetDialogueSession(ctx, id)
-	if updated != nil {
-		dlg = *updated
-	}
-	// Emit redacted intent.updated (project the route before publishing).
-	s.publishDialogueSimple("dialogue.intent.updated", id, route.public())
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runDialogueRouting(asyncCtx, id, body.Prompt)
+	})
 
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
@@ -691,6 +806,45 @@ func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, view)
+}
+
+func (s *Server) runAsync(fn func(context.Context)) {
+	if s.async != nil {
+		s.async(fn)
+		return
+	}
+	go fn(context.Background())
+}
+
+func (s *Server) runDialogueRouting(ctx context.Context, id, userMessage string) {
+	dlg, err := s.store.GetDialogueSession(ctx, id)
+	if err != nil || dlg == nil {
+		if err != nil {
+			log.Printf("dialogue routing %s: get dialogue: %v", id, err)
+		}
+		return
+	}
+	if dlg.RouteLocked || dlg.Status != model.DialogueStatusRouting {
+		return
+	}
+	msgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
+	route, _, rerr := s.runRouting(ctx, dlg, userMessage, msgs)
+	if rerr != nil {
+		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_failed", rerr.Error())
+		s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+			"code": "route_failed", "message": rerr.Error(),
+		})
+		return
+	}
+	if err := s.persistRouteRecordUnlocked(ctx, id, route); err != nil {
+		log.Printf("dialogue routing %s: persist route: %v", id, err)
+		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_persist_failed", err.Error())
+		s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+			"code": "route_persist_failed", "message": err.Error(),
+		})
+		return
+	}
+	s.publishDialogueSimple("dialogue.intent.updated", id, route.public())
 }
 
 // listDialogues handles GET /api/dialogues.
@@ -814,8 +968,7 @@ func (s *Server) archiveDialogue(w http.ResponseWriter, r *http.Request) {
 //
 // Pre-route (status=routing, route not locked): the message is the user refining
 // their initial request before choosing a route, so the handler appends the
-// message and re-runs the (synchronous) intent-routing procedure, returning the
-// composed view — the legacy 200 contract preserved for the routing phase.
+// message, schedules intent routing, and returns 202 with the current view.
 //
 // Continuing session (status is one of the active/analyzing/... phases, i.e. the
 // session route is already established and the dialogue stays open): the handler
@@ -891,23 +1044,21 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-route phase: synchronous re-routing (legacy 200 contract).
-	allMsgs, _ := s.store.LatestDialogueMessages(ctx, id, 100)
-	route, _, rerr := s.runRouting(ctx, dlg, body.Content, allMsgs)
-	if rerr != nil {
-		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "route_failed", rerr.Error())
-		view, _ := s.composeDialogueView(ctx, id)
-		writeJSON(w, http.StatusOK, view)
-		return
-	}
-	_ = s.persistRouteRecordUnlocked(ctx, id, route)
-	s.publishDialogueSimple("dialogue.intent.updated", id, route.public())
+	// Pre-route phase: re-routing can wait on the model, so accept the message
+	// immediately and let SSE/view refresh carry the result.
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runDialogueRouting(asyncCtx, id, body.Content)
+	})
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"dialogueId": id,
+		"acceptedAt": now.UTC().Format(time.RFC3339),
+		"view":       view,
+	})
 }
 
 // cancelDialogueTurn handles POST /api/dialogues/:id/turns/:turnId/cancel. It
@@ -1005,9 +1156,61 @@ func (s *Server) confirmDialogueChange(w http.ResponseWriter, r *http.Request) {
 	}
 	var summary dialogue.TurnSummary
 	_ = json.Unmarshal([]byte(turn.SummaryJSON), &summary)
-	prompt := strings.TrimSpace(summary.ChangeDescription)
-	if prompt == "" {
-		prompt = "修改应用"
+
+	// Build the prompt, including full draft content if available
+	var prompt string
+	if summary.DocumentDraftChange != nil {
+		// Load and validate the draft
+		draft, err := s.store.GetProjectDocumentDraftByID(ctx, summary.DocumentDraftChange.DraftID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "load document draft")
+			return
+		}
+		if draft == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft not found"})
+			return
+		}
+
+		// Validate draft ownership and state
+		if draft.ApplicationID != dlg.ResolvedApplicationID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft application mismatch"})
+			return
+		}
+		if draft.DialogueID != dialogueID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft dialogue mismatch"})
+			return
+		}
+		if draft.ID != summary.DocumentDraftChange.DraftID {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft ID mismatch"})
+			return
+		}
+		if draft.Path != summary.DocumentDraftChange.Path {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft path mismatch"})
+			return
+		}
+		if draft.SourceChecksum != summary.DocumentDraftChange.SourceChecksum {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft source checksum mismatch"})
+			return
+		}
+		if draft.Status != model.ProjectDocumentDraftStatusProposed {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "document draft not in proposed state"})
+			return
+		}
+
+		// Build prompt with full draft content
+		prompt = fmt.Sprintf(
+			"用户已确认基于文档草稿的变更需求。\n\n文档路径：%s\n源文档校验：%s\n\n变更概要：%s\n\n完整草稿内容：\n---\n%s\n---",
+			draft.Path,
+			draft.SourceChecksum,
+			summary.ChangeDescription,
+			draft.Content,
+		)
+	} else {
+		// Legacy behavior without draft
+		prompt = strings.TrimSpace(summary.ChangeDescription)
+		if prompt == "" {
+			prompt = "修改应用"
+		}
 	}
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
@@ -1102,7 +1305,7 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 		// candidate. Do not lock the user into an empty recommendation view.
 		intent = dialogue.IntentApplicationGeneration
 		route.Intent = intent
-		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新应用。"
+		route.UserFacingReason = "我会先澄清你的需求，并生成一个可运行的新智能体。"
 	}
 
 	switch intent {
@@ -1143,8 +1346,10 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		s.runRoundAndPersistForDialogue(ctx, childID, 1, id)
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
+		s.runAsync(func(asyncCtx context.Context) {
+			s.runRoundAndPersistForDialogue(asyncCtx, childID, 1, id)
+		})
 
 	case dialogue.IntentBusinessProcessingAgent:
 		routeBytes, _ := json.Marshal(route)
@@ -1152,12 +1357,15 @@ func (s *Server) selectDialogueRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "lock route")
 			return
 		}
-		// Start business drafting round 1.
-		if rerr := s.runBusinessDraftRound(ctx, id, dlg, 1); rerr != nil {
-			writeError(w, http.StatusInternalServerError, "draft round")
-			return
-		}
 		s.publishDialogueSimple("dialogue.route.confirmed", id, route.public())
+		s.runAsync(func(asyncCtx context.Context) {
+			if rerr := s.runBusinessDraftRound(asyncCtx, id, dlg, 1); rerr != nil {
+				_ = s.store.UpdateDialogueStatus(asyncCtx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
+				s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+					"code": "draft_round_failed", "message": rerr.Error(),
+				})
+			}
+		})
 	}
 
 	view, err := s.composeDialogueView(ctx, id)
@@ -1204,23 +1412,40 @@ func (s *Server) runBusinessDraftRound(ctx context.Context, dialogueID string, d
 		CurrentDraft:     currentDraft,
 		CurrentQuestions: nil,
 	}
-	out, err := s.dialogueRouter.RunBusinessDraftRound(ctx, input, s.publishDialogueEvent)
+	draftThinking := ""
+	out, err := s.dialogueRouter.RunBusinessDraftRound(ctx, input, func(ev dialogue.StreamEvent) {
+		if ev.Type == "dialogue.draft.thinking" {
+			draftThinking = ev.Delta
+		}
+		s.publishDialogueEvent(ev)
+	})
 	if err != nil {
 		return err
 	}
-	// Persist work-log + questions + consolidation + agentDraft as messages.
+	// Persist thinking + work-log + questions + consolidation + agentDraft as messages.
 	now := time.Now()
+	analysisAt := now
+	if strings.TrimSpace(draftThinking) != "" {
+		if err := s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
+			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "thinking",
+			Content: draftThinking, CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		analysisAt = now.Add(time.Millisecond)
+	}
 	for _, wl := range out.WorkLog {
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "analysis_work_log",
-			Content: wl.Content, CreatedAt: now,
+			Content: wl.Content, CreatedAt: analysisAt,
 		})
 	}
+	questionAt := analysisAt.Add(time.Millisecond)
 	for _, q := range out.Questions {
 		qBytes, _ := json.Marshal(q)
 		_ = s.store.AppendDialogueMessage(ctx, model.DialogueMessage{
 			ID: "dmsg_" + idpkg.New(), DialogueID: dialogueID, Role: "agent", Kind: "question",
-			MetadataJSON: string(qBytes), CreatedAt: now,
+			MetadataJSON: string(qBytes), CreatedAt: questionAt,
 		})
 		s.publishDialogueSimple("dialogue.draft.question.created", dialogueID, q)
 	}
@@ -1402,8 +1627,12 @@ func (s *Server) answerDialogueClarification(w http.ResponseWriter, r *http.Requ
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
-	_ = advanced
+	if updated != nil {
+		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusActive, "", "")
+		s.runAsync(func(asyncCtx context.Context) {
+			s.advanceAfterUserTurnForDialogue(asyncCtx, childID, updated, id)
+		})
+	}
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1504,8 +1733,12 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
 	updated, _ := s.store.GetClarificationSession(ctx, childID)
 	s.publishDialogueChild(ctx, id, childID, req)
-	advanced, _ := s.advanceAfterUserTurnForDialogue(ctx, childID, updated, id)
-	_ = advanced
+	if updated != nil {
+		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusActive, "", "")
+		s.runAsync(func(asyncCtx context.Context) {
+			s.advanceAfterUserTurnForDialogue(asyncCtx, childID, updated, id)
+		})
+	}
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1601,6 +1834,7 @@ func (s *Server) patchDialogueRequirement(w http.ResponseWriter, r *http.Request
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
+	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	current.GenerationProfile = recomputeGenerationProfile(current)
 	reqBytes, _ := json.Marshal(current)
@@ -1637,7 +1871,9 @@ func (s *Server) retryDialogueClarificationRound(w http.ResponseWriter, r *http.
 	if retryRound < 1 {
 		retryRound = 1
 	}
-	s.runRoundAndPersistForDialogue(ctx, childID, retryRound, id)
+	s.runAsync(func(asyncCtx context.Context) {
+		s.runRoundAndPersistForDialogue(asyncCtx, childID, retryRound, id)
+	})
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")
@@ -1697,21 +1933,42 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 	factoryName := normalizedName + "-" + suffix
 	factorySlug := factoryAppSlug(normalizedName, req.AppType, suffix)
 
-	// Seed the fixed 6-step job, mirroring confirmClarification. The job carries
-	// the CONFIRMED requirement + child session id. The job + steps + child link
-	// are committed in a SINGLE transaction: on failure there is NO orphaned job
-	// and the child is moved to a diagnosable failed state.
+	// Seed the collaboration-plan job, mirroring confirmClarification. The job
+	// carries the CONFIRMED requirement + child session id. The job + steps +
+	// edges + child link are committed in a SINGLE transaction: on failure there
+	// is NO orphaned job and the child is moved to a diagnosable failed state.
 	now := time.Now()
 	jobID := "job_" + idpkg.New()
+
+	// Build the default collaboration plan from the confirmed requirement and
+	// materialize it into job_steps + job_step_edges. CurrentStepKind points at
+	// the FIRST plan agent's role so the job is executable from its plan head.
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: string(reqBytes)})
+	planJSON, err := plan.JSON()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration plan")
+		return
+	}
+	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build collaboration steps")
+		return
+	}
+	currentStep := model.StepRequirementAnalysis
+	if len(plan.Agents) > 0 {
+		currentStep = model.StepKind(plan.Agents[0].Role)
+	}
+
 	job := model.Job{
 		ID:                       jobID,
 		UserPrompt:               sess.InitialPrompt,
 		AppName:                  factoryName,
 		AppSlug:                  factorySlug,
 		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          model.StepRequirementAnalysis,
+		CurrentStepKind:          currentStep,
 		ClarificationSessionID:   childID,
 		ConfirmedRequirementJSON: string(reqBytes),
+		CollaborationPlanJSON:    planJSON,
 		// DialogueID links the job to the dialogue its safe agent activity is
 		// surfaced under (Task 4). It is the work_trace_events sequence-
 		// partition key: the executor stamps it onto every trace the runner
@@ -1720,14 +1977,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	steps := make([]model.JobStep, 0, len(stepPlan))
-	for i, sp := range stepPlan {
-		steps = append(steps, model.JobStep{
-			ID: "step_" + idpkg.New(), JobID: jobID, Kind: sp.kind, Seq: i + 1,
-			AgentKey: sp.agentKey, Status: model.StepStatusPending, Attempt: 0,
-		})
-	}
-	if err := s.store.SeedClarificationJob(ctx, job, steps, childID); err != nil {
+	if err := s.store.SeedClarificationJobWithEdges(ctx, job, steps, edges, childID); err != nil {
 		// Atomic rollback already discarded any half-seeded job/steps. Move the
 		// child to a diagnosable failed state so the session is never left in
 		// ready_to_confirm with no linked job.
@@ -1930,10 +2180,15 @@ func (s *Server) continueDialogueBusinessAgent(w http.ResponseWriter, r *http.Re
 	if refreshed != nil {
 		dlg = refreshed
 	}
-	if rerr := s.runBusinessDraftRound(ctx, id, dlg, userTurns+1); rerr != nil {
-		// A failed round leaves a diagnosable state; the view still composes.
-		_ = s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
-	}
+	round := userTurns + 1
+	s.runAsync(func(asyncCtx context.Context) {
+		if rerr := s.runBusinessDraftRound(asyncCtx, id, dlg, round); rerr != nil {
+			_ = s.store.UpdateDialogueStatus(asyncCtx, id, model.DialogueStatusFailed, "draft_round_failed", rerr.Error())
+			s.publishDialogueSimple("dialogue.failed", id, map[string]any{
+				"code": "draft_round_failed", "message": rerr.Error(),
+			})
+		}
+	})
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "compose view")

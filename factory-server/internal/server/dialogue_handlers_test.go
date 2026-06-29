@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,32 @@ func (f *fakeDialogueRunner) Run(ctx context.Context, dir, name string, args ...
 	return runner.CommandResult{ExitCode: 0, Stdout: out}, nil
 }
 
+type blockingDialogueRunner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingDialogueRunner() *blockingDialogueRunner {
+	return &blockingDialogueRunner{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (f *blockingDialogueRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	select {
+	case <-f.started:
+	default:
+		close(f.started)
+	}
+	select {
+	case <-ctx.Done():
+		return runner.CommandResult{ExitCode: 1, Stderr: ctx.Err().Error()}, ctx.Err()
+	case <-f.release:
+		return runner.CommandResult{ExitCode: 0, Stdout: routeAmbiguousOutput}, nil
+	}
+}
+
 // canned route outputs ---------------------------------------------------
 
 const routeExistingAppHighConfidenceOutput = `{
@@ -88,6 +115,15 @@ const routeBusinessAgentOutput = `{
   "existingApplicationSlugs": [],
   "internalBlueprintSlug": "",
   "userFacingReason": "将配置一个业务处理智能体。",
+  "needsRouteConfirmation": false
+}`
+
+const routeManagedAgentOutput = `{
+  "intent": "existing_application",
+  "confidence": "high",
+  "existingApplicationSlugs": ["ops-copilot"],
+  "internalBlueprintSlug": "",
+  "userFacingReason": "运维智能体与部署和告警排查需求最相似，可直接打开使用。",
   "needsRouteConfirmation": false
 }`
 
@@ -202,6 +238,7 @@ func newDialogueTestServer(t *testing.T, dlgRunner runner.CommandRunner) (*Serve
 		}
 	}
 	srv := New(config.Config{ArtifactRoot: t.TempDir(), WorkspaceRoot: root}, st, scanner.Scanner{})
+	srv.async = func(fn func(context.Context)) { fn(context.Background()) }
 	// Override clarification + dialogue runners with fakes. Both use the same
 	// underlying runner.CommandRunner type; clarification is driven by the
 	// clar-specific fake stdout constants.
@@ -230,7 +267,8 @@ func mustWriteCatalog(t *testing.T, root string) {
 	cat := `{"version":1,"scenes":{
   "carrier-formation-replay": {"surface":"application","order":1},
   "aircraft-carrier-track": {"surface":"application","order":2},
-  "carrier-homeport-tide-window": {"surface":"blueprint"}
+  "carrier-homeport-tide-window": {"surface":"blueprint"},
+  "ops-copilot": {"surface":"managed_agent","order":1,"name":"运维智能体","description":"排查部署、告警和服务健康问题","url":"https://example.com/ops","keywords":["运维","部署","告警"]}
 }}`
 	dir := root + "/.factory"
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -336,6 +374,69 @@ func TestCreateDialoguePersistsMessageAndRoutes(t *testing.T) {
 	}
 	if !sawIntent {
 		t.Fatalf("did not see dialogue.intent.updated event; got %#v", eventTypes(events))
+	}
+}
+
+func TestCreateDialogueCanRecommendManagedAgent(t *testing.T) {
+	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeManagedAgentOutput})
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "帮我排查部署告警"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Route.Intent != dialogue.IntentExistingApplication {
+		t.Fatalf("route intent = %q, want existing_application", view.Route.Intent)
+	}
+	if len(view.Recommendations) != 1 {
+		t.Fatalf("recommendations = %d, want 1: %+v", len(view.Recommendations), view.Recommendations)
+	}
+	got := view.Recommendations[0]
+	if got.Kind != "managed_agent" {
+		t.Fatalf("recommendation kind = %q, want managed_agent: %+v", got.Kind, got)
+	}
+	if got.Slug != "ops-copilot" || got.RuntimeURL != "https://example.com/ops" {
+		t.Fatalf("unexpected managed recommendation: %+v", got)
+	}
+}
+
+func TestCreateDialogueReturnsBeforeSlowRoutingCompletes(t *testing.T) {
+	blocking := newBlockingDialogueRunner()
+	srv, r, _ := newDialogueTestServer(t, blocking)
+	srv.async = func(fn func(context.Context)) { go fn(context.Background()) }
+	ch := srv.hub.Subscribe()
+	defer srv.hub.Unsubscribe(ch)
+
+	start := time.Now()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "慢模型也不能卡住前端"})
+	}()
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-done:
+	case <-time.After(150 * time.Millisecond):
+		close(blocking.release)
+		t.Fatalf("create blocked waiting on routing model")
+	}
+	elapsed := time.Since(start)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if elapsed > 150*time.Millisecond {
+		t.Fatalf("create blocked for %s waiting on routing model", elapsed)
+	}
+	select {
+	case <-blocking.started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("routing model was not started asynchronously")
+	}
+	close(blocking.release)
+	if !waitForEventType(ch, "dialogue.intent.updated") {
+		t.Fatalf("routing did not complete after releasing the model")
 	}
 }
 
@@ -761,6 +862,12 @@ func TestRouteSelectEmptyExistingApplicationFallsBackToGeneration(t *testing.T) 
 	if view.Child == nil || view.Session.ClarificationSessionID == "" {
 		t.Fatalf("empty existing-app selection must create a clarification child, got %#v", view)
 	}
+	if !strings.Contains(view.Route.UserFacingReason, "新智能体") {
+		t.Fatalf("empty existing-app fallback reason should use 智能体 product noun, got %q", view.Route.UserFacingReason)
+	}
+	if strings.Contains(view.Route.UserFacingReason, "新应用") {
+		t.Fatalf("empty existing-app fallback reason leaked old product noun: %q", view.Route.UserFacingReason)
+	}
 }
 
 // TestApplicationGenerationWithoutBlueprintStillCreatesClarification verifies
@@ -772,7 +879,7 @@ func TestApplicationGenerationWithoutBlueprintStillCreatesClarification(t *testi
 	  "confidence": "high",
 	  "existingApplicationSlugs": [],
 	  "internalBlueprintSlug": "",
-	  "userFacingReason": "将先澄清需求并生成一个可运行的新应用。",
+	  "userFacingReason": "将先澄清需求并生成一个可运行的新智能体。",
 	  "needsRouteConfirmation": false
 	}`
 	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeNoBlueprint})
@@ -1671,11 +1778,14 @@ func TestMessagesWhileUnlockedRepeatsRouting(t *testing.T) {
 	_ = drainClarificationHub(ch)
 
 	msgRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/messages", map[string]string{"content": "帮我看看已有的"})
-	if msgRec.Code != http.StatusOK {
+	if msgRec.Code != http.StatusAccepted {
 		t.Fatalf("messages status = %d body=%s", msgRec.Code, msgRec.Body.String())
 	}
-	var view dialogueView
-	json.NewDecoder(msgRec.Body).Decode(&view)
+	var ack struct {
+		View dialogueView `json:"view"`
+	}
+	json.NewDecoder(msgRec.Body).Decode(&ack)
+	view := ack.View
 	if view.Route.Intent == "" {
 		t.Fatalf("re-route did not produce a route payload")
 	}
@@ -2818,5 +2928,384 @@ func TestScenarioArchiveThenExplicitDeletePreservesAudit(t *testing.T) {
 	trace, err := st.ListDialogueTrace(ctx, dlgID, 0, 0)
 	if err != nil || len(trace) != 1 {
 		t.Fatalf("trace lost on app deletion (audit violated): err=%v len=%d", err, len(trace))
+	}
+}
+
+func TestDialogueReadyToConfirmIncludesCollaborationPlanPreview(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "生成公网数据研判智能体"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create = %d body=%s", create.Code, create.Body.String())
+	}
+	var created dialogueView
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created view: %v", err)
+	}
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{
+		"intent": "application_generation",
+	})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var routed dialogueView
+	if err := json.NewDecoder(routeRec.Body).Decode(&routed); err != nil {
+		t.Fatalf("decode routed view: %v", err)
+	}
+	childID := routed.Session.ClarificationSessionID
+	if childID == "" {
+		t.Fatalf("route did not create child clarification: %+v", routed.Session)
+	}
+	completeReq := `{"appType":"command_dashboard","appName":"公网数据研判智能体","targetUsers":["值班员"],"coreScenario":"监控公网动态","primaryView":"指挥看板","mainEntities":["目标"],"dataPolicy":"live_api","judgementBoundary":{"dataSources":["public_web_search"],"summary":"使用公网搜索研判目标动态"},"generationProfile":{"base":["software-factory-app"]},"acceptanceFocus":["显示数据来源"]}`
+	if err := st.UpdateClarificationRequirement(context.Background(), childID, completeReq); err != nil {
+		t.Fatalf("UpdateClarificationRequirement: %v", err)
+	}
+	if err := st.SetClarificationStatus(context.Background(), childID, model.ClarificationStatusReadyToConfirm, "", ""); err != nil {
+		t.Fatalf("SetClarificationStatus: %v", err)
+	}
+	view, err := srv.composeDialogueView(context.Background(), created.Session.ID)
+	if err != nil || view == nil {
+		t.Fatalf("composeDialogueView: view=%v err=%v", view != nil, err)
+	}
+	if view.CollaborationPlanPreview == nil {
+		t.Fatalf("missing collaboration plan preview in ready-to-confirm view")
+	}
+	if len(view.CollaborationPlanPreview.Agents) == 0 || len(view.CollaborationPlanPreview.Edges) == 0 {
+		t.Fatalf("empty collaboration plan preview: %+v", view.CollaborationPlanPreview)
+	}
+}
+
+// --- Document draft tests ---
+
+// TestConfirmDialogueChangeIncludesFullDocumentDraftContent verifies that when
+// confirming a change that originated from a document draft, the created job's
+// UserPrompt includes the full draft content, not just the excerpt.
+func TestConfirmDialogueChangeIncludesFullDocumentDraftContent(t *testing.T) {
+	// Set up a project test server to create a draft and apply it
+	r, st, root, app := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", app.ID)
+
+	// Create source file
+	sourcePath := filepath.Join(root, "generated-apps", "demo", "docs", "overview.md")
+	if err := os.WriteFile(sourcePath, []byte("# Overview\nOriginal content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Get initial preview
+	preview := getMarkdownPreview(t, r, "dlg_1")
+
+	// Full draft content we want to see in the job prompt
+	fullDraft := "# Overview\nThis is the full modified content\nWith multiple paragraphs\nAnd more changes here\nEven more content that would be truncated in an excerpt"
+
+	// Save and apply draft
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{
+		"dialogueId":     "dlg_1",
+		"path":           "docs/overview.md",
+		"sourceChecksum": preview.Checksum,
+		"content":        fullDraft,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save draft status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{
+		"dialogueId": "dlg_1",
+		"path":       "docs/overview.md",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply draft status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Now create a dialogue test server to call confirm
+	// We need to set up an effective version and a source job with confirmed requirement
+	_, r2, st2 := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+
+	// Copy the dialogue, turn, and draft from the project test store to the dialogue test store
+	dlg, _ := st.GetDialogueSession(ctx, "dlg_1")
+	dlg.ID = "dlg_copy"
+	dlg.Status = model.DialogueStatusChangeConfirmation
+	if err := st2.CreateDialogueSession(ctx, *dlg); err != nil {
+		t.Fatalf("copy dialogue: %v", err)
+	}
+
+	turn, _ := st.GetLatestCompletedDialogueTurnByIntent(ctx, "dlg_1", model.TurnIntentApplicationModification)
+	turn.ID = "turn_copy"
+	turn.DialogueID = "dlg_copy"
+	if err := st2.CreateDialogueTurn(ctx, *turn); err != nil {
+		t.Fatalf("copy turn: %v", err)
+	}
+
+	// Copy the draft
+	draft, _ := st.GetLatestProjectDocumentDraft(ctx, app.ID, "dlg_1", "docs/overview.md")
+	draft.DialogueID = "dlg_copy"
+	if _, err := st2.UpsertProjectDocumentDraft(ctx, *draft); err != nil {
+		t.Fatalf("copy draft: %v", err)
+	}
+
+	// Set up the required app, version, and job
+	testApp := model.Application{ID: app.ID, Slug: "demo", Name: "Demo", Source: model.AppSourceGenerated, Path: "generated-apps/demo", Status: model.AppStatusStopped, CreatedAt: now, UpdatedAt: now}
+	if err := st2.UpsertApplication(ctx, testApp); err != nil {
+		t.Fatalf("upsert app: %v", err)
+	}
+
+	version := model.ApplicationVersion{ID: "ver_1", ApplicationID: app.ID, JobID: "job_1", Status: model.ApplicationVersionEffective, CreatedAt: now, PromotedAt: &now}
+	if _, err := st2.CreateApplicationVersion(ctx, version); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	sourceJob := model.Job{ID: "job_1", AppSlug: "demo", AppName: "Demo", Status: model.JobStatusCompleted, ConfirmedRequirementJSON: "{}", ApplicationID: app.ID, CreatedAt: now, UpdatedAt: now}
+	if err := st2.CreateJob(ctx, sourceJob); err != nil {
+		t.Fatalf("create source job: %v", err)
+	}
+
+	// Get job count before confirm
+	jobsBefore, _ := st2.ListJobs(ctx, "")
+
+	// Now call confirm
+	confirmRec := doJSON(t, r2, http.MethodPost, "/api/dialogues/dlg_copy/changes/confirm", nil)
+	if confirmRec.Code != http.StatusAccepted {
+		t.Fatalf("confirm status=%d body=%s", confirmRec.Code, confirmRec.Body.String())
+	}
+
+	// Get the created job and verify the prompt includes the full draft
+	jobsAfter, _ := st2.ListJobs(ctx, "")
+	if len(jobsAfter) != len(jobsBefore)+1 {
+		t.Fatalf("expected %d jobs after confirm, got %d", len(jobsBefore)+1, len(jobsAfter))
+	}
+
+	// Find the revision job
+	var revision *model.Job
+	for i := range jobsAfter {
+		if jobsAfter[i].Kind == "revise" {
+			revision = &jobsAfter[i]
+			break
+		}
+	}
+	if revision == nil {
+		t.Fatalf("no revise job found")
+	}
+
+	if !strings.Contains(revision.UserPrompt, fullDraft) {
+		t.Fatalf("job prompt missing full draft content\nPrompt: %s\n\nWanted to contain: %s", revision.UserPrompt, fullDraft)
+	}
+
+	if !strings.Contains(revision.UserPrompt, "docs/overview.md") {
+		t.Fatalf("job prompt missing document path")
+	}
+
+	if !strings.Contains(revision.UserPrompt, draft.SourceChecksum) {
+		t.Fatalf("job prompt missing source checksum")
+	}
+}
+
+// TestConfirmDialogueChangeRejectsMissingDocumentDraft verifies that confirmation
+// fails with 409 when the referenced draft does not exist.
+func TestConfirmDialogueChangeRejectsMissingDocumentDraft(t *testing.T) {
+	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+
+	// Set up dialogue in change_confirmation with a turn referencing a non-existent draft
+	dlg := model.DialogueSession{ID: "dlg_test", Status: model.DialogueStatusChangeConfirmation, Intent: model.DialogueIntentApplicationGeneration, ResolvedApplicationID: "app_demo", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a turn summary with a documentDraftChange referencing non-existent draft
+	summary := dialogue.TurnSummary{
+		Intent:         model.TurnIntentApplicationModification,
+		UserFacingText: "Change",
+		ChangeDescription: "Change",
+		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
+			DraftID: "non-existent-draft",
+			ApplicationID: "app_demo",
+			DialogueID: "dlg_test",
+			Path: "docs/overview.md",
+			SourceChecksum: "sha256:abc123",
+		},
+	}
+	summaryJSON, _ := json.Marshal(summary)
+	turn := model.DialogueTurn{
+		ID: "turn_1", DialogueID: "dlg_test", Intent: model.TurnIntentApplicationModification,
+		Status: model.TurnStatusCompleted, SummaryJSON: string(summaryJSON), CreatedAt: now, EndedAt: &now,
+	}
+	if err := st.CreateDialogueTurn(ctx, turn); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up required app, version, and source job
+	app := model.Application{ID: "app_demo", Slug: "demo", Name: "Demo", Source: model.AppSourceGenerated, Path: "generated-apps/demo", Status: model.AppStatusStopped, CreatedAt: now, UpdatedAt: now}
+	if err := st.UpsertApplication(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+
+	version := model.ApplicationVersion{ID: "ver_1", ApplicationID: "app_demo", Status: model.ApplicationVersionEffective, CreatedAt: now}
+	if _, err := st.CreateApplicationVersion(ctx, version); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceJob := model.Job{ID: "job_1", AppSlug: "demo", AppName: "Demo", Status: model.JobStatusCompleted, ConfirmedRequirementJSON: "{}", ApplicationID: "app_demo", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateJob(ctx, sourceJob); err != nil {
+		t.Fatal(err)
+	}
+
+	// Call confirm
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/dlg_test/changes/confirm", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirm status=%d, want 409 Conflict", rec.Code)
+	}
+}
+
+// TestConfirmDialogueChangeRejectsMismatchedDocumentDraftOwnership verifies that
+// confirmation fails when the draft belongs to a different application or dialogue.
+func TestConfirmDialogueChangeRejectsMismatchedDocumentDraftOwnership(t *testing.T) {
+	_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+	ctx := context.Background()
+	now := time.Now()
+
+	// Set up dialogue and draft with mismatched ownership
+	dlg := model.DialogueSession{ID: "dlg_test", Status: model.DialogueStatusChangeConfirmation, Intent: model.DialogueIntentApplicationGeneration, ResolvedApplicationID: "app_correct", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create two apps
+	appCorrect := model.Application{ID: "app_correct", Slug: "demo", Name: "Demo", Source: model.AppSourceGenerated, Path: "generated-apps/demo", Status: model.AppStatusStopped, CreatedAt: now, UpdatedAt: now}
+	appWrong := model.Application{ID: "app_wrong", Slug: "demo2", Name: "Demo2", Source: model.AppSourceGenerated, Path: "generated-apps/demo2", Status: model.AppStatusStopped, CreatedAt: now, UpdatedAt: now}
+	if err := st.UpsertApplication(ctx, appCorrect); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertApplication(ctx, appWrong); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create draft with wrong app and wrong dialogue
+	draft := model.ProjectDocumentDraft{
+		ID: "draft_1", ApplicationID: "app_wrong", DialogueID: "dlg_wrong",
+		Path: "docs/overview.md", SourceChecksum: "sha256:abc123",
+		Content: "Content", Status: model.ProjectDocumentDraftStatusProposed,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := st.UpsertProjectDocumentDraft(ctx, draft); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create turn summary referencing the draft
+	summary := dialogue.TurnSummary{
+		Intent:         model.TurnIntentApplicationModification,
+		UserFacingText: "Change",
+		ChangeDescription: "Change",
+		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
+			DraftID: "draft_1",
+			ApplicationID: "app_correct", // Mismatch with draft's app
+			DialogueID: "dlg_test",
+			Path: "docs/overview.md",
+			SourceChecksum: "sha256:abc123",
+		},
+	}
+	summaryJSON, _ := json.Marshal(summary)
+	turn := model.DialogueTurn{
+		ID: "turn_1", DialogueID: "dlg_test", Intent: model.TurnIntentApplicationModification,
+		Status: model.TurnStatusCompleted, SummaryJSON: string(summaryJSON), CreatedAt: now, EndedAt: &now,
+	}
+	if err := st.CreateDialogueTurn(ctx, turn); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up version and source job
+	version := model.ApplicationVersion{ID: "ver_1", ApplicationID: "app_correct", Status: model.ApplicationVersionEffective, CreatedAt: now}
+	if _, err := st.CreateApplicationVersion(ctx, version); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceJob := model.Job{ID: "job_1", AppSlug: "demo", AppName: "Demo", Status: model.JobStatusCompleted, ConfirmedRequirementJSON: "{}", ApplicationID: "app_correct", CreatedAt: now, UpdatedAt: now}
+	if err := st.CreateJob(ctx, sourceJob); err != nil {
+		t.Fatal(err)
+	}
+
+	// Call confirm
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues/dlg_test/changes/confirm", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirm status=%d, want 409 Conflict for app mismatch", rec.Code)
+	}
+}
+
+// TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus verifies that
+// confirmation fails when the draft is not in "proposed" status.
+func TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus(t *testing.T) {
+	cases := []model.ProjectDocumentDraftStatus{
+		model.ProjectDocumentDraftStatusDraft,
+		model.ProjectDocumentDraftStatusDiscarded,
+	}
+
+	for _, status := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			_, r, st := newDialogueTestServer(t, &fakeDialogueRunner{})
+			ctx := context.Background()
+			now := time.Now()
+
+			// Set up dialogue
+			dlg := model.DialogueSession{ID: "dlg_test", Status: model.DialogueStatusChangeConfirmation, Intent: model.DialogueIntentApplicationGeneration, ResolvedApplicationID: "app_demo", CreatedAt: now, UpdatedAt: now}
+			if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+				t.Fatal(err)
+			}
+
+			// Set up app
+			app := model.Application{ID: "app_demo", Slug: "demo", Name: "Demo", Source: model.AppSourceGenerated, Path: "generated-apps/demo", Status: model.AppStatusStopped, CreatedAt: now, UpdatedAt: now}
+			if err := st.UpsertApplication(ctx, app); err != nil {
+				t.Fatal(err)
+			}
+
+			// Create draft with wrong status
+			draft := model.ProjectDocumentDraft{
+				ID: "draft_1", ApplicationID: "app_demo", DialogueID: "dlg_test",
+				Path: "docs/overview.md", SourceChecksum: "sha256:abc123",
+				Content: "Content", Status: status,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			if _, err := st.UpsertProjectDocumentDraft(ctx, draft); err != nil {
+				t.Fatal(err)
+			}
+
+			// Create turn summary
+			summary := dialogue.TurnSummary{
+				Intent:         model.TurnIntentApplicationModification,
+				UserFacingText: "Change",
+				ChangeDescription: "Change",
+				DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
+					DraftID: "draft_1",
+					ApplicationID: "app_demo",
+					DialogueID: "dlg_test",
+					Path: "docs/overview.md",
+					SourceChecksum: "sha256:abc123",
+				},
+			}
+			summaryJSON, _ := json.Marshal(summary)
+			turn := model.DialogueTurn{
+				ID: "turn_1", DialogueID: "dlg_test", Intent: model.TurnIntentApplicationModification,
+				Status: model.TurnStatusCompleted, SummaryJSON: string(summaryJSON), CreatedAt: now, EndedAt: &now,
+			}
+			if err := st.CreateDialogueTurn(ctx, turn); err != nil {
+				t.Fatal(err)
+			}
+
+			// Set up version and source job
+			version := model.ApplicationVersion{ID: "ver_1", ApplicationID: "app_demo", Status: model.ApplicationVersionEffective, CreatedAt: now}
+			if _, err := st.CreateApplicationVersion(ctx, version); err != nil {
+				t.Fatal(err)
+			}
+
+			sourceJob := model.Job{ID: "job_1", AppSlug: "demo", AppName: "Demo", Status: model.JobStatusCompleted, ConfirmedRequirementJSON: "{}", ApplicationID: "app_demo", CreatedAt: now, UpdatedAt: now}
+			if err := st.CreateJob(ctx, sourceJob); err != nil {
+				t.Fatal(err)
+			}
+
+			// Call confirm
+			rec := doJSON(t, r, http.MethodPost, "/api/dialogues/dlg_test/changes/confirm", nil)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("confirm status=%d, want 409 Conflict for status=%s", rec.Code, status)
+			}
+		})
 	}
 }

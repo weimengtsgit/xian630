@@ -204,3 +204,41 @@ func TestCountRunningJobsByAppSlug(t *testing.T) {
 		t.Fatalf("running app-z = %d, want 0", n)
 	}
 }
+
+func TestUpdateJobConfirmedRequirement(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	created := time.UnixMilli(1000)
+	job := model.Job{
+		ID:                       "job_req",
+		AppSlug:                  "demo",
+		UserPrompt:               "p",
+		Status:                   model.JobStatusQueued,
+		CurrentStepKind:          model.StepRequirementAnalysis,
+		ConfirmedRequirementJSON: `{"old":true}`,
+		CreatedAt:                created,
+		UpdatedAt:                created,
+	}
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	if err := st.UpdateJobConfirmedRequirement(context.Background(), "job_req", `{"new":true}`); err != nil {
+		t.Fatalf("update confirmed requirement: %v", err)
+	}
+
+	got, err := st.GetJob(context.Background(), "job_req")
+	if err != nil || got == nil {
+		t.Fatalf("get job: %#v %v", got, err)
+	}
+	if got.ConfirmedRequirementJSON != `{"new":true}` {
+		t.Fatalf("confirmed requirement = %s", got.ConfirmedRequirementJSON)
+	}
+	if !got.UpdatedAt.After(created) {
+		t.Fatalf("updated_at = %v, want after %v", got.UpdatedAt, created)
+	}
+}

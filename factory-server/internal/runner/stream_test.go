@@ -82,7 +82,8 @@ func (r *recordEmitter) contentContaining(substr string) bool {
 // event is a top-level NDJSON object; content blocks are NESTED inside
 // assistant.message.content[]) and asserts the hidden-reasoning security
 // boundary (Constraint #9):
-//   - thinking blocks are DROPPED ENTIRELY (never become a record or trace);
+//   - thinking blocks never become a record or trace (without a task-thinking
+//     emitter this helper drops them via NopTaskThinkingEmitter);
 //   - Write/Edit tool_use blocks become file_delta records (+N / +A -B);
 //   - Read/Grep/Glob become activity records with a redacted RELATIVE path;
 //   - non-allowlisted tools (WebSearch) and system events are ignored.
@@ -91,7 +92,8 @@ func TestStreamClaudeEventsDropsThinkingAndCapturesFileDeltas(t *testing.T) {
 	stream := strings.Join([]string{
 		// 1. system init — ignored (not an assistant turn).
 		`{"type":"system","subtype":"init","session_id":"abc"}`,
-		// 2. assistant turn with a thinking block (must be DROPPED entirely).
+		// 2. assistant turn with a thinking block (no task-thinking emitter in this
+		//    helper, so it is dropped by NopTaskThinkingEmitter).
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"THINKING_CANARY"}]}}`,
 		// 3. assistant turn with a Read tool_use on an ABSOLUTE path → activity,
 		//    path redacted to a RELATIVE form (no leading /, no home dir).
@@ -436,5 +438,44 @@ func TestDecodeWorkLogAbsentIsNoOp(t *testing.T) {
 	_ = os.WriteFile(path, []byte(`{"summary":"no workLog here","thinking":"x"}`), 0o644)
 	if got := DecodeWorkLog(path); got != nil {
 		t.Fatalf("DecodeWorkLog = %#v, want nil for absent workLog", got)
+	}
+}
+
+// capturingThinkingEmitter is a test double that captures Think calls.
+type capturingThinkingEmitter struct {
+	thoughts []string
+}
+
+func (c *capturingThinkingEmitter) Think(_ context.Context, content string) error {
+	c.thoughts = append(c.thoughts, content)
+	return nil
+}
+
+// TestClaudeStreamThinkingGoesOnlyToTaskThinkingEmitter verifies that both
+// top-level thinking_delta events and nested assistant thinking blocks are routed
+// to the TaskThinkingEmitter and never appear in records or traces.
+func TestClaudeStreamThinkingGoesOnlyToTaskThinkingEmitter(t *testing.T) {
+	records := &recordEmitter{}
+	thinking := &capturingThinkingEmitter{}
+	lines := []string{
+		`{"type":"thinking_delta","thinking_delta":"private reasoning"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"nested reasoning"},{"type":"text","text":"public"}]}}`,
+	}
+
+	// Use the existing stream processing entry point.
+	streamClaudeEventsWithThinking(context.Background(), records, thinking, strings.Join(lines, "\n"))
+
+	if len(thinking.thoughts) != 2 || thinking.thoughts[0] != "private reasoning" || thinking.thoughts[1] != "nested reasoning" {
+		t.Errorf("thinking emitter got %#v", thinking.thoughts)
+	}
+	for _, rec := range records.records {
+		if strings.Contains(rec.content, "private reasoning") || strings.Contains(rec.content, "nested reasoning") {
+			t.Fatalf("thinking leaked into execution record: %#v", rec)
+		}
+	}
+	for _, tr := range records.traces {
+		if strings.Contains(tr.payload, "private reasoning") || strings.Contains(tr.payload, "nested reasoning") {
+			t.Fatalf("thinking leaked into work trace: %#v", tr)
+		}
 	}
 }
