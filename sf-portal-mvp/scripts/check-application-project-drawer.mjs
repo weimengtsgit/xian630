@@ -40,6 +40,8 @@ assert.match(panelJsx, /textarea/, 'ApplicationProjectPanel must use a textarea 
 assert.match(panelJsx, /preview\.draft\.status === 'draft'/, 'ApplicationProjectPanel must show apply only for draft status')
 assert.match(panelJsx, /等待中心会话确认/, 'ApplicationProjectPanel must show proposed draft waiting-confirmation state')
 assert.match(panelJsx, /源文档已更新，请丢弃草稿后重新编辑/, 'ApplicationProjectPanel must show stale draft guidance')
+assert.match(panelJsx, /重新以当前源文档创建草稿/, 'ApplicationProjectPanel must offer stale draft restart from current source')
+assert.match(panelJsx, /restartDraftFromCurrentSource/, 'ApplicationProjectPanel must implement restartDraftFromCurrentSource handler')
 assert.doesNotMatch(panelJsx, /dangerouslySetInnerHTML/, 'Markdown preview must not use dangerouslySetInnerHTML')
 
 for (const cls of ['application-project-panel', 'app-project-groups', 'app-project-tree-node', 'app-project-preview', 'app-project-preview-tabs', 'app-project-metadata']) {

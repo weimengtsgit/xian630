@@ -99,6 +99,20 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
       setDraftSaving(false)
     }
   }
+  const restartDraftFromCurrentSource = async () => {
+    if (!preview?.draft || !preview.draft.isStale || draftSaving) return
+    setDraftSaving(true)
+    try {
+      await factoryApi.discardApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
+      setPreview(next)
+      setDraftText(next.content || '')
+      setEditing(true)
+      setMode('source')
+    } finally {
+      setDraftSaving(false)
+    }
+  }
 
   if (!applicationId) {
     return <div className="application-project-panel app-project-empty">项目尚未准备好。</div>
@@ -128,7 +142,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
       <section className="app-project-preview">
         {loadingPreview ? <p className="app-project-empty"><Loader2 size={13} className="spin" /> 加载预览...</p> : null}
         {previewError ? <p className="app-project-error">{previewError}</p> : null}
-        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} draftSaving={draftSaving} /> : null}
+        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} draftSaving={draftSaving} /> : null}
         {!preview && !loadingPreview && !previewError ? <p className="app-project-empty">选择文件查看预览。</p> : null}
       </section>
     </div>
@@ -171,7 +185,7 @@ function ProjectNode({ node, expanded, setExpanded, selectedPath, onSelect }) {
   )
 }
 
-function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, draftSaving }) {
+function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, restartDraftFromCurrentSource, draftSaving }) {
   const sourceModes = preview.kind === 'markdown'
     ? [['preview', '预览'], ['source', '源码']]
     : preview.kind === 'json'
@@ -195,6 +209,7 @@ function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, set
           {preview.draft && preview.draft.status === 'draft' && !preview.draft.isStale ? <button type="button" onClick={applyDraft} disabled={draftSaving}>应用为变更需求</button> : null}
           {preview.draft && preview.draft.status === 'proposed' ? <span className="app-project-proposed">已应用为变更需求，等待中心会话确认。</span> : null}
           {preview.draft ? <button type="button" onClick={discardDraft} disabled={draftSaving}>丢弃草稿</button> : null}
+          {preview.draft && preview.draft.isStale ? <button type="button" onClick={restartDraftFromCurrentSource} disabled={draftSaving}>重新以当前源文档创建草稿</button> : null}
           {preview.draft && preview.draft.isStale ? <span className="app-project-stale">源文档已更新，请丢弃草稿后重新编辑。</span> : null}
         </div>
       ) : null}
