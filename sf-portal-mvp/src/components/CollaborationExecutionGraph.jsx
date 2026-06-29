@@ -47,6 +47,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     }
     return order
   }, [graph])
+  const revealOrderKey = revealOrder.join('|')
 
   // 检查是否需要 reduce motion
   const prefersReducedMotion = useMemo(() => {
@@ -59,9 +60,20 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
 
   // 初始化和重置 reveal 状态
   useEffect(() => {
-    if (!graph) return
+    if (!graph) {
+      lastGraphIdentityRef.current = null
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current)
+        revealTimerRef.current = null
+      }
+      setRevealedKeys(new Set())
+      setRevealComplete(false)
+      return
+    }
 
-    // 如果图标识没变，不做任何事
+    // 如果图标识没变，不做任何事。The effect is keyed by stable graph identity
+    // values, so this guard is defensive and will not clear an active timer for
+    // an unrelated parent re-render.
     if (graphIdentity === lastGraphIdentityRef.current) return
     lastGraphIdentityRef.current = graphIdentity
 
@@ -125,7 +137,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
         clearTimeout(revealTimerRef.current)
       }
     }
-  }, [graph, graphIdentity, revealOrder, prefersReducedMotion])
+  }, [graphIdentity, revealOrderKey, prefersReducedMotion])
 
   // 检查边是否可见
   const isEdgeVisible = useCallback((edge) => {
@@ -159,6 +171,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       <div className="ceg-canvas">
         {graph.waves.map((wave, waveIndex) => {
           const nextWave = graph.waves[waveIndex + 1]
+          const visibleCards = isRevealMode
+            ? wave.cards.filter(card => revealedKeys.has(card.agentKey))
+            : wave.cards
+          if (isRevealMode && visibleCards.length === 0) return null
           const visibleEdges = graph.edges.filter(edge => {
             const from = cardsByKey[edge.from]
             const to = cardsByKey[edge.to]
@@ -169,7 +185,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
             <div className="ceg-wave" data-wave={wave.index}>
               <span className="ceg-wave-label">{wave.label}</span>
               <div className="ceg-wave-cards">
-                {wave.cards.map(card => (
+                {visibleCards.map(card => (
                   <GraphCard
                     key={card.id}
                     card={card}
@@ -184,7 +200,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
                 ))}
               </div>
             </div>
-            {waveIndex < graph.waves.length - 1 ? (
+            {waveIndex < graph.waves.length - 1 && (!isRevealMode || visibleEdges.length > 0) ? (
               <WaveConnector
                 fromWave={wave}
                 toWave={nextWave}
