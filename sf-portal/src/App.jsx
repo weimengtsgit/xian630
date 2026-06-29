@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
-import { ApplicationsPanel } from './components/ApplicationsPanel'
 import { AgentsPanel } from './components/AgentsPanel'
 import { FloatingAIButton } from './components/FloatingAIButton'
 import { ChatDialog } from './components/ChatDialog'
+import { extractKeywords } from './utils/keywordExtractor'
 import './App.css'
 
 function App() {
   const [isChatOpen, setIsChatOpen] = useState(false)
   const [isChatMinimized, setIsChatMinimized] = useState(false)
+  // 用户在 AI 应用生成助手对话中输入的需求，提炼关键字后流入流水线首端卡片
+  const [userInput, setUserInput] = useState({ text: '', keywords: [] })
 
   const toggleChat = () => {
     if (isChatOpen) {
@@ -30,15 +32,17 @@ function App() {
     setIsChatMinimized(true)
   }
 
+  // 用户提交对话内容 → 提炼关键字
+  const handleUserSubmit = (text) => {
+    setUserInput({ text, keywords: extractKeywords(text) })
+  }
+
   return (
     <main className="portal-shell">
       <TopBar />
       <LeftToolbar />
       <div className="portal-content">
-        <div className="content-vertical">
-          <ApplicationsPanel />
-          <AgentsPanel />
-        </div>
+        <AgentsPanel userInput={userInput} />
       </div>
       <FloatingAIButton
         onClick={toggleChat}
@@ -48,6 +52,7 @@ function App() {
         isOpen={isChatOpen}
         onClose={closeChat}
         onMinimize={minimizeChat}
+        onUserSubmit={handleUserSubmit}
       />
     </main>
   )
