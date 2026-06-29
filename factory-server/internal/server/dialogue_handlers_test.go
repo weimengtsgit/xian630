@@ -3014,6 +3014,19 @@ func TestDialogueReadyToConfirmIncludesCollaborationPlanPreview(t *testing.T) {
 	if len(view.CollaborationPlanPreview.Agents) == 0 || len(view.CollaborationPlanPreview.Edges) == 0 {
 		t.Fatalf("empty collaboration plan preview: %+v", view.CollaborationPlanPreview)
 	}
+	if err := st.SetClarificationStatus(context.Background(), childID, model.ClarificationStatusConfirmed, "", ""); err != nil {
+		t.Fatalf("SetClarificationStatus confirmed: %v", err)
+	}
+	confirmedView, err := srv.composeDialogueView(context.Background(), created.Session.ID)
+	if err != nil || confirmedView == nil {
+		t.Fatalf("composeDialogueView confirmed: view=%v err=%v", confirmedView != nil, err)
+	}
+	if confirmedView.CollaborationPlanPreview == nil {
+		t.Fatalf("missing collaboration plan preview after confirmation")
+	}
+	if len(confirmedView.CollaborationPlanPreview.Agents) != len(view.CollaborationPlanPreview.Agents) {
+		t.Fatalf("confirmed preview agent count = %d, want %d", len(confirmedView.CollaborationPlanPreview.Agents), len(view.CollaborationPlanPreview.Agents))
+	}
 }
 
 // --- Document draft tests ---

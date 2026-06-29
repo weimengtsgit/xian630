@@ -494,13 +494,11 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		if err == nil && child != nil {
 			cv := s.viewFromSessionWithMessages(ctx, child)
 			view.Child = &cv
-			// While the child clarification is ready_to_confirm, surface a PREVIEW of
-			// the collaboration plan that WOULD run on confirm. The preview is built
-			// from the same DefaultPlan the confirm path uses, but NO job is created
-			// here — the preview exists so the user can see (and later adjust) the
-			// participating agents before generation begins. High-impact agents in the
-			// plan are projected as warnings so the surface can flag blocking gates.
-			if child.Status == model.ClarificationStatusReadyToConfirm && child.RequirementJSON != "" {
+			// Once clarification has produced a confirmed requirement, surface the
+			// collaboration plan preview as dialogue history. Before confirmation it
+			// explains what WOULD run; after confirmation it remains as the user's
+			// accepted orchestration snapshot while the job is seeded and executed.
+			if child.RequirementJSON != "" && (child.Status == model.ClarificationStatusReadyToConfirm || child.Status == model.ClarificationStatusConfirmed) {
 				view.CollaborationPlanPreview = buildCollaborationPlanPreview(child.RequirementJSON)
 			}
 		}

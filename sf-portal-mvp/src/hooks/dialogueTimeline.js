@@ -406,6 +406,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   if (child) {
     appendChildItems(items, child, view.session)
   }
+  const collaborationPreview = safeCollaborationPlanPreview(view.collaborationPlanPreview)
+  if (collaborationPreview) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_collaboration_plan_preview`,
+      type: 'collaboration_plan_preview',
+      preview: collaborationPreview,
+    })
+  }
 
   // 5. Business-agent drafting surface.
   // 5a. Open business-draft clarifying questions (parent agent question messages
@@ -1116,6 +1124,44 @@ function findLastIndex(arr, predicate) {
     if (predicate(arr[i])) return i
   }
   return -1
+}
+
+function safeCollaborationPlanPreview(preview) {
+  if (!preview || typeof preview !== 'object') return null
+  const agents = Array.isArray(preview.agents) ? preview.agents : []
+  if (agents.length === 0) return null
+  return {
+    schemaVersion: Number(preview.schemaVersion || preview.schema_version || 0) || 0,
+    mode: safeString(preview.mode),
+    lanes: Array.isArray(preview.lanes) ? preview.lanes.map(lane => ({
+      id: safeString(lane.id),
+      label: safeString(lane.label || lane.name || lane.id),
+    })).filter(lane => lane.id) : [],
+    agents: agents.map(agent => ({
+      key: safeString(agent.key),
+      name: safeString(agent.name || agent.key),
+      role: safeString(agent.role || agent.key),
+      lane: safeString(agent.lane),
+      highImpact: !!(agent.highImpact || agent.high_impact),
+    })).filter(agent => agent.key || agent.name),
+    edges: Array.isArray(preview.edges) ? preview.edges.map(edge => ({
+      from: safeString(edge.from),
+      to: safeString(edge.to),
+    })).filter(edge => edge.from && edge.to) : [],
+    adjustments: Array.isArray(preview.adjustments)
+      ? preview.adjustments.map(safeCollaborationAdjustment)
+      : Array.isArray(preview.highImpactWarnings)
+        ? preview.highImpactWarnings.map(safeCollaborationAdjustment)
+        : [],
+  }
+}
+
+function safeCollaborationAdjustment(adjustment) {
+  return {
+    agentKey: safeString(adjustment && (adjustment.agentKey || adjustment.agent_key)),
+    action: safeString(adjustment && adjustment.action),
+    message: safeString(adjustment && adjustment.message),
+  }
 }
 
 function parseJSON(raw) {

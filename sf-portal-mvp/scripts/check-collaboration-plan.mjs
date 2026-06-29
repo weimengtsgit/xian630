@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { buildCollaborationCardView } from '../src/hooks/collaborationPlanState.js'
+import { buildDialogueTimeline } from '../src/hooks/dialogueTimeline.js'
 
 const jobCenter = readFileSync(new URL('../src/components/JobCenter.jsx', import.meta.url), 'utf8')
 const workbench = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
@@ -18,8 +19,8 @@ assert.match(state, /buildCollaborationCardView/, 'collaboration plan state help
 assert.match(execState, /fixedSteps\s*=\s*\[\]/, 'execution record helper should accept dynamic step definitions')
 assert.doesNotMatch(jobCenter, /3x2 matrix of the six fixed stages/, 'JobCenter should no longer describe only fixed six stages')
 assert.match(workbench, /cw-collaboration-graph/, 'confirm preview should render a collaboration graph')
-assert.match(workbench, /collaborationPlanPreview\.edges/, 'confirm preview graph should use plan edges')
-assert.match(workbench, /collaborationPreviewUniqueEdges/, 'confirm preview graph should dedupe plan edges before rendering')
+assert.match(workbench, /collaboration_plan_preview/, 'confirm preview graph should render as a dialogue timeline item')
+assert.match(workbench, /uniqueEdges/, 'confirm preview graph should dedupe plan edges before rendering')
 assert.doesNotMatch(workbench, /edge\.to\}-\$\{index\}/, 'confirm preview graph keys should not depend on array indexes')
 assert.match(workbench, /cw-collaboration-adjustments/, 'confirm preview should show collaboration adjustment records')
 assert.match(drawer, /sed-snapshot-skill-files/, 'step drawer should show snapshot skill files')
@@ -45,3 +46,24 @@ assert.equal(
   13,
   'collaboration plan card view should render every planned agent task, not fall back to the fixed six stages',
 )
+
+const confirmedDialogueTimeline = buildDialogueTimeline({
+  session: { id: 'dlg-confirmed', status: 'task_running', intent: 'application_generation' },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '请做一个 todo 应用' }],
+  child: {
+    id: 'clar-confirmed',
+    status: 'confirmed',
+    messages: [],
+    requirement: { appType: 'tool', appName: 'Todo', coreScenario: '管理待办' },
+  },
+  collaborationPlanPreview: {
+    lanes: dynamicPlan.plan.lanes,
+    agents: dynamicPlan.plan.agents,
+    edges: [{ from: 'agent-1', to: 'agent-2' }, { from: 'agent-1', to: 'agent-2' }],
+    highImpactWarnings: [{ agentKey: 'agent-3', action: 'confirm_participation', message: '需要质量门禁' }],
+  },
+})
+const previewItem = confirmedDialogueTimeline.find(item => item.type === 'collaboration_plan_preview')
+assert.ok(previewItem, 'confirmed dialogue timeline should retain the collaboration preview inside the conversation')
+assert.equal(previewItem.preview.agents.length, 13, 'retained collaboration preview should include every planned agent')
+assert.equal(previewItem.preview.adjustments[0].message, '需要质量门禁', 'retained collaboration preview should map high-impact warnings to adjustments')
