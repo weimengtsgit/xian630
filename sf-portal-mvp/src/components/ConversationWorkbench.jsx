@@ -23,6 +23,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
+import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
 import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
@@ -233,6 +234,7 @@ export function ConversationWorkbench({
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
+            onOpenTaskDrawer={() => onToggleDrawerEntry && onToggleDrawerEntry('task')}
             onPickClarification={(scope, value) => {
               if (!value) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
@@ -423,7 +425,7 @@ function CopyableBlock({ text, children, className = '', copyLabel = '复制' })
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskDrawer }) {
   if (item.type === 'user_message') {
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
@@ -482,7 +484,14 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     return <ThinkingSummary item={item} />
   }
   if (item.type === 'collaboration_plan_preview') {
-    return <CollaborationPlanPreviewCard preview={item.preview} />
+    return (
+      <CollaborationExecutionGraph
+        graph={item.graph}
+        onOpenTask={card => {
+          if (card && card.stepId && onOpenTaskDrawer) onOpenTaskDrawer(card)
+        }}
+      />
+    )
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
@@ -556,91 +565,6 @@ function ThinkingSummary({ item }) {
   )
 }
 
-function CollaborationPlanPreviewCard({ preview }) {
-  const agents = preview && Array.isArray(preview.agents) ? preview.agents : []
-  const edges = preview && Array.isArray(preview.edges) ? preview.edges : []
-  const adjustments = preview && Array.isArray(preview.adjustments) ? preview.adjustments : []
-  const lanes = preview && Array.isArray(preview.lanes) ? preview.lanes : []
-  const edgeKeys = new Set()
-  const uniqueEdges = edges.filter(edge => {
-    if (!edge || !edge.from || !edge.to) return false
-    const key = `${edge.from}->${edge.to}`
-    if (edgeKeys.has(key)) return false
-    edgeKeys.add(key)
-    return true
-  })
-  const agentOrder = Object.fromEntries(
-    agents.filter(agent => agent && agent.key).map((agent, index) => [agent.key, index + 1]),
-  )
-  const laneRows = lanes.map(lane => ({
-    lane,
-    agents: agents.filter(agent => agent && agent.lane === lane.id),
-  })).filter(row => row.agents.length > 0)
-  const looseAgents = agents.filter(
-    agent => agent && !lanes.some(lane => lane.id === agent.lane),
-  )
-  if (looseAgents.length > 0) {
-    laneRows.push({
-      lane: { id: 'unassigned', label: '其他' },
-      agents: looseAgents,
-    })
-  }
-  if (agents.length === 0) return null
-  return (
-    <section className="cw-collaboration-preview">
-      <div className="cw-collaboration-preview-head">
-        <h3>协作智能体参与计划</h3>
-        <div className="cw-collaboration-stats">
-          <span>{agents.length} 个智能体</span>
-          <span>{uniqueEdges.length} 条依赖</span>
-        </div>
-      </div>
-      {laneRows.length > 0 ? (
-        <div className="cw-collaboration-graph cw-collaboration-flow" aria-label="协作智能体执行关系图">
-          {laneRows.map(row => (
-            <div className="cw-collaboration-stage" key={row.lane.id}>
-              <div className="cw-collaboration-stage-label">
-                <strong>{row.lane.label}</strong>
-                <span>{row.agents.length} 个</span>
-              </div>
-              <div className="cw-collaboration-rail">
-                {row.agents.map((agent, index) => (
-                  <div className="cw-collaboration-node-wrap" key={agent.key || `${row.lane.id}-${index}`}>
-                    <div className="cw-collaboration-node">
-                      <span className="cw-collaboration-node-index">
-                        {String(agentOrder[agent.key] || index + 1).padStart(2, '0')}
-                      </span>
-                      <span className="cw-collaboration-node-main">
-                        <strong>{agent.name || agent.key}</strong>
-                        <small>{agent.role || agent.key}</small>
-                      </span>
-                      {agent.highImpact ? <em>门禁</em> : null}
-                    </div>
-                    {index < row.agents.length - 1 ? (
-                      <ArrowRight size={13} className="cw-collaboration-node-arrow" />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {adjustments.length > 0 ? (
-        <div className="cw-collaboration-adjustments">
-          <AlertTriangle size={13} />
-          <ul>
-            {adjustments.map((adjustment, index) => (
-              <li key={`${adjustment.message || adjustment.action || 'adjustment'}-${index}`}>
-                {adjustment.message || adjustment.action || '协作计划已调整'}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </section>
-  )
-}
 
 // FoldedAnalysis (D6) renders the persisted analysis work log as a COLLAPSED
 // block with an expand/collapse toggle. The round's streamed analysis folds above
