@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 
@@ -128,21 +128,18 @@ function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys }) {
   const toCards = toWave && Array.isArray(toWave.cards) ? toWave.cards : []
   return (
     <div className={`ceg-connector${active ? ' is-active' : ''}`} aria-hidden="true">
-      <svg className="ceg-edge-svg" viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
-        {list.length > 0 ? list.map((edge, index) => {
-          const fromY = cardSlotPercent(fromCards, edge.from)
-          const toY = cardSlotPercent(toCards, edge.to)
-          return (
-            <path
-              key={edge.id || `${edge.from}->${edge.to}-${index}`}
-              className={`ceg-edge-path ceg-edge-${edge.state || 'inactive'}`}
-              d={orthogonalPath(fromY, toY)}
-            />
-          )
-        }) : (
-          <path className="ceg-edge-path ceg-edge-inactive" d="M 0 50 H 100" />
-        )}
-      </svg>
+      {list.length > 0 ? list.map((edge, index) => {
+        const fromY = cardSlotPercent(fromCards, edge.from)
+        const toY = cardSlotPercent(toCards, edge.to)
+        return (
+          <EdgeSegments
+            key={edge.id || `${edge.from}->${edge.to}-${index}`}
+            edge={edge}
+            fromY={fromY}
+            toY={toY}
+          />
+        )
+      }) : <EdgeSegments edge={{ state: 'inactive' }} fromY={50} toY={50} />}
       {list.length > 0 ? list.map((edge, index) => (
         <span
           key={`${edge.id || `${edge.from}->${edge.to}`}-arrow-${index}`}
@@ -151,6 +148,38 @@ function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys }) {
         />
       )) : <span className="ceg-edge-arrow ceg-edge-inactive" style={{ top: '50%' }} />}
     </div>
+  )
+}
+
+function EdgeSegments({ edge, fromY, toY }) {
+  const state = edge.state || 'inactive'
+  const stateClass = `ceg-edge-${state}`
+  const linear = Math.abs(fromY - toY) < 1
+  if (linear) {
+    return (
+      <span
+        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass}`}
+        style={{ left: '0%', width: '100%', top: `${fromY}%` }}
+      />
+    )
+  }
+  const minY = Math.min(fromY, toY)
+  const height = Math.abs(toY - fromY)
+  return (
+    <Fragment>
+      <span
+        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass}`}
+        style={{ left: '0%', width: '48%', top: `${fromY}%` }}
+      />
+      <span
+        className={`ceg-edge-seg ceg-edge-vertical ${stateClass}`}
+        style={{ left: '48%', top: `${minY}%`, height: `${height}%` }}
+      />
+      <span
+        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass}`}
+        style={{ left: '48%', width: '52%', top: `${toY}%` }}
+      />
+    </Fragment>
   )
 }
 
@@ -163,11 +192,6 @@ function cardSlotPercent(cards, agentKey) {
   const top = Math.max(14, 50 - Math.min(36, (count - 1) * 16))
   const bottom = 100 - top
   return top + ((bottom - top) * index) / (count - 1)
-}
-
-function orthogonalPath(fromY, toY) {
-  if (Math.abs(fromY - toY) < 1) return `M 0 ${fromY} H 100`
-  return `M 0 ${fromY} H 48 V ${toY} H 100`
 }
 
 function relatedCardKeys(graph, activeKey) {
