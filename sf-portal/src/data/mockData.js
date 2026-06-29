@@ -38,51 +38,42 @@ export const mockApplications = [
   }
 ]
 
-// 模拟智能体数据
+// 模拟智能体数据（生产流水线：业务逻辑 → 并行(界面解析/数据抓取) → 生产交付）
 export const mockAgents = [
   {
-    id: 'agent-1',
-    name: '代码生成助手',
-    type: '开发助手',
+    id: 'agent-business',
+    name: '业务逻辑智能体',
+    type: '业务逻辑',
     status: 'working',
-    currentTask: '生成用户管理模块',
-    progress: 65,
-    lastActivity: new Date('2024-01-18T10:30:00')
+    currentTask: '业务流程建模与逻辑拆解',
+    progress: 72,
+    lastActivity: new Date()
   },
   {
-    id: 'agent-2',
-    name: '测试执行器',
-    type: '测试工具',
+    id: 'agent-prototype',
+    name: '界面解析智能体',
+    type: '界面解析',
     status: 'idle',
     currentTask: null,
     progress: 0,
-    lastActivity: new Date('2024-01-18T09:45:00')
+    lastActivity: new Date()
   },
   {
-    id: 'agent-3',
-    name: '文档编写员',
-    type: '文档工具',
+    id: 'agent-data',
+    name: '数据抓取智能体',
+    type: '数据抓取',
     status: 'idle',
     currentTask: null,
     progress: 0,
-    lastActivity: new Date('2024-01-18T08:00:00')
+    lastActivity: new Date()
   },
   {
-    id: 'agent-4',
-    name: '代码审查员',
-    type: '质量保障',
-    status: 'completed',
-    currentTask: '审查支付模块代码',
-    progress: 100,
-    lastActivity: new Date('2024-01-18T10:00:00')
-  },
-  {
-    id: 'agent-5',
-    name: '部署助手',
-    type: '运维工具',
+    id: 'agent-production',
+    name: '生产交付智能体',
+    type: '生产交付',
     status: 'idle',
     currentTask: null,
     progress: 0,
-    lastActivity: new Date('2024-01-17T16:30:00')
+    lastActivity: new Date()
   }
 ]
