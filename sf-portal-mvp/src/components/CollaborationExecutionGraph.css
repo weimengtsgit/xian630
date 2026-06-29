@@ -79,63 +79,46 @@
 }
 
 .ceg-card-is-revealing {
-  animation: cegAgentReveal 1.05s cubic-bezier(0.22, 0.72, 0.18, 1);
+  animation: cegAgentGlowReveal 1.18s cubic-bezier(0.18, 0.76, 0.2, 1) both;
   box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.34), 0 0 22px rgba(104, 221, 255, 0.28), 0 12px 28px rgba(0, 0, 0, 0.28);
   overflow: hidden;
-  will-change: clip-path, opacity, transform, filter;
+  will-change: opacity, transform, filter;
 }
 
 .ceg-card-is-revealing::after {
   content: '';
   position: absolute;
-  inset: 0;
+  inset: -1px;
   border-radius: 8px;
-  background: linear-gradient(90deg, transparent 0%, rgba(104, 221, 255, 0.08) 36%, rgba(104, 221, 255, 0.32) 52%, rgba(104, 221, 255, 0.06) 68%, transparent 100%);
-  transform: translateX(-110%);
-  animation: cegAgentRevealSweep 0.96s cubic-bezier(0.22, 0.72, 0.18, 1) both;
+  background: linear-gradient(90deg, rgba(6, 18, 29, 0) 0%, rgba(104, 221, 255, 0.16) 17%, rgba(6, 18, 29, 0.7) 34%, rgba(6, 18, 29, 0.86) 100%);
+  transform: translateX(-18%);
+  animation: cegAgentLightWash 1.18s cubic-bezier(0.18, 0.76, 0.2, 1) both;
   pointer-events: none;
+  will-change: opacity, transform;
 }
 
-@keyframes cegAgentReveal {
+@keyframes cegAgentGlowReveal {
   0% {
-    opacity: 0;
-    clip-path: inset(0 100% 0 0);
-    transform: translateX(-10px) scale(0.985);
-    filter: saturate(1.08) brightness(1.06);
-  }
-  25% {
-    opacity: 0.72;
-    clip-path: inset(0 64% 0 0);
-    transform: translateX(-6px) scale(0.992);
-    filter: saturate(1.14) brightness(1.1);
-  }
-  50% {
-    opacity: 1;
-    clip-path: inset(0 30% 0 0);
-    transform: translateX(-2px) scale(1.004);
-    filter: saturate(1.2) brightness(1.13);
-  }
-  75% {
-    clip-path: inset(0 6% 0 0);
-    transform: translateX(0) scale(1.002);
-    filter: saturate(1.1) brightness(1.05);
-  }
-  88% {
-    clip-path: inset(0 0 0 0);
-    transform: translateX(0) scale(1);
+    opacity: 0.36;
+    transform: translateX(-4px) scale(0.992);
+    filter: saturate(0.74) brightness(0.64);
   }
   100% {
     opacity: 1;
-    clip-path: inset(0 0 0 0);
     transform: translateX(0) scale(1);
     filter: none;
   }
 }
 
-@keyframes cegAgentRevealSweep {
-  0% { opacity: 0; transform: translateX(-110%); }
-  34% { opacity: 0.95; }
-  100% { opacity: 0; transform: translateX(110%); }
+@keyframes cegAgentLightWash {
+  0% {
+    opacity: 1;
+    transform: translateX(-18%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(104%);
+  }
 }
 
 /* Orchestrator pulsing effect during reveal */
@@ -227,6 +210,11 @@
   .ceg-card-is-revealing {
     animation: none !important;
     box-shadow: none !important;
+  }
+
+  .ceg-card-is-revealing::after {
+    animation: none !important;
+    opacity: 0 !important;
   }
 
   .ceg-spin {
