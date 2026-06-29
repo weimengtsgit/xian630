@@ -51,6 +51,10 @@ type TurnSummary struct {
 	// document-draft-initiated change proposals. Non-nil only when the change
 	// originated from an applied document draft.
 	DocumentDraftChange *DocumentDraftChangeRef `json:"documentDraftChange,omitempty"`
+	// Converter indicates which converter produced the summary: "llm" or "deterministic".
+	Converter string `json:"converter,omitempty"`
+	// ConversionError records any error that occurred during conversion when fallback was used.
+	ConversionError string `json:"conversionError,omitempty"`
 }
 
 // TurnOutput is the validated result of one turn-intent round.

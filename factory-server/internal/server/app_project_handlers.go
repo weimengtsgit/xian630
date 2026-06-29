@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"mime"
 	"net/http"
 	"os"
@@ -292,12 +291,45 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusConflict, "stale_source")
 		return
 	}
-	added, removed := lineDelta(string(raw), draft.Content)
-	excerpt := draftExcerpt(string(raw), draft.Content, 600)
+	// Try to use the document draft converter, fall back to deterministic if it fails
+	var userFacingText, changeDescription string
+	var converterUsed string = "deterministic"
+	var conversionError string
+	if s.documentDraftConverter != nil {
+		converterInput := dialogue.DocumentDraftConverterInput{
+			Path:           cleanRel,
+			SourceMarkdown: string(raw),
+			DraftMarkdown:  draft.Content,
+			SourceChecksum: draft.SourceChecksum,
+		}
+		if output, err := s.documentDraftConverter.ConvertDraft(r.Context(), converterInput); err == nil && output != nil {
+			userFacingText = output.UserFacingText
+			changeDescription = output.ChangeDescription
+			converterUsed = "llm"
+		} else if err != nil {
+			conversionError = err.Error()
+		}
+	}
+	// Fall back to deterministic implementation if converter failed or returned invalid output
+	if userFacingText == "" || changeDescription == "" {
+		fallbackInput := dialogue.DocumentDraftConverterInput{
+			Path:           cleanRel,
+			SourceMarkdown: string(raw),
+			DraftMarkdown:  draft.Content,
+			SourceChecksum: draft.SourceChecksum,
+		}
+		fallbackOutput, _ := dialogue.NewDeterministicDocumentDraftConverter().ConvertDraft(r.Context(), fallbackInput)
+		if fallbackOutput != nil {
+			userFacingText = fallbackOutput.UserFacingText
+			changeDescription = fallbackOutput.ChangeDescription
+		}
+		converterUsed = "deterministic"
+	}
+
 	summary := dialogue.TurnSummary{
 		Intent:              model.TurnIntentApplicationModification,
-		UserFacingText:      "已根据文档草稿生成变更建议，请确认后应用。",
-		ChangeDescription:   fmt.Sprintf("基于 %s 的文档草稿生成变更需求：新增 %d 行、删除 %d 行。关键修改内容：%s", cleanRel, added, removed, excerpt),
+		UserFacingText:      userFacingText,
+		ChangeDescription:   changeDescription,
 		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
 			DraftID:        draft.ID,
 			ApplicationID:  app.ID,
@@ -305,6 +337,8 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 			Path:           cleanRel,
 			SourceChecksum: draft.SourceChecksum,
 		},
+		Converter:         converterUsed,
+		ConversionError:   conversionError,
 	}
 	summaryJSON, _ := json.Marshal(summary)
 	now := time.Now()
@@ -327,63 +361,6 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{"draftId": draft.ID, "turnId": turnID, "status": string(model.DialogueStatusChangeConfirmation), "summary": summary})
 }
 
-func draftExcerpt(source, draft string, limit int) string {
-	src := map[string]int{}
-	for _, line := range strings.Split(source, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			src[trimmed]++
-		}
-	}
-	var added []string
-	for _, line := range strings.Split(draft, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if src[trimmed] > 0 {
-			src[trimmed]--
-			continue
-		}
-		added = append(added, "+ "+trimmed)
-	}
-	var removed []string
-	for line, count := range src {
-		for i := 0; i < count; i++ {
-			removed = append(removed, "- "+line)
-		}
-	}
-	sort.Strings(removed)
-	changed := append(added, removed...)
-	if len(changed) == 0 {
-		changed = []string{strings.TrimSpace(draft)}
-	}
-	text := strings.Join(changed, "；")
-	if len([]rune(text)) > limit {
-		runes := []rune(text)
-		text = string(runes[:limit]) + "…"
-	}
-	return text
-}
-
-func lineDelta(source, draft string) (int, int) {
-	src := map[string]int{}
-	for _, line := range strings.Split(source, "\n") {
-		src[line]++
-	}
-	added, removed := 0, 0
-	for _, line := range strings.Split(draft, "\n") {
-		if src[line] > 0 {
-			src[line]--
-		} else {
-			added++
-		}
-	}
-	for _, n := range src {
-		removed += n
-	}
-	return added, removed
-}
 
 func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Request) (model.Application, string, bool) {
 	id := Param(r, "id")

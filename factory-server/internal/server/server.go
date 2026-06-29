@@ -68,6 +68,11 @@ type Server struct {
 	// Start and is also startable from tests so they can drive it.
 	turnWorker *TurnWorker
 	runLog     *runlog.Logger
+
+	// documentDraftConverter converts document drafts to user-facing change summaries.
+	// In production, this is the deterministic converter. Tests may override this
+	// with fakes or LLM-backed implementations.
+	documentDraftConverter dialogue.DocumentDraftConverter
 }
 
 type claudeCommandAdapter struct {
@@ -248,6 +253,14 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// same dialogue.Runner implements TurnClassifier via ClassifyTurn). Tests
 	// override s.turnClassifier directly with a fake.
 	s.turnClassifier = s.dialogueRouter
+	// Document draft converter uses the deterministic implementation in production.
+	// Tests may override s.documentDraftConverter directly with fakes or
+	// LLM-backed implementations.
+	if cfg.EnableDocumentDraftLLMConverter {
+		s.documentDraftConverter = dialogue.NewLLMDocumentDraftConverter(s.dialogueRouter)
+	} else {
+		s.documentDraftConverter = dialogue.NewDeterministicDocumentDraftConverter()
+	}
 	s.turnWorker = NewTurnWorker(s, st, s.turnClassifier)
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
 		Store:        st,

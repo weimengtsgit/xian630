@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dialogue"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -393,3 +395,204 @@ func mustWriteBytes(t *testing.T, path string, content []byte) {
 }
 
 func jsonContains(body, s string) bool { return strings.Contains(body, s) }
+
+func TestApplicationProjectDraftUsesConverter(t *testing.T) {
+	r, st, root, app := newProjectTestServer(t)
+
+	// Seed dialogue
+	seedProjectDialogue(t, st, "dlg_1", app.ID)
+
+	// Override with fake converter that returns custom output
+	expectedOutput := &dialogue.DocumentDraftConverterOutput{
+		UserFacingText:    "Custom user facing text",
+		ChangeDescription: "Custom change description",
+	}
+	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
+	srv.documentDraftConverter = dialogue.NewFakeDocumentDraftConverter(expectedOutput, nil)
+	r = srv.routes()
+
+	// Create preview and draft
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{
+		"dialogueId":     "dlg_1",
+		"path":           "docs/overview.md",
+		"sourceChecksum": preview.Checksum,
+		"content":        "# Edited",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save draft: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Apply
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{
+		"dialogueId":     "dlg_1",
+		"path":           "docs/overview.md",
+		"sourceChecksum": preview.Checksum,
+		"content":        "# Edited",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply draft: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Verify
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	summary := resp["summary"].(map[string]any)
+	if summary["userFacingText"] != expectedOutput.UserFacingText {
+		t.Errorf("userFacingText=%q want=%q", summary["userFacingText"], expectedOutput.UserFacingText)
+	}
+	if summary["changeDescription"] != expectedOutput.ChangeDescription {
+		t.Errorf("changeDescription=%q want=%q", summary["changeDescription"], expectedOutput.ChangeDescription)
+	}
+	if summary["documentDraftChange"] == nil {
+		t.Error("documentDraftChange is nil, should be preserved")
+	}
+	if summary["converter"] != "llm" {
+		t.Errorf("converter=%q want=llm", summary["converter"])
+	}
+}
+
+// Test-only converter that returns nil, nil
+type nilOutputConverter struct{}
+
+func (c *nilOutputConverter) ConvertDraft(ctx context.Context, input dialogue.DocumentDraftConverterInput) (*dialogue.DocumentDraftConverterOutput, error) {
+	return nil, nil
+}
+
+func TestApplicationProjectDraftFallsBackToDeterministic(t *testing.T) {
+	tests := []struct {
+		name      string
+		converter dialogue.DocumentDraftConverter
+	}{
+		{
+			name:      "converter returns error",
+			converter: dialogue.NewFakeDocumentDraftConverter(nil, fmt.Errorf("converter failed")),
+		},
+		{
+			name:      "converter returns nil output",
+			converter: &nilOutputConverter{},
+		},
+		{
+			name:      "converter returns empty userFacingText",
+			converter: dialogue.NewFakeDocumentDraftConverter(&dialogue.DocumentDraftConverterOutput{ChangeDescription: "desc"}, nil),
+		},
+		{
+			name:      "converter returns empty changeDescription",
+			converter: dialogue.NewFakeDocumentDraftConverter(&dialogue.DocumentDraftConverterOutput{UserFacingText: "text"}, nil),
+		},
+		{
+			name:      "converter is nil",
+			converter: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create server first so we can override the converter immediately
+			root := t.TempDir()
+			st, err := store.Open(":memory:")
+			if err != nil {
+				t.Fatalf("open store: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+
+			// Set up app
+			app := model.Application{
+				ID:            "app_demo",
+				Slug:          "demo",
+				Name:          "Demo",
+				Source:        model.AppSourceGenerated,
+				Path:          "generated-apps/demo",
+				ManifestPath:  "generated-apps/demo/.factory/app.json",
+				Status:        model.AppStatusStopped,
+			}
+			if err := st.UpsertApplication(context.Background(), app); err != nil {
+				t.Fatalf("upsert app: %v", err)
+			}
+
+			// Create server with our converter override
+			srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
+			srv.documentDraftConverter = tt.converter
+			r := srv.routes()
+
+			// Set up test files
+			appDir := filepath.Join(root, app.Path, "docs")
+			if err := os.MkdirAll(appDir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			testPath := filepath.Join(appDir, "overview.md")
+			origContent := "# Overview\nHello"
+			draftContent := "# Overview\nModified content\nline 2\nnew line 3\n"
+			if err := os.WriteFile(testPath, []byte(origContent), 0o644); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+
+			// Seed dialogue
+			now := time.Now()
+			if err := st.CreateDialogueSession(context.Background(), model.DialogueSession{
+				ID:                   "dlg_1",
+				Status:               model.DialogueStatusResolved,
+				Intent:               model.DialogueIntentApplicationGeneration,
+				ResolvedApplicationID: app.ID,
+				InitialPrompt:        "p",
+				CreatedAt:            now,
+				UpdatedAt:            now,
+			}); err != nil {
+				t.Fatalf("seed dialogue: %v", err)
+			}
+
+			// Get preview and create draft
+			preview := getMarkdownPreview(t, r, "dlg_1")
+			rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{
+				"dialogueId":     "dlg_1",
+				"path":           "docs/overview.md",
+				"sourceChecksum": preview.Checksum,
+				"content":        draftContent,
+			})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("save draft: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+
+			// Apply
+			rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{
+				"dialogueId":     "dlg_1",
+				"path":           "docs/overview.md",
+				"sourceChecksum": preview.Checksum,
+				"content":        draftContent,
+			})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("apply draft: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+
+			// Verify
+			var resp map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			summary := resp["summary"].(map[string]any)
+			if summary["userFacingText"] != "已根据文档草稿生成变更建议，请确认后应用。" {
+				t.Errorf("userFacingText=%q want deterministic fallback", summary["userFacingText"])
+			}
+			if !strings.Contains(summary["changeDescription"].(string), "docs/overview.md") {
+				t.Errorf("changeDescription=%q should contain path", summary["changeDescription"])
+			}
+			if summary["documentDraftChange"] == nil {
+				t.Error("documentDraftChange is nil, should be preserved")
+			}
+			if summary["converter"] != "deterministic" {
+				t.Errorf("converter=%q want=deterministic", summary["converter"])
+			}
+			if tt.name == "converter returns error" {
+				if summary["conversionError"] == "" {
+					t.Error("conversionError should be set when converter returns an error")
+				}
+			} else {
+				if summary["conversionError"] != nil && summary["conversionError"] != "" {
+					t.Errorf("conversionError=%q want empty", summary["conversionError"])
+				}
+			}
+		})
+	}
+}
