@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { buildCollaborationCardView } from '../src/hooks/collaborationPlanState.js'
 import { buildDialogueTimeline } from '../src/hooks/dialogueTimeline.js'
+import { buildCollaborationExecutionGraphView } from '../src/hooks/collaborationExecutionGraphState.js'
 
 const jobCenter = readFileSync(new URL('../src/components/JobCenter.jsx', import.meta.url), 'utf8')
 const workbench = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
@@ -67,3 +68,70 @@ const previewItem = confirmedDialogueTimeline.find(item => item.type === 'collab
 assert.ok(previewItem, 'confirmed dialogue timeline should retain the collaboration preview inside the conversation')
 assert.equal(previewItem.preview.agents.length, 13, 'retained collaboration preview should include every planned agent')
 assert.equal(previewItem.preview.adjustments[0].message, '需要质量门禁', 'retained collaboration preview should map high-impact warnings to adjustments')
+
+const graphPreview = {
+  lanes: [
+    { id: 'analysis', label: '分析' },
+    { id: 'generation', label: '生成' },
+    { id: 'delivery', label: '交付' },
+  ],
+  agents: [
+    { key: 'collaboration-orchestrator', name: '协作编排', role: 'collaboration_orchestration', lane: 'analysis' },
+    { key: 'requirement-analyst', name: '需求分析', role: 'requirement_analysis', lane: 'analysis' },
+    { key: 'designer', name: '设计', role: 'design_contract', lane: 'analysis' },
+    { key: 'data-integration', name: '数据接入', role: 'data_integration', lane: 'analysis', highImpact: true },
+    { key: 'solution-designer', name: '方案设计', role: 'solution_design', lane: 'generation' },
+    { key: 'code-generator', name: '代码生成', role: 'code_generation', lane: 'generation' },
+    { key: 'tester', name: '测试验证', role: 'test_verification', lane: 'delivery' },
+  ],
+  edges: [
+    { from: 'collaboration-orchestrator', to: 'requirement-analyst' },
+    { from: 'requirement-analyst', to: 'designer' },
+    { from: 'requirement-analyst', to: 'data-integration' },
+    { from: 'designer', to: 'solution-designer' },
+    { from: 'data-integration', to: 'solution-designer' },
+    { from: 'solution-designer', to: 'code-generator' },
+    { from: 'code-generator', to: 'tester' },
+  ],
+  adjustments: [{ message: '用户要求保留数据接入门禁' }],
+}
+
+const plannedGraph = buildCollaborationExecutionGraphView(graphPreview, [])
+assert.equal(plannedGraph.cards.length, 8, 'planned graph should include user input plus seven agents')
+assert.equal(plannedGraph.cards[0].kind, 'origin', 'first graph card should be the user-input origin')
+assert.equal(plannedGraph.cards[1].agentKey, 'collaboration-orchestrator', 'second graph card should be the orchestration hub')
+assert.equal(plannedGraph.cards[1].kind, 'orchestrator', 'collaboration orchestrator should be marked as the hub card')
+assert.equal(plannedGraph.cards.find(card => card.agentKey === 'designer').state, 'pending_confirmation', 'unconfirmed agents should be pending confirmation')
+assert.equal(plannedGraph.edges.every(edge => edge.state === 'planned'), true, 'unconfirmed graph edges should be planned')
+
+const runningGraph = buildCollaborationExecutionGraphView(graphPreview, [
+  { stepId: 'step-orch', agentKey: 'collaboration-orchestrator', status: 'succeeded', name: '协作编排' },
+  { stepId: 'step-req', agentKey: 'requirement-analyst', status: 'succeeded', name: '需求分析' },
+  { stepId: 'step-design', agentKey: 'designer', status: 'running', name: '设计', summary: '正在生成设计契约' },
+  { stepId: 'step-data', agentKey: 'data-integration', status: 'pending', name: '数据接入' },
+  { stepId: 'step-solution', agentKey: 'solution-designer', status: 'pending', name: '方案设计' },
+  { stepId: 'step-code', agentKey: 'code-generator', status: 'pending', name: '代码生成' },
+  { stepId: 'step-test', agentKey: 'tester', status: 'pending', name: '测试验证' },
+])
+assert.equal(runningGraph.confirmed, true, 'presence of real step blocks should make the graph accepted/execution-state')
+assert.equal(runningGraph.cards.find(card => card.agentKey === 'collaboration-orchestrator').state, 'completed', 'succeeded orchestrator should be completed')
+assert.equal(runningGraph.cards.find(card => card.agentKey === 'designer').state, 'running', 'running step should map to running card state')
+assert.equal(runningGraph.cards.find(card => card.agentKey === 'solution-designer').state, 'waiting_upstream', 'pending card with unfinished upstream should wait upstream')
+assert.equal(
+  runningGraph.cards.find(card => card.agentKey === 'solution-designer').waitingFor.join('、'),
+  '设计、数据接入',
+  'waiting card should name unfinished upstream agents',
+)
+assert.equal(
+  runningGraph.edges.find(edge => edge.from === 'requirement-analyst' && edge.to === 'designer').state,
+  'flowing',
+  'completed upstream into running downstream should be flowing',
+)
+assert.equal(
+  runningGraph.edges.find(edge => edge.from === 'designer' && edge.to === 'solution-designer').state,
+  'inactive',
+  'unfinished upstream should keep downstream edge inactive',
+)
+assert.ok(runningGraph.waves.length >= 5, 'graph should build multiple horizontal execution waves')
+assert.equal(runningGraph.summary.totalAgents, 7, 'summary should count collaboration agents, excluding user input')
+assert.equal(runningGraph.summary.running, 1, 'summary should count running cards')
