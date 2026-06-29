@@ -72,7 +72,8 @@ type Server struct {
 	// documentDraftConverter converts document drafts to user-facing change summaries.
 	// In production, this is the deterministic converter. Tests may override this
 	// with fakes or LLM-backed implementations.
-	documentDraftConverter dialogue.DocumentDraftConverter
+	documentDraftConverter     dialogue.DocumentDraftConverter
+	documentDraftConverterName string
 }
 
 type claudeCommandAdapter struct {
@@ -258,8 +259,10 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// LLM-backed implementations.
 	if cfg.EnableDocumentDraftLLMConverter {
 		s.documentDraftConverter = dialogue.NewLLMDocumentDraftConverter(s.dialogueRouter)
+		s.documentDraftConverterName = "llm"
 	} else {
 		s.documentDraftConverter = dialogue.NewDeterministicDocumentDraftConverter()
+		s.documentDraftConverterName = "deterministic"
 	}
 	s.turnWorker = NewTurnWorker(s, st, s.turnClassifier)
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{

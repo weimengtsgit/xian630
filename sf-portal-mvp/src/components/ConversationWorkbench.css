@@ -18,7 +18,8 @@
   border-bottom: 1px solid rgba(111, 218, 255, 0.18);
 }
 .cw-composer {
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: stretch;
   border-top: 1px solid rgba(111, 218, 255, 0.18);
   border-bottom: 0;
 }
@@ -231,8 +232,9 @@
 .cw-resolved { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; background: rgba(20, 64, 50, 0.62) !important; border: 1px solid rgba(126, 231, 135, 0.42); color: #bff6c4; }
 .cw-answer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid rgba(111, 218, 255, 0.14); font-size: 12px; }
 .cw-error { padding: 6px 12px; color: #ff9a9a; background: rgba(255, 102, 94, 0.08); font-size: 12px; }
-.cw-composer-scope { align-self: stretch; flex-basis: 100%; color: #ffc457; font-size: 11px; line-height: 1.4; padding: 4px 8px; border: 1px solid rgba(255, 196, 87, 0.24); border-radius: 6px; background: rgba(45, 34, 12, 0.42); }
-.cw-composer textarea { flex: 1; min-height: 76px; max-height: 220px; resize: none; line-height: 1.5; font-size: 13px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.24); background: rgba(3, 17, 29, 0.8); color: #edfaff; padding: 8px; font-family: inherit; overflow-y: auto; }
+.cw-composer-scope { color: #ffc457; font-size: 11px; line-height: 1.4; padding: 4px 8px; border: 1px solid rgba(255, 196, 87, 0.24); border-radius: 6px; background: rgba(45, 34, 12, 0.42); }
+.cw-composer-row { display: flex; align-items: flex-end; gap: 8px; width: 100%; }
+.cw-composer-row textarea { flex: 1; min-width: 0; min-height: 76px; max-height: 220px; resize: none; line-height: 1.5; font-size: 13px; border-radius: 6px; border: 1px solid rgba(111, 218, 255, 0.24); background: rgba(3, 17, 29, 0.8); color: #edfaff; padding: 8px; font-family: inherit; overflow-y: auto; }
 .cw-send { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; }
 /* Phase 1: the .cw-history* and .cw-delete-confirm* rules that styled the old
  * in-workbench history drawer were removed — history moved to the left SessionNav

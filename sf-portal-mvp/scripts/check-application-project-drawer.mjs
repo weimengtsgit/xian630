@@ -53,7 +53,12 @@ assert.match(panelCss, /app-project-diff-line-removed/, 'ApplicationProjectPanel
 assert.match(panelJsx, /以草稿内容继续/, 'ApplicationProjectPanel must offer continue with stale draft content action')
 assert.match(panelJsx, /continueDraftFromStaleContent/, 'ApplicationProjectPanel must implement continueDraftFromStaleContent handler')
 assert.match(panelJsx, /const staleDraftContent = preview\.draft\.content/, 'continueDraftFromStaleContent must capture stale draft content before discard')
+assert.match(panelJsx, /factoryApi\.saveApplicationProjectDraft\(applicationId,\s*\{\s*dialogueId,\s*path:\s*preview\.path,\s*sourceChecksum:\s*preview\.checksum,\s*content:\s*preview\.content \|\| ''\s*\}\)/, 'restartDraftFromCurrentSource must save a new draft against the current checksum without first discarding')
+assert.match(panelJsx, /factoryApi\.saveApplicationProjectDraft\(applicationId,\s*\{\s*dialogueId,\s*path:\s*preview\.path,\s*sourceChecksum:\s*preview\.checksum,\s*content:\s*staleDraftContent \|\| ''\s*\}\)/, 'continueDraftFromStaleContent must preserve stale content by saving it against the current checksum')
+assert.doesNotMatch(panelJsx, /restartDraftFromCurrentSource[\s\S]*discardApplicationProjectDraft[\s\S]*continueDraftFromStaleContent/, 'stale rebase handlers must not discard before the replacement draft is saved')
 assert.match(panelJsx, /preview\.draft && preview\.draft\.status === 'draft' && !preview\.draft\.isStale/, 'ApplicationProjectPanel must only show apply button for non-stale drafts')
+assert.match(panelJsx, /MAX_DIFF_LINES/, 'stale diff must cap expensive LCS work for large documents')
+assert.match(panelJsx, /app-project-diff-too-large/, 'stale diff must show a bounded fallback for large documents')
 
 for (const cls of ['application-project-panel', 'app-project-groups', 'app-project-tree-node', 'app-project-preview', 'app-project-preview-tabs', 'app-project-metadata']) {
   assert.match(panelCss, new RegExp(`\\.${cls}`), `ApplicationProjectPanel.css must style .${cls}`)

@@ -409,6 +409,7 @@ func TestApplicationProjectDraftUsesConverter(t *testing.T) {
 	}
 	srv := New(config.Config{WorkspaceRoot: root}, st, scanner.Scanner{})
 	srv.documentDraftConverter = dialogue.NewFakeDocumentDraftConverter(expectedOutput, nil)
+	srv.documentDraftConverterName = "llm"
 	r = srv.routes()
 
 	// Create preview and draft
@@ -451,6 +452,39 @@ func TestApplicationProjectDraftUsesConverter(t *testing.T) {
 	}
 	if summary["converter"] != "llm" {
 		t.Errorf("converter=%q want=llm", summary["converter"])
+	}
+}
+
+func TestApplicationProjectDraftDefaultConverterIsMarkedDeterministic(t *testing.T) {
+	r, st, _, app := newProjectTestServer(t)
+	seedProjectDialogue(t, st, "dlg_1", app.ID)
+
+	preview := getMarkdownPreview(t, r, "dlg_1")
+	rec := doJSON(t, r, http.MethodPut, "/api/apps/app_demo/project-drafts", map[string]any{
+		"dialogueId":     "dlg_1",
+		"path":           "docs/overview.md",
+		"sourceChecksum": preview.Checksum,
+		"content":        "# Edited",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save draft: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = doJSON(t, r, http.MethodPost, "/api/apps/app_demo/project-drafts/apply", map[string]any{
+		"dialogueId": "dlg_1",
+		"path":       "docs/overview.md",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply draft: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	summary := resp["summary"].(map[string]any)
+	if summary["converter"] != "deterministic" {
+		t.Fatalf("converter=%q want deterministic", summary["converter"])
 	}
 }
 
@@ -500,13 +534,13 @@ func TestApplicationProjectDraftFallsBackToDeterministic(t *testing.T) {
 
 			// Set up app
 			app := model.Application{
-				ID:            "app_demo",
-				Slug:          "demo",
-				Name:          "Demo",
-				Source:        model.AppSourceGenerated,
-				Path:          "generated-apps/demo",
-				ManifestPath:  "generated-apps/demo/.factory/app.json",
-				Status:        model.AppStatusStopped,
+				ID:           "app_demo",
+				Slug:         "demo",
+				Name:         "Demo",
+				Source:       model.AppSourceGenerated,
+				Path:         "generated-apps/demo",
+				ManifestPath: "generated-apps/demo/.factory/app.json",
+				Status:       model.AppStatusStopped,
 			}
 			if err := st.UpsertApplication(context.Background(), app); err != nil {
 				t.Fatalf("upsert app: %v", err)
@@ -532,13 +566,13 @@ func TestApplicationProjectDraftFallsBackToDeterministic(t *testing.T) {
 			// Seed dialogue
 			now := time.Now()
 			if err := st.CreateDialogueSession(context.Background(), model.DialogueSession{
-				ID:                   "dlg_1",
-				Status:               model.DialogueStatusResolved,
-				Intent:               model.DialogueIntentApplicationGeneration,
+				ID:                    "dlg_1",
+				Status:                model.DialogueStatusResolved,
+				Intent:                model.DialogueIntentApplicationGeneration,
 				ResolvedApplicationID: app.ID,
-				InitialPrompt:        "p",
-				CreatedAt:            now,
-				UpdatedAt:            now,
+				InitialPrompt:         "p",
+				CreatedAt:             now,
+				UpdatedAt:             now,
 			}); err != nil {
 				t.Fatalf("seed dialogue: %v", err)
 			}

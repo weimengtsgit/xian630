@@ -169,7 +169,7 @@ The analysis portion of the visible work trace shown inside a clarification conv
 **模型思考过程 (思考过程)**: The model's raw reasoning (`thinking_delta`), streamed live on the conversation surface as a 思考过程 block (distinct from 分析过程). Shown to the user token-by-token; the conversation flow surfaces it (the executor/trace pipeline is a separate surface).
 
 **任务思考过程**:
-The `thinking_delta` emitted by a generation-task agent while a task card is executing, shown in the dialogue conversation flow as task-attributed thinking with credential redaction but without summarization or semantic rewriting. It is distinct from analysis work logs, visible work trace events, and step execution records.
+The `thinking_delta` emitted by a generation-task agent while a task card is executing, carried by a dedicated task-attributed thinking stream and shown in the dialogue conversation flow with credential redaction but without summarization or semantic rewriting. It is distinct from analysis work logs, visible work trace events, and step execution records.
 _Avoid_: 分析工作日志, 可见工作轨迹, 步骤执行记录
 
 **任务执行块**:

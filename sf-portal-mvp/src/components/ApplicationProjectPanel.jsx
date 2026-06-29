@@ -101,12 +101,13 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
   }
   const restartDraftFromCurrentSource = async () => {
     if (!preview?.draft || !preview.draft.isStale || draftSaving) return
+    const currentSourceContent = preview.content || ''
     setDraftSaving(true)
     try {
-      await factoryApi.discardApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      await factoryApi.saveApplicationProjectDraft(applicationId, { dialogueId, path: preview.path, sourceChecksum: preview.checksum, content: preview.content || '' })
       const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
       setPreview(next)
-      setDraftText(next.content || '')
+      setDraftText(currentSourceContent)
       setEditing(true)
       setMode('source')
     } finally {
@@ -118,7 +119,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
     const staleDraftContent = preview.draft.content
     setDraftSaving(true)
     try {
-      await factoryApi.discardApplicationProjectDraft(applicationId, { dialogueId, path: preview.path })
+      await factoryApi.saveApplicationProjectDraft(applicationId, { dialogueId, path: preview.path, sourceChecksum: preview.checksum, content: staleDraftContent || '' })
       const next = await factoryApi.getApplicationProjectFile(applicationId, preview.path, dialogueId)
       setPreview(next)
       setDraftText(staleDraftContent || '')
@@ -300,6 +301,8 @@ function formatBytes(value) {
   return `${(n / 1024 / 1024).toFixed(1)} MiB`
 }
 
+const MAX_DIFF_LINES = 500
+
 // LCS-based line diff helper
 function computeLineDiff(sourceText, draftText) {
   const sourceLines = (sourceText || '').split('\n')
@@ -308,6 +311,9 @@ function computeLineDiff(sourceText, draftText) {
   // Compute LCS table
   const m = sourceLines.length
   const n = draftLines.length
+  if (m + n > MAX_DIFF_LINES) {
+    return { tooLarge: true, sourceLineCount: m, draftLineCount: n, lines: [] }
+  }
   const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
 
   for (let i = 1; i <= m; i++) {
@@ -339,16 +345,24 @@ function computeLineDiff(sourceText, draftText) {
     }
   }
 
-  return diff
+  return { tooLarge: false, lines: diff }
 }
 
 function LineDiffView({ sourceText, draftText }) {
   const diff = useMemo(() => computeLineDiff(sourceText, draftText), [sourceText, draftText])
 
+  if (diff.tooLarge) {
+    return (
+      <div className="app-project-diff app-project-diff-too-large">
+        当前文档差异较大（源文档 {diff.sourceLineCount} 行，草稿 {diff.draftLineCount} 行），已跳过逐行对比。请选择一种变基方式后继续编辑。
+      </div>
+    )
+  }
+
   return (
     <div className="app-project-diff">
       <div className="app-project-diff-lines">
-        {diff.map((item, index) => (
+        {diff.lines.map((item, index) => (
           <div key={index} className={`app-project-diff-line app-project-diff-line-${item.type}`}>
             <span className="app-project-diff-line-gutter">
               {item.type === 'same' ? ' ' : item.type === 'added' ? '+' : '-'}

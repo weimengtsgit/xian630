@@ -79,12 +79,3 @@ const ENTRY_TITLES = {
   agents: '协作智能体',
   application: '应用项目',
 }
-
-function ApplicationProjectPlaceholder() {
-  return (
-    <div className="workbench-drawer-placeholder">
-      <p>当前应用暂无可浏览的项目文件。</p>
-      <small>生成完成后可在此查看项目文档、代码与配置（Phase 5 迁入）。</small>
-    </div>
-  )
-}

@@ -449,17 +449,19 @@ export function ConversationWorkbench({
                 正在回复任务内澄清{clarificationScopeLabel ? `：${clarificationScopeLabel}` : ''}。请先回答该问题。
               </div>
             ) : null}
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder={clarificationScope ? '回复当前任务内澄清' : composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
-              disabled={submitting}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
-            />
-            <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
-              {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
-            </button>
+            <div className="cw-composer-row">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                placeholder={clarificationScope ? '回复当前任务内澄清' : composerActive ? '继续描述修改需求' : '输入需求或补充说明'}
+                disabled={submitting}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitText() } }}
+              />
+              <button type="button" className="cw-send" onClick={submitText} disabled={!input.trim() || submitting} title="发送" aria-label="发送">
+                {submitting ? <Loader2 size={16} className="spin" /> : <Send size={16} />}
+              </button>
+            </div>
           </>
         )}
       </footer>

@@ -305,7 +305,10 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 		if output, err := s.documentDraftConverter.ConvertDraft(r.Context(), converterInput); err == nil && output != nil {
 			userFacingText = output.UserFacingText
 			changeDescription = output.ChangeDescription
-			converterUsed = "llm"
+			converterUsed = s.documentDraftConverterName
+			if converterUsed == "" {
+				converterUsed = "llm"
+			}
 		} else if err != nil {
 			conversionError = err.Error()
 		}
@@ -327,9 +330,9 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 	}
 
 	summary := dialogue.TurnSummary{
-		Intent:              model.TurnIntentApplicationModification,
-		UserFacingText:      userFacingText,
-		ChangeDescription:   changeDescription,
+		Intent:            model.TurnIntentApplicationModification,
+		UserFacingText:    userFacingText,
+		ChangeDescription: changeDescription,
 		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
 			DraftID:        draft.ID,
 			ApplicationID:  app.ID,
@@ -337,8 +340,8 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 			Path:           cleanRel,
 			SourceChecksum: draft.SourceChecksum,
 		},
-		Converter:         converterUsed,
-		ConversionError:   conversionError,
+		Converter:       converterUsed,
+		ConversionError: conversionError,
 	}
 	summaryJSON, _ := json.Marshal(summary)
 	now := time.Now()
@@ -360,7 +363,6 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 	s.publishDialogueSimple("dialogue.change.proposed", body.DialogueID, map[string]any{"turn_id": turnID, "draft_id": draft.ID, "document_path": cleanRel, "summary": summary})
 	writeJSON(w, http.StatusOK, map[string]any{"draftId": draft.ID, "turnId": turnID, "status": string(model.DialogueStatusChangeConfirmation), "summary": summary})
 }
-
 
 func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Request) (model.Application, string, bool) {
 	id := Param(r, "id")

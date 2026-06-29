@@ -138,6 +138,10 @@ assert.match(workbenchJsx, /cw-custom-input/, 'custom clarification input must u
 assert.match(workbenchJsx, /cw-custom-submit/, 'custom clarification add button must use a styled button class')
 assert.match(workbenchCss, /\.cw-options button[\s\S]*cursor:\s*pointer/, 'question options must visibly afford clicking')
 assert.match(workbenchCss, /selected\.cw-option-recommended|cw-option-recommended\.selected/, 'selected recommended options must keep visible selected state')
+assert.match(workbenchJsx, /<div className="cw-composer-row">[\s\S]*<textarea[\s\S]*className="cw-send"/, 'composer textarea and send button must live in a dedicated row')
+assert.match(workbenchCss, /\.cw-composer\s*\{[\s\S]*flex-direction:\s*column[\s\S]*align-items:\s*stretch/, 'composer must stack scope hint above the input row')
+assert.match(workbenchCss, /\.cw-composer-row\s*\{[\s\S]*display:\s*flex[\s\S]*align-items:\s*flex-end/, 'composer row must align textarea and send button horizontally')
+assert.match(workbenchCss, /\.cw-composer-row textarea\s*\{[\s\S]*min-width:\s*0/, 'composer textarea must be allowed to shrink inside the row without collapsing')
 // History list + delete-confirm now live in SessionNav. Assert the SAME
 // behaviors there (scrollable list, delete button, in-app confirm card,
 // pendingDelete state, no window.confirm) — not deleted to force green.
