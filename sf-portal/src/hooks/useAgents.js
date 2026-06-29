@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { mockAgents } from '../data/mockData'
+import { advanceAgentProgress, advancePipeline, getAgentProgressIncrement } from './pipeline.js'
 
 export function useAgents() {
   const [agents, setAgents] = useState([])
@@ -18,27 +19,13 @@ export function useAgents() {
   // 模拟智能体工作进度更新
   useEffect(() => {
     const interval = setInterval(() => {
-      setAgents(prev =>
-        prev.map(agent => {
-          if (agent.status === 'working' && agent.progress < 100) {
-            const newProgress = Math.min(agent.progress + Math.random() * 5, 100)
-            if (newProgress >= 100) {
-              return {
-                ...agent,
-                progress: 100,
-                status: 'completed',
-                lastActivity: new Date()
-              }
-            }
-            return {
-              ...agent,
-              progress: Math.round(newProgress),
-              lastActivity: new Date()
-            }
-          }
-          return agent
-        })
-      )
+      setAgents(prev => {
+        const progressedAgents = prev.map(agent =>
+          advanceAgentProgress(agent, getAgentProgressIncrement(agent.id))
+        )
+
+        return advancePipeline(progressedAgents)
+      })
     }, 2000)
 
     return () => clearInterval(interval)

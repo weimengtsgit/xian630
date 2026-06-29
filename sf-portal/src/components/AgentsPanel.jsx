@@ -1,7 +1,5 @@
 import { useAgents } from '../hooks/useAgents'
 import {
-  Play,
-  Pause,
   CheckCircle,
   Clock,
   StopCircle,
@@ -37,17 +35,17 @@ function getStatusInfo(status) {
   }
 }
 
-function AgentNode({ agent, onAssign, onStop }) {
+function AgentNode({ agent }) {
   const meta = AGENT_META[agent.id] || { icon: Bot, desc: '' }
   const Icon = meta.icon
   const statusInfo = getStatusInfo(agent.status)
   const StatusIcon = statusInfo.icon
 
   return (
-    <div className="agent-node" data-status={agent.status}>
+    <div className="agent-node" data-agent-id={agent.id} data-status={agent.status}>
       <div className="agent-node-head">
         <div className="agent-node-icon" style={{ background: statusInfo.bgColor }}>
-          <Icon size={36} style={{ color: statusInfo.color }} />
+          <Icon size={30} style={{ color: statusInfo.color }} />
           {agent.status === 'working' && (
             <span className="agent-node-pulse" style={{ borderColor: statusInfo.color }} />
           )}
@@ -62,7 +60,7 @@ function AgentNode({ agent, onAssign, onStop }) {
 
       <div className="agent-node-status">
         {StatusIcon ? (
-          <StatusIcon size={20} style={{ color: statusInfo.color }} />
+          <StatusIcon size={17} style={{ color: statusInfo.color }} />
         ) : (
           <span className="status-dot" style={{ background: statusInfo.color }} />
         )}
@@ -88,24 +86,6 @@ function AgentNode({ agent, onAssign, onStop }) {
       {agent.status === 'completed' && (
         <div className="agent-node-done">产出就绪 ✓</div>
       )}
-
-      <div className="agent-node-actions">
-        {agent.status === 'idle' && (
-          <button className="node-btn node-btn--start" onClick={() => onAssign(agent.id, '新任务')}>
-            <Play size={20} />
-            启动
-          </button>
-        )}
-        {agent.status === 'working' && (
-          <button className="node-btn node-btn--pause" onClick={() => onStop(agent.id)}>
-            <Pause size={20} />
-            暂停
-          </button>
-        )}
-        {agent.status === 'completed' && (
-          <span className="node-btn node-btn--done">已完成</span>
-        )}
-      </div>
     </div>
   )
 }
@@ -117,7 +97,7 @@ function UserInputNode({ userInput }) {
     <div className="agent-node user-input-node" data-empty={!hasInput}>
       <div className="agent-node-head">
         <div className="agent-node-icon user-input-icon">
-          <User size={36} />
+          <User size={30} />
         </div>
         <div className="agent-node-titles">
           <div className="agent-node-name">用户输入</div>
@@ -184,7 +164,7 @@ function MergeConnector() {
 }
 
 export function AgentsPanel({ userInput }) {
-  const { agents, loading, assignTask, stopAgent } = useAgents()
+  const { agents, loading } = useAgents()
   const byId = (id) => agents.find((a) => a.id === id)
 
   if (loading) {
@@ -217,20 +197,20 @@ export function AgentsPanel({ userInput }) {
           <LinearConnector />
 
           <div className="flow-stage flow-stage--single">
-            <AgentNode agent={byId('agent-business')} onAssign={assignTask} onStop={stopAgent} />
+            <AgentNode agent={byId('agent-business')} />
           </div>
 
           <SplitConnector />
 
           <div className="flow-stage flow-stage--parallel">
-            <AgentNode agent={byId('agent-prototype')} onAssign={assignTask} onStop={stopAgent} />
-            <AgentNode agent={byId('agent-data')} onAssign={assignTask} onStop={stopAgent} />
+            <AgentNode agent={byId('agent-prototype')} />
+            <AgentNode agent={byId('agent-data')} />
           </div>
 
           <MergeConnector />
 
           <div className="flow-stage flow-stage--single">
-            <AgentNode agent={byId('agent-production')} onAssign={assignTask} onStop={stopAgent} />
+            <AgentNode agent={byId('agent-production')} />
           </div>
         </div>
       </div>
