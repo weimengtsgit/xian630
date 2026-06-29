@@ -593,27 +593,16 @@ func (c *ClaudeStepRunner) projectDocsAfterStep(ctx context.Context, trace runne
 	if root == "" {
 		return res
 	}
+	artifactID := ""
 	artifacts, _ := c.Store.ListArtifactsByJob(ctx, job.ID)
-	steps, _ := c.Store.ListJobSteps(ctx, job.ID)
-	stepByID := map[string]model.JobStep{}
-	for _, st := range steps {
-		stepByID[st.ID] = st
-	}
-	g := projectdocs.Generator{}
 	for _, art := range artifacts {
-		if art.Kind != "output_json" {
-			continue
-		}
-		st, ok := stepByID[art.StepID]
-		if !ok {
-			continue
-		}
-		if _, err := g.ProjectStep(projectdocs.Source{ProjectRoot: root, JobID: job.ID, StepID: st.ID, Attempt: art.Attempt, AgentKey: st.AgentKey, StepKind: string(st.Kind), SourceArtifactID: art.ID, OutputPath: art.Path}); err != nil && trace != nil {
-			_ = trace.Trace(ctx, string(model.WorkTraceWarning), `{"message":"project document projection failed"}`)
+		if art.Kind == "output_json" && art.StepID == step.ID && art.Attempt == step.Attempt {
+			artifactID = art.ID
+			break
 		}
 	}
-	if job.Status == model.JobStatusCompleted || step.Kind == model.StepDeployment {
-		_ = g.GenerateSummary(root)
+	if _, err := (projectdocs.Generator{}).ProjectStep(projectdocs.Source{ProjectRoot: root, JobID: job.ID, StepID: step.ID, Attempt: step.Attempt, AgentKey: step.AgentKey, StepKind: string(step.Kind), SourceArtifactID: artifactID, OutputPath: outputPath}); err != nil && trace != nil {
+		_ = trace.Trace(ctx, string(model.WorkTraceWarning), `{"message":"project document projection failed"}`)
 	}
 	return res
 }

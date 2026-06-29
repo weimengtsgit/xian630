@@ -14,6 +14,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
+	"github.com/weimengtsgit/xian630/factory-server/internal/projectdocs"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -576,6 +577,10 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	// Stop the OLD effective container (best-effort, outside the tx). The new
 	// one is already running + recorded.
 	f.stopPreviousDeployments(ctx, rt, app.ID, dep.ID)
+	// Project-document summary is best-effort and never changes deployment success.
+	if app.Path != "" {
+		_ = (projectdocs.Generator{}).GenerateSummary(filepath.Join(f.Workspace, filepath.FromSlash(app.Path)))
+	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
 }
 
