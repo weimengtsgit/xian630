@@ -18,7 +18,7 @@ import {
   initialWorkTraceState,
   applyTraceEvent,
 } from '../src/hooks/workTraceState.js'
-import { resolveWorkbenchTitle } from '../src/hooks/dialogueTimeline.js'
+import { buildDialogueTimeline, buildTaskBlocks, resolveWorkbenchTitle } from '../src/hooks/dialogueTimeline.js'
 import { displayJobTitle } from '../src/hooks/jobSelection.js'
 
 // ---- reducer: ordering, isolation, dedup (the verbatim brief test) -----------
@@ -93,6 +93,11 @@ assert.match(
 assert.match(eventsJs, /subscribeDialogueTrace/, 'events module must expose a per-dialogue subscribeDialogueTrace helper')
 assert.match(eventsJs, /work-trace\/stream/, 'the per-dialogue helper must open the work-trace/stream EventSource')
 assert.match(eventsJs, /afterSequence/, 'the helper must accept an afterSequence cursor for replay/reconnect')
+assert.match(eventsJs, /subscribeDialogueTaskThinking/, 'events module must expose a per-dialogue subscribeDialogueTaskThinking helper')
+assert.match(eventsJs, /task-thinking\/stream/, 'the task-thinking helper must open the task-thinking/stream EventSource')
+assert.match(useDialogueJs, /subscribeDialogueTaskThinking/, 'useDialogueSessions must subscribe to the task-thinking SSE stream')
+assert.match(useDialogueJs, /applyTaskThinkingEvent/, 'useDialogueSessions must fold task-thinking rows into taskThinkingState')
+assert.match(useDialogueJs, /buildDialogueTimeline\([\s\S]*taskThinking\.items/, 'useDialogueSessions must pass taskThinking.items into buildDialogueTimeline')
 
 // The continuous-workbench UI surfaces the new controls.
 assert.match(workbenchJsx, /已生效，可继续描述修改需求/, 'after a version deploys, render the vN already-effective hint')
@@ -122,6 +127,26 @@ assert.equal(resolveWorkbenchTitle({}, null), '新会话')
 assert.equal(displayJobTitle({ app_name: '航迹复盘', user_prompt: '将阈值改为 150 海里', id: 'job_1' }), '将阈值改为 150 海里')
 assert.equal(displayJobTitle({ app_name: '航迹复盘', id: 'job_1' }), 'job_1')
 assert.match(workbenchJsx, /resolveWorkbenchTitle\(view,\s*session\)/, 'workbench must resolve its header title through the pure helper')
+
+const taskBlocks = buildTaskBlocks([
+  { id: 'step_1', job_id: 'job_1', name: '代码生成', agent_key: 'coder', status: 'running', attempt: 2 },
+], [])
+const timelineWithTaskThinking = buildDialogueTimeline(
+  { session: { id: 'dlg_1', status: 'task_running' }, messages: [], route: {} },
+  null,
+  null,
+  null,
+  [],
+  null,
+  taskBlocks,
+  [
+    { dialogueId: 'dlg_1', dialogueSequence: 1, taskId: 'job_1', stepId: 'step_1', attempt: 2, content: '分析组件边界。', redacted: false },
+    { dialogueId: 'dlg_1', dialogueSequence: 2, taskId: 'job_1', stepId: 'step_1', attempt: 2, content: '生成实现。', redacted: true },
+  ],
+)
+const taskBlockWithThinking = timelineWithTaskThinking.find(item => item.type === 'task_execution_block' && item.stepId === 'step_1')
+assert.equal(taskBlockWithThinking.taskThinking, '分析组件边界。生成实现。', 'task-thinking rows must render in the matching task execution block')
+assert.equal(taskBlockWithThinking.taskThinkingRedacted, true, 'task execution block must mark redacted task-thinking rows')
 
 // The selected dialogue owns the task drawer. It must not be a separate
 // workbench sibling driven by the global display-job selector: selecting a

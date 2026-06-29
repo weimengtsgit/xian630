@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { factoryApi } from '../api/client'
-import { subscribeFactoryEvents, subscribeDialogueTrace } from '../api/events'
+import { subscribeFactoryEvents, subscribeDialogueTrace, subscribeDialogueTaskThinking } from '../api/events'
 import {
   applyDialogueEvent,
   buildDialogueTimeline,
@@ -16,6 +16,7 @@ import {
   liveStepFromTrace,
   resetWorkTraceState,
 } from './workTraceState'
+import { initialTaskThinkingState, applyTaskThinkingEvent, resetTaskThinkingState } from './taskThinkingState'
 import { selectFocusTask } from './focusTask'
 
 // dialogue.* + wrapped clarification.* event types drive a TARGETED refresh keyed
@@ -80,6 +81,11 @@ export function useDialogueSessions() {
   // dialogue, fed by the per-dialogue SSE stream (Constraint #7 — NOT the global
   // /api/events). Reset + re-hydrated whenever the selected dialogue changes.
   const [workTrace, setWorkTrace] = useState(initialWorkTraceState())
+  const [taskThinking, setTaskThinking] = useState(initialTaskThinkingState())
+  const taskThinkingSeqKey = useMemo(() => {
+    const items = Array.isArray(taskThinking.items) ? taskThinking.items : []
+    return items.map(it => it.dialogueSequence).join(',')
+  }, [taskThinking.items])
   // clarificationSeqKey: a STABLE string key derived from the clarification
   // traces only (their sequences). The work-trace stream is high-frequency
   // (assistant/tool tokens), so the timeline rebuild effect MUST NOT depend on
@@ -152,9 +158,9 @@ export function useDialogueSessions() {
     // rebuilding on every high-frequency assistant/tool trace token.
     if (!state.view && !optimisticUserMessage) return
     setState(prev => (prev.view === state.view
-      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items, pendingTurn, jobStepBlocks) }
+      ? { ...prev, timeline: buildDialogueTimeline(prev.view, optimisticUserMessage, prev.liveAnalysis, prev.liveThinking, workTrace.items, pendingTurn, jobStepBlocks, taskThinking.items) }
       : prev))
-  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey, pendingTurn, jobStepBlocks]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.view, optimisticUserMessage, state.liveAnalysis, state.liveThinking, clarificationSeqKey, taskThinkingSeqKey, pendingTurn, jobStepBlocks]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // refreshSessions fetches the composed list (each entry is a full DialogueView).
   // It does NOT refetch on every streaming delta — only on mount, after a mutating
@@ -195,7 +201,7 @@ export function useDialogueSessions() {
         ...prev,
         selectedDialogueId: id,
         view,
-        timeline: buildDialogueTimeline(view, null, null, null, workTrace.items, pendingTurnRef.current, jobStepBlocks),
+        timeline: buildDialogueTimeline(view, null, null, null, workTrace.items, pendingTurnRef.current, jobStepBlocks, taskThinking.items),
         questions: openQuestionsForView(view),
         requirement: view.child ? (view.child.requirement || null) : null,
         needsRefresh: null,
@@ -212,6 +218,7 @@ export function useDialogueSessions() {
       // parameter (out of scope outside that arrow).
       if (selectedDialogueIdRef.current !== id) {
         setWorkTrace(resetWorkTraceState(id))
+        setTaskThinking(resetTaskThinkingState(id))
         setPendingTurn(null)
       }
     }
@@ -643,6 +650,28 @@ export function useDialogueSessions() {
     // pendingTurn is read inside onEvent for the terminal-clear side effect, but
     // must NOT re-subscribe the stream on every turn change; read it via ref.
   }, [state.selectedDialogueId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const dialogueId = state.selectedDialogueId
+    if (!dialogueId) {
+      setTaskThinking(initialTaskThinkingState())
+      return undefined
+    }
+    let unsubscribe = () => {}
+    setTaskThinking(resetTaskThinkingState(dialogueId))
+    unsubscribe = subscribeDialogueTaskThinking(dialogueId, {
+      afterSequence: 0,
+      getDialogueTaskThinking: factoryApi.getDialogueTaskThinking,
+      onEvent: row => {
+        if (!mountedRef.current) return
+        setTaskThinking(prev => applyTaskThinkingEvent(prev, row))
+      },
+      onError: () => {
+        /* best-effort: the stream replays persisted task-thinking rows. */
+      },
+    })
+    return () => unsubscribe()
+  }, [state.selectedDialogueId])
 
   // Bridge the in-flight pipeline step into the conversation's live analysis
   // (Task 3, D2 — Step 5). The work-trace stream already surfaces the build

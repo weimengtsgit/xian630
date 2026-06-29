@@ -38,11 +38,13 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'dialogue.intent.updated',
     'dialogue.route.started',
     'dialogue.route.delta',
+    'dialogue.route.thinking',
     'dialogue.route.completed',
     'dialogue.application.recommended',
     'dialogue.route.confirmed',
     'dialogue.draft.started',
     'dialogue.draft.delta',
+    'dialogue.draft.thinking',
     'dialogue.draft.completed',
     'dialogue.draft.question.created',
     'dialogue.draft.consolidation.updated',
@@ -52,9 +54,18 @@ export function subscribeFactoryEvents(onEvent, { onError } = {}) {
     'dialogue.agent.created',
     'dialogue.clarification.updated',
     'dialogue.clarification.delta',
+    'dialogue.clarification.thinking',
     'dialogue.resolved',
+    'dialogue.failed',
     'dialogue.abandoned',
     'dialogue.deleted',
+    'dialogue.message.accepted',
+    'dialogue.turn.started',
+    'dialogue.turn.completed',
+    'dialogue.turn.failed',
+    'dialogue.turn.canceled',
+    'dialogue.change.proposed',
+    'dialogue.forked',
   ]
   types.forEach(type => {
     source.addEventListener(type, event => {
@@ -201,6 +212,71 @@ export function subscribeDialogueTrace(
   return () => {
     closed = true
     hydrationAborted = true
+    if (source) {
+      source.close()
+      source = null
+    }
+  }
+}
+
+const TASK_THINKING_EVENT_TYPE = 'task.thinking.appended'
+
+// subscribeDialogueTaskThinking(dialogueId, { onEvent, onError, afterSequence, getDialogueTaskThinking })
+//
+// Per-dialogue SSE transport for task-thinking events. It hydrates persisted
+// rows first through REST, then streams live rows from the dialogue-scoped SSE
+// endpoint. The caller folds rows through taskThinkingState.
+export function subscribeDialogueTaskThinking(dialogueId, {
+  afterSequence = 0,
+  getDialogueTaskThinking,
+  onEvent,
+  onError,
+} = {}) {
+  if (!dialogueId) return () => {}
+
+  let closed = false
+  let source = null
+  let highest = Number(afterSequence) || 0
+
+  const emit = row => {
+    if (!row || closed) return
+    const seq = Number(row.dialogue_sequence ?? row.dialogueSequence)
+    if (Number.isFinite(seq) && seq <= highest) return
+    if (Number.isFinite(seq)) highest = seq
+    if (typeof onEvent === 'function') onEvent(row)
+  }
+
+  if (typeof getDialogueTaskThinking === 'function') {
+    getDialogueTaskThinking(dialogueId, highest)
+      .then(data => {
+        const rows = Array.isArray(data)
+          ? data
+          : data && Array.isArray(data.events)
+            ? data.events
+            : []
+        rows.forEach(emit)
+      })
+      .catch(err => {
+        if (typeof onError === 'function') onError(err)
+      })
+  }
+
+  source = new EventSource(
+    `${API_BASE_URL}/api/dialogues/${dialogueId}/task-thinking/stream?afterSequence=${encodeURIComponent(highest)}`,
+  )
+  source.addEventListener(TASK_THINKING_EVENT_TYPE, event => {
+    try {
+      emit(JSON.parse(event.data))
+    } catch (err) {
+      if (typeof onError === 'function') onError(err)
+    }
+  })
+  source.addEventListener('error', err => {
+    if (typeof onError === 'function') onError(err)
+  })
+
+  return () => {
+    closed = true
     if (source) {
       source.close()
       source = null

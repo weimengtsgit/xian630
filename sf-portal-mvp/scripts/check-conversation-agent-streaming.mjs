@@ -384,6 +384,12 @@ assert.ok(
   eventsSrc.includes("'dialogue.clarification.delta'"),
   'events.js must register dialogue.clarification.delta on the global SSE bus',
 )
+for (const type of ['dialogue.route.thinking', 'dialogue.draft.thinking', 'dialogue.clarification.thinking']) {
+  assert.ok(
+    eventsSrc.includes(`'${type}'`),
+    `events.js must register ${type} on the global SSE bus so live 思考过程 reaches the workbench`,
+  )
+}
 // Legacy bare clarification.message.delta must STILL be registered so the
 // standalone clarification surface (useClarification / ClarificationPanel) keeps
 // streaming — we must not break it.
@@ -397,6 +403,12 @@ assert.ok(
   dispatcherSrc.includes("'dialogue.clarification.delta'"),
   'useDialogueSessions DIALOGUE_TYPES must include dialogue.clarification.delta so the dispatcher routes it',
 )
+for (const type of ['dialogue.route.thinking', 'dialogue.draft.thinking', 'dialogue.clarification.thinking']) {
+  assert.ok(
+    dispatcherSrc.includes(`'${type}'`),
+    `useDialogueSessions DIALOGUE_TYPES must include ${type} so the dispatcher routes live 思考过程`,
+  )
+}
 
 const timelineSrc = readFileSync(new URL('../src/hooks/dialogueTimeline.js', import.meta.url), 'utf8')
 assert.ok(
