@@ -1,6 +1,38 @@
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
 
+const DEFAULT_AGENT_DESCRIPTIONS = {
+  'collaboration-orchestrator': '根据确认需求摘要生成协作计划，并记录用户调整。',
+  'requirement-analyst': '整理用户需求并形成确认需求摘要。',
+  'domain-analyst': '注入领域知识和客户判断口径。',
+  designer: '产出结构化设计契约。',
+  'data-integration': '产出真实数据接入计划和演示数据契约。',
+  'solution-designer': '形成技术方案、文件计划和实现边界。',
+  'code-generator': '写入应用代码并生成 manifest。',
+  'code-reviewer': '阻断式质量门禁。',
+  'security-reviewer': '检查安全和权限风险。',
+  tester: '运行或分析构建与测试结果。',
+  'product-acceptance': '检查生成结果是否满足需求、设计和数据契约。',
+  'image-builder': '构建应用容器镜像。',
+  deployer: '部署容器并完成健康验证。',
+}
+
+const DEFAULT_ROLE_DESCRIPTIONS = {
+  collaboration_orchestration: DEFAULT_AGENT_DESCRIPTIONS['collaboration-orchestrator'],
+  requirement_analysis: DEFAULT_AGENT_DESCRIPTIONS['requirement-analyst'],
+  domain_analysis: DEFAULT_AGENT_DESCRIPTIONS['domain-analyst'],
+  design_contract: DEFAULT_AGENT_DESCRIPTIONS.designer,
+  data_integration: DEFAULT_AGENT_DESCRIPTIONS['data-integration'],
+  solution_design: DEFAULT_AGENT_DESCRIPTIONS['solution-designer'],
+  code_generation: DEFAULT_AGENT_DESCRIPTIONS['code-generator'],
+  code_review: DEFAULT_AGENT_DESCRIPTIONS['code-reviewer'],
+  security_review: DEFAULT_AGENT_DESCRIPTIONS['security-reviewer'],
+  test_verification: DEFAULT_AGENT_DESCRIPTIONS.tester,
+  product_acceptance: DEFAULT_AGENT_DESCRIPTIONS['product-acceptance'],
+  image_build: DEFAULT_AGENT_DESCRIPTIONS['image-builder'],
+  deployment: DEFAULT_AGENT_DESCRIPTIONS.deployer,
+}
+
 export const CARD_STATE_LABEL = {
   pending_confirmation: '待确认',
   waiting_upstream: '等待上游',
@@ -42,6 +74,7 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
     title: '用户输入',
     subtitle: '需求描述',
     description: '来自对话中的确认需求',
+    tooltip: '来自对话中的确认需求',
     state: confirmed ? 'completed' : 'pending_confirmation',
     stateLabel: confirmed ? CARD_STATE_LABEL.completed : CARD_STATE_LABEL.pending_confirmation,
     lane: 'origin',
@@ -57,13 +90,15 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
       .filter(key => !isCompleted(cardStateForStep(stepByAgent[key], confirmed, [])))
       .map(key => agentByKey[key] && (agentByKey[key].name || agentByKey[key].key) || key)
     const state = cardStateForStep(step, confirmed, waitingFor)
+    const description = agentDescription(agent)
     return {
       id: agent.key,
       kind: agent.key === ORCHESTRATOR_KEY ? 'orchestrator' : 'agent',
       agentKey: agent.key,
       title: agent.name || agent.key,
       subtitle: agent.role || agent.key,
-      description: agent.description || '',
+      description,
+      tooltip: description,
       state,
       stateLabel: CARD_STATE_LABEL[state] || state,
       lane: agent.lane || 'unassigned',
@@ -108,6 +143,14 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
     summary: summarize(cards),
     adjustments: Array.isArray(preview && preview.adjustments) ? preview.adjustments : [],
   }
+}
+
+function agentDescription(agent) {
+  if (!agent) return ''
+  return DEFAULT_AGENT_DESCRIPTIONS[agent.key] ||
+    DEFAULT_ROLE_DESCRIPTIONS[agent.role] ||
+    agent.description ||
+    ''
 }
 
 function cardStateForStep(step, confirmed, waitingFor) {

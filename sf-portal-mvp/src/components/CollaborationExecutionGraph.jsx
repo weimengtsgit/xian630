@@ -243,7 +243,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
   const waitText = card.waitingFor && card.waitingFor.length > 0
     ? `等待：${card.waitingFor.slice(0, 2).join('、')}${card.waitingFor.length > 2 ? `等 ${card.waitingFor.length} 个上游` : ''}`
     : ''
-  const tooltipText = card.description || card.summary || waitText || '等待编排流转'
+  const tooltipText = card.tooltip || card.description || '暂无描述'
   const tooltipId = `ceg-card-tooltip-${card.id}`
   return (
     <button

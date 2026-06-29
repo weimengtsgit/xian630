@@ -11,6 +11,7 @@ const state = readFileSync(new URL('../src/hooks/collaborationPlanState.js', imp
 const execState = readFileSync(new URL('../src/hooks/executionRecordState.js', import.meta.url), 'utf8')
 const useJobs = readFileSync(new URL('../src/hooks/useJobs.js', import.meta.url), 'utf8')
 const dialogueTimeline = readFileSync(new URL('../src/hooks/dialogueTimeline.js', import.meta.url), 'utf8')
+const graphState = readFileSync(new URL('../src/hooks/collaborationExecutionGraphState.js', import.meta.url), 'utf8')
 const graphComponent = readFileSync(new URL('../src/components/CollaborationExecutionGraph.jsx', import.meta.url), 'utf8')
 const graphCss = readFileSync(new URL('../src/components/CollaborationExecutionGraph.css', import.meta.url), 'utf8')
 assert.match(dialogueTimeline, /buildCollaborationExecutionGraphView/, 'dialogue timeline should build collaboration execution graph view data')
@@ -39,9 +40,12 @@ assert.match(graphComponent, /connectorMode/, 'graph component should classify c
 assert.match(graphComponent, /connectorState/, 'graph component should derive a visible connector state from its edge states')
 assert.match(graphComponent, /ceg-connector-mode-/, 'graph component should expose connector mode classes for fork and merge styling')
 assert.match(graphComponent, /card\.summary \|\| waitText \|\| card\.description/, 'graph cards should prefer live task summary before static agent description')
+assert.match(graphComponent, /card\.tooltip \|\| card\.description \|\| '暂无描述'/, 'graph card tooltip should show the agent role description, not execution summary text')
 assert.match(graphComponent, /aria-describedby=\{tooltipId\}/, 'graph cards should expose hover tooltip text through aria-describedby')
 assert.match(graphComponent, /className="ceg-card-tooltip"/, 'graph cards should render a hover tooltip')
 assert.doesNotMatch(graphComponent, /ceg-card-detail/, 'graph cards should not render an internal detail panel')
+assert.match(graphState, /DEFAULT_AGENT_DESCRIPTIONS/, 'graph state should provide stable default agent descriptions for tooltips')
+assert.match(graphState, /整理用户需求并形成确认需求摘要/, 'requirement analyst tooltip should describe the card responsibility')
 assert.doesNotMatch(graphComponent, /ceg-adjustments/, 'graph component should not render a separate long adjustment card below the execution graph')
 assert.match(graphCss, /@keyframes cegFlowRight/, 'graph css should define horizontal animated flow lines')
 
@@ -200,6 +204,11 @@ assert.equal(plannedGraph.cards[0].kind, 'origin', 'first graph card should be t
 assert.equal(plannedGraph.cards[1].agentKey, 'collaboration-orchestrator', 'second graph card should be the orchestration hub')
 assert.equal(plannedGraph.cards[1].kind, 'orchestrator', 'collaboration orchestrator should be marked as the hub card')
 assert.equal(plannedGraph.cards.find(card => card.agentKey === 'designer').state, 'pending_confirmation', 'unconfirmed agents should be pending confirmation')
+assert.equal(
+  plannedGraph.cards.find(card => card.agentKey === 'requirement-analyst').tooltip,
+  '整理用户需求并形成确认需求摘要。',
+  'requirement analyst tooltip should use the agent responsibility description, not step execution text',
+)
 assert.equal(plannedGraph.edges.every(edge => edge.state === 'planned'), true, 'unconfirmed graph edges should be planned')
 
 const runningGraph = buildCollaborationExecutionGraphView(graphPreview, [
@@ -214,6 +223,11 @@ const runningGraph = buildCollaborationExecutionGraphView(graphPreview, [
 assert.equal(runningGraph.confirmed, true, 'presence of real step blocks should make the graph accepted/execution-state')
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'collaboration-orchestrator').state, 'completed', 'succeeded orchestrator should be completed')
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'designer').state, 'running', 'running step should map to running card state')
+assert.equal(
+  runningGraph.cards.find(card => card.agentKey === 'designer').tooltip,
+  '产出结构化设计契约。',
+  'running card tooltip should remain the card responsibility description instead of the live execution summary',
+)
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'solution-designer').state, 'waiting_upstream', 'pending card with unfinished upstream should wait upstream')
 assert.equal(
   runningGraph.cards.find(card => card.agentKey === 'solution-designer').waitingFor.join('、'),
