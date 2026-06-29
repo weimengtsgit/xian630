@@ -546,7 +546,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
-	return StepResult{Status: model.StepStatusSucceeded}
+	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
 }
 
 func (c *ClaudeStepRunner) failureFromError(err error) StepResult {

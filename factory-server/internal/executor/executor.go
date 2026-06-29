@@ -36,6 +36,9 @@ type StepResult struct {
 	ErrorCode      model.ErrorCode  // set when failed
 	ErrorMessage   string
 	NeedsUserInput bool
+	// FrozenRequirementJSON carries the requirement_analysis step's canonical
+	// output so the job row becomes the source of truth for later steps and UI.
+	FrozenRequirementJSON string
 	// Questions is the clarifying questions a step raised when pausing for user
 	// input (waiting_user). Persisted on the step so the job detail can surface
 	// them; empty for non-waiting results.
@@ -78,9 +81,9 @@ type Executor struct {
 	// allowlist + cap + sensitive-key stripping + persist-before-publish; and
 	// the SSE forwarder re-validates persisted rows. Thinking never reaches here
 	// (dropped at the source in stream.go).
-	OnTrace         func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
-	OnTaskThinking  func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
-	RunLog          *runlog.Logger
+	OnTrace        func(context.Context, model.WorkTraceEvent) (model.WorkTraceEvent, error)
+	OnTaskThinking func(context.Context, model.TaskThinkingEvent) (model.TaskThinkingEvent, error)
+	RunLog         *runlog.Logger
 
 	// cancels maps a running jobID → the CancelFunc of its in-flight step's ctx,
 	// guarded by cancelsMu. runJobStep adds on start and removes on end (defer);
@@ -150,16 +153,16 @@ func (e *Executor) newStepEmitter(jobID, stepID, dialogueID string, attempt int,
 		key = agentKey[0]
 	}
 	return &stepEmitter{
-		store:       e.store,
-		onRecord:    e.OnRecord,
-		jobID:       jobID,
-		stepID:      stepID,
-		agentKey:    key,
-		dialogueID:  dialogueID,
-		attempt:     attempt,
-		onTrace:     e.OnTrace,
-		onThinking:  e.OnTaskThinking,
-		nextSeq:     1,
+		store:      e.store,
+		onRecord:   e.OnRecord,
+		jobID:      jobID,
+		stepID:     stepID,
+		agentKey:   key,
+		dialogueID: dialogueID,
+		attempt:    attempt,
+		onTrace:    e.OnTrace,
+		onThinking: e.OnTaskThinking,
+		nextSeq:    1,
 	}
 }
 
@@ -541,6 +544,11 @@ func (e *Executor) runJobStep(ctx context.Context, job model.Job) error {
 func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepResult) error {
 	switch res.Status {
 	case model.StepStatusSucceeded:
+		if strings.TrimSpace(res.FrozenRequirementJSON) != "" {
+			if err := e.store.UpdateJobConfirmedRequirement(ctx, jobID, res.FrozenRequirementJSON); err != nil {
+				return err
+			}
+		}
 		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
 			return err
 		}
@@ -841,6 +849,9 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 }
 
 func repairableFailureKind(kind model.StepKind, code model.ErrorCode) bool {
+	if kind == model.StepCodeGeneration && code == model.ErrorSchemaValidationFailed {
+		return true
+	}
 	if kind == model.StepTestVerification || kind == model.StepImageBuild {
 		return true
 	}
