@@ -35,7 +35,9 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
         </div>
       </header>
       <div className="ceg-canvas">
-        {graph.waves.map((wave, waveIndex) => (
+        {graph.waves.map((wave, waveIndex) => {
+          const nextWave = graph.waves[waveIndex + 1]
+          return (
           <div className="ceg-wave-group" key={wave.id}>
             <div className="ceg-wave" data-wave={wave.index}>
               <span className="ceg-wave-label">{wave.label}</span>
@@ -55,6 +57,8 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
             </div>
             {waveIndex < graph.waves.length - 1 ? (
               <WaveConnector
+                fromWave={wave}
+                toWave={nextWave}
                 edges={graph.edges.filter(edge => {
                   const from = cardsByKey[edge.from]
                   const to = cardsByKey[edge.to]
@@ -65,7 +69,8 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
               />
             ) : null}
           </div>
-        ))}
+          )
+        })}
       </div>
       {Array.isArray(graph.adjustments) && graph.adjustments.length > 0 ? (
         <div className="ceg-adjustments">
@@ -116,21 +121,53 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
   )
 }
 
-function WaveConnector({ edges, activeKey, relatedKeys }) {
+function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys }) {
   const list = Array.isArray(edges) ? edges : []
   const active = activeKey && list.some(edge => relatedKeys.has(edge.from) && relatedKeys.has(edge.to))
+  const fromCards = fromWave && Array.isArray(fromWave.cards) ? fromWave.cards : []
+  const toCards = toWave && Array.isArray(toWave.cards) ? toWave.cards : []
   return (
     <div className={`ceg-connector${active ? ' is-active' : ''}`} aria-hidden="true">
+      <svg className="ceg-edge-svg" viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
+        {list.length > 0 ? list.map((edge, index) => {
+          const fromY = cardSlotPercent(fromCards, edge.from)
+          const toY = cardSlotPercent(toCards, edge.to)
+          return (
+            <path
+              key={edge.id || `${edge.from}->${edge.to}-${index}`}
+              className={`ceg-edge-path ceg-edge-${edge.state || 'inactive'}`}
+              d={orthogonalPath(fromY, toY)}
+            />
+          )
+        }) : (
+          <path className="ceg-edge-path ceg-edge-inactive" d="M 0 50 H 100" />
+        )}
+      </svg>
       {list.length > 0 ? list.map((edge, index) => (
         <span
-          key={edge.id || `${edge.from}->${edge.to}-${index}`}
-          className={`ceg-edge-track ceg-edge-${edge.state || 'inactive'}`}
-          style={{ '--ceg-edge-index': index, '--ceg-edge-count': list.length }}
+          key={`${edge.id || `${edge.from}->${edge.to}`}-arrow-${index}`}
+          className={`ceg-edge-arrow ceg-edge-${edge.state || 'inactive'}`}
+          style={{ top: `${cardSlotPercent(toCards, edge.to)}%` }}
         />
-      )) : <span className="ceg-edge-track ceg-edge-inactive" style={{ '--ceg-edge-index': 0, '--ceg-edge-count': 1 }} />}
-      <span className="ceg-arrow" />
+      )) : <span className="ceg-edge-arrow ceg-edge-inactive" style={{ top: '50%' }} />}
     </div>
   )
+}
+
+function cardSlotPercent(cards, agentKey) {
+  const count = cards.length
+  if (count <= 1) return 50
+  const index = cards.findIndex(card => card.agentKey === agentKey)
+  if (index < 0) return 50
+  if (count === 2) return index === 0 ? 25 : 75
+  const top = Math.max(14, 50 - Math.min(36, (count - 1) * 16))
+  const bottom = 100 - top
+  return top + ((bottom - top) * index) / (count - 1)
+}
+
+function orthogonalPath(fromY, toY) {
+  if (Math.abs(fromY - toY) < 1) return `M 0 ${fromY} H 100`
+  return `M 0 ${fromY} H 48 V ${toY} H 100`
 }
 
 function relatedCardKeys(graph, activeKey) {
