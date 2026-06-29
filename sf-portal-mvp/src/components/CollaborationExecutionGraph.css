@@ -61,6 +61,32 @@
   transform: none;
 }
 
+.ceg-card-is-revealing {
+  animation: cegAgentReveal 0.62s cubic-bezier(0.2, 0.82, 0.22, 1);
+  box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.34), 0 0 22px rgba(104, 221, 255, 0.28), 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+@keyframes cegAgentReveal {
+  0% {
+    opacity: 0;
+    transform: translateX(-14px) scale(0.96);
+    filter: saturate(1.12) brightness(1.08);
+  }
+  42% {
+    opacity: 1;
+    transform: translateX(3px) scale(1.015);
+    filter: saturate(1.28) brightness(1.16);
+  }
+  72% {
+    transform: translateX(0) scale(0.995);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    filter: none;
+  }
+}
+
 /* Orchestrator pulsing effect during reveal */
 .ceg-is-orchestrating {
   overflow: hidden;
@@ -139,6 +165,11 @@
 
   .ceg-edge-is-revealing {
     animation: none !important;
+  }
+
+  .ceg-card-is-revealing {
+    animation: none !important;
+    box-shadow: none !important;
   }
 
   .ceg-spin {

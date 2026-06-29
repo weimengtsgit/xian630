@@ -4,6 +4,10 @@ import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
+const REVEAL_INITIAL_DELAY_MS = 250
+const REVEAL_STEP_DELAY_MS = 240
+const REVEAL_CARD_ANIMATION_MS = 620
+const REVEAL_REPLAY_PAUSE_MS = 1400
 
 const STATE_ICON = {
   pending_confirmation: HelpCircle,
@@ -19,8 +23,9 @@ const STATE_ICON = {
 export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   const [activeKey, setActiveKey] = useState('')
   const [revealedKeys, setRevealedKeys] = useState(() => new Set())
+  const [revealingKeys, setRevealingKeys] = useState(() => new Set())
   const [revealComplete, setRevealComplete] = useState(false)
-  const revealTimerRef = useRef(null)
+  const revealTimerRefs = useRef([])
   const lastGraphIdentityRef = useRef(null)
 
   const cardsByKey = graph && graph.cardsByKey ? graph.cardsByKey : {}
@@ -59,15 +64,28 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   // Reveal plays for both the planned graph and the accepted execution graph.
   const isRevealRunning = !revealComplete && !prefersReducedMotion
 
+  const clearRevealTimers = useCallback(() => {
+    for (const timer of revealTimerRefs.current) clearTimeout(timer)
+    revealTimerRefs.current = []
+  }, [])
+
+  const scheduleRevealTimer = useCallback((callback, delay) => {
+    const timer = setTimeout(() => {
+      revealTimerRefs.current = revealTimerRefs.current.filter(item => item !== timer)
+      callback()
+    }, delay)
+    revealTimerRefs.current.push(timer)
+    return timer
+  }, [])
+
   // 初始化和重置 reveal 状态
   useLayoutEffect(() => {
     if (!graph) {
       lastGraphIdentityRef.current = null
-      if (revealTimerRef.current) {
-        clearTimeout(revealTimerRef.current)
-        revealTimerRef.current = null
-      }
+      clearRevealTimers()
+      setActiveKey('')
       setRevealedKeys(new Set())
+      setRevealingKeys(new Set())
       setRevealComplete(false)
       return
     }
@@ -79,13 +97,12 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     lastGraphIdentityRef.current = graphIdentity
 
     // 清理之前的定时器
-    if (revealTimerRef.current) {
-      clearTimeout(revealTimerRef.current)
-      revealTimerRef.current = null
-    }
+    clearRevealTimers()
+    setActiveKey('')
 
     const initialKeys = new Set([USER_INPUT_KEY, ORCHESTRATOR_KEY])
     setRevealedKeys(initialKeys)
+    setRevealingKeys(new Set())
     setRevealComplete(false)
 
     // 如果没有需要 reveal 的卡片，直接完成
@@ -98,38 +115,59 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     if (prefersReducedMotion) {
       const allKeys = new Set([...initialKeys, ...revealOrder])
       setRevealedKeys(allKeys)
+      setRevealingKeys(new Set())
       setRevealComplete(true)
       return
     }
 
     // 开始逐个 reveal 卡片
     let currentIndex = 0
+    const resetReveal = () => {
+      currentIndex = 0
+      setActiveKey('')
+      setRevealedKeys(new Set(initialKeys))
+      setRevealingKeys(new Set())
+      setRevealComplete(false)
+      scheduleRevealTimer(revealNext, REVEAL_INITIAL_DELAY_MS)
+    }
+
     const revealNext = () => {
       if (currentIndex >= revealOrder.length) {
+        setRevealingKeys(new Set())
         setRevealComplete(true)
+        scheduleRevealTimer(resetReveal, REVEAL_REPLAY_PAUSE_MS)
         return
       }
 
+      const agentKey = revealOrder[currentIndex]
       setRevealedKeys(prev => {
         const next = new Set(prev)
-        next.add(revealOrder[currentIndex])
+        next.add(agentKey)
         return next
       })
+      setRevealingKeys(prev => {
+        const next = new Set(prev)
+        next.add(agentKey)
+        return next
+      })
+      scheduleRevealTimer(() => {
+        setRevealingKeys(prev => {
+          const next = new Set(prev)
+          next.delete(agentKey)
+          return next
+        })
+      }, REVEAL_CARD_ANIMATION_MS)
 
       currentIndex++
-      revealTimerRef.current = setTimeout(revealNext, 200)
+      scheduleRevealTimer(revealNext, REVEAL_STEP_DELAY_MS)
     }
 
     // 初始延迟
-    revealTimerRef.current = setTimeout(revealNext, 250)
+    scheduleRevealTimer(revealNext, REVEAL_INITIAL_DELAY_MS)
 
     // 清理函数
-    return () => {
-      if (revealTimerRef.current) {
-        clearTimeout(revealTimerRef.current)
-      }
-    }
-  }, [graphIdentity, revealOrderKey, prefersReducedMotion])
+    return clearRevealTimers
+  }, [graphIdentity, revealOrderKey, prefersReducedMotion, clearRevealTimers, scheduleRevealTimer])
 
   // 检查边是否可见
   const isEdgeVisible = useCallback((edge) => {
@@ -141,8 +179,8 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   const getCardRevealClass = useCallback((agentKey) => {
     if (!isRevealRunning) return 'ceg-card-is-revealed'
     if (!revealedKeys.has(agentKey)) return 'ceg-card-is-hidden'
-    return 'ceg-card-is-revealed'
-  }, [isRevealRunning, revealedKeys])
+    return revealingKeys.has(agentKey) ? 'ceg-card-is-revealed ceg-card-is-revealing' : 'ceg-card-is-revealed'
+  }, [isRevealRunning, revealedKeys, revealingKeys])
 
   if (!graph || !Array.isArray(graph.waves) || graph.waves.length === 0) return null
 
