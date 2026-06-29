@@ -39,6 +39,8 @@ assert.match(graphComponent, /connectorMode/, 'graph component should classify c
 assert.match(graphComponent, /connectorState/, 'graph component should derive a visible connector state from its edge states')
 assert.match(graphComponent, /ceg-connector-mode-/, 'graph component should expose connector mode classes for fork and merge styling')
 assert.match(graphComponent, /card\.summary \|\| waitText \|\| card\.description/, 'graph cards should prefer live task summary before static agent description')
+assert.match(graphComponent, /aria-describedby=\{detailId\}/, 'graph cards should expose hover details through aria-describedby')
+assert.match(graphComponent, /className="ceg-card-detail"/, 'graph cards should render a hover detail panel')
 assert.doesNotMatch(graphComponent, /ceg-adjustments/, 'graph component should not render a separate long adjustment card below the execution graph')
 assert.match(graphCss, /@keyframes cegFlowRight/, 'graph css should define horizontal animated flow lines')
 
@@ -72,6 +74,8 @@ assert.match(graphCss, /\.ceg-connector-state-blocked/, 'graph css should make b
 assert.match(graphCss, /\.ceg-card-is-hidden/, 'graph css should define hidden card styling')
 assert.match(graphCss, /\.ceg-card-is-revealed/, 'graph css should define revealed card styling')
 assert.match(graphCss, /\.ceg-card-is-revealing/, 'graph css should define a summoned-card enter animation')
+assert.match(graphCss, /\.ceg-card:hover \.ceg-card-detail/, 'graph css should show card details on hover')
+assert.match(graphCss, /\.ceg-card:focus-visible \.ceg-card-detail/, 'graph css should show card details on keyboard focus')
 assert.match(graphCss, /@keyframes cegAgentGlowReveal/, 'graph css should brighten summoned cards with a continuous glow reveal')
 assert.match(graphCss, /@keyframes cegAgentLightWash/, 'graph css should wash the dark reveal layer from left to right')
 assert.match(graphCss, /\.ceg-card-is-revealing::after(?:(?!@keyframes)[\s\S])*rgba\(6, 18, 29, 0\.86\)(?:(?!@keyframes)[\s\S])*animation:\s*cegAgentLightWash/, 'agent reveal should use a moving dark-to-light wash layer')

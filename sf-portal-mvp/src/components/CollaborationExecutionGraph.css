@@ -20,6 +20,12 @@
 .ceg-card-desc { grid-column: 1 / -1; min-height: 28px; color: rgba(215, 238, 248, 0.72); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
 .ceg-card-state { grid-column: 1 / -1; justify-self: start; padding: 3px 8px; border-radius: 999px; background: rgba(6, 18, 29, 0.54); color: #9ddff0; font-size: 11px; font-weight: 600; }
 .ceg-card-wait { grid-column: 1 / -1; color: #83cddd; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
+.ceg-card-detail { position: absolute; inset: 7px; z-index: 4; display: flex; flex-direction: column; gap: 4px; padding: 9px; border: 1px solid rgba(104, 221, 255, 0.28); border-radius: 7px; background: linear-gradient(180deg, rgba(4, 18, 30, 0.96), rgba(7, 28, 43, 0.94)); color: #d7eef8; box-shadow: 0 12px 26px rgba(0, 0, 0, 0.34); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(4px) scale(0.98); transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(104, 221, 255, 0.38) rgba(6, 18, 29, 0.34); }
+.ceg-card:hover .ceg-card-detail, .ceg-card:focus-visible .ceg-card-detail, .ceg-card.is-active .ceg-card-detail { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+.ceg-card-detail-title { color: #f0fbff; font-size: 12px; font-weight: 700; line-height: 1.25; }
+.ceg-card-detail-role { color: #75bfd2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.2; overflow-wrap: anywhere; }
+.ceg-card-detail-desc, .ceg-card-detail-line, .ceg-card-detail-state { color: rgba(215, 238, 248, 0.84); font-size: 10px; line-height: 1.38; overflow-wrap: anywhere; }
+.ceg-card-detail-state { color: #9ddff0; font-weight: 600; }
 .ceg-gate { position: absolute; top: 6px; right: 7px; padding: 1px 5px; border: 1px solid rgba(252, 211, 77, 0.38); border-radius: 999px; background: rgba(92, 58, 8, 0.42); color: #fde68a; font-size: 9px; font-style: normal; }
 .ceg-origin { border-color: rgba(252, 211, 77, 0.34); }
 .ceg-orchestrator { border-color: rgba(167, 139, 250, 0.55); box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.16), 0 10px 24px rgba(23, 15, 50, 0.24); }
