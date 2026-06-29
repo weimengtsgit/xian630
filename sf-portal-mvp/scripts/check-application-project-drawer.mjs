@@ -6,6 +6,7 @@ const clientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 
 const drawerJsx = readFileSync(new URL('../src/components/WorkbenchDrawer.jsx', import.meta.url), 'utf8')
 const panelJsx = readFileSync(new URL('../src/components/ApplicationProjectPanel.jsx', import.meta.url), 'utf8')
 const panelCss = readFileSync(new URL('../src/components/ApplicationProjectPanel.css', import.meta.url), 'utf8')
+const backendProjectHandlers = readFileSync(new URL('../../factory-server/internal/server/app_project_handlers.go', import.meta.url), 'utf8')
 
 assert.match(appJsx, /applicationProjectId/, 'App must derive an applicationProjectId for the 应用项目 drawer')
 assert.match(appJsx, /resolvedApplication[\s\S]*\.id/, 'applicationProjectId must prefer resolvedApplication.id')
@@ -25,6 +26,7 @@ for (const token of ['loadingTree', 'treeError', 'app-project-empty', 'app-proje
   assert.match(panelJsx, new RegExp(token), `ApplicationProjectPanel must include ${token} state/markup`)
 }
 assert.match(panelJsx, /MarkdownPreview/, 'ApplicationProjectPanel must support Markdown preview')
+assert.match(backendProjectHandlers, /project-docs\.json/, 'project tree backend must surface .factory/project-docs.json in factory metadata')
 assert.match(panelJsx, /'源码'/, 'Markdown preview must expose source mode')
 assert.match(panelJsx, /'格式化'/, 'JSON preview must expose formatted mode')
 assert.match(panelJsx, /'原始'/, 'JSON preview must expose raw mode')
