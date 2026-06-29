@@ -639,6 +639,29 @@ const (
 // DialogueSequence is per dialogue_id and assigned by the store (MAX+1 in one
 // transaction). StepSequence is per (task_id, step_id, attempt) and also assigned
 // by the store.
+type ProjectDocumentDraftStatus string
+
+const (
+	ProjectDocumentDraftStatusDraft     ProjectDocumentDraftStatus = "draft"
+	ProjectDocumentDraftStatusProposed  ProjectDocumentDraftStatus = "proposed"
+	ProjectDocumentDraftStatusDiscarded ProjectDocumentDraftStatus = "discarded"
+)
+
+type ProjectDocumentDraft struct {
+	ID              string                     `json:"id"`
+	ApplicationID   string                     `json:"application_id"`
+	DialogueID      string                     `json:"dialogue_id"`
+	Path            string                     `json:"path"`
+	SourceChecksum  string                     `json:"source_checksum"`
+	Content         string                     `json:"content,omitempty"`
+	Status          ProjectDocumentDraftStatus `json:"status"`
+	ConversionError string                     `json:"conversion_error,omitempty"`
+	CreatedAt       time.Time                  `json:"created_at"`
+	UpdatedAt       time.Time                  `json:"updated_at"`
+	ProposedTurnID  string                     `json:"proposed_turn_id,omitempty"`
+	ProposedAt      *time.Time                 `json:"proposed_at,omitempty"`
+}
+
 type TaskThinkingEvent struct {
 	ID               string    `json:"id"`
 	DialogueID       string    `json:"dialogue_id"`
