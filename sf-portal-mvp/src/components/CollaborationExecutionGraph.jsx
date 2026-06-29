@@ -1,5 +1,5 @@
-import { Fragment, useMemo, useState } from 'react'
-import { CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Clock3, CircleDot, GitBranch, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
@@ -17,9 +17,131 @@ const STATE_ICON = {
 
 export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   const [activeKey, setActiveKey] = useState('')
+  const [revealedKeys, setRevealedKeys] = useState(() => new Set())
+  const [revealComplete, setRevealComplete] = useState(false)
+  const revealTimerRef = useRef(null)
+  const lastGraphIdentityRef = useRef(null)
+
   const cardsByKey = graph && graph.cardsByKey ? graph.cardsByKey : {}
   const relatedKeys = useMemo(() => relatedCardKeys(graph, activeKey), [graph, activeKey])
+
+  // 计算图的唯一标识，用于决定何时重置 reveal
+  const graphIdentity = useMemo(() => {
+    if (!graph) return ''
+    const cardKeys = graph.cards?.map(c => c.agentKey).join('|') || ''
+    const edgeIds = graph.edges?.map(e => e.id || `${e.from}->${e.to}`).join('|') || ''
+    return `${graph.confirmed}|${cardKeys}|${edgeIds}`
+  }, [graph])
+
+  // 计算需要 reveal 的卡片顺序（排除用户输入和编排器）
+  const revealOrder = useMemo(() => {
+    if (!graph || !graph.waves) return []
+    const order = []
+    for (const wave of graph.waves) {
+      if (wave.index <= 1) continue // 跳过波次 0（用户输入）和 1（编排器）
+      for (const card of wave.cards) {
+        if (card.agentKey !== USER_INPUT_KEY && card.agentKey !== 'collaboration-orchestrator') {
+          order.push(card.agentKey)
+        }
+      }
+    }
+    return order
+  }, [graph])
+
+  // 检查是否需要 reduce motion
+  const prefersReducedMotion = useMemo(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  }, [])
+
+  // 检查是否是 reveal 模式
+  const isRevealMode = !graph?.confirmed
+
+  // 初始化和重置 reveal 状态
+  useEffect(() => {
+    if (!graph) return
+
+    // 如果图标识没变，不做任何事
+    if (graphIdentity === lastGraphIdentityRef.current) return
+    lastGraphIdentityRef.current = graphIdentity
+
+    // 清理之前的定时器
+    if (revealTimerRef.current) {
+      clearTimeout(revealTimerRef.current)
+      revealTimerRef.current = null
+    }
+
+    // 如果是确认后的图，立即显示所有卡片
+    if (graph.confirmed) {
+      const allKeys = new Set(graph.cards?.map(c => c.agentKey) || [])
+      setRevealedKeys(allKeys)
+      setRevealComplete(true)
+      return
+    }
+
+    // 未确认的图：初始化 reveal 状态
+    const initialKeys = new Set([USER_INPUT_KEY, 'collaboration-orchestrator'])
+    setRevealedKeys(initialKeys)
+    setRevealComplete(false)
+
+    // 如果没有需要 reveal 的卡片，直接完成
+    if (revealOrder.length === 0) {
+      setRevealComplete(true)
+      return
+    }
+
+    // 如果 reduce motion，立即显示所有卡片
+    if (prefersReducedMotion) {
+      const allKeys = new Set([...initialKeys, ...revealOrder])
+      setRevealedKeys(allKeys)
+      setRevealComplete(true)
+      return
+    }
+
+    // 开始逐个 reveal 卡片
+    let currentIndex = 0
+    const revealNext = () => {
+      if (currentIndex >= revealOrder.length) {
+        setRevealComplete(true)
+        return
+      }
+
+      setRevealedKeys(prev => {
+        const next = new Set(prev)
+        next.add(revealOrder[currentIndex])
+        return next
+      })
+
+      currentIndex++
+      revealTimerRef.current = setTimeout(revealNext, 200)
+    }
+
+    // 初始延迟
+    revealTimerRef.current = setTimeout(revealNext, 250)
+
+    // 清理函数
+    return () => {
+      if (revealTimerRef.current) {
+        clearTimeout(revealTimerRef.current)
+      }
+    }
+  }, [graph, graphIdentity, revealOrder, prefersReducedMotion])
+
+  // 检查边是否可见
+  const isEdgeVisible = useCallback((edge) => {
+    if (!isRevealMode) return true
+    return revealedKeys.has(edge.to)
+  }, [isRevealMode, revealedKeys])
+
+  // 获取卡片的 reveal 状态类
+  const getCardRevealClass = useCallback((agentKey) => {
+    if (!isRevealMode) return 'ceg-card-is-revealed'
+    if (!revealedKeys.has(agentKey)) return 'ceg-card-is-hidden'
+    return 'ceg-card-is-revealed'
+  }, [isRevealMode, revealedKeys])
+
   if (!graph || !Array.isArray(graph.waves) || graph.waves.length === 0) return null
+
   return (
     <section className="ceg" aria-label="协作编排执行图">
       <header className="ceg-head">
@@ -37,6 +159,11 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       <div className="ceg-canvas">
         {graph.waves.map((wave, waveIndex) => {
           const nextWave = graph.waves[waveIndex + 1]
+          const visibleEdges = graph.edges.filter(edge => {
+            const from = cardsByKey[edge.from]
+            const to = cardsByKey[edge.to]
+            return from && to && from.wave === wave.index && to.wave > wave.index && isEdgeVisible(edge)
+          })
           return (
           <div className="ceg-wave-group" key={wave.id}>
             <div className="ceg-wave" data-wave={wave.index}>
@@ -51,6 +178,8 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
                     onEnter={() => setActiveKey(card.agentKey)}
                     onLeave={() => setActiveKey('')}
                     onOpenTask={onOpenTask}
+                    revealClass={getCardRevealClass(card.agentKey)}
+                    isOrchestrating={isRevealMode && !revealComplete && card.agentKey === 'collaboration-orchestrator'}
                   />
                 ))}
               </div>
@@ -59,13 +188,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
               <WaveConnector
                 fromWave={wave}
                 toWave={nextWave}
-                edges={graph.edges.filter(edge => {
-                  const from = cardsByKey[edge.from]
-                  const to = cardsByKey[edge.to]
-                  return from && to && from.wave === wave.index && to.wave > wave.index
-                })}
+                edges={visibleEdges}
                 activeKey={activeKey}
                 relatedKeys={relatedKeys}
+                isRevealMode={isRevealMode}
               />
             ) : null}
           </div>
@@ -76,7 +202,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   )
 }
 
-function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
+function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealClass, isOrchestrating }) {
   const Icon = card.kind === 'origin' ? User : card.kind === 'orchestrator' ? GitBranch : STATE_ICON[card.state] || CircleDot
   const canOpenTask = !!card.stepId
   const waitText = card.waitingFor && card.waitingFor.length > 0
@@ -85,7 +211,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
   return (
     <button
       type="button"
-      className={`ceg-card ceg-card-state-${card.state} ceg-${card.kind}${active ? ' is-active' : ''}${dimmed ? ' is-dimmed' : ''}`}
+      className={`ceg-card ceg-card-state-${card.state} ceg-${card.kind}${active ? ' is-active' : ''}${dimmed ? ' is-dimmed' : ''} ${revealClass || ''}${isOrchestrating ? ' ceg-is-orchestrating' : ''}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onFocus={onEnter}
@@ -111,7 +237,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
   )
 }
 
-function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys }) {
+function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys, isRevealMode }) {
   const list = Array.isArray(edges) ? edges : []
   const active = activeKey && list.some(edge => relatedKeys.has(edge.from) && relatedKeys.has(edge.to))
   const fromCards = fromWave && Array.isArray(fromWave.cards) ? fromWave.cards : []
@@ -127,13 +253,14 @@ function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys }) {
             edge={edge}
             fromY={fromY}
             toY={toY}
+            isRevealing={isRevealMode}
           />
         )
       }) : <EdgeSegments edge={{ state: 'inactive' }} fromY={50} toY={50} />}
       {list.length > 0 ? list.map((edge, index) => (
         <span
           key={`${edge.id || `${edge.from}->${edge.to}`}-arrow-${index}`}
-          className={`ceg-edge-arrow ceg-edge-${edge.state || 'inactive'}`}
+          className={`ceg-edge-arrow ceg-edge-${edge.state || 'inactive'}${isRevealMode ? ' ceg-edge-is-revealing' : ''}`}
           style={{ top: `${cardSlotPercent(toCards, edge.to)}%` }}
         />
       )) : <span className="ceg-edge-arrow ceg-edge-inactive" style={{ top: '50%' }} />}
@@ -141,14 +268,15 @@ function WaveConnector({ fromWave, toWave, edges, activeKey, relatedKeys }) {
   )
 }
 
-function EdgeSegments({ edge, fromY, toY }) {
+function EdgeSegments({ edge, fromY, toY, isRevealing }) {
   const state = edge.state || 'inactive'
   const stateClass = `ceg-edge-${state}`
+  const revealClass = isRevealing ? 'ceg-edge-is-revealing' : ''
   const linear = Math.abs(fromY - toY) < 1
   if (linear) {
     return (
       <span
-        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass}`}
+        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass} ${revealClass}`}
         style={{ left: '0%', width: '100%', top: `${fromY}%` }}
       />
     )
@@ -158,15 +286,15 @@ function EdgeSegments({ edge, fromY, toY }) {
   return (
     <Fragment>
       <span
-        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass}`}
+        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass} ${revealClass}`}
         style={{ left: '0%', width: '48%', top: `${fromY}%` }}
       />
       <span
-        className={`ceg-edge-seg ceg-edge-vertical ${stateClass}`}
+        className={`ceg-edge-seg ceg-edge-vertical ${stateClass} ${revealClass}`}
         style={{ left: '48%', top: `${minY}%`, height: `${height}%` }}
       />
       <span
-        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass}`}
+        className={`ceg-edge-seg ceg-edge-horizontal ${stateClass} ${revealClass}`}
         style={{ left: '48%', width: '52%', top: `${toY}%` }}
       />
     </Fragment>
