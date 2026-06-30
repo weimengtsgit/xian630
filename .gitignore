@@ -95,7 +95,12 @@ sf-deploy.tar.gz
 /fix-ontology-adapter/
 /ontology_specs/
 /ontology_specs_all/
-/carrier-data-debug/
+/carrier-data-debug/*
+# ...but track the redacted ontology dump + the redaction tooling (safe; no secrets)
+!/carrier-data-debug/all-endpoints-redacted/
+!/carrier-data-debug/redact_all.py
+!/carrier-data-debug/verify_redaction.py
+!/carrier-data-debug/check_usability.py
 /online-backups/
 
 # === Fetched bundles / generated HTML / catalog docs ===
