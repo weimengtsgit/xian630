@@ -18,6 +18,8 @@
 .ceg-card-main strong { color: #f0fbff; font-size: 12px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ceg-card-main small { color: #75bfd2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ceg-card-desc { grid-column: 1 / -1; min-height: 28px; color: rgba(215, 238, 248, 0.72); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.ceg-orchestration-phase { grid-column: 1 / -1; min-height: 18px; display: inline-flex; align-items: center; justify-self: start; max-width: 100%; padding: 2px 7px; border: 1px solid rgba(167, 139, 250, 0.28); border-radius: 999px; background: rgba(30, 20, 62, 0.5); color: #c8b6ff; font-size: 10px; font-weight: 600; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: cegPhaseSwap 0.46s cubic-bezier(0.18, 0.76, 0.2, 1) both; }
+.ceg-orchestration-phase.is-exiting { animation: cegPhaseExit 0.26s ease-in both; }
 .ceg-card-state { grid-column: 1 / -1; justify-self: start; padding: 3px 8px; border-radius: 999px; background: rgba(6, 18, 29, 0.54); color: #9ddff0; font-size: 11px; font-weight: 600; }
 .ceg-card-wait { grid-column: 1 / -1; color: #83cddd; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
 .ceg-card-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 12; width: max-content; max-width: 220px; padding: 7px 9px; border: 1px solid rgba(104, 221, 255, 0.34); border-radius: 6px; background: rgba(3, 17, 29, 0.96); color: #d7eef8; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.36); font-size: 11px; line-height: 1.42; text-align: left; white-space: normal; overflow-wrap: anywhere; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 4px); transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease; }
@@ -66,6 +68,33 @@
 @keyframes cegFlowDown { from { background-position: 0 0; } to { background-position: 0 20px; } }
 @keyframes cegPulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 0.95; transform: scale(1.02); } }
 @keyframes cegSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes cegPhaseSwap {
+  0% {
+    opacity: 0;
+    transform: translateY(7px);
+    filter: brightness(0.86);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: brightness(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: none;
+  }
+}
+@keyframes cegPhaseExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+}
 
 /* Reveal animation classes */
 .ceg-card-is-hidden {
@@ -188,7 +217,8 @@
 /* Reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .ceg-card-is-hidden,
-  .ceg-card-is-revealed {
+  .ceg-card-is-revealed,
+  .ceg-orchestration-phase {
     opacity: 1 !important;
     transform: none !important;
     visibility: visible !important;
@@ -221,6 +251,14 @@
   }
 
   .ceg-spin {
+    animation: none !important;
+  }
+
+  .ceg-orchestration-phase {
+    animation: none !important;
+  }
+
+  .ceg-orchestration-phase.is-exiting {
     animation: none !important;
   }
 

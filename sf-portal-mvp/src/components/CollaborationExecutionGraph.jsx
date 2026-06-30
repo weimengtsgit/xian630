@@ -4,7 +4,19 @@ import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
-const REVEAL_INITIAL_DELAY_MS = 450
+const ORCHESTRATION_PHASES = [
+  { label: '正在解析确认需求', duration: 1000 },
+  { label: '正在规划协作路径', duration: 1000 },
+  { label: '正在召唤协作智能体', duration: 1400 },
+  { label: '正在交接执行波次', duration: 900 },
+]
+const ORCHESTRATION_SUMMON_PHASE_INDEX = 2
+const ORCHESTRATION_HANDOFF_PHASE_INDEX = 3
+const ORCHESTRATION_PHASE_TRANSITION_MS = 260
+const REVEAL_INITIAL_DELAY_MS = ORCHESTRATION_PHASES
+  .slice(0, ORCHESTRATION_SUMMON_PHASE_INDEX)
+  .reduce((total, phase) => total + phase.duration, 0) +
+  (ORCHESTRATION_PHASE_TRANSITION_MS * ORCHESTRATION_SUMMON_PHASE_INDEX)
 const REVEAL_STEP_DELAY_MS = 520
 const REVEAL_CARD_ANIMATION_MS = 900
 
@@ -24,6 +36,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   const [revealedKeys, setRevealedKeys] = useState(() => new Set())
   const [revealingKeys, setRevealingKeys] = useState(() => new Set())
   const [revealComplete, setRevealComplete] = useState(false)
+  const [orchestrationPhase, setOrchestrationPhase] = useState({ index: 0, exiting: false })
   const revealTimerRefs = useRef([])
   const lastGraphIdentityRef = useRef(null)
 
@@ -62,6 +75,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
 
   // Reveal plays for both the planned graph and the accepted execution graph.
   const isRevealRunning = !revealComplete && !prefersReducedMotion
+  const orchestrationPhaseIndex = orchestrationPhase.index
+  const orchestrationLabel = isRevealRunning
+    ? ORCHESTRATION_PHASES[orchestrationPhaseIndex]?.label || ORCHESTRATION_PHASES[0].label
+    : prefersReducedMotion ? '协作编排已生成' : ''
 
   const clearRevealTimers = useCallback(() => {
     for (const timer of revealTimerRefs.current) clearTimeout(timer)
@@ -86,6 +103,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       setRevealedKeys(new Set())
       setRevealingKeys(new Set())
       setRevealComplete(false)
+      setOrchestrationPhase({ index: 0, exiting: false })
       return
     }
 
@@ -103,10 +121,12 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     setRevealedKeys(initialKeys)
     setRevealingKeys(new Set())
     setRevealComplete(false)
+    setOrchestrationPhase({ index: 0, exiting: false })
 
     // 如果没有需要 reveal 的卡片，直接完成
     if (revealOrder.length === 0) {
       setRevealComplete(true)
+      setOrchestrationPhase({ index: ORCHESTRATION_HANDOFF_PHASE_INDEX, exiting: false })
       return
     }
 
@@ -116,7 +136,25 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       setRevealedKeys(allKeys)
       setRevealingKeys(new Set())
       setRevealComplete(true)
+      setOrchestrationPhase({ index: ORCHESTRATION_HANDOFF_PHASE_INDEX, exiting: false })
       return
+    }
+
+    let phaseDelay = 0
+    const schedulePhaseChange = (index, delay) => {
+      scheduleRevealTimer(() => {
+        setOrchestrationPhase(prev => ({ ...prev, exiting: true }))
+      }, delay)
+      scheduleRevealTimer(() => {
+        setOrchestrationPhase({ index, exiting: false })
+      }, delay + ORCHESTRATION_PHASE_TRANSITION_MS)
+    }
+    for (let index = 1; index < ORCHESTRATION_HANDOFF_PHASE_INDEX; index += 1) {
+      phaseDelay += ORCHESTRATION_PHASES[index - 1].duration
+      if (index < ORCHESTRATION_HANDOFF_PHASE_INDEX) {
+        schedulePhaseChange(index, phaseDelay)
+      }
+      phaseDelay += ORCHESTRATION_PHASE_TRANSITION_MS
     }
 
     // 开始逐个 reveal 卡片
@@ -124,7 +162,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     const revealNext = () => {
       if (currentIndex >= revealOrder.length) {
         setRevealingKeys(new Set())
-        setRevealComplete(true)
+        schedulePhaseChange(ORCHESTRATION_HANDOFF_PHASE_INDEX, 0)
+        scheduleRevealTimer(() => {
+          setRevealComplete(true)
+        }, ORCHESTRATION_PHASE_TRANSITION_MS + ORCHESTRATION_PHASES[ORCHESTRATION_HANDOFF_PHASE_INDEX].duration)
         return
       }
 
@@ -215,6 +256,8 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
                     onOpenTask={onOpenTask}
                     revealClass={getCardRevealClass(card.agentKey)}
                     isOrchestrating={isRevealRunning && card.agentKey === ORCHESTRATOR_KEY}
+                    orchestrationLabel={card.agentKey === ORCHESTRATOR_KEY ? orchestrationLabel : ''}
+                    orchestrationPhaseExiting={card.agentKey === ORCHESTRATOR_KEY ? orchestrationPhase.exiting : false}
                   />
                 ))}
               </div>
@@ -237,8 +280,8 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   )
 }
 
-function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealClass, isOrchestrating }) {
-  const Icon = card.kind === 'origin' ? User : card.kind === 'orchestrator' ? GitBranch : STATE_ICON[card.state] || CircleDot
+function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealClass, isOrchestrating, orchestrationLabel, orchestrationPhaseExiting }) {
+  const Icon = card.kind === 'origin' ? User : card.kind === 'orchestrator' ? isOrchestrating ? Loader2 : GitBranch : STATE_ICON[card.state] || CircleDot
   const canOpenTask = !!card.stepId
   const waitText = card.waitingFor && card.waitingFor.length > 0
     ? `等待：${card.waitingFor.slice(0, 2).join('、')}${card.waitingFor.length > 2 ? `等 ${card.waitingFor.length} 个上游` : ''}`
@@ -260,7 +303,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
       aria-describedby={tooltipId}
     >
       <span className="ceg-card-icon">
-        <Icon size={18} className={card.state === 'running' ? 'ceg-spin' : ''} />
+        <Icon size={18} className={card.state === 'running' || isOrchestrating ? 'ceg-spin' : ''} />
       </span>
       <span className="ceg-card-main">
         <strong>{card.title}</strong>
@@ -268,6 +311,9 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
       </span>
       {card.highImpact ? <em className="ceg-gate">门禁</em> : null}
       <span className="ceg-card-desc">{card.summary || waitText || card.description || '等待编排流转'}</span>
+      {orchestrationLabel ? (
+        <span key={orchestrationLabel} className={`ceg-orchestration-phase${orchestrationPhaseExiting ? ' is-exiting' : ''}`}>{orchestrationLabel}</span>
+      ) : null}
       <span className="ceg-card-state">{card.stateLabel}</span>
       {waitText ? <span className="ceg-card-wait">{waitText}</span> : null}
       <span id={tooltipId} className="ceg-card-tooltip" role="tooltip">{tooltipText}</span>
