@@ -41,7 +41,7 @@ const DATA_DOWNSTREAM_NODES = [
 
 export function WorkbenchTrack({ cardKey, activeLabel = '', failedLabel = '', card }) {
   if (cardKey === 'data_capture') {
-    return <DataFlowTrack card={card || {}} activeLabel={activeLabel} />
+    return <DataFlowTrack card={card || {}} />
   }
   const steps = STATIC_TRACKS[cardKey] || []
   return (
@@ -68,7 +68,7 @@ export function WorkbenchTrack({ cardKey, activeLabel = '', failedLabel = '', ca
 //   - cw-track-node-failed    : node hit a red breakpoint (boundary failed)
 //   - cw-track-node-waiting   : node is paused for degradation confirmation
 // Inactive nodes keep the base .cw-track li styling.
-function DataFlowTrack({ card, activeLabel }) {
+function DataFlowTrack({ card }) {
   const contract = (card.artifacts || []).find(item => item.kind === 'data_contract')
   const meta = (contract && contract.metadata) || null
   const cardState = card.state || ''
