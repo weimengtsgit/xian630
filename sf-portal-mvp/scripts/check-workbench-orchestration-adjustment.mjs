@@ -233,4 +233,10 @@ const workbenchSrc = readFileSync(new URL('../src/components/ConversationWorkben
 assert.equal(workbenchSrc.includes('onConfirmCard'), true, 'ConversationWorkbench must accept the onConfirmCard prop')
 assert.equal(workbenchSrc.includes('onConfirmCard ? onConfirmCard(key)'), true, 'WorkbenchAgentBlock confirm must prefer onConfirmCard over onConfirm')
 
+// answerJob (task-internal clarification answer) must carry attachmentIds so UI-uploaded
+// attachments bind to the answer message (review finding: client dropped scope.attachmentIds).
+const clientSrc = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
+const answerJobBody = clientSrc.slice(clientSrc.indexOf('answerJob:'), clientSrc.indexOf('retryCurrentStep:'))
+assert.equal(answerJobBody.includes('attachmentIds'), true, 'answerJob request body must include scope.attachmentIds')
+
 console.log('check-workbench-orchestration-adjustment: ok')

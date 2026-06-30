@@ -138,6 +138,7 @@ export const factoryApi = {
       answer,
       ...(scope.stepId ? { stepId: scope.stepId } : {}),
       ...(scope.attempt ? { attempt: scope.attempt } : {}),
+      ...(scope.attachmentIds && scope.attachmentIds.length ? { attachmentIds: scope.attachmentIds } : {}),
     }),
   }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
