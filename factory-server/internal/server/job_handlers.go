@@ -540,11 +540,12 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 // answerJobBody is accepted by POST /api/jobs/:id/answer; either "answer" or
 // "content" is accepted for interoperability with older clients.
 type answerJobBody struct {
-	Answer      string `json:"answer"`
-	Content     string `json:"content"`
-	StepID      string `json:"stepId"`
-	StepIDSnake string `json:"step_id"`
-	Attempt     int    `json:"attempt"`
+	Answer        string   `json:"answer"`
+	Content       string   `json:"content"`
+	StepID        string   `json:"stepId"`
+	StepIDSnake   string   `json:"step_id"`
+	Attempt       int      `json:"attempt"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
 }
 
 // answerJob handles POST /api/jobs/:id/answer — appends a user conversation
@@ -646,6 +647,18 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "append dialogue answer")
 			return
 		}
+		// Bind any attachments the user pinned to this task-internal clarification
+		// answer. Each id is validated (active check) by createDialogueAttachmentRefs;
+		// only the attachment id + focus key are persisted, never file content or
+		// credentials. Without this the attachments the user supplied during a
+		// 业务逻辑/界面解析/数据抓取 phase were dropped.
+		if len(body.AttachmentIDs) > 0 {
+			focusKey := stepKindToFocusKey(targetStep.Kind)
+			if err := s.createDialogueAttachmentRefs(r.Context(), job.DialogueID, dlgMsg.ID, body.AttachmentIDs, focusKey); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid attachment reference")
+				return
+			}
+		}
 	}
 	if job.Status == model.JobStatusWaitingUser && targetStep != nil {
 		if isManualStepConfirmationQuestions(targetStep.PendingQuestions) {
@@ -691,8 +704,7 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-func isManualStepConfirmationQuestions(raw string) bool {
-	if strings.TrimSpace(raw) == "" {
+func isManualStepConfirmationQuestions(raw string) bool {	if strings.TrimSpace(raw) == "" {
 		return false
 	}
 	var items []struct {
@@ -708,6 +720,23 @@ func isManualStepConfirmationQuestions(raw string) bool {
 		}
 	}
 	return false
+}
+
+// stepKindToFocusKey projects a job step kind onto the workbench focus key the
+// task-internal clarification binding uses. It mirrors currentWorkbenchFocusKey
+// (dialogue_handlers.go) so an attachment pinned during a task-internal
+// clarification lands on the same focus lane as the step that asked for it.
+func stepKindToFocusKey(kind model.StepKind) string {
+	switch kind {
+	case model.StepDesignContract:
+		return "interface_parsing"
+	case model.StepDataIntegration:
+		return "data_capture"
+	case model.StepSolutionDesign, model.StepCodeGeneration, model.StepCodeReview, model.StepSecurityReview, model.StepTestVerification, model.StepProductAcceptance, model.StepImageBuild, model.StepDeployment:
+		return "production_delivery"
+	default:
+		return "business_logic"
+	}
 }
 
 // retryCurrentStep handles POST /api/jobs/:id/retry-current-step. It resets the

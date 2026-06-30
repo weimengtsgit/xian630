@@ -756,6 +756,75 @@ func TestAnswerJobRoutesToProvidedWaitingStep(t *testing.T) {
 	}
 }
 
+// TestAnswerJobBindsTaskInternalAttachmentRefs verifies F1: when a task-internal
+// clarification answer carries attachmentIds, the backend binds each id to the
+// freshly-appended dialogue answer message via createDialogueAttachmentRefs, so
+// the attachments the user pinned in a 业务逻辑/界面解析/数据抓取 phase are not
+// dropped. The job must carry a DialogueID for the binding branch to run.
+func TestAnswerJobBindsTaskInternalAttachmentRefs(t *testing.T) {
+	srv, r, st := newJobsTestServer(t, config.Config{})
+
+	dialogueID := "dlg_f1"
+	if err := st.CreateDialogueSession(context.Background(), model.DialogueSession{
+		ID: dialogueID, Status: model.DialogueStatusTaskRunning,
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: testNow(), UpdatedAt: testNow(),
+	}); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
+	}
+	// An active dialogue attachment the user uploaded earlier.
+	attID := "att_f1"
+	if err := st.CreateDialogueAttachment(context.Background(), model.DialogueAttachment{
+		ID: attID, DialogueID: dialogueID, FocusKey: "business_logic",
+		OriginalName: "spec.md", StoredPath: "dialogue-attachments/" + dialogueID + "/" + attID + "/spec.md",
+		PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: testNow(),
+	}); err != nil {
+		t.Fatalf("seed attachment: %v", err)
+	}
+
+	// Seed a job WITH a DialogueID so the task-internal binding branch runs.
+	now := time.Now()
+	jobID := "job_f1"
+	job := model.Job{
+		ID: jobID, UserPrompt: "p", Status: model.JobStatusWaitingUser,
+		CurrentStepKind: model.StepRequirementAnalysis,
+		ConfirmedRequirementJSON: testConfirmedRequirement,
+		DialogueID: dialogueID, CreatedAt: now, UpdatedAt: now,
+	}
+	stepID := "step_f1"
+	steps := []model.JobStep{{
+		ID: stepID, JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1,
+		Status: model.StepStatusWaitingUser, NeedsUserInput: true, Attempt: 0,
+	}}
+	if err := st.SeedJob(context.Background(), job, steps); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+jobID+"/answer", map[string]any{
+		"answer":        "选 A 方案",
+		"stepId":        stepID,
+		"attempt":       0,
+		"attachmentIds": []string{attID},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	refs, err := st.ListDialogueAttachmentRefs(context.Background(), dialogueID)
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 attachment ref bound to the answer, got %d: %#v", len(refs), refs)
+	}
+	if refs[0].AttachmentID != attID {
+		t.Fatalf("ref attachment id = %q, want %q", refs[0].AttachmentID, attID)
+	}
+	if refs[0].MessageID == "" || !strings.HasPrefix(refs[0].MessageID, "msg_") {
+		t.Fatalf("ref message id = %q, want the task-internal answer's dlgMsg id (msg_...)", refs[0].MessageID)
+	}
+	_ = srv
+}
+
 func TestAnswerJobRejectsStaleStepAttempt(t *testing.T) {
 	_, r, st := newJobsTestServer(t, config.Config{})
 	create := createJobViaAPI(t, r, "p")
