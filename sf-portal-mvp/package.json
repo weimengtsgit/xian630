@@ -7,7 +7,8 @@
     "dev": "vite",
     "test:logic": "node scripts/check-job-selection.mjs && node scripts/check-focus-task.mjs && node scripts/check-application-ordering.mjs && node scripts/check-application-store-page.mjs && node scripts/check-application-project-drawer.mjs && node scripts/check-application-wording.mjs && node scripts/check-agent-creation.mjs && node scripts/check-agent-panel-layout.mjs && node scripts/check-clarification.mjs && node scripts/check-chat-input-sizing.mjs && node scripts/check-clarification-layout.mjs && node scripts/check-execution-record-state.mjs && node scripts/check-task-observability-layout.mjs && node scripts/check-conversation-workbench.mjs && node scripts/check-dialogue-workbench.mjs && node scripts/check-visible-work-trace.mjs && node scripts/check-task-thinking-state.mjs && node scripts/check-managed-agents.mjs && node scripts/check-side-panel-toggle.mjs && node scripts/check-workbench-drawer.mjs && node scripts/check-collaboration-plan.mjs",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:workbench-orchestration": "node scripts/check-workbench-orchestration-adjustment.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.263.1",
