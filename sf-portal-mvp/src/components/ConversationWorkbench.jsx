@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
 import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
+import { WorkbenchAgentBlock } from './WorkbenchAgentBlock'
 import { AttachmentComposer } from './AttachmentComposer'
 import { AttachmentPreviewModal } from './AttachmentPreviewModal'
 import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
@@ -353,6 +354,20 @@ export function ConversationWorkbench({
             }}
           />
         ))}
+
+        {aggregateGraph.cards
+          .filter(card => card.key !== 'user_input' && card.state !== 'not_started' && card.state !== 'waiting_upstream')
+          .map(card => (
+            <WorkbenchAgentBlock
+              key={card.key}
+              card={card}
+              thinking=""
+              analysisLog=""
+              questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
+              onConfirm={key => onConfirm && onConfirm({ aggregateCardKey: key })}
+              onOpenArtifact={openProjectDocument}
+            />
+          ))}
 
         {/* Continuous-workbench trace surface (Task 7): the dialogue-scoped,
             sequence-replayable visible work-trace. Rendered as a compact

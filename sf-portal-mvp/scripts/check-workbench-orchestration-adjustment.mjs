@@ -101,4 +101,14 @@ const appSource = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8
 assert.equal(appSource.includes('onSend={(prompt, options = {})'), true, 'App must preserve onSend options')
 assert.equal(appSource.includes('dialogue.send(prompt, options)'), true, 'App must pass attachment options into dialogue.send')
 
+// ---- Task 7: workbench agent blocks + responsibility tracks ----------------
+const blockSource = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
+for (const text of ['思考过程', '思考摘要', '模型分析过程', '确认业务逻辑并继续', '确认界面解析并继续', '确认数据抓取并继续']) {
+  assert.equal(blockSource.includes(text), true, `agent block must include ${text}`)
+}
+const tracksSource = readFileSync(new URL('../src/components/WorkbenchTracks.jsx', import.meta.url), 'utf8')
+for (const text of ['目标识别', '布局分区', '来源', '方案设计', '部署']) {
+  assert.equal(tracksSource.includes(text), true, `tracks must include ${text}`)
+}
+
 console.log('check-workbench-orchestration-adjustment: ok')
