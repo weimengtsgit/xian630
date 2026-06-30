@@ -219,6 +219,7 @@ function App() {
               drawerEntry={drawerEntry}
               onToggleDrawerEntry={toggleDrawerEntry}
               onOpenTaskStep={openTaskStepFromGraph}
+              onConfirmTaskStep={jobs.confirmStep}
               hasBoundApplication={hasBoundApplication}
               onSend={prompt => {
                 if (activeClarification) {

@@ -147,6 +147,7 @@ export function buildTaskBlocks(steps, summary) {
       const latest = sm && (sm.latest_record || sm.latestRecord)
       const summaryText = latest && (latest.content || latest.text || latest.message) || ''
       const attention = STEP_ATTENTION_STATUSES.has(status)
+      const pendingQuestions = safeString(step.pending_questions || step.pendingQuestions)
       return {
         id: `taskblock_${step.job_id || step.jobId || ''}_${step.id}`,
         type: 'task_execution_block',
@@ -158,6 +159,9 @@ export function buildTaskBlocks(steps, summary) {
         status,
         summary: safeString(summaryText),
         error: safeString(step.error_message || step.errorMessage),
+        needsUserInput: !!(step.needs_user_input || step.needsUserInput),
+        pendingQuestions,
+        manualConfirmation: isManualStepConfirmation(pendingQuestions),
         startedAt: step.started_at || step.startedAt || '',
         endedAt: step.ended_at || step.endedAt || '',
         // safeExecution is populated by the builder from persisted work-trace
@@ -175,6 +179,16 @@ export function buildTaskBlocks(steps, summary) {
       if (sa !== sb) return sa - sb
       return a.stepId < b.stepId ? -1 : a.stepId > b.stepId ? 1 : 0
     })
+}
+
+function isManualStepConfirmation(raw) {
+  if (!raw) return false
+  try {
+    const items = JSON.parse(raw)
+    return Array.isArray(items) && items.some(item => item && item.type === 'manual_step_confirmation' && item.confirm)
+  } catch {
+    return false
+  }
 }
 
 // stepSeq looks up a step's seq by id (dependency/execution order). Returns

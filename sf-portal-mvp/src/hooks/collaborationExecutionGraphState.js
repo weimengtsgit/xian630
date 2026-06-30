@@ -39,6 +39,7 @@ export const CARD_STATE_LABEL = {
   ready: '待启动',
   running: '执行中',
   waiting_user: '等待用户',
+  manual_confirmation: '待人工确认',
   completed: '已完成',
   failed: '失败',
   skipped: '已跳过',
@@ -52,6 +53,7 @@ export const EDGE_STATE_LABEL = {
   blocked: '阻塞',
   blocked_failed: '失败阻塞',
   blocked_waiting_user: '等待用户',
+  blocked_manual_confirmation: '等待确认',
 }
 
 export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []) {
@@ -93,6 +95,7 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
       .map(key => agentByKey[key] && (agentByKey[key].name || agentByKey[key].key) || key)
     const state = cardStateForStep(step, confirmed, waitingFor)
     const description = agentDescription(agent)
+    const manualConfirmation = isManualConfirmationStep(step)
     return {
       id: agent.key,
       kind: agent.key === ORCHESTRATOR_KEY ? 'orchestrator' : 'agent',
@@ -102,12 +105,13 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
       description,
       tooltip: description,
       state,
-      stateLabel: CARD_STATE_LABEL[state] || state,
+      stateLabel: manualConfirmation ? CARD_STATE_LABEL.manual_confirmation : CARD_STATE_LABEL[state] || state,
       lane: agent.lane || 'unassigned',
       wave: Math.max(1, (rankByAgent[agent.key] || 0) + 1),
       stepId: step && (step.stepId || step.step_id || step.id) || null,
       step,
-      summary: step && (step.summary || step.error || '') || '',
+      summary: manualConfirmation ? '任务已完成，等待人工确认继续。' : step && (step.summary || step.error || '') || '',
+      manualConfirmation,
       waitingFor,
       highImpact: !!agent.highImpact,
       upstream: upstreamKeys,
@@ -143,6 +147,7 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
     edges: graphEdges,
     waves,
     summary: summarize(cards),
+    manualStepConfirmation: !!(preview && preview.executionPolicy && preview.executionPolicy.manualStepConfirmation),
     adjustments: Array.isArray(preview && preview.adjustments) ? preview.adjustments : [],
   }
 }
@@ -167,10 +172,24 @@ function cardStateForStep(step, confirmed, waitingFor) {
   return waitingFor.length > 0 ? 'waiting_upstream' : 'ready'
 }
 
+function isManualConfirmationStep(step) {
+  if (!step) return false
+  if (step.manualConfirmation || step.manual_confirmation) return true
+  const raw = step.pendingQuestions || step.pending_questions || ''
+  if (!raw) return false
+  try {
+    const items = JSON.parse(raw)
+    return Array.isArray(items) && items.some(item => item && item.type === 'manual_step_confirmation' && item.confirm)
+  } catch {
+    return false
+  }
+}
+
 function edgeState(fromCard, toCard, confirmed) {
   if (!confirmed) return 'planned'
   if (!fromCard || !toCard) return 'inactive'
   if (fromCard.state === 'failed' || toCard.state === 'failed') return 'blocked_failed'
+  if (fromCard.manualConfirmation || toCard.manualConfirmation) return 'blocked_manual_confirmation'
   if (toCard.state === 'waiting_user') return 'blocked_waiting_user'
   if (toCard.state === 'completed') return 'completed'
   if (fromCard.state === 'completed' && (toCard.state === 'ready' || toCard.state === 'running')) return 'flowing'
