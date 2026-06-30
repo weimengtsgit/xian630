@@ -220,6 +220,7 @@ function App() {
               onToggleDrawerEntry={toggleDrawerEntry}
               onOpenTaskStep={openTaskStepFromGraph}
               onConfirmTaskStep={jobs.confirmStep}
+              onConfirmDataAccess={jobs.confirmDataAccess}
               hasBoundApplication={hasBoundApplication}
               onSend={prompt => {
                 if (activeClarification) {

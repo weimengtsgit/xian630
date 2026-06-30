@@ -60,6 +60,7 @@ export function ConversationWorkbench({
   onToggleDrawerEntry,
   onOpenTaskStep,
   onConfirmTaskStep,
+  onConfirmDataAccess,
   hasBoundApplication,
   onCancelTurn,
   onConfirmChange,
@@ -296,6 +297,7 @@ export function ConversationWorkbench({
             onSelectClarificationScope={onSelectClarificationScope}
             onOpenTaskStep={onOpenTaskStep}
             onConfirmTaskStep={onConfirmTaskStep}
+            onConfirmDataAccess={onConfirmDataAccess}
             manualStepConfirmation={manualStepConfirmation}
             onToggleManualStepConfirmation={setManualStepConfirmation}
             onPickClarification={(scope, value) => {
@@ -530,7 +532,7 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation }) {
   if (item.type === 'user_message') {
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
@@ -551,7 +553,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     // fills the composer (the reply goes through the normal send → answerJob
     // path, which resets the step so the agent reads the user's answer).
     return (
-      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} submitting={submitting} />
+      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} onConfirmDataAccess={onConfirmDataAccess} submitting={submitting} />
     )
   }
   if (item.type === 'analysis_stream') {
@@ -988,10 +990,11 @@ function shortId(value) {
 // submit + draftAnswers state), a job-step clarification is answered via the
 // normal composer: picking an option (or typing) fills the composer, and sending
 // goes through answerJob → the step resets and the agent reads the reply.
-function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
+function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAccess, submitting }) {
   const questions = Array.isArray(item.questions) ? item.questions : []
   const open = item.status === 'open'
   const [expanded, setExpanded] = useState(item.expanded !== false)
+  const [confirming, setConfirming] = useState(false)
   // Whether ANY question offers structured options. The agent does not always
   // emit an options array (sometimes it writes (A)/(B)/(C) into the question
   // text instead). When there are no pickable options, the hint must NOT say
@@ -1010,8 +1013,25 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
     if (!open || typeof onSelectScope !== 'function') return
     onSelectScope(scope)
   }
-  const pick = value => {
-    if (!open || submitting || typeof onPick !== 'function') return
+  const pick = async (value, opt, question) => {
+    if (!open || submitting || confirming || typeof onPick !== 'function') return
+    if (
+      question &&
+      question.id === 'data_access_summary_confirmation' &&
+      opt &&
+      opt.value === 'confirm' &&
+      typeof onConfirmDataAccess === 'function'
+    ) {
+      setConfirming(true)
+      try {
+        await onConfirmDataAccess(scope.taskId, scope.stepId, { version: question.defaultAnswer || '', attempt: scope.attempt })
+      } catch {
+        // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
+      } finally {
+        setConfirming(false)
+      }
+      return
+    }
     onPick(scope, value)
   }
   return (
@@ -1042,8 +1062,8 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
                       key={opt.value || opt.label}
                       type="button"
                       className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
-                      onClick={() => pick(opt.label || opt.value)}
-                      disabled={!open || submitting}
+                      onClick={() => pick(opt.label || opt.value, opt, q)}
+                      disabled={!open || submitting || confirming}
                     >
                       <span className="cw-option-head">
                         <b>{opt.label || opt.value}</b>

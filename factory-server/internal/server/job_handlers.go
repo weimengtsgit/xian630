@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dataaccess"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -744,6 +745,53 @@ func (s *Server) confirmJobStep(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	job, err := s.exec.ConfirmManualStep(r.Context(), jobID, stepID, body.Attempt)
+	if err != nil {
+		switch {
+		case err.Error() == "job not found" || err.Error() == "step not found":
+			writeError(w, http.StatusNotFound, "not found")
+		default:
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	s.publishStepUpdated(r.Context(), stepID)
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+	writeJSON(w, http.StatusOK, job)
+}
+
+type confirmDataAccessBody struct {
+	Version string `json:"version"`
+	Attempt int    `json:"attempt"`
+}
+
+func (s *Server) confirmDataAccessStep(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+	stepID := Param(r, "stepID")
+	var body confirmDataAccessBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	body.Version = strings.TrimSpace(body.Version)
+	if body.Version == "" {
+		writeError(w, http.StatusBadRequest, "version required")
+		return
+	}
+	if err := s.exec.ValidateDataAccessStepConfirmation(r.Context(), jobID, stepID, body.Attempt); err != nil {
+		switch {
+		case err.Error() == "job not found" || err.Error() == "step not found":
+			writeError(w, http.StatusNotFound, "not found")
+		default:
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	// 数据接入确认只固化当前草案版本，不重跑模型；推进由 executor 统一处理。
+	if err := dataaccess.FinalizeVersion(s.cfg.ArtifactRoot, jobID, body.Version, "user"); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	job, err := s.exec.ConfirmDataAccessStep(r.Context(), jobID, stepID, body.Attempt)
 	if err != nil {
 		switch {
 		case err.Error() == "job not found" || err.Error() == "step not found":

@@ -759,16 +759,38 @@
   overflow: hidden;
   border: 1px solid var(--asp-border);
   border-radius: var(--asp-radius-md);
-  background: #07111b;
+  background:
+    linear-gradient(135deg, rgba(74, 103, 125, 0.2), rgba(13, 22, 31, 0.96)),
+    #07111b;
 }
 
-.store-detail-preview-frame iframe {
-  width: 200%;
-  height: 200%;
+.store-detail-preview-link {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
   border: 0;
-  background: #ffffff;
-  transform: scale(0.5);
-  transform-origin: 0 0;
+  color: var(--asp-text-primary);
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+}
+
+.store-detail-preview-link strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.store-detail-preview-link span {
+  color: var(--asp-text-secondary);
+  font-size: 13px;
 }
 
 .store-detail-preview-empty {

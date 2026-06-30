@@ -16,6 +16,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/ccstatus"
 	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
 	"github.com/weimengtsgit/xian630/factory-server/internal/config"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dataaccess"
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
@@ -798,6 +799,111 @@ func TestAnswerJobRejectsStaleStepAttempt(t *testing.T) {
 	}
 	if updated[0].Status != model.StepStatusWaitingUser || updated[0].UserPrompt != "" {
 		t.Fatalf("stale answer mutated step: %#v", updated[0])
+	}
+}
+
+func TestConfirmDataAccessFinalizesVersionAndAdvances(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, r, st := newJobsTestServer(t, cfg)
+	create := createJobViaAPI(t, r, "生成数据接入应用")
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", create.Code)
+	}
+	var job model.Job
+	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	step, err := st.GetStepByKind(context.Background(), job.ID, model.StepDataIntegration)
+	if err != nil || step == nil {
+		t.Fatalf("get data step: %#v %v", step, err)
+	}
+	result := dataaccess.Result{
+		SchemaVersion: 1,
+		Stage:         "data_access",
+		Version:       "v1",
+		Status:        dataaccess.StatusPendingConfirmation,
+		CanFinalize:   true,
+		Summary:       dataaccess.Summary{Confirmed: []string{"接口可用"}},
+	}
+	if _, err := dataaccess.WriteVersion(cfg.ArtifactRoot, job.ID, result, "# 数据获取方案\n"); err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	if err := st.AdvanceJobStep(context.Background(), job.ID, model.StepDataIntegration); err != nil {
+		t.Fatalf("advance to data step: %v", err)
+	}
+	if err := st.MarkStepWaitingUser(context.Background(), step.ID, `[{"id":"data_access_summary_confirmation"}]`); err != nil {
+		t.Fatalf("mark data step waiting: %v", err)
+	}
+	if err := st.MarkJobWaitingUser(context.Background(), job.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/steps/"+step.ID+"/data-access/confirm", map[string]any{
+		"version": "v1",
+		"attempt": step.Attempt,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	finalRaw, err := os.ReadFile(filepath.Join(cfg.ArtifactRoot, "jobs", job.ID, "data-access", "final", "dataAccessResult.internal.json"))
+	if err != nil {
+		t.Fatalf("read final result: %v", err)
+	}
+	if !strings.Contains(string(finalRaw), `"status": "finalized"`) {
+		t.Fatalf("final result not finalized: %s", finalRaw)
+	}
+	updatedStep, err := st.GetStepByKind(context.Background(), job.ID, model.StepDataIntegration)
+	if err != nil || updatedStep == nil {
+		t.Fatalf("get updated step: %#v %v", updatedStep, err)
+	}
+	if updatedStep.Status != model.StepStatusSucceeded || updatedStep.NeedsUserInput {
+		t.Fatalf("data step after confirm = %#v, want succeeded without input", updatedStep)
+	}
+	updatedJob, err := st.GetJob(context.Background(), job.ID)
+	if err != nil || updatedJob == nil {
+		t.Fatalf("get updated job: %#v %v", updatedJob, err)
+	}
+	if updatedJob.Status != model.JobStatusQueued || updatedJob.CurrentStepKind != model.StepSolutionDesign {
+		t.Fatalf("job after confirm = status %s current %s, want queued solution_design", updatedJob.Status, updatedJob.CurrentStepKind)
+	}
+}
+
+func TestConfirmDataAccessDoesNotFinalizeWhenStepIsNotWaiting(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, r, st := newJobsTestServer(t, cfg)
+	create := createJobViaAPI(t, r, "生成数据接入应用")
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", create.Code)
+	}
+	var job model.Job
+	if err := json.NewDecoder(create.Body).Decode(&job); err != nil {
+		t.Fatalf("decode job: %v", err)
+	}
+	step, err := st.GetStepByKind(context.Background(), job.ID, model.StepDataIntegration)
+	if err != nil || step == nil {
+		t.Fatalf("get data step: %#v %v", step, err)
+	}
+	result := dataaccess.Result{
+		SchemaVersion: 1,
+		Stage:         "data_access",
+		Version:       "v1",
+		Status:        dataaccess.StatusPendingConfirmation,
+		CanFinalize:   true,
+	}
+	if _, err := dataaccess.WriteVersion(cfg.ArtifactRoot, job.ID, result, "# 数据获取方案\n"); err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+job.ID+"/steps/"+step.ID+"/data-access/confirm", map[string]any{
+		"version": "v1",
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirm status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(cfg.ArtifactRoot, "jobs", job.ID, "data-access", "final", "dataAccessResult.internal.json")); !os.IsNotExist(err) {
+		t.Fatalf("final result should not be written when step is not waiting, stat err=%v", err)
 	}
 }
 

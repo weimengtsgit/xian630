@@ -337,8 +337,8 @@ export function ApplicationStorePage(props) {
                     onStart={startApplication}
                     onStop={stopApplication}
                     onRebuild={restartApplication}
-                    onRegenerate={appToRegenerate => {
-                        if (onRegenerate) onRegenerate(appToRegenerate)
+                    onRegenerate={app => {
+                        onRegenerate?.(app)
                         setSelectedAppId(null)
                     }}
                     onDelete={deleteApplication}
@@ -414,13 +414,11 @@ function ApplicationDetailModal({app, action, onClose, onRefresh, onStart, onSto
                             </div>
                             {url ? (
                                 <div className="store-detail-preview-frame">
-                                    <iframe
-                                        title={`${appTitle(app)}首页预览`}
-                                        src={url}
-                                        loading="lazy"
-                                        sandbox="allow-scripts allow-forms allow-popups"
-                                        referrerPolicy="no-referrer"
-                                    />
+                                    <button type="button" className="store-detail-preview-link" onClick={() => window.open(url, '_blank', 'noopener')}>
+                                        <ExternalLink size={22}/>
+                                        <strong>{appTitle(app)}</strong>
+                                        <span>首页将在新标签页打开</span>
+                                    </button>
                                 </div>
                             ) : (
                                 <div className="store-detail-preview-empty">暂无可预览首页</div>
