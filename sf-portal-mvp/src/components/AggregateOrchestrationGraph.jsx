@@ -1,11 +1,11 @@
-import { CheckCircle2, Circle, Clock3, FileCheck2, Loader2, PackageCheck, UserRound } from 'lucide-react'
+import { CheckCircle2, Circle, Clock3, FileCheck2, Loader2, PackageCheck, User } from 'lucide-react'
 import './AggregateOrchestrationGraph.css'
 
 // The aggregate graph renders exactly five pipeline cards, one per role. The
 // card text comes from the view model (card.label), but they are, in order:
 // 用户输入 / 业务逻辑 / 界面解析 / 数据抓取 / 生产交付.
 const ICONS = {
-  user_input: UserRound,
+  user_input: User,
   business_logic: FileCheck2,
   interface_parsing: Circle,
   data_capture: Clock3,
