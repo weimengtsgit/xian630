@@ -151,6 +151,8 @@ type dialogueView struct {
 	ResolvedApplication      *model.Application            `json:"resolvedApplication,omitempty"`
 	CreatedAgent             *model.Agent                  `json:"createdAgent,omitempty"`
 	SeededJob                *model.Job                    `json:"seededJob,omitempty"`
+	AttachmentRefs           []model.DialogueAttachmentRef `json:"attachmentRefs,omitempty"`
+	WorkbenchArtifacts       []model.WorkbenchArtifactRef  `json:"workbenchArtifacts,omitempty"`
 }
 
 // collaborationPlanPreview is the confirm-summary preview of the collaboration
@@ -482,6 +484,15 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		return nil, err
 	}
 	view := &dialogueView{Session: *dlg, Messages: msgs}
+	// Project attachment refs and workbench artifacts into the composed view so
+	// the workbench timeline can render attachment chips on user messages and
+	// surface produced artifacts without extra round-trips.
+	if refs, err := s.store.ListDialogueAttachmentRefs(ctx, id); err == nil {
+		view.AttachmentRefs = refs
+	}
+	if artifacts, err := s.store.ListWorkbenchArtifactRefsByDialogue(ctx, id); err == nil {
+		view.WorkbenchArtifacts = artifacts
+	}
 	// The embedded Session.DraftJSON carries the raw route record INCLUDING the
 	// hidden internalBlueprintSlug. It is parsed below to build the redacted
 	// Route payload, then BLANKED so it can never leak into a JSON response.

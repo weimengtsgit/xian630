@@ -238,6 +238,27 @@ function safeExecutionKey(stepId, attempt) {
     : `${stepId}::legacy`
 }
 
+// attachmentRefsByMessage groups the composed view's attachmentRefs by their
+// message_id (camel- or snake-cased), projecting each ref to the minimal shape
+// the timeline needs to render an attachment chip under a user message:
+// { id, active, name, previewKind }. Refs with no message id are dropped.
+function attachmentRefsByMessage(view) {
+  const refs = Array.isArray(view && view.attachmentRefs) ? view.attachmentRefs : []
+  const grouped = {}
+  for (const ref of refs) {
+    const messageId = safeString(ref.message_id || ref.messageId)
+    if (!messageId) continue
+    if (!grouped[messageId]) grouped[messageId] = []
+    grouped[messageId].push({
+      id: safeString(ref.id),
+      active: ref.active !== false,
+      name: safeString(ref.attachment && (ref.attachment.original_name || ref.attachment.originalName)),
+      previewKind: safeString(ref.attachment && (ref.attachment.preview_kind || ref.attachment.previewKind)),
+    })
+  }
+  return grouped
+}
+
 // buildDialogueTimeline maps a composed DialogueView to an ordered list of
 // semantic UI items. Items are plain objects; the workbench renders them. Every
 // item is built from EXPLICITLY NAMED fields so internal keys cannot leak.
@@ -345,6 +366,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   }
 
   // 1. Parent thread: user messages + analysis work logs, in persisted order.
+  const refsByMessage = attachmentRefsByMessage(view)
   for (const msg of parentMessages) {
     if (!msg || msg.role === 'user') {
       if (msg && msg.role === 'user' && msg.kind !== 'task_clarification_answer') {
@@ -352,6 +374,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
           id: msg.id,
           type: 'user_message',
           content: safeString(msg.content),
+          attachments: refsByMessage[msg.id] || [],
         })
       }
       continue

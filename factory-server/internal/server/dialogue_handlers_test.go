@@ -3546,3 +3546,23 @@ func TestConfirmDialogueClarificationSeedsJobWithAppSlug(t *testing.T) {
 		t.Fatalf("confirmed dialogue must seed job with AppSlug for early project docs: %#v", jobs)
 	}
 }
+
+func TestComposeDialogueViewIncludesAttachmentRefsAndWorkbenchArtifacts(t *testing.T) {
+	srv, _, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	_ = srv.store.CreateDialogueSession(ctx, model.DialogueSession{ID: "dlg_view", Status: model.DialogueStatusActive, Intent: model.DialogueIntentApplicationGeneration})
+	_ = srv.store.AppendDialogueMessage(ctx, model.DialogueMessage{ID: "dmsg_view", DialogueID: "dlg_view", Role: "user", Kind: "message", Content: "带附件", CreatedAt: time.Now()})
+	_ = srv.store.CreateDialogueAttachment(ctx, model.DialogueAttachment{ID: "att_view", DialogueID: "dlg_view", OriginalName: "req.md", StoredPath: "dialogue-attachments/dlg_view/att_view/req.md", PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: time.Now()})
+	_ = srv.store.CreateDialogueAttachmentRef(ctx, model.DialogueAttachmentRef{ID: "aref_view", DialogueID: "dlg_view", MessageID: "dmsg_view", AttachmentID: "att_view", Active: true, CreatedAt: time.Now()})
+	_ = srv.store.UpsertWorkbenchArtifactRef(ctx, model.WorkbenchArtifactRef{ID: "warf_view", DialogueID: "dlg_view", JobID: "job_1", CardKey: "business_logic", Kind: model.WorkbenchArtifactProjectDocument, Label: "需求文档", Path: "docs/01-requirements.md", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	view, err := srv.composeDialogueView(ctx, "dlg_view")
+	if err != nil {
+		t.Fatalf("composeDialogueView: %v", err)
+	}
+	if len(view.AttachmentRefs) != 1 || view.AttachmentRefs[0].Attachment.OriginalName != "req.md" {
+		t.Fatalf("AttachmentRefs = %#v", view.AttachmentRefs)
+	}
+	if len(view.WorkbenchArtifacts) != 1 || view.WorkbenchArtifacts[0].Path != "docs/01-requirements.md" {
+		t.Fatalf("WorkbenchArtifacts = %#v", view.WorkbenchArtifacts)
+	}
+}
