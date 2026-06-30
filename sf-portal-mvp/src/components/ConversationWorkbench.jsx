@@ -59,6 +59,7 @@ export function ConversationWorkbench({
   onAnswerBatch,
   onAcceptConsolidation,
   onConfirm,
+  onConfirmCard,
   onRetry,
   onAbandon,
   workTrace,
@@ -411,7 +412,7 @@ export function ConversationWorkbench({
               thinking=""
               analysisLog=""
               questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
-              onConfirm={key => onConfirm && onConfirm({ aggregateCardKey: key })}
+              onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
               onOpenArtifact={openArtifact}
               onSubmitCredential={submitCredential}
             />

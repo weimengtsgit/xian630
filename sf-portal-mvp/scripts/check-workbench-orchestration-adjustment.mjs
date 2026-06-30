@@ -181,4 +181,17 @@ const compatibilityFailure = buildWorkbenchOrchestrationView({
 assert.equal(compatibilityFailure.cardsByKey.interface_parsing.state, 'waiting_artifact_confirmation')
 assert.equal(compatibilityFailure.activeCardKey, 'interface_parsing')
 
+// ---- Fix wave F2: task-phase card confirm routes to answerJob, not confirmDialogueClarification
+// The WorkbenchAgentBlock confirm buttons (确认业务逻辑/界面解析/数据抓取并继续) back a
+// waiting task step in the TASK-PHASE. confirmDialogueClarification returns 409 there
+// (no active pre-task clarification child), so a dedicated onConfirmCard must route a
+// task-phase confirm through jobs.answerJob. Pre-task business_logic keeps dialogue.confirm.
+const appSrc = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+assert.equal(appSrc.includes('onConfirmCard'), true, 'App must define an onConfirmCard callback for card confirms')
+assert.equal(appSrc.includes('jobs.answerJob'), true, 'onConfirmCard must advance the task-phase waiting step via jobs.answerJob')
+assert.equal(/onConfirmCard/.test(appSrc) && appSrc.indexOf('onConfirmCard') < appSrc.indexOf('dialogue.confirm', appSrc.indexOf('onConfirmCard')), true, 'onConfirmCard must fall back to dialogue.confirm only in the pre-task branch')
+const workbenchSrc = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+assert.equal(workbenchSrc.includes('onConfirmCard'), true, 'ConversationWorkbench must accept the onConfirmCard prop')
+assert.equal(workbenchSrc.includes('onConfirmCard ? onConfirmCard(key)'), true, 'WorkbenchAgentBlock confirm must prefer onConfirmCard over onConfirm')
+
 console.log('check-workbench-orchestration-adjustment: ok')
