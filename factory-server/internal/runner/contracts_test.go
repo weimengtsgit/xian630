@@ -34,27 +34,59 @@ func TestValidateRequirementAnalysisInvalidJSON(t *testing.T) {
 	}
 }
 
-// TestValidateRequirementAnalysisNeedsUserInput was renamed/repurposed for the
-// Task-5 freeze contract. The old contract emitted {needsUserInput, questions}
-// and the validator surfaced that as a pause; the new contract hard-fails
-// instead. A frozen-requirement output that lacks the validation block (the old
-// shape) MUST now be rejected with ErrSchemaValidationFailed — there is no
-// clarification path inside the pipeline step.
+// TestValidateRequirementAnalysisNeedsUserInput proves requirement_analysis is
+// one of the few stages allowed to pause for user clarification. It may ask only
+// structured questions; downstream stages must degrade instead of asking.
 func TestValidateRequirementAnalysisNeedsUserInput(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 		"summary": "x", "needsUserInput": true,
 		"questions": [{"id":"q1","question":"how big?","defaultAnswer":"5"}]
 	}`))
-	_, err := ValidateRequirementAnalysis(p)
-	if err == nil {
-		t.Fatal("err = nil, want rejection of legacy needsUserInput shape (no clarification path in the freeze step)")
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
-	// decode is lenient (unknown fields ignored), so the legacy shape decodes
-	// fine and is rejected by the validation rules: no validation block means
-	// validation.complete=false → ErrSchemaValidationFailed. The point of this
-	// test is that the old clarify-then-pause contract is gone.
-	if !errors.Is(err, ErrSchemaValidationFailed) && !errors.Is(err, ErrOutputInvalidJSON) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed or ErrOutputInvalidJSON", err)
+	if !out.NeedsUserInput {
+		t.Fatal("NeedsUserInput = false, want true")
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	}
+}
+
+func TestRequirementAnalysisQuestionNormalizesAlternateFields(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+		"needsUserInput": true,
+		"questions": [
+			{
+				"id": "q1",
+				"text": "用演示数据还是真实API？",
+				"options": [
+					{"id": "mock", "label": "演示数据"},
+					{"id": "api", "label": "真实API"}
+				]
+			}
+		]
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	}
+	q := out.Questions[0]
+	if q.Question != "用演示数据还是真实API？" {
+		t.Fatalf("question text = %q, want normalized from `text`", q.Question)
+	}
+	if len(q.Options) != 2 {
+		t.Fatalf("options = %d, want 2", len(q.Options))
+	}
+	if q.Options[0].Value != "mock" {
+		t.Fatalf("option[0].value = %q, want normalized from `id`", q.Options[0].Value)
+	}
+	if q.Options[0].Label != "演示数据" {
+		t.Fatalf("option[0].label = %q", q.Options[0].Label)
 	}
 }
 
@@ -263,11 +295,10 @@ func TestValidateSolutionDesignHappy(t *testing.T) {
 	}
 }
 
-// TestSolutionDesignQuestionNormalizesAlternateFields proves the Question
-// decoder tolerates the model's alternate field names: question text under
-// `text` (not `question`) and option identity under `id` (not `value`). Without
-// this the clarification card loses its question text and option values.
-func TestSolutionDesignQuestionNormalizesAlternateFields(t *testing.T) {
+// TestSolutionDesignQuestionIsDowngradedWhenStageCannotAsk proves a
+// non-allowlisted stage does not pause the job even if the model emits a
+// structured clarification question.
+func TestSolutionDesignQuestionIsDowngradedWhenStageCannotAsk(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 		"needsUserInput": true,
 		"usedSkills": [".claude/skills/software-factory-app/SKILL.md"],
@@ -286,21 +317,14 @@ func TestSolutionDesignQuestionNormalizesAlternateFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if len(out.Questions) != 1 {
-		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	if out.NeedsUserInput {
+		t.Fatal("NeedsUserInput = true, want downgraded false")
 	}
-	q := out.Questions[0]
-	if q.Question != "用演示数据还是真实API？" {
-		t.Fatalf("question text = %q, want normalized from `text`", q.Question)
+	if len(out.Questions) != 0 {
+		t.Fatalf("questions = %d, want downgraded empty", len(out.Questions))
 	}
-	if len(q.Options) != 2 {
-		t.Fatalf("options = %d, want 2", len(q.Options))
-	}
-	if q.Options[0].Value != "mock" {
-		t.Fatalf("option[0].value = %q, want normalized from `id`", q.Options[0].Value)
-	}
-	if q.Options[0].Label != "演示数据" {
-		t.Fatalf("option[0].label = %q", q.Options[0].Label)
+	if len(out.Warnings) == 0 {
+		t.Fatal("Warnings empty, want downgrade warning")
 	}
 }
 

@@ -180,17 +180,16 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	default:
 		// The remaining admitted gate kinds (collaboration_orchestration,
 		// domain_analysis, design_contract, data_integration) are analysis/
-		// contract producers. They share the normal needsUserInput/questions
-		// contract so domain-level uncertainty can pause for user clarification
-		// instead of leaking prose into output.json and failing as invalid JSON.
-		out, err := validateCollaborationProducer(ws.OutputPath())
+		// contract producers. Only a small allowlist may pause for user input;
+		// other producers must degrade uncertainty into warnings and continue.
+		out, err := validateCollaborationProducer(step.Kind, ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	}
 }
 
-func validateCollaborationProducer(outputPath string) (runner.StepOutput, error) {
+func validateCollaborationProducer(kind model.StepKind, outputPath string) (runner.StepOutput, error) {
 	var raw struct {
 		Status         string            `json:"status"`
 		NeedsUserInput bool              `json:"needsUserInput"`
@@ -200,10 +199,26 @@ func validateCollaborationProducer(outputPath string) (runner.StepOutput, error)
 		return runner.StepOutput{}, err
 	}
 	needsUserInput := raw.NeedsUserInput || strings.EqualFold(strings.TrimSpace(raw.Status), "needs_input")
+	if (needsUserInput || len(raw.Questions) > 0) && !canAskUserInStep(kind) {
+		return runner.StepOutput{Warnings: disallowedStepQuestionWarnings(kind, len(raw.Questions))}, nil
+	}
 	if needsUserInput && len(raw.Questions) == 0 {
 		return runner.StepOutput{}, fmt.Errorf("questions required when collaboration step needs input: %w", runner.ErrSchemaValidationFailed)
 	}
 	return runner.StepOutput{NeedsUserInput: needsUserInput, Questions: raw.Questions}, nil
+}
+
+func canAskUserInStep(kind model.StepKind) bool {
+	switch kind {
+	case model.StepRequirementAnalysis, model.StepDesignContract, model.StepDataIntegration:
+		return true
+	default:
+		return false
+	}
+}
+
+func disallowedStepQuestionWarnings(kind model.StepKind, questionCount int) []string {
+	return []string{fmt.Sprintf("%s 阶段不允许向用户提问，已忽略 %d 个澄清问题；本阶段只能基于已确认需求、历史对话和上游契约推断，仍缺失的信息必须降级处理。", kind, questionCount)}
 }
 
 func parseCollaborationStepSnapshot(raw string) collaborationStepSnapshot {
@@ -459,6 +474,9 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 	if err != nil {
 		return c.failureFromError(err)
 	}
+	if len(out.Warnings) > 0 {
+		emitClarificationTrace(ctx, trace, nil, out.Warnings)
+	}
 	if out.NeedsUserInput {
 		// Step 3 (high-impact uncertainty): the agent flagged it cannot proceed
 		// without user input. Emit a clarification.required trace BEFORE the
@@ -545,6 +563,9 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		// the waiting transition. See finishCodeGeneration for the rationale.
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
+	}
+	if len(out.Warnings) > 0 {
+		emitClarificationTrace(ctx, trace, nil, out.Warnings)
 	}
 	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
 }
@@ -666,15 +687,15 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
 			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
 			"All human-readable string values must be Simplified Chinese. This includes summary, scenario text, view descriptions, entity names, constraints, risks, and unsupported-request explanations. Only identifiers, slugs, enum keys, file paths, and code symbols may remain non-Chinese.\n" +
-			"Do not ask clarifying questions. Do not output needsUserInput or questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
+			"Only when a high-impact requirement decision cannot be inferred from prior dialogue or confirmedRequirement may you output needsUserInput=true with structured questions. Otherwise do not ask clarifying questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
 			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not attempt to write files or modify the workspace.\n" +
 			"If the requirement is incomplete, set validation.complete=false. If the request exceeds supported capability, set validation.supported=false.\n" +
 			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
 	}
 	if step.Kind == model.StepSolutionDesign {
 		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。" +
-			"需要用户澄清时，questions 中每个问题必须用结构化字段：question 为问题文本（只描述要决策什么，不要把选项塞进 question），options 为选项数组，每个选项含 value（机器可读的选项值，如 mock_data、real_api）和 label（中文可读选项描述），可在最推荐选项上加 recommended:true。禁止把 (A)/(B)/(C) 等选项写进 question 文本；选项必须放在 options 数组里，否则前端无法渲染成可点击选项。示例：{\"id\":\"data-source\",\"question\":\"请确认数据获取方式\",\"options\":[{\"value\":\"mock_data\",\"label\":\"使用演示数据\",\"recommended\":true},{\"value\":\"real_api\",\"label\":\"提供真实后端API\"}]}。" +
-			"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案（例如用户选择演示数据则 dataPolicy 按 mock_data 处理），不要再重复提出已回答过的澄清问题；只有在出现全新且未决的决策点时才再次 needsUserInput=true。" +
+			"方案设计阶段不允许向用户提问：必须固定输出 needsUserInput=false 且 questions=[]。如果信息不足，只能基于已确认需求、历史对话、generationProfile、skills 和 blueprintDocs 做保守推断；仍缺失的数据字段、外部来源或能力必须写入 warnings，并在方案中设计降级态，不得把任务暂停给用户澄清。" +
+			"如果 prompt 末尾出现 [user_input] 段落，那是历史回答或修复上下文，只能用于推进方案，不得继续追问。" +
 			"用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
@@ -683,6 +704,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
 			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
 			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			"代码生成阶段不允许向用户提问：必须固定输出 needsUserInput=false 且 questions=[]。如果仍缺少数据字段、接口字段、坐标、时间范围或外部来源，只能基于已确认需求和上游数据接入结论生成降级态；不得失败结束，也不得等待用户澄清。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
@@ -698,15 +720,16 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
 			"AUDIT blueprintRefs（确认引用的 skill 存在于 .claude/skills/requirement-clarification/blueprints.json 且为 reference-only），将任何超出现有 skill 目录支持的请求记入 validation.unsupportedRequests。" +
 			"输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。" +
-			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
+			"只有当高影响需求决策无法从历史对话和 confirmedRequirement 推断时，才允许输出 needsUserInput=true 和结构化 questions；否则不要提问。不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
 	case model.StepSolutionDesign:
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案，不要重复提出已回答过的澄清问题。\n用户需求：" + job.UserPrompt +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；方案设计阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]。缺失信息只能基于上游契约推断或设计降级态。\n用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
 			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
 			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
 			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			"代码生成阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]；缺失字段或数据只能生成降级态，不得等待用户澄清。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
@@ -733,13 +756,18 @@ func isCollaborationProducerKind(kind model.StepKind) bool {
 }
 
 func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
+	questionPolicy := "本阶段不允许向用户提问：必须输出 needsUserInput=false 且 questions=[]；如果信息不足，只能基于已确认需求、历史对话和上游契约推断，仍缺失的信息写入 warnings 并降级处理。"
+	if canAskUserInStep(step.Kind) {
+		questionPolicy = "本阶段允许在高影响事项无法从已确认需求、历史对话和上游契约推断时提问；需要用户确认时输出 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组。"
+	}
 	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
 		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
 		"output.json 路径：" + absolutePath(ws.OutputPath()) + "。" +
 		"JSON 必须包含：status、summary、needsUserInput、questions、workLog、warnings。" +
 		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
-		"如果发现必须由用户确认才能避免错误实现，则 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		questionPolicy +
+		"若本阶段允许提问，questions 每项必须包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
 		"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮协作澄清的回答，必须据此推进，不要重复提出已回答过的问题。" +
 		"workLog 必须是面向用户的简短过程摘要数组，每项包含 title 和 summary；warnings 用于记录非阻塞风险。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。" +

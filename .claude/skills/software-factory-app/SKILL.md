@@ -51,6 +51,11 @@ description: Generate a deployable React/Vite static application for the softwar
   committed carrier-affiliation sources) is allowed and, when `dataPolicy`
   requires real data, is mandatory — see Honest Data.
 - Do not require login, external credentials, or cloud services.
+- Do not ask the final user clarifying questions during code generation. If a
+  field, source, coordinate, horizon, or API detail is still missing after
+  requirement clarification / requirement analysis / design contract / data
+  integration, generate a degraded state and record the gap in `warnings`;
+  never pause the task for user input.
 
 ## Honest Data (真实数据优先 / 诚实模式)
 

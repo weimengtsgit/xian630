@@ -266,10 +266,9 @@ func TestCodeGenerationPromptInjectsCarrierOntologyFieldContract(t *testing.T) {
 	}
 }
 
-// TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: as of Task 5 the
-// requirement_analysis step FREEZES the confirmed requirement. It must NEVER
-// return waiting_user (clarification is pre-job now): a frozen output whose
-// validation reports complete=false fails the step with schema_validation_failed.
+// TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: requirement_analysis
+// may ask structured high-impact questions, but an explicit validation rejection
+// still fails the step with schema_validation_failed.
 func TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
@@ -789,12 +788,12 @@ func TestClaudeStepRunnerEmitsSafeTracesFromStream(t *testing.T) {
 	}
 }
 
-// TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput asserts that
-// when the agent signals NeedsUserInput (high-impact uncertainty), the claude
-// step runner emits a clarification.required trace BEFORE returning the
-// waiting_user status. The trigger is deterministic (NeedsUserInput=true +
-// Questions), testable via a fake output.
-func TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput(t *testing.T) {
+// TestCodeGenerationDowngradesDisallowedClarification asserts that
+// code_generation is not allowed to pause for user clarification. If it asks
+// despite having produced the required files, the runner ignores the question
+// and continues; missing data must be handled by the generated app's degraded
+// state rather than ending the task as waiting_user.
+func TestCodeGenerationDowngradesDisallowedClarification(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
 	cmd := fakeStreamCodegenCommand{
@@ -829,15 +828,67 @@ func TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput(t *testing.T
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Status != model.StepStatusWaitingUser {
-		t.Fatalf("status = %s, want waiting_user", res.Status)
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
 	}
-	if !trace.hasType(string(model.WorkTraceClarification)) {
-		t.Errorf("no clarification trace emitted on NeedsUserInput; events=%#v", trace.events)
+	if trace.hasType(string(model.WorkTraceClarification)) {
+		t.Errorf("clarification trace emitted for disallowed code_generation question; events=%#v", trace.events)
 	}
-	if !trace.payloadContaining("数据源用哪个") {
-		t.Errorf("clarification payload missing the question: %#v", trace.events)
+	if !trace.hasType(string(model.WorkTraceAssumption)) {
+		t.Errorf("no downgrade assumption trace emitted; events=%#v", trace.events)
 	}
+}
+
+func TestCollaborationProducerDowngradesDisallowedQuestion(t *testing.T) {
+	path := writeExecutorOutputJSON(t, `{
+		"status": "needs_input",
+		"needsUserInput": true,
+		"questions": [{"id":"q1","question":"还要确认什么？"}]
+	}`)
+	out, err := validateCollaborationProducer(model.StepDomainAnalysis, path)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if out.NeedsUserInput {
+		t.Fatal("NeedsUserInput = true, want downgraded false")
+	}
+	if len(out.Questions) != 0 {
+		t.Fatalf("questions = %d, want downgraded empty", len(out.Questions))
+	}
+	if len(out.Warnings) == 0 {
+		t.Fatal("Warnings empty, want downgrade warning")
+	}
+}
+
+func TestCollaborationProducerAllowsDesignAndDataQuestions(t *testing.T) {
+	for _, kind := range []model.StepKind{model.StepDesignContract, model.StepDataIntegration} {
+		t.Run(string(kind), func(t *testing.T) {
+			path := writeExecutorOutputJSON(t, `{
+				"status": "needs_input",
+				"needsUserInput": true,
+				"questions": [{"id":"q1","question":"请选择确认项","options":[{"value":"a","label":"选项A"}]}]
+			}`)
+			out, err := validateCollaborationProducer(kind, path)
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if !out.NeedsUserInput {
+				t.Fatal("NeedsUserInput = false, want true")
+			}
+			if len(out.Questions) != 1 {
+				t.Fatalf("questions = %d, want 1", len(out.Questions))
+			}
+		})
+	}
+}
+
+func writeExecutorOutputJSON(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "output.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write output.json: %v", err)
+	}
+	return path
 }
 
 // TestClaudeStepRunnerEmitsWorkLogAsDialogueTrace (Task 4) asserts that the
