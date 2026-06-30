@@ -497,3 +497,59 @@ func TestValidateRequirementAnalysisToleratesThinkingAndWorkLog(t *testing.T) {
 		t.Fatal("NeedsUserInput = true, want false")
 	}
 }
+
+func TestValidateRequirementAnalysisRejectsSummaryChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"需求摘要 B",
+	  "appType":"operations_tool",
+	  "appName":"请假审批",
+	  "targetUsers":["员工"],
+	  "coreScenario":"提交和审批请假",
+	  "primaryView":"审批工作台",
+	  "mainEntities":["请假单"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["可提交审批"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, `{"summary":"需求摘要 A","appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假"}`)
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	}
+}
+
+func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	confirmed := `{"summary":"需求摘要 A","appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"需求摘要 A",
+	  "appType":"operations_tool",
+	  "appName":"请假审批",
+	  "targetUsers":["员工"],
+	  "coreScenario":"提交和审批请假",
+	  "primaryView":"审批工作台",
+	  "mainEntities":["请假单"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["可提交审批"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if _, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed); err != nil {
+		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v", err)
+	}
+}

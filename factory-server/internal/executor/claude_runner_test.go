@@ -327,6 +327,11 @@ func TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen(t *testing.T) {
 			"summary":                "frozen ok",
 			"appType":                "timeline-replay",
 			"appName":                "demo",
+			"coreScenario":           "复盘航迹",
+			"primaryView":            "地图+时间轴",
+			"mainEntities":           []string{"编队", "事件"},
+			"dataPolicy":             "mock_data",
+			"acceptanceFocus":        []string{"轨迹联动"},
 			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
 			"validation": map[string]any{
 				"complete":            true,
@@ -344,6 +349,11 @@ func TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen(t *testing.T) {
 		AuditRunner:  cmd,
 	}
 	job, step := claudeJobStep(model.StepRequirementAnalysis)
+	// The Task-6 consistency gate compares the frozen output's summary-critical
+	// fields against the job's ConfirmedRequirementJSON. Seed a confirmed
+	// requirement whose picked fields match the fakeClaudeCommand output above
+	// (summary/appType/appName) so the freeze passes the consistency check.
+	job.ConfirmedRequirementJSON = `{"summary":"frozen ok","appType":"timeline-replay","appName":"demo","coreScenario":"复盘航迹","primaryView":"地图+时间轴","mainEntities":["编队","事件"],"dataPolicy":"mock_data","acceptanceFocus":["轨迹联动"]}`
 
 	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
@@ -530,6 +540,11 @@ func TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies(t *t
 			"summary":                "ok",
 			"appType":                "timeline-replay",
 			"appName":                "demo",
+			"coreScenario":           "复盘航迹",
+			"primaryView":            "地图+时间轴",
+			"mainEntities":           []string{"编队", "事件"},
+			"dataPolicy":             "mock_data",
+			"acceptanceFocus":        []string{"轨迹联动"},
 			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
 			"validation": map[string]any{
 				"complete":            true,
@@ -552,6 +567,12 @@ func TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies(t *t
 	// operational input.json and proves the audit copy redacts it while the
 	// operational file keeps it verbatim.
 	job.UserPrompt = "需求：生成应用。附 DB_PASSWORD=hunter2-leak 用于测试脱敏。"
+	// Seed a confirmed requirement whose picked summary-critical fields match
+	// the fakeClaudeCommand output (summary/appType/appName) so the Task-6
+	// consistency gate passes and the step succeeds. Without this the guard
+	// coerces an empty ConfirmedRequirementJSON to "{}", which mismatches the
+	// frozen output and fails the step before the redaction invariants can run.
+	job.ConfirmedRequirementJSON = `{"summary":"ok","appType":"timeline-replay","appName":"demo","coreScenario":"复盘航迹","primaryView":"地图+时间轴","mainEntities":["编队","事件"],"dataPolicy":"mock_data","acceptanceFocus":["轨迹联动"]}`
 
 	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {

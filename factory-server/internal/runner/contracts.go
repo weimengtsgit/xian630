@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -356,22 +358,111 @@ type requirementValidation struct {
 // is pre-job now, so a frozen requirement that the agent finds incomplete or
 // unsupported is a hard failure, not a pause.
 func ValidateRequirementAnalysis(path string) (StepOutput, error) {
-	var raw requirementAnalysisOutput
-	if err := ReadAndDecode(path, &raw); err != nil {
-		return StepOutput{}, err
-	}
-	if !raw.Validation.Complete || !raw.Validation.Supported {
-		return StepOutput{}, fmt.Errorf("confirmed requirement rejected: %w%s",
-			ErrSchemaValidationFailed, requirementRejectionDetail(raw.Validation))
-	}
-	if raw.AppType == "" || raw.AppName == "" || len(raw.GenerationProfile) == 0 {
-		return StepOutput{}, fmt.Errorf("missing required requirement fields: %w", ErrSchemaValidationFailed)
-	}
-	frozen, err := json.Marshal(raw)
+	out, _, err := validateRequirementAnalysisDecoded(path)
+	return out, err
+}
+
+// ValidateRequirementAnalysisWithConfirmedSummary is the requirement-analysis
+// boundary gate used by the executor: it decodes+validates the step's output
+// AND confirms the frozen requirement the agent produced matches the user-
+// confirmed requirement summary that seeded the job (design: requirement-
+// consistency contract). A mismatch means the agent drifted from what the user
+// accepted in clarification, so the pipeline hard-fails with
+// ErrSchemaValidationFailed rather than freezing a divergent requirement. The
+// comparison is over the summary-critical fields only (pickRequirementFields);
+// audit-only detail (workLog, validation internals, generationProfile) is
+// ignored so a faithful freeze that adds audit color still passes.
+func ValidateRequirementAnalysisWithConfirmedSummary(path, confirmedRequirementJSON string) (StepOutput, error) {
+	out, raw, err := validateRequirementAnalysisDecoded(path)
 	if err != nil {
 		return StepOutput{}, err
 	}
-	return StepOutput{FrozenRequirementJSON: string(frozen)}, nil
+	want := requirementSummaryChecksum(requirementFieldsFromConfirmed(confirmedRequirementJSON))
+	got := requirementSummaryChecksum(requirementFieldsFromOutput(raw))
+	if want != got {
+		return StepOutput{}, fmt.Errorf("confirmed requirement consistency mismatch: %w", ErrSchemaValidationFailed)
+	}
+	return out, nil
+}
+
+// validateRequirementAnalysisDecoded is the shared decode+validate core. It
+// returns BOTH the StepOutput (the executor-facing projection) AND the decoded
+// requirementAnalysisOutput so the consistency check can re-derive its summary
+// fields without re-reading the file. Both ValidateRequirementAnalysis (no
+// consistency check) and ValidateRequirementAnalysisWithConfirmedSummary route
+// through here so the structural rules cannot drift between the two entry
+// points.
+func validateRequirementAnalysisDecoded(path string) (StepOutput, requirementAnalysisOutput, error) {
+	var raw requirementAnalysisOutput
+	if err := ReadAndDecode(path, &raw); err != nil {
+		return StepOutput{}, raw, err
+	}
+	if !raw.Validation.Complete || !raw.Validation.Supported {
+		return StepOutput{}, raw, fmt.Errorf("confirmed requirement rejected: %w%s",
+			ErrSchemaValidationFailed, requirementRejectionDetail(raw.Validation))
+	}
+	if raw.AppType == "" || raw.AppName == "" || len(raw.GenerationProfile) == 0 {
+		return StepOutput{}, raw, fmt.Errorf("missing required requirement fields: %w", ErrSchemaValidationFailed)
+	}
+	frozen, err := json.Marshal(raw)
+	if err != nil {
+		return StepOutput{}, raw, err
+	}
+	return StepOutput{FrozenRequirementJSON: string(frozen)}, raw, nil
+}
+
+// requirementFieldsFromConfirmed picks the summary-critical fields out of the
+// user-confirmed requirement JSON (the job's ConfirmedRequirementJSON) so they
+// can be checksummed against the agent's frozen output. A malformed/empty
+// confirmed JSON yields an empty map, which checksums consistently — the gate
+// is "did the agent reproduce the confirmed summary", and an empty confirmed
+// summary is a real signal a job was created without clarification.
+func requirementFieldsFromConfirmed(confirmedRequirementJSON string) map[string]any {
+	var doc map[string]any
+	_ = json.Unmarshal([]byte(confirmedRequirementJSON), &doc)
+	return pickRequirementFields(doc)
+}
+
+// requirementFieldsFromOutput projects the decoded frozen-requirement output
+// onto the same summary-critical keys the confirmed JSON is picked into, so the
+// two go through the identical pickRequirementFields + checksum path. The
+// []string slice fields marshal to the same JSON shape as a confirmed JSON
+// array, so a matching value compares equal regardless of Go type.
+func requirementFieldsFromOutput(raw requirementAnalysisOutput) map[string]any {
+	return pickRequirementFields(map[string]any{
+		"summary":         raw.Summary,
+		"appType":         raw.AppType,
+		"appName":         raw.AppName,
+		"coreScenario":    raw.CoreScenario,
+		"primaryView":     raw.PrimaryView,
+		"mainEntities":    raw.MainEntities,
+		"dataPolicy":      raw.DataPolicy,
+		"acceptanceFocus": raw.AcceptanceFocus,
+	})
+}
+
+// pickRequirementFields keeps only the summary-critical keys that define
+// WHETHER two requirements are the same requirement: the one-line summary plus
+// the stable identity/scenario fields. Audit color (generationProfile,
+// constraints, risks, workLog, validation) is excluded on purpose — it is not
+// part of what the user confirmed and must not gate the consistency check.
+func pickRequirementFields(doc map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, key := range []string{"summary", "appType", "appName", "coreScenario", "primaryView", "mainEntities", "dataPolicy", "acceptanceFocus"} {
+		if v, ok := doc[key]; ok {
+			out[key] = v
+		}
+	}
+	return out
+}
+
+// requirementSummaryChecksum is a stable sha256 of the picked requirement
+// fields. json.Marshal on a map[string]any sorts keys, so field order in the
+// source JSON does not affect the checksum — only the field values do.
+func requirementSummaryChecksum(fields map[string]any) string {
+	raw, _ := json.Marshal(fields)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // requirementRejectionDetail formats the agent's missingFields and

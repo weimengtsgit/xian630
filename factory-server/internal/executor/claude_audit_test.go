@@ -81,6 +81,11 @@ func TestCaptureAuditArtifactsHidesClaudeReasoning(t *testing.T) {
 			"summary":                "frozen",
 			"appType":                "timeline-replay",
 			"appName":                "demo",
+			"coreScenario":           "复盘航迹",
+			"primaryView":            "地图+时间轴",
+			"mainEntities":           []string{"编队", "事件"},
+			"dataPolicy":             "mock_data",
+			"acceptanceFocus":        []string{"轨迹联动"},
 			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
 			"validation": map[string]any{
 				"complete":            true,
@@ -99,6 +104,11 @@ func TestCaptureAuditArtifactsHidesClaudeReasoning(t *testing.T) {
 		AuditRunner:  cmd,
 	}
 	job, step := claudeJobStep(model.StepRequirementAnalysis)
+	// Seed a confirmed requirement whose summary-critical fields match the
+	// frozen output above so the Task-6 consistency gate passes; without it the
+	// executor coerces an empty ConfirmedRequirementJSON to "{}" and the step
+	// fails before the audit/redaction invariants under test can run.
+	job.ConfirmedRequirementJSON = `{"summary":"frozen","appType":"timeline-replay","appName":"demo","coreScenario":"复盘航迹","primaryView":"地图+时间轴","mainEntities":["编队","事件"],"dataPolicy":"mock_data","acceptanceFocus":["轨迹联动"]}`
 	if err := st.CreateJob(context.Background(), job); err != nil {
 		t.Fatalf("create job: %v", err)
 	}

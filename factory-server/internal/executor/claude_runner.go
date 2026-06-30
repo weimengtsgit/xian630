@@ -154,7 +154,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
-		out, err := runner.ValidateRequirementAnalysis(ws.OutputPath())
+		out, err := runner.ValidateRequirementAnalysisWithConfirmedSummary(ws.OutputPath(), string(confirmedReq))
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
