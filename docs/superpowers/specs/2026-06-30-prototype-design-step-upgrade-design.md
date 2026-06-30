@@ -4,7 +4,7 @@
 
 当前 `/api/dialogues` 已经支持从对话创建需求澄清、确认需求后创建生成任务，并将协作计划物化为 `job_steps` 与 `job_step_edges`。现有协作计划中存在 `designer/design_contract` 步骤，但它更像结构化设计契约输出；本设计将该步骤替换升级为用户可见的“原型设计”步骤。
 
-升级后的原型设计步骤消费需求分析产出的需求文档和确认需求摘要，支持步骤内对话，生成可预览的静态原型页面，并允许用户通过自然语言反馈修改原型。用户可以确认原型，也可以不确认而直接进入方案设计。
+升级后的原型设计步骤消费需求分析产出的需求文档和确认需求摘要，支持步骤内对话，生成可预览的静态原型页面，并允许用户通过自然语言反馈修改原型。用户可以确认原型，也可以不确认而直接进入方案设计。原型设计代理的核心提示词不再内嵌在 Go 代码里，而是沉淀为项目本地 skill：`.claude/skills/prototype-design/SKILL.md`，由 `collaborationProducerPrompt` 在 `design_contract` 步骤中显式要求 Claude 读取并遵循。
 
 ## 设计目标
 
@@ -51,6 +51,23 @@
 
 原型设计不得绕过需求分析重新解释原始 prompt；它可以根据需求分析文档推断原型偏好，但高影响或模糊偏好需要用户确认。
 
+## 原型设计 Skill
+
+原型设计步骤使用项目本地 skill 管理代理规则：
+
+```text
+.claude/skills/prototype-design/SKILL.md
+```
+
+该 skill 负责描述原型设计代理的稳定工作契约：
+
+- 输入来源：`input.json` 中的 `confirmedRequirement`、`generationProfile`、`skills`、`blueprintDocs`、`collaborationSnapshot`，以及 prompt 末尾可选的 `[user_input]`。
+- 默认策略：`fidelity=static`、`targetPlatform=responsive`、默认首页为唯一可见/生成页面。
+- 反馈规则：自然语言反馈优先；只有模糊、高影响、改变范围或升级高保真时才返回结构化问题。
+- 输出契约：只输出 JSON，包含 `status`、`summary`、`needsUserInput`、`questions`、`workLog`、`warnings`、`prototype`。
+- 原型结构：`prototype` 至少包含 `style`、`targetAudience`、`targetPlatform`、`fidelity`、`defaultPage`、`pages`、`constraints`、`confirmationPolicy`。
+
+`collaborationProducerPrompt` 对 `model.StepDesignContract` 使用专门分支，提示 Claude 先 Read 并严格遵循 `.claude/skills/prototype-design/SKILL.md`。其他协作 producer（领域分析、数据接入、协作编排）继续使用通用结构化结论 prompt，不加载原型设计 skill。
 ## 步骤内对话
 
 原型设计复用 Job step 的 `waiting_user` 机制，而不是创建新的 dialogue 或 clarification session。
@@ -213,6 +230,7 @@ POST /api/jobs/:jobID/steps/:stepID/prototype/continue-without-confirmation
 ## 测试重点
 
 - 原型设计 step 能从需求分析产物启动，而不是依赖原始 prompt。
+- `design_contract` 的 `collaborationProducerPrompt` 会指向 `.claude/skills/prototype-design/SKILL.md`，且领域分析等通用协作步骤不会误加载该 skill。
 - 缺少原型偏好时进入 `waiting_user` 并持久化结构化问题。
 - 明确自然语言反馈直接产生新 attempt。
 - 模糊或高保真反馈进入结构化选择。

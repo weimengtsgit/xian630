@@ -4,7 +4,7 @@
 
 **Goal:** 将现有 `design_contract` 步骤替换升级为用户可感知的「原型设计」对话步骤：读取需求分析文档，生成静态原型页面，支持风格、目标用户、目标平台反馈，并允许用户确认或不确认继续。
 
-**Architecture:** 保留内部 step kind `design_contract`，避免数据库迁移和历史任务断裂；在后端改变该步骤的提示词、运行权限、产物校验、Artifact 登记和预览 API，在前端将其展示为「原型设计」。原型文件只写入 Claude attempt 目录，通过 Artifact 清单安全暴露预览；确认后成为后续步骤硬约束，未确认则仅作为参考上下文。
+**Architecture:** 保留内部 step kind `design_contract`，避免数据库迁移和历史任务断裂；在后端让该步骤读取项目本地 skill `.claude/skills/prototype-design/SKILL.md`，并改变运行权限、产物校验、Artifact 登记和预览 API，在前端将其展示为「原型设计」。原型文件只写入 Claude attempt 目录，通过 Artifact 清单安全暴露预览；确认后成为后续步骤硬约束，未确认则仅作为参考上下文。
 
 **Tech Stack:** Go `factory-server`、现有 Job/Step/Artifact Store、Claude Runner、React/Vite `sf-portal-mvp`、Node 脚本校验、Markdown 文档。
 
@@ -28,7 +28,8 @@
 - `factory-server/internal/runner/claude_test.go`：锁定 Claude Runner 权限和工作目录行为。
 - `factory-server/internal/model/prototype.go`：定义 server 和 executor 共用的原型 Manifest/Contract DTO。
 - `factory-server/internal/executor/prototype_contract.go`：读取并校验 Claude 生成的原型输出文件。
-- `factory-server/internal/executor/claude_runner.go`：让 `design_contract` 使用原型生成提示词、attempt 写入模式、产物校验、Artifact 登记和下游上下文注入。
+- `.claude/skills/prototype-design/SKILL.md`：沉淀原型设计代理的输入来源、默认策略、反馈规则和 JSON 输出契约。
+- `factory-server/internal/executor/claude_runner.go`：让 `design_contract` 的 `collaborationProducerPrompt` 指向原型设计 skill，并负责 attempt 写入模式、产物校验、Artifact 登记和下游上下文注入。
 - `factory-server/internal/executor/execution_records.go`：支持把 attempt 目录中已生成的文件登记为 Artifact。
 - `factory-server/internal/executor/executor.go`：提供确认原型、继续但不确认两个执行器入口。
 - `factory-server/internal/server/prototype_handlers.go`：提供原型摘要、预览、反馈、确认、继续但不确认 API。
@@ -253,6 +254,7 @@ git commit -m "feat: add attempt write mode for claude runner"
 ### Task 2: 让 `design_contract` 生成并登记原型产物
 
 **Files:**
+- Create: `.claude/skills/prototype-design/SKILL.md`
 - Create: `factory-server/internal/model/prototype.go`
 - Create: `factory-server/internal/executor/prototype_contract.go`
 - Modify: `factory-server/internal/executor/claude_runner.go`
@@ -599,45 +601,126 @@ func prototypeDecisionQuestions() []runner.Question {
 }
 ```
 
-- [ ] **Step 7: 替换 `design_contract` 提示词为原型设计提示词**
+- [ ] **Step 7: 将 `design_contract` 原型设计提示词沉淀为 skill**
 
-在 `collaborationProducerPrompt` 或相邻 prompt builder 中，对 `model.StepDesignContract` 返回：
+创建 `.claude/skills/prototype-design/SKILL.md`：
+
+```md
+---
+name: prototype-design
+description: Produce software-factory prototype design conclusions from confirmed requirements. Use when the factory runs the design_contract step as the user-facing 原型设计 stage, including style, target user, target platform, fidelity, static homepage, and prototype feedback decisions.
+---
+
+# Prototype Design
+
+Use this skill when Factory asks you to run the `design_contract` collaboration producer as the user-facing 原型设计 stage.
+
+## Inputs
+
+Read `input.json` first. Use these fields as source of truth:
+
+- `confirmedRequirement`: requirement-analysis output and confirmed user intent.
+- `generationProfile`, `skills`, and `blueprintDocs`: reference style, structure, interaction, and data-model guidance.
+- `collaborationSnapshot`: current multi-agent step context.
+- `[user_input]`, if present in the prompt: user's latest prototype feedback.
+
+Do not ask about the original raw prompt when the confirmed requirement already contains the answer.
+
+## Defaults
+
+- Default fidelity is `static`.
+- Default target platform is `responsive`.
+- Default visible/generated page is the homepage.
+- Multi-page prototypes are allowed in the plan, but only add pages that are directly supported by the confirmed requirement.
+- Generate high-fidelity interactive intent only when the user explicitly asks for high fidelity, interactive behavior, or clickable flows.
+
+## Clarification Rules
+
+Accept natural-language feedback first. Ask a structured question only when the decision is ambiguous, high-impact, or changes fidelity/scope.
+
+Concrete choice dimensions:
+
+- `style`: visual tone, density, information hierarchy.
+- `targetAudience`: UED, developer, product, business reviewer, or mixed.
+- `targetPlatform`: responsive, web, mobile.
+- `fidelity`: static or high_fidelity_interactive.
+
+Each question must include `id`, `question`, and `options`. Each option must include `value` and `label`; add `recommended: true` to the recommended option.
+
+## Output Contract
+
+Output only one raw JSON object. Do not output Markdown, code fences, hidden reasoning, or prose outside JSON.
+
+Required top-level fields: `status`、`summary`、`needsUserInput`、`questions`、`workLog`、`warnings`、`prototype`。
+
+`prototype` 至少包含：`style`、`targetAudience`、`targetPlatform`、`fidelity`、`defaultPage`、`pages`、`constraints`、`confirmationPolicy`。
+
+All human-readable text must be Simplified Chinese. Identifiers, enum values, paths, and code symbols may remain English.
+```
+
+在 `factory-server/internal/executor/claude_runner_test.go` 增加 prompt 回归测试：
 
 ```go
-func prototypeDesignPrompt() string {
-	return `你是软件工厂的原型设计代理。你必须读取需求分析步骤生成并已确认的文档，生成可预览的静态原型页面。
+func TestDesignContractPromptUsesPrototypeDesignSkill(t *testing.T) {
+	ws := runner.AttemptWorkspace{Root: t.TempDir(), JobID: "job_design_contract_prompt", StepKind: model.StepDesignContract, Attempt: 1}
+	job, step := claudeJobStep(model.StepDesignContract)
+	prompt := collaborationProducerPrompt(job, step, ws)
 
-默认行为：
-- 默认只生成首页静态页面，可以在 manifest 中列出多页面，但不要默认实现所有页面。
-- 仅当用户明确要求高保真交互时，才生成高保真可交互页面。
-- 原型需要体现用户选择或默认推断的风格、目标用户和目标平台。
-- 目标用户可包含 UED、开发、产品、业务评审等。
-- 目标平台可包含 responsive、web、mobile。
+	for _, want := range []string{"原型设计协作智能体", ".claude/skills/prototype-design/SKILL.md", "先 Read 并严格遵循项目本地 skill", "prototype 必须描述静态原型页面方案", "默认 fidelity=static"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("design contract prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "设计契约") {
+		t.Fatalf("design contract prompt should use 原型设计 terminology, got:\n%s", prompt)
+	}
+}
 
-必须在 attempt 目录下创建：
-- prototype/index.html
-- prototype/styles.css
-- prototype/mock-data.js
-- prototype/preview-manifest.json
-- prototype/prototype-contract.json
-- output.json
+func TestGenericCollaborationProducerPromptDoesNotUsePrototypeSkill(t *testing.T) {
+	ws := runner.AttemptWorkspace{Root: t.TempDir(), JobID: "job_domain_prompt", StepKind: model.StepDomainAnalysis, Attempt: 1}
+	job, step := claudeJobStep(model.StepDomainAnalysis)
+	prompt := collaborationProducerPrompt(job, step, ws)
 
-output.json schema：
-{
-  "summary": "一句话说明生成的原型",
-  "prototype_dir": "prototype",
-  "manifest": "prototype/preview-manifest.json",
-  "contract": "prototype/prototype-contract.json"
-}`
+	if strings.Contains(prompt, ".claude/skills/prototype-design/SKILL.md") {
+		t.Fatalf("domain analysis prompt must not load prototype skill:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "领域分析协作智能体") {
+		t.Fatalf("domain analysis prompt lost generic producer wording:\n%s", prompt)
+	}
 }
 ```
 
+在 `factory-server/internal/executor/claude_runner.go` 中让 `collaborationProducerPrompt` 对 `model.StepDesignContract` 使用专门分支：
+
+```go
+func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
+	if step.Kind == model.StepDesignContract {
+		return prototypeDesignProducerPrompt(job, ws)
+	}
+	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。" + genericCollaborationProducerInstructions(job, ws)
+}
+
+func prototypeDesignProducerPrompt(job model.Job, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的原型设计协作智能体。先 Read 并严格遵循项目本地 skill：.claude/skills/prototype-design/SKILL.md。" +
+		"读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出原型设计阶段的结构化结论。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
+		"output.json 路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、workLog、warnings、prototype。" +
+		"prototype 必须描述静态原型页面方案，至少包含 style、targetAudience、targetPlatform、fidelity、defaultPage、pages、constraints。" +
+		"默认 fidelity=static、defaultPage=home，只生成首页级静态原型规格；只有用户明确要求高保真交互时，才将 fidelity 设为 high_fidelity_interactive。" +
+		"用户需求：" + job.UserPrompt
+}
+```
+
+同时将 `collaborationProducerName(model.StepDesignContract)` 从「设计契约」改成「原型设计」。
 - [ ] **Step 8: 验证并提交**
 
 ```powershell
 gofmt -w factory-server/internal/model/prototype.go factory-server/internal/executor/prototype_contract.go factory-server/internal/executor/claude_runner.go factory-server/internal/executor/execution_records.go factory-server/internal/executor/claude_runner_test.go
-go test ./factory-server/internal/executor -count=1
-git add factory-server/internal/model/prototype.go factory-server/internal/executor/prototype_contract.go factory-server/internal/executor/claude_runner.go factory-server/internal/executor/execution_records.go factory-server/internal/executor/claude_runner_test.go
+cd factory-server
+go test ./internal/executor -count=1
+cd ..
+git add .claude/skills/prototype-design/SKILL.md factory-server/internal/model/prototype.go factory-server/internal/executor/prototype_contract.go factory-server/internal/executor/claude_runner.go factory-server/internal/executor/execution_records.go factory-server/internal/executor/claude_runner_test.go
 git commit -m "feat: generate prototype artifacts from design step"
 ```
 
@@ -1534,7 +1617,9 @@ git commit -m "docs: document prototype design flow"
 ## 验证矩阵
 
 - Runner 权限边界：`go test ./factory-server/internal/runner -count=1`
-- 原型产物校验和下游上下文：`go test ./factory-server/internal/executor -count=1`
+- 原型产物校验和下游上下文：`cd factory-server
+go test ./internal/executor -count=1
+cd ..`
 - 原型预览和决策 API：`go test ./factory-server/internal/server -count=1`
 - Store 兼容性：`go test ./factory-server/internal/store -count=1`
 - 对话工作台回归：`node sf-portal-mvp/scripts/check-dialogue-workbench.mjs`
