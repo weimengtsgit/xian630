@@ -526,6 +526,10 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/dialogues/:id/task-thinking", s.dialogueTaskThinkingEvents)
 	r.Handle("GET", "/api/dialogues/:id/task-thinking/stream", s.dialogueTaskThinkingStream)
 
+	// Dialogue session attachments (Task 3). Multipart upload only; credential
+	// files are rejected at the boundary (use controlled credential input).
+	r.Handle("POST", "/api/dialogues/:id/attachments", s.uploadDialogueAttachment)
+
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)
 	return r

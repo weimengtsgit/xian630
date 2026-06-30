@@ -690,3 +690,63 @@ type TaskThinkingEvent struct {
 	Redacted         bool      `json:"redacted"`
 	CreatedAt        time.Time `json:"created_at"`
 }
+
+// AttachmentStatus is the lifecycle state of a dialogue attachment. Active
+// attachments are usable by agents; deactivated ones remain for audit history.
+type AttachmentStatus string
+
+const (
+	AttachmentStatusActive      AttachmentStatus = "active"
+	AttachmentStatusDeactivated AttachmentStatus = "deactivated"
+)
+
+// AttachmentPreviewKind selects how the UI renders a stored attachment. The
+// value is persisted verbatim into dialogue_attachments.preview_kind.
+type AttachmentPreviewKind string
+
+const (
+	AttachmentPreviewImage    AttachmentPreviewKind = "image"
+	AttachmentPreviewMarkdown AttachmentPreviewKind = "markdown"
+	AttachmentPreviewText     AttachmentPreviewKind = "text"
+	AttachmentPreviewJSON     AttachmentPreviewKind = "json"
+	AttachmentPreviewCSV      AttachmentPreviewKind = "csv"
+	AttachmentPreviewPDF      AttachmentPreviewKind = "pdf"
+	AttachmentPreviewMetadata AttachmentPreviewKind = "metadata"
+	AttachmentPreviewBlocked  AttachmentPreviewKind = "blocked"
+)
+
+// DialogueAttachment is a file uploaded into a dialogue session. Stored on
+// disk under ArtifactRoot/dialogue-attachments/<dialogueID>/<id>/<name>; its
+// metadata is persisted in dialogue_attachments. Credential-like files must
+// never reach this table (rejected at the upload boundary).
+type DialogueAttachment struct {
+	ID            string                `json:"id"`
+	DialogueID    string                `json:"dialogue_id"`
+	FocusKey      string                `json:"focus_key"`
+	OriginalName  string                `json:"original_name"`
+	StoredPath    string                `json:"stored_path,omitempty"`
+	Mime          string                `json:"mime"`
+	Extension     string                `json:"extension"`
+	SizeBytes     int64                 `json:"size_bytes"`
+	SHA256        string                `json:"sha256"`
+	PreviewKind   AttachmentPreviewKind `json:"preview_kind"`
+	Status        AttachmentStatus      `json:"status"`
+	CreatedAt     time.Time             `json:"created_at"`
+	DeactivatedAt *time.Time            `json:"deactivated_at,omitempty"`
+}
+
+// DialogueAttachmentRef links a stored attachment to the dialogue message that
+// uses it. A single attachment can be referenced by multiple messages; refs
+// deactivate independently so removal from one message keeps the file alive
+// for others.
+type DialogueAttachmentRef struct {
+	ID            string             `json:"id"`
+	DialogueID    string             `json:"dialogue_id"`
+	MessageID     string             `json:"message_id"`
+	AttachmentID  string             `json:"attachment_id"`
+	FocusKey      string             `json:"focus_key"`
+	Active        bool               `json:"active"`
+	CreatedAt     time.Time          `json:"created_at"`
+	DeactivatedAt *time.Time         `json:"deactivated_at,omitempty"`
+	Attachment    DialogueAttachment `json:"attachment"`
+}

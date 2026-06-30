@@ -335,3 +335,36 @@ CREATE TABLE IF NOT EXISTS project_document_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_project_document_drafts_scope
 ON project_document_drafts(application_id, dialogue_id, path);
+
+CREATE TABLE IF NOT EXISTS dialogue_attachments (
+    id             TEXT    PRIMARY KEY,
+    dialogue_id    TEXT    NOT NULL,
+    focus_key      TEXT    NOT NULL DEFAULT '',
+    original_name  TEXT    NOT NULL,
+    stored_path    TEXT    NOT NULL DEFAULT '',
+    mime           TEXT    NOT NULL DEFAULT '',
+    extension      TEXT    NOT NULL DEFAULT '',
+    size_bytes     INTEGER NOT NULL DEFAULT 0,
+    sha256         TEXT    NOT NULL DEFAULT '',
+    preview_kind   TEXT    NOT NULL DEFAULT 'metadata',
+    status         TEXT    NOT NULL DEFAULT 'active',
+    created_at     INTEGER NOT NULL,
+    deactivated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_attachments_dialogue
+ON dialogue_attachments(dialogue_id, created_at);
+
+CREATE TABLE IF NOT EXISTS dialogue_attachment_refs (
+    id             TEXT    PRIMARY KEY,
+    dialogue_id    TEXT    NOT NULL,
+    message_id     TEXT    NOT NULL,
+    attachment_id  TEXT    NOT NULL,
+    focus_key      TEXT    NOT NULL DEFAULT '',
+    active         INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL,
+    deactivated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_attachment_refs_dialogue
+ON dialogue_attachment_refs(dialogue_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dialogue_attachment_refs_message
+ON dialogue_attachment_refs(message_id, created_at);
