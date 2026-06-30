@@ -439,6 +439,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/healthz", s.health)
 
 	r.Handle("GET", "/api/apps", s.listApps)
+	r.Handle("GET", "/api/apps/generation-stats", s.appGenerationStats)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
 	r.Handle("GET", "/api/apps/:id/project-tree", s.applicationProjectTree)
 	r.Handle("GET", "/api/apps/:id/project-file", s.applicationProjectFile)
