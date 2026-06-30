@@ -12,8 +12,10 @@ import {
   Edit3,
   ExternalLink,
   FileCode,
+  FileText,
   GitCommit,
   HelpCircle,
+  Image as ImageIcon,
   Loader2,
   MessageSquare,
   MoreHorizontal,
@@ -347,11 +349,13 @@ export function ConversationWorkbench({
             setDraftAnswers={setDraftAnswers}
             submitting={submitting}
             focusRequirement={focusRequirement}
+            dialogueId={session && session.id}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
+            onOpenPreviewAttachment={setPreviewAttachment}
             onOpenTaskStep={onOpenTaskStep}
             onConfirmTaskStep={onConfirmTaskStep}
             manualStepConfirmation={manualStepConfirmation}
@@ -616,11 +620,30 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
   if (item.type === 'user_message') {
+    // Submitted attachment refs (Task 11 / spec decision #22): after send, the
+    // persisted user_message carries `attachments` [{ id, active, name,
+    // previewKind }]. Render each as a clickable chip BELOW the content. Inactive
+    // refs (active===false) stay visible but muted with a 已停用 marker (decision
+    // #23: deactivated refs remain for replay/audit). Clicking opens the existing
+    // AttachmentPreviewModal via the shared preview setter (no second modal).
+    const attachments = Array.isArray(item.attachments) ? item.attachments : []
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
         <div className="cw-item cw-user">{item.content}</div>
+        {attachments.length > 0 ? (
+          <div className="cw-user-attachments">
+            {attachments.map(ref => (
+              <MessageAttachmentChip
+                key={ref.id}
+                ref_={ref}
+                dialogueId={dialogueId}
+                onOpen={onOpenPreviewAttachment}
+              />
+            ))}
+          </div>
+        ) : null}
       </CopyableBlock>
     )
   }
@@ -721,6 +744,30 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     return <div className="cw-system">{statusText(item.status)}</div>
   }
   return null
+}
+
+// MessageAttachmentChip renders one submitted attachment reference under a
+// user_message. It reuses the existing `.cw-attach-chip` look. Clicking opens the
+// shared AttachmentPreviewModal (Task 4 wiring). The ref carries only
+// { id, active, name, previewKind }; we attach dialogueId + name + previewKind so
+// the modal degrades to its metadata path when there is no content route yet.
+function MessageAttachmentChip({ ref_, dialogueId, onOpen }) {
+  const active = ref_.active !== false
+  const isImage = ref_.previewKind === 'image'
+  const name = ref_.name || '附件'
+  const open = () => {
+    if (!onOpen || !ref_.id) return
+    onOpen({ id: ref_.id, name, previewKind: ref_.previewKind, dialogueId, originalName: name })
+  }
+  return (
+    <span className={`cw-attach-chip cw-attach-chip-ref${active ? '' : ' cw-attach-chip-inactive'}`}>
+      {isImage ? <ImageIcon size={14} /> : <FileText size={14} />}
+      <button type="button" className="cw-attach-name" onClick={open} title={active ? '预览附件' : '附件已停用'} disabled={!ref_.id || !onOpen}>
+        {name}
+      </button>
+      {active ? null : <em className="cw-attach-deactivated">已停用</em>}
+    </span>
+  )
 }
 
 function ThinkingSummary({ item }) {
