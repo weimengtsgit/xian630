@@ -133,7 +133,13 @@ const (
 	// returned status:"blocked". It is the only code a blocking-review failure
 	// carries, and it is repairable under the bounded auto-repair policy.
 	ErrorBlockingReview ErrorCode = "blocking_review"
-	ErrorUnknown        ErrorCode = "unknown"
+	// ErrorUserRejectedConfirmation is set on a step that was paused
+	// waiting_user for a required user confirmation (e.g. a deployment port
+	// confirmation) and was then explicitly rejected by the user via
+	// RejectRequiredConfirmation. The step is marked failed with this code and
+	// the job transitions to failed.
+	ErrorUserRejectedConfirmation ErrorCode = "user_rejected_confirmation"
+	ErrorUnknown                  ErrorCode = "unknown"
 )
 
 // ExecutionRecordKind is the kind tag of a StepExecutionRecord: system

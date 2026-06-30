@@ -150,7 +150,8 @@ function aggregateProductionState(steps) {
 
 function productionFailureState(step) {
   const code = step.errorCode || step.error_code || ''
-  if (code === 'blocking_review' || code === 'schema_validation_failed') return 'auto_repairing'
+  const repairable = new Set(['blocking_review', 'schema_validation_failed', 'file_constraint_violated'])
+  if (repairable.has(code)) return 'auto_repairing'
   return 'failed'
 }
 

@@ -1192,3 +1192,30 @@ func (c *capturingAppender) AppendStepExecutionRecord(_ context.Context, rec mod
 	c.mu.Unlock()
 	return nil
 }
+
+// TestRejectRequiredProductionConfirmationFailsJob is the Task-10 user-rejection
+// transition: a production-delivery step paused waiting_user for a required
+// confirmation (e.g. a deployment port confirmation) must fail the job when the
+// user rejects it. RejectRequiredConfirmation marks the waiting step failed with
+// user_rejected_confirmation, then marks the job failed. Deterministic: the seed
+// sets the job straight into waiting_user with a deployment step, so the only
+// observable transition is waiting_user → failed.
+func TestRejectRequiredProductionConfirmationFailsJob(t *testing.T) {
+	e, st := newTestExecutor(t, &fakeRunner{})
+	ctx := context.Background()
+	job := model.Job{ID: "job_confirm", Status: model.JobStatusWaitingUser, CurrentStepKind: model.StepDeployment, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := st.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	step := model.JobStep{ID: "step_deploy", JobID: job.ID, Kind: model.StepDeployment, Status: model.StepStatusWaitingUser, Attempt: 1, NeedsUserInput: true}
+	if err := st.CreateJobStep(ctx, step); err != nil {
+		t.Fatalf("CreateJobStep: %v", err)
+	}
+	got, err := e.RejectRequiredConfirmation(ctx, job.ID, "用户拒绝部署端口确认")
+	if err != nil {
+		t.Fatalf("RejectRequiredConfirmation: %v", err)
+	}
+	if got.Status != model.JobStatusFailed {
+		t.Fatalf("status = %s, want failed", got.Status)
+	}
+}

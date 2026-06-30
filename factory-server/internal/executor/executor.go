@@ -1327,6 +1327,44 @@ func (e *Executor) Cancel(ctx context.Context, jobID string) error {
 	return nil
 }
 
+// RejectRequiredConfirmation fails a job that is paused waiting_user for a
+// required user confirmation (e.g. a deployment port confirmation). The user is
+// declining the requested confirmation, so the job cannot proceed: the waiting
+// step is marked failed with user_rejected_confirmation and the job is marked
+// failed. This is the user-driven counterpart to the auto-repair and retry
+// transitions — repair rewinds a failed gate, retry re-runs the failed command,
+// and reject abandons a waiting gate. Returns the refreshed job.
+func (e *Executor) RejectRequiredConfirmation(ctx context.Context, jobID, reason string) (*model.Job, error) {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, errors.New("job not found")
+	}
+	if job.Status != model.JobStatusWaitingUser {
+		return nil, errors.New("job is not waiting for user confirmation")
+	}
+	msg := strings.TrimSpace(reason)
+	if msg == "" {
+		msg = "用户拒绝必要确认"
+	}
+	step, err := e.store.GetStepByKind(ctx, job.ID, job.CurrentStepKind)
+	if err != nil {
+		return nil, err
+	}
+	if step != nil {
+		if err := e.store.MarkStepFailed(ctx, step.ID, model.ErrorUserRejectedConfirmation, msg); err != nil {
+			return nil, err
+		}
+	}
+	if err := e.store.MarkJobFailed(ctx, job.ID); err != nil {
+		return nil, err
+	}
+	e.notify(ctx, job.ID, "")
+	return e.store.GetJob(ctx, job.ID)
+}
+
 func (e *Executor) notify(ctx context.Context, jobID, stepID string) {
 	if e.OnUpdate == nil {
 		return
