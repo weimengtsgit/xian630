@@ -36,6 +36,8 @@
 }
 .cw-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; }
 .cw-status { font-size: 11px; color: #68ddff; }
+.cw-composer .cw-abandon-requirement { align-self: flex-start; border-color: rgba(255, 150, 150, 0.2); background: transparent; color: rgba(255, 176, 176, 0.72); font-size: 11px; }
+.cw-composer .cw-abandon-requirement:hover:not(:disabled), .cw-composer .cw-abandon-requirement:focus-visible:not(:disabled) { border-color: rgba(255, 150, 150, 0.42); background: rgba(60, 24, 30, 0.26); color: #ffb0b0; }
 
 /* Phase 1: the 3 top-right drawer-entry buttons (任务执行 / 协作智能体 /
  * 工作空间). They open the unified right 工作台抽屉 and are mutually exclusive —

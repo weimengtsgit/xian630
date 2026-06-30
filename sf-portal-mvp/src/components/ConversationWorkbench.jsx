@@ -68,6 +68,13 @@ export function ConversationWorkbench({
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
   const textareaRef = useRef(null)
+  const handleAbandonRequirement = () => {
+    if (!onAbandon || submitting) return
+    const ok = typeof window === 'undefined'
+      ? true
+      : window.confirm('确定放弃本次需求吗？这会结束当前需求澄清/生成对话，但不会取消已经在执行的任务。如需停止任务，请在「任务执行」中取消。')
+    if (ok) onAbandon()
+  }
   // Auto-grow the composer textarea with its content (capped by the CSS
   // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
   const resizeTextarea = () => {
@@ -331,7 +338,17 @@ export function ConversationWorkbench({
 
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
-        {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
+        {canAbandon ? (
+          <button
+            type="button"
+            className="cw-abandon-requirement"
+            onClick={handleAbandonRequirement}
+            disabled={submitting}
+            title="放弃本次需求"
+          >
+            放弃本次需求
+          </button>
+        ) : null}
         {/* Archive control: archive a resolved dialogue. The backend endpoint
             (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
             refreshes the view so the composer is replaced by a terminal hint. */}
