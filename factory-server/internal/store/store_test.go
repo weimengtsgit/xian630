@@ -127,6 +127,56 @@ func TestOpenMigratesStepExecutionRecordsIdempotently(t *testing.T) {
 //     (no data loss);
 //   - re-opening the upgraded DB is a no-op (idempotent).
 //
+// TestOpenMigratesJobsCollaborationPlan reproduces the "/api/jobs 500 list jobs"
+// failure: a DB created before jobs.collaboration_plan_json shipped lacks the
+// column (CREATE TABLE IF NOT EXISTS never re-adds it to an existing table), and
+// without an ensureColumn backfill the ListJobs SELECT fails with
+// "no such column: collaboration_plan_json". Open() must backfill it.
+func TestOpenMigratesJobsCollaborationPlan(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Now()
+
+	seed, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	if err := seed.CreateJob(ctx, model.Job{
+		ID: "job_cp", UserPrompt: "协作计划", NormalizedPrompt: "协作计划",
+		AppSlug: "cp-app", AppName: "协作应用", Status: model.JobStatusCompleted,
+		CurrentStepKind: model.StepDeployment, CreatedAppID: "app_cp",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		seed.Close()
+		t.Fatalf("seed job: %v", err)
+	}
+	// Degrade to the pre-collaboration-plan shape, mimicking an on-disk DB from
+	// before the column existed.
+	if _, err := seed.db.Exec(`ALTER TABLE jobs DROP COLUMN collaboration_plan_json`); err != nil {
+		seed.Close()
+		t.Fatalf("degrade drop collaboration_plan_json: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open upgraded db: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// ListJobs SELECTs collaboration_plan_json (see jobSelectCols); after the
+	// backfill migration it must succeed and return the seeded row.
+	jobs, err := st.ListJobs(ctx, "")
+	if err != nil {
+		t.Fatalf("ListJobs after migrate: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != "job_cp" {
+		t.Fatalf("expected seeded job_cp, got %+v", jobs)
+	}
+}
+
 // To produce a realistic "prior" database without guessing the exact historical
 // column set, the test opens the current schema once, then strips it back to the
 // pre-Workbench shape (drops the four jobs columns and the three new tables)
