@@ -762,8 +762,9 @@ const (
 // tagged with the aggregate card it belongs to (CardKey) so the orchestration
 // view can render it on the right card, and carries a Kind so the frontend can
 // route artifact-open by kind. Path is relative to the configured artifact
-// root; PreviewURL is empty unless a serving endpoint is wired (deferred — the
-// interface preview stores a manifest, not a servable HTML page). Status is the
+// root; PreviewURL carries the serving-endpoint path for kinds that are served
+// (interface_preview points at the manifest inspection route; empty otherwise).
+// Status is the
 // artifact lifecycle: provisional (snapshot retained, not yet promoted) or
 // active. SnapshotHash is a content hash of the stored artifact for change
 // detection.

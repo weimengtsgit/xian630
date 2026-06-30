@@ -17,7 +17,7 @@ import { factoryApi } from '../api/client'
 export function InterfacePreviewModal({ artifact, jobId, onClose }) {
   const [state, setState] = useState({ status: 'loading', data: null, error: '' })
 
-  const resolvedJobId = (artifact && artifact.jobId) || jobId
+  const resolvedJobId = (artifact && (artifact.jobId || artifact.job_id)) || jobId
 
   useEffect(() => {
     if (!artifact || !resolvedJobId) {
