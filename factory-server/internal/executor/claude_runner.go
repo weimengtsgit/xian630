@@ -590,6 +590,12 @@ func (c *ClaudeStepRunner) projectDocsAfterStep(ctx context.Context, trace runne
 			}
 		}
 	}
+	if root == "" && job.AppSlug != "" {
+		root = filepath.Join(c.Workspace, "generated-apps", filepath.FromSlash(job.AppSlug))
+	}
+	if root != "" {
+		_ = os.MkdirAll(filepath.Join(root, "docs"), 0o755)
+	}
 	if root == "" {
 		return res
 	}
@@ -753,7 +759,7 @@ func collaborationProducerName(kind model.StepKind) string {
 	case model.StepDomainAnalysis:
 		return "领域分析"
 	case model.StepDesignContract:
-		return "设计契约"
+		return "界面设计"
 	case model.StepDataIntegration:
 		return "数据接入"
 	default:

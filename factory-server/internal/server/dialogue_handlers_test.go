@@ -3520,3 +3520,29 @@ func TestCreateDialogueMultipartRejectsCredentialFile(t *testing.T) {
 		t.Fatalf("credential file persisted on disk: %#v", matches)
 	}
 }
+
+func TestConfirmDialogueClarificationSeedsJobWithAppSlug(t *testing.T) {
+	srv, router, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	dlg := model.DialogueSession{ID: "dlg_slug", Status: model.DialogueStatusDraftingApplication, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true, ClarificationSessionID: "clar_slug", CreatedAt: testNow(), UpdatedAt: testNow()}
+	if err := srv.store.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("CreateDialogueSession: %v", err)
+	}
+	req := `{"appType":"operations_management","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","targetUsers":["员工"],"mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	clar := model.ClarificationSession{ID: "clar_slug", Status: model.ClarificationStatusReadyToConfirm, InitialPrompt: "做请假审批", RequirementJSON: req, CreatedAt: testNow(), UpdatedAt: testNow()}
+	if err := srv.store.CreateClarificationSession(ctx, clar); err != nil {
+		t.Fatalf("CreateClarificationSession: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/dialogues/dlg_slug/clarification/confirm", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	jobs, err := srv.store.ListJobsByDialogue(ctx, "dlg_slug")
+	if err != nil {
+		t.Fatalf("ListJobsByDialogue: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].AppSlug == "" {
+		t.Fatalf("confirmed dialogue must seed job with AppSlug for early project docs: %#v", jobs)
+	}
+}

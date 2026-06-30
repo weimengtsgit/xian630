@@ -194,6 +194,7 @@ function artifactsForCard(view, cardKey) {
       path: String(item.path || ''),
       previewUrl: String(item.previewUrl || ''),
       status: String(item.status || 'active'),
+      jobId: String(item.jobId || item.job_id || ''),
     }))
 }
 

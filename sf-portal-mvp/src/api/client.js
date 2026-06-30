@@ -154,6 +154,8 @@ export const factoryApi = {
       }&limit=200`,
     ),
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
+  getJobProjectDocument: (jobId, path) =>
+    request(`/api/jobs/${jobId}/project-docs/file?path=${encodeURIComponent(path)}`),
   getArtifactContent: async id => requestText(`/api/artifacts/${id}/content`),
   createClarification: prompt => request('/api/clarifications', { method: 'POST', body: JSON.stringify({ prompt }) }),
   getActiveClarification: () => request('/api/clarifications/active'),

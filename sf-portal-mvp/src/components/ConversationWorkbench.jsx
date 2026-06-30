@@ -28,11 +28,13 @@ import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
 import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
 import { AttachmentComposer } from './AttachmentComposer'
 import { AttachmentPreviewModal } from './AttachmentPreviewModal'
+import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
+import { factoryApi } from '../api/client'
 import './ConversationWorkbench.css'
 
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
@@ -185,6 +187,22 @@ export function ConversationWorkbench({
     focusKey: aggregateGraph.activeCardKey || 'business_logic',
   })
   const [previewAttachment, setPreviewAttachment] = useState(null)
+  const [previewDocument, setPreviewDocument] = useState(null)
+  // openProjectDocument fetches a task-owned docs/*.md file for read-only rich
+  // preview. Early in the pipeline (before code generation registers an
+  // application) the job already carries an AppSlug, so the backend can resolve
+  // the project root and serve the projected document.
+  const openProjectDocument = async artifact => {
+    if (!artifact || !artifact.path) return
+    const jobId = artifact.jobId || (focusTask && focusTask.id)
+    if (!jobId) return
+    try {
+      const doc = await factoryApi.getJobProjectDocument(jobId, artifact.path)
+      setPreviewDocument(doc)
+    } catch {
+      setPreviewDocument(null)
+    }
+  }
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -301,7 +319,7 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
-      <AggregateOrchestrationGraph graph={aggregateGraph} />
+      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openProjectDocument} />
 
       <div className="cw-body">
         {timeline.map(item => (
@@ -474,6 +492,8 @@ export function ConversationWorkbench({
       {previewAttachment ? (
         <AttachmentPreviewModal attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />
       ) : null}
+
+      <ProjectDocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
 
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>

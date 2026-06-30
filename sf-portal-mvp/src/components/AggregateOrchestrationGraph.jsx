@@ -1,4 +1,4 @@
-import { CheckCircle2, Circle, Clock3, FileCheck2, Loader2, PackageCheck, User } from 'lucide-react'
+import { CheckCircle2, Circle, Clock3, FileCheck2, FileText, Loader2, PackageCheck, User } from 'lucide-react'
 import './AggregateOrchestrationGraph.css'
 
 // The aggregate graph renders exactly five pipeline cards, one per role. The
@@ -27,7 +27,7 @@ const STATE_LABELS = {
   skipped: '已跳过',
 }
 
-export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCompact }) {
+export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCompact, onOpenArtifact }) {
   if (!graph || !Array.isArray(graph.cards)) return null
   const active = graph.cardsByKey && graph.activeCardKey ? graph.cardsByKey[graph.activeCardKey] : null
   if (compact) {
@@ -60,6 +60,23 @@ export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCo
               <small>{STATE_LABELS[card.state] || card.state}</small>
               {card.subStage ? <em>{card.subStage}</em> : null}
               {card.currentAction ? <p>{card.currentAction}</p> : null}
+              {Array.isArray(card.artifacts) && card.artifacts.length > 0 ? (
+                <ul className="aog-artifacts">
+                  {card.artifacts.map(artifact => (
+                    <li key={artifact.id || artifact.path}>
+                      <button
+                        type="button"
+                        className="aog-artifact-link"
+                        onClick={() => onOpenArtifact && onOpenArtifact(artifact)}
+                        title={artifact.path || artifact.label}
+                      >
+                        <FileText size={12} />
+                        <span>{artifact.label || artifact.path}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </article>
           )
         })}

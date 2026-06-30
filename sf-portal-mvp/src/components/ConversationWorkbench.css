@@ -407,3 +407,15 @@
 .cw-preview-meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; padding: 10px 12px; border: 1px solid rgba(111, 218, 255, 0.14); border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-size: 11px; }
 .cw-preview-meta dt { color: rgba(215, 238, 248, 0.6); }
 .cw-preview-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* Task 5: read-only rich Markdown preview for task-owned project documents. */
+.cw-doc-modal-layer { position: absolute; inset: 0; z-index: 32; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(3, 11, 18, 0.64); }
+.cw-doc-modal { width: min(760px, 100%); max-height: min(78vh, 760px); display: flex; flex-direction: column; border: 1px solid rgba(111, 218, 255, 0.26); border-radius: 8px; background: rgba(4, 18, 30, 0.98); }
+.cw-doc-modal header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid rgba(111, 218, 255, 0.18); color: #edfaff; }
+.cw-doc-modal header button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: rgba(11, 29, 44, 0.72); color: #d7eef8; cursor: pointer; }
+.cw-doc-rich { overflow: auto; padding: 16px 18px; color: #d7eef8; line-height: 1.62; }
+.cw-doc-rich h1 { margin: 0 0 14px; font-size: 20px; color: #edfaff; }
+.cw-doc-rich h2 { margin: 18px 0 8px; font-size: 16px; color: #edfaff; }
+.cw-doc-rich h3 { margin: 14px 0 6px; font-size: 14px; color: #68ddff; }
+.cw-doc-rich p { margin: 0 0 8px; }
+.cw-doc-li::before { content: '• '; color: #68ddff; }
