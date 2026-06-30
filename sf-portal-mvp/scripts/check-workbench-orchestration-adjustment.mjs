@@ -1,5 +1,6 @@
 // sf-portal-mvp/scripts/check-workbench-orchestration-adjustment.mjs
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   AGGREGATE_CARD_KEYS,
   buildWorkbenchOrchestrationView,
@@ -72,4 +73,14 @@ assert.equal(production.cardsByKey.production_delivery.subStage, '代码生成')
 assert.equal(production.edges.find(edge => edge.from === 'data_capture' && edge.to === 'production_delivery').state, 'flowing')
 
 assert.deepEqual(AGGREGATE_CARD_KEYS, ['user_input', 'business_logic', 'interface_parsing', 'data_capture', 'production_delivery'])
+
+const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
+assert.equal(graphSource.includes('协作编排'), false, 'aggregate graph must not render 协作编排 as a card')
+for (const label of ['用户输入', '业务逻辑', '界面解析', '数据抓取', '生产交付']) {
+  assert.equal(graphSource.includes(label), true, `graph source must render ${label}`)
+}
+const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.css', import.meta.url), 'utf8')
+assert.equal(css.includes('@media (prefers-reduced-motion: reduce)'), true, 'pulse motion must respect reduced motion')
+assert.equal(css.includes('position: sticky'), true, 'graph must support fixed-in-workbench placement')
+
 console.log('check-workbench-orchestration-adjustment: ok')

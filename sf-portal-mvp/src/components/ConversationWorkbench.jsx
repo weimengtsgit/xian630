@@ -25,6 +25,8 @@ import {
   XCircle,
 } from 'lucide-react'
 import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
+import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
+import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
@@ -163,6 +165,15 @@ export function ConversationWorkbench({
     : ''
   const taskBadge = taskDrawerBadgeInfo(focusTask)
 
+  // Aggregate orchestration graph (Task 2): a fixed five-card overview of the
+  // whole pipeline (用户输入/业务逻辑/界面解析/数据抓取/生产交付) that stays pinned
+  // above the conversation body and reflects the latest view + trace state.
+  const aggregateGraph = useMemo(() => buildWorkbenchOrchestrationView({
+    view,
+    workTraceItems: traceItems,
+    jobStepBlocks: traceSteps,
+  }), [view, traceItems, traceSteps])
+
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -277,10 +288,9 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
+      <AggregateOrchestrationGraph graph={aggregateGraph} />
+
       <div className="cw-body">
-        {timeline.length === 0 && traceItems.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有智能体，还是生成新智能体。</div>
-        ) : null}
         {timeline.map(item => (
           <TimelineItem
             key={item.id}
