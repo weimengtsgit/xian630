@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+coverage/
+.superpowers/
+.worktrees/
+dist/
+npm-debug.log*
