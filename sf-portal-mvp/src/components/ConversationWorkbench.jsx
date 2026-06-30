@@ -241,9 +241,9 @@ export function ConversationWorkbench({
         scope: question.scope || 'data_capture',
         value,
       })
-      // After a successful submit the credential handle is durable; nudge the
-      // view so the agent re-reads controlledCredentialRefs on its next input.
-      if (onSend) await onSend('', {})
+      // Credential handle persisted server-side (durable). The data_integration
+      // step reads controlledCredentialRefs from the store on its next run;
+      // resuming the waiting step after a credential submit is deferred wiring.
     } catch {
       // Surface failure via the existing submitting/error UX implicitly; the
       // boundary's own 4xx (e.g. empty value) is guarded before this call.
