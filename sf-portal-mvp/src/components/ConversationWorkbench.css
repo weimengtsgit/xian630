@@ -452,3 +452,19 @@
 .cw-artifact-list button, .cw-agent-folded button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; cursor: pointer; font-size: 11px; }
 .cw-agent-confirm { align-self: flex-end; padding: 6px 10px; border: 1px solid rgba(126, 231, 135, 0.46); border-radius: 6px; background: rgba(20, 64, 50, 0.58); color: #bff6c4; cursor: pointer; }
 .cw-agent-folded { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px 34px; }
+
+/* ---- F4: interface preview modal (manifest render) ---------------------- */
+.cw-interface-modal .cw-doc-rich { padding: 14px 16px; }
+.cw-interface-loading { display: flex; align-items: center; gap: 8px; color: rgba(215, 238, 248, 0.7); }
+.cw-interface-error p { color: #ffb0b0; margin: 0; }
+.cw-interface-summary { margin: 0 0 12px; font-size: 14px; color: #edfaff; line-height: 1.6; }
+.cw-interface-section { margin: 0 0 12px; }
+.cw-interface-section h3 { margin: 0 0 6px; color: #68ddff; font-size: 12px; }
+.cw-interface-text { margin: 0; white-space: pre-wrap; word-break: break-word; color: rgba(215, 238, 248, 0.85); font-size: 12px; line-height: 1.55; }
+.cw-interface-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.cw-interface-list-item { min-width: 0; color: rgba(215, 238, 248, 0.82); font-size: 12px; line-height: 1.5; }
+.cw-interface-json { margin: 0; max-height: 280px; overflow: auto; white-space: pre; word-break: normal; background: rgba(3, 17, 29, 0.7); border: 1px solid rgba(111, 218, 255, 0.14); border-radius: 6px; padding: 8px 10px; color: rgba(215, 238, 248, 0.86); font-size: 11.5px; line-height: 1.5; }
+.cw-interface-empty { margin: 0; color: rgba(215, 238, 248, 0.45); font-size: 12px; }
+.cw-interface-fields h3 { margin: 8px 0 6px; }
+.cw-interface-field-list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-interface-field-chip { padding: 3px 8px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 999px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; font-size: 11px; }

@@ -1174,13 +1174,14 @@ func (c *ClaudeStepRunner) artifactRoot() string {
 // returns a WorkbenchArtifactRef (Kind=interface_preview, CardKey=
 // interface_parsing, Status=provisional) for the orchestration view to render.
 //
-// The manifest is the RETAINED SNAPSHOT only — a serving endpoint (HTML+ MIME
-// + CSP) is intentionally deferred (decision #38: Task 8 mandates snapshot
-// retention, not serving), so the ref carries no PreviewURL. The Path stays
-// under the artifact root (jobs/<job>/design_contract/attempt-<n>/interface-
-// preview/manifest.json) and contains ONLY design metadata — no credentials,
-// no provider reasoning (Constraint #9: the manifest is built from the public
-// design contract fields the agent authored, never from hidden provider data).
+// PreviewURL points at the GET /api/jobs/:id/interface-preview serving endpoint
+// (F4) so the view model surfaces a fetchable URL. It serves the manifest JSON
+// for inspection; rendering it as a runnable HTML preview is a separate, larger
+// generation-capability follow-up (deferred). The Path stays under the artifact
+// root (jobs/<job>/design_contract/attempt-<n>/interface-preview/manifest.json)
+// and contains ONLY design metadata — no credentials, no provider reasoning
+// (Constraint #9: the manifest is built from the public design contract fields
+// the agent authored, never from hidden provider data).
 func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput) (model.WorkbenchArtifactRef, error) {
 	raw, err := json.MarshalIndent(map[string]any{
 		"kind":             "static_manifest",
@@ -1201,8 +1202,9 @@ func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, j
 	}
 	sum := sha256.Sum256(raw)
 	now := time.Now()
+	refID := "warf_" + id.New()
 	return model.WorkbenchArtifactRef{
-		ID:           "warf_" + id.New(),
+		ID:           refID,
 		DialogueID:   job.DialogueID,
 		JobID:        job.ID,
 		StepID:       step.ID,
@@ -1210,6 +1212,7 @@ func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, j
 		Kind:         model.WorkbenchArtifactInterfacePreview,
 		Label:        "界面预览",
 		Path:         previewRel,
+		PreviewURL:   fmt.Sprintf("/api/jobs/%s/interface-preview?artifactId=%s", job.ID, refID),
 		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
 		Status:       "provisional",
 		CreatedAt:    now,

@@ -558,7 +558,11 @@ export function ConversationWorkbench({
       ) : null}
 
       <ProjectDocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
-      <InterfacePreviewModal artifact={previewInterface} onClose={() => setPreviewInterface(null)} />
+      <InterfacePreviewModal
+        artifact={previewInterface}
+        jobId={(focusTask && focusTask.id) || ''}
+        onClose={() => setPreviewInterface(null)}
+      />
 
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>

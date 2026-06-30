@@ -478,6 +478,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/jobs/:id/artifacts", s.jobArtifacts)
 	r.Handle("GET", "/api/jobs/:id/execution-summary", s.jobExecutionSummary)
 	r.Handle("GET", "/api/jobs/:id/project-docs/file", s.jobProjectDocumentFile)
+	r.Handle("GET", "/api/jobs/:id/interface-preview", s.jobInterfacePreview)
 	r.Handle("GET", "/api/jobs/:id/collaboration-plan", s.getJobCollaborationPlan)
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)

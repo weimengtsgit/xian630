@@ -156,6 +156,14 @@ export const factoryApi = {
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
   getJobProjectDocument: (jobId, path) =>
     request(`/api/jobs/${jobId}/project-docs/file?path=${encodeURIComponent(path)}`),
+  // getJobInterfacePreview fetches the retained interface-preview manifest (F4)
+  // the design_contract step wrote. The backend resolves the interface_preview
+  // workbench artifact ref by artifactId under ArtifactRoot and returns its
+  // decoded manifest: { summary, designDocument, assumedDataFields, snapshotHash,
+  // path }. The modal renders this readably instead of the prior "快照已保留"
+  // placeholder (spec #7: the proposed interface must be inspectable).
+  getJobInterfacePreview: (jobId, artifactId) =>
+    request(`/api/jobs/${jobId}/interface-preview?artifactId=${encodeURIComponent(artifactId)}`),
   getArtifactContent: async id => requestText(`/api/artifacts/${id}/content`),
   createClarification: prompt => request('/api/clarifications', { method: 'POST', body: JSON.stringify({ prompt }) }),
   getActiveClarification: () => request('/api/clarifications/active'),
