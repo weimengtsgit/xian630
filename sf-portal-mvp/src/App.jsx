@@ -304,6 +304,7 @@ function App() {
           loading={apps.loading}
           error={apps.error}
           actionById={apps.actionById}
+          generationStats={apps.generationStats}
           refresh={apps.refresh}
           startApplication={apps.startApplication}
           stopApplication={apps.stopApplication}

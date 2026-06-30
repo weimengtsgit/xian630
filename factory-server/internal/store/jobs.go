@@ -261,16 +261,6 @@ func (s *Store) GetJob(ctx context.Context, id string) (*model.Job, error) {
 	return j, nil
 }
 
-// UpdateJobConfirmedRequirement stores the latest server-finalized requirement
-// JSON for a job. Requirement-analysis steps may refine the confirmed
-// requirement after the job is created; downstream steps read this frozen value.
-func (s *Store) UpdateJobConfirmedRequirement(ctx context.Context, jobID, confirmedRequirementJSON string) error {
-	_, err := s.db.ExecContext(ctx, `
-UPDATE jobs SET confirmed_requirement_json = ?, updated_at = ? WHERE id = ?`,
-		confirmedRequirementJSON, ms(time.Now()), jobID)
-	return err
-}
-
 // ListJobs returns jobs ordered newest-first. When status is non-empty the
 // result is restricted to jobs in that status.
 func (s *Store) ListJobs(ctx context.Context, status string) ([]model.Job, error) {
@@ -553,6 +543,35 @@ UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
 	return err
 }
 
+// UpdateJobConfirmedRequirement stores the canonical frozen requirement emitted
+// by requirement_analysis. Later steps and the dialogue workbench read this
+// field as the current requirement snapshot for the job.
+func (s *Store) UpdateJobConfirmedRequirement(ctx context.Context, jobID, requirementJSON string) error {
+	now := ms(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs SET confirmed_requirement_json = ?, updated_at = ? WHERE id = ?`,
+		requirementJSON, now, jobID); err != nil {
+		return err
+	}
+	var clarificationID string
+	if err := tx.QueryRowContext(ctx, `SELECT clarification_session_id FROM jobs WHERE id = ?`, jobID).Scan(&clarificationID); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if clarificationID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE clarification_sessions SET requirement_json = ?, updated_at = ? WHERE id = ?`,
+			requirementJSON, now, clarificationID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // SetJobCreatedApp links a job to the application its code_generation step
 // produced: it stamps created_app_id, app_slug and app_name and bumps updated_at.
 // It is called by the fake-claude (and, later, the real claude) runner after it
@@ -597,6 +616,28 @@ ORDER BY created_at DESC LIMIT 1`, appID, appID)
 		return nil, nil
 	}
 	return j, err
+}
+
+// ListJobsForApplication returns every job that produced or targets appID,
+// ordered by creation time from oldest to newest.
+func (s *Store) ListJobsForApplication(ctx context.Context, appID string) ([]model.Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobSelectCols+`
+FROM jobs WHERE application_id = ? OR created_app_id = ?
+ORDER BY created_at ASC`, appID, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]model.Job, 0)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *j)
+	}
+	return out, rows.Err()
 }
 
 // MarkStepRunning flips a step to running, bumps attempt, and stamps started_at
