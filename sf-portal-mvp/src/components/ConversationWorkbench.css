@@ -447,6 +447,18 @@
 .cw-track li.is-active span { background: #68ddff; box-shadow: 0 0 10px rgba(104, 221, 255, 0.56); }
 .cw-track li.is-failed { color: #ffb0b0; }
 .cw-track li.is-failed span { background: #ff665e; }
+/* F6: data-flow track node states. Real CSS states (no animation) driven by
+   the verification metadata projected onto the data_contract artifact. */
+.cw-track li.cw-track-node-succeeded { color: #9be3a8; }
+.cw-track li.cw-track-node-succeeded span { background: #4ec96a; }
+.cw-track li.cw-track-node-active { color: #68ddff; }
+.cw-track li.cw-track-node-active span { background: #68ddff; box-shadow: 0 0 10px rgba(104, 221, 255, 0.56); }
+.cw-track li.cw-track-node-failed { color: #ffb0b0; }
+.cw-track li.cw-track-node-failed span { background: #ff665e; }
+.cw-track li.cw-track-node-waiting { color: #ffd98a; }
+.cw-track li.cw-track-node-waiting span { background: #f0b84a; }
+.cw-data-flow-track { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 0; }
+.cw-data-flow-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 .cw-artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .cw-artifact-list h4 { flex-basis: 100%; }
 .cw-artifact-list button, .cw-agent-folded button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; cursor: pointer; font-size: 11px; }

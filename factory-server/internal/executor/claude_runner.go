@@ -253,6 +253,18 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		if res.Status == model.StepStatusSucceeded {
+			// F6: project the data-verification summary onto the data_contract
+			// artifact so the workbench's data-flow track can render REAL states
+			// (active/failed/succeeded/waiting) instead of a static label list.
+			// The summary is built from the decoded DataIntegrationOutput:
+			// sourceBoundary (which boundary the data actually came from), the
+			// per-boundary verification verdicts (so a failed ontology boundary
+			// shows red), the ordered fallback history, and the sample/field
+			// counts that annotate the processing nodes.
+			meta, mErr := buildDataContractMetadata(dataDetail)
+			if mErr != nil {
+				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: mErr.Error()}, nil
+			}
 			c.upsertWorkbenchArtifact(ctx, model.WorkbenchArtifactRef{
 				ID:         "warf_" + id.New(),
 				DialogueID: job.DialogueID,
@@ -263,6 +275,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 				Label:      "数据契约",
 				Path:       "docs/data-integration.md",
 				Status:     dataDetail.SourceBoundary,
+				Metadata:   meta,
 				CreatedAt:  time.Now(),
 				UpdatedAt:  time.Now(),
 			})
@@ -1257,4 +1270,53 @@ func slugFromProjectDir(projectDir string) string {
 	}
 	parts := strings.Split(projectDir, "/")
 	return parts[len(parts)-1]
+}
+
+// dataContractVerification is the per-boundary verdict projected onto the
+// data_capture card. It mirrors runner.DataVerificationNode but lives here so
+// the projection is an explicit, frontend-facing contract rather than a leak of
+// the runner's internal struct tags.
+type dataContractVerificationNode struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// buildDataContractMetadata marshals a frontend-facing verification summary from
+// the decoded DataIntegrationOutput. The shape is fixed:
+//
+//	{
+//	  "sourceBoundary": <ontology|internet|demo>,
+//	  "verification": { "ontology": {...}, "internet": {...}, "demo": {...} },
+//	  "fallbackHistory": [...],
+//	  "sampleCount": <n>,
+//	  "fieldCount": <n>
+//	}
+//
+// The data_capture card's data-flow track reads this to derive node states: the
+// sourceBoundary node is the selected source (succeeded/active), a boundary in
+// fallbackHistory (or whose verification status is "failed") renders red, and
+// fieldCount/sampleCount annotate the processing nodes.
+func buildDataContractMetadata(detail runner.DataIntegrationOutput) (string, error) {
+	summary := struct {
+		SourceBoundary  string                                    `json:"sourceBoundary"`
+		Verification    map[string]dataContractVerificationNode  `json:"verification"`
+		FallbackHistory []string                                  `json:"fallbackHistory"`
+		SampleCount     int                                       `json:"sampleCount"`
+		FieldCount      int                                       `json:"fieldCount"`
+	}{
+		SourceBoundary: detail.SourceBoundary,
+		Verification: map[string]dataContractVerificationNode{
+			"ontology": {Status: detail.Verification.Ontology.Status, Reason: detail.Verification.Ontology.Reason},
+			"internet": {Status: detail.Verification.Internet.Status, Reason: detail.Verification.Internet.Reason},
+			"demo":     {Status: detail.Verification.Demo.Status, Reason: detail.Verification.Demo.Reason},
+		},
+		FallbackHistory: detail.FallbackHistory,
+		SampleCount:     detail.DataContract.SampleCount,
+		FieldCount:      len(detail.DataContract.Fields),
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		return "", fmt.Errorf("marshal data-contract metadata: %w", err)
+	}
+	return string(raw), nil
 }

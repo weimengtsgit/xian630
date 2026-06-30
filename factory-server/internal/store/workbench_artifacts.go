@@ -23,9 +23,9 @@ func (s *Store) UpsertWorkbenchArtifactRef(ctx context.Context, r model.Workbenc
 	// Try update first (id is PK). preserving created_at.
 	res, err := s.db.ExecContext(ctx, `
 UPDATE workbench_artifact_refs
-SET dialogue_id=?, job_id=?, step_id=?, card_key=?, kind=?, label=?, path=?, preview_url=?, snapshot_hash=?, status=?, updated_at=?
+SET dialogue_id=?, job_id=?, step_id=?, card_key=?, kind=?, label=?, path=?, preview_url=?, snapshot_hash=?, status=?, metadata=?, updated_at=?
 WHERE id=?`,
-		r.DialogueID, r.JobID, r.StepID, r.CardKey, string(r.Kind), r.Label, r.Path, r.PreviewURL, r.SnapshotHash, r.Status, ms(r.UpdatedAt), r.ID)
+		r.DialogueID, r.JobID, r.StepID, r.CardKey, string(r.Kind), r.Label, r.Path, r.PreviewURL, r.SnapshotHash, r.Status, r.Metadata, ms(r.UpdatedAt), r.ID)
 	if err != nil {
 		return err
 	}
@@ -33,9 +33,9 @@ WHERE id=?`,
 		return nil
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO workbench_artifact_refs(id,dialogue_id,job_id,step_id,card_key,kind,label,path,preview_url,snapshot_hash,status,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.DialogueID, r.JobID, r.StepID, r.CardKey, string(r.Kind), r.Label, r.Path, r.PreviewURL, r.SnapshotHash, r.Status, ms(r.CreatedAt), ms(r.UpdatedAt))
+INSERT INTO workbench_artifact_refs(id,dialogue_id,job_id,step_id,card_key,kind,label,path,preview_url,snapshot_hash,status,metadata,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.DialogueID, r.JobID, r.StepID, r.CardKey, string(r.Kind), r.Label, r.Path, r.PreviewURL, r.SnapshotHash, r.Status, r.Metadata, ms(r.CreatedAt), ms(r.UpdatedAt))
 	return err
 }
 
@@ -44,8 +44,8 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 // artifacts yet.
 func (s *Store) ListWorkbenchArtifactRefsByDialogue(ctx context.Context, dialogueID string) ([]model.WorkbenchArtifactRef, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id,dialogue_id,job_id,step_id,card_key,kind,label,path,preview_url,snapshot_hash,status,created_at,updated_at
-FROM workbench_artifact_refs WHERE dialogue_id=? ORDER BY created_at DESC`, dialogueID)
+	SELECT id,dialogue_id,job_id,step_id,card_key,kind,label,path,preview_url,snapshot_hash,status,metadata,created_at,updated_at
+	FROM workbench_artifact_refs WHERE dialogue_id=? ORDER BY created_at DESC`, dialogueID)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ FROM workbench_artifact_refs WHERE dialogue_id=? ORDER BY created_at DESC`, dial
 func scanWorkbenchArtifactRef(sc scanner, r *model.WorkbenchArtifactRef) error {
 	var kind string
 	var created, updated int64
-	if err := sc.Scan(&r.ID, &r.DialogueID, &r.JobID, &r.StepID, &r.CardKey, &kind, &r.Label, &r.Path, &r.PreviewURL, &r.SnapshotHash, &r.Status, &created, &updated); err != nil {
+	if err := sc.Scan(&r.ID, &r.DialogueID, &r.JobID, &r.StepID, &r.CardKey, &kind, &r.Label, &r.Path, &r.PreviewURL, &r.SnapshotHash, &r.Status, &r.Metadata, &created, &updated); err != nil {
 		return err
 	}
 	r.Kind = model.WorkbenchArtifactKind(kind)
@@ -80,8 +80,8 @@ func scanWorkbenchArtifactRef(sc scanner, r *model.WorkbenchArtifactRef) error {
 // newest-created first.
 func (s *Store) ListWorkbenchArtifactRefsByJob(ctx context.Context, jobID string) ([]model.WorkbenchArtifactRef, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id,dialogue_id,job_id,step_id,card_key,kind,label,path,preview_url,snapshot_hash,status,created_at,updated_at
-FROM workbench_artifact_refs WHERE job_id=? ORDER BY created_at DESC`, jobID)
+	SELECT id,dialogue_id,job_id,step_id,card_key,kind,label,path,preview_url,snapshot_hash,status,metadata,created_at,updated_at
+	FROM workbench_artifact_refs WHERE job_id=? ORDER BY created_at DESC`, jobID)
 	if err != nil {
 		return nil, err
 	}

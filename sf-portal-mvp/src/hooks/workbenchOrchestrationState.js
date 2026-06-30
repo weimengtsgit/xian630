@@ -212,7 +212,24 @@ function artifactsForCard(view, cardKey) {
       previewUrl: String(item.previewUrl || ''),
       status: String(item.status || 'active'),
       jobId: String(item.jobId || item.job_id || ''),
+      metadata: parseArtifactMetadata(item.metadata),
     }))
+}
+
+// parseArtifactMetadata decodes the producer-authored JSON a workbench artifact
+// carries onto its card. For the data_capture card's data_contract artifact it
+// is the data-verification summary the executor projects (sourceBoundary +
+// per-boundary verification + fallback history + sample/field counts); the
+// data-flow track reads it to render real states. Invalid/missing JSON decodes
+// to null so the track falls back to its inactive defaults rather than throwing.
+function parseArtifactMetadata(raw) {
+  if (raw == null || raw === '') return null
+  try {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return value && typeof value === 'object' ? value : null
+  } catch {
+    return null
+  }
 }
 
 function applyUpstreamWaiting(cardsByKey) {

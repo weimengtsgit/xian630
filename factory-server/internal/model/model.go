@@ -780,6 +780,14 @@ type WorkbenchArtifactRef struct {
 	PreviewURL   string                `json:"previewUrl,omitempty"`
 	SnapshotHash string                `json:"snapshotHash,omitempty"`
 	Status       string                `json:"status"`
+	// Metadata carries producer-authored, JSON-encoded detail that the
+	// orchestration view projects onto the card. For the data_capture card's
+	// data_contract artifact it is the data-verification summary the executor
+	// builds from the decoded DataIntegrationOutput (sourceBoundary, per-boundary
+	// verification verdicts, fallback history, sample/field counts) so the
+	// data-flow track can render real active/failed/succeeded/waiting states
+	// instead of a static label list. Empty for artifact kinds that carry none.
+	Metadata     string                `json:"metadata,omitempty"`
 	CreatedAt    time.Time             `json:"created_at"`
 	UpdatedAt    time.Time             `json:"updated_at"`
 }

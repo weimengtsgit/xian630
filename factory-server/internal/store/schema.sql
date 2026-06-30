@@ -381,6 +381,7 @@ CREATE TABLE IF NOT EXISTS workbench_artifact_refs (
     preview_url   TEXT    NOT NULL DEFAULT '',
     snapshot_hash TEXT    NOT NULL DEFAULT '',
     status        TEXT    NOT NULL DEFAULT 'active',
+    metadata      TEXT    NOT NULL DEFAULT '',
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
 );
