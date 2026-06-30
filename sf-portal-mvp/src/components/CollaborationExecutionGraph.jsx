@@ -436,6 +436,8 @@ function classifyConnectorMode(fromCount, toCount) {
 
 function connectorStateForEdges(edges) {
   const states = edges.map(edge => edge.state || 'inactive')
+  if (states.includes('blocked_failed')) return 'blocked_failed'
+  if (states.includes('blocked_waiting_user')) return 'blocked_waiting_user'
   if (states.includes('blocked')) return 'blocked'
   if (states.includes('flowing')) return 'flowing'
   if (states.length > 0 && states.every(state => state === 'planned')) return 'planned'

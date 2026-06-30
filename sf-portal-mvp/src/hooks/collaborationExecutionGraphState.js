@@ -50,6 +50,8 @@ export const EDGE_STATE_LABEL = {
   flowing: '流转中',
   completed: '已完成',
   blocked: '阻塞',
+  blocked_failed: '失败阻塞',
+  blocked_waiting_user: '等待用户',
 }
 
 export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []) {
@@ -168,7 +170,8 @@ function cardStateForStep(step, confirmed, waitingFor) {
 function edgeState(fromCard, toCard, confirmed) {
   if (!confirmed) return 'planned'
   if (!fromCard || !toCard) return 'inactive'
-  if (fromCard.state === 'failed' || toCard.state === 'failed' || toCard.state === 'waiting_user') return 'blocked'
+  if (fromCard.state === 'failed' || toCard.state === 'failed') return 'blocked_failed'
+  if (toCard.state === 'waiting_user') return 'blocked_waiting_user'
   if (toCard.state === 'completed') return 'completed'
   if (fromCard.state === 'completed' && (toCard.state === 'ready' || toCard.state === 'running')) return 'flowing'
   return 'inactive'

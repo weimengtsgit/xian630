@@ -85,6 +85,10 @@ assert.match(graphCss, /\.ceg-connector-state-flowing/, 'graph css should make f
 assert.match(graphCss, /\.ceg-connector-state-completed/, 'graph css should make completed dependency lines visually distinct')
 assert.match(graphCss, /\.ceg-connector-state-inactive/, 'graph css should make inactive dependency lines visually distinct')
 assert.match(graphCss, /\.ceg-connector-state-blocked/, 'graph css should make blocked dependency lines visually distinct')
+assert.match(graphCss, /\.ceg-edge-blocked_waiting_user[\s\S]*243, 199, 97/, 'waiting-user blocked lines should use the same amber family as task waiting state')
+assert.match(graphCss, /\.ceg-edge-blocked_failed[\s\S]*255, 102, 94/, 'failed blocked lines should use the same red family as task failed state')
+assert.match(graphComponent, /states\.includes\('blocked_failed'\)/, 'connector state should prioritize failed blocked edges')
+assert.match(graphComponent, /states\.includes\('blocked_waiting_user'\)/, 'connector state should preserve waiting-user blocked edges')
 assert.match(graphCss, /\.ceg-card-is-hidden/, 'graph css should define hidden card styling')
 assert.match(graphCss, /\.ceg-card-is-revealed/, 'graph css should define revealed card styling')
 assert.match(graphCss, /\.ceg-card-is-revealing/, 'graph css should define a summoned-card enter animation')
@@ -255,6 +259,28 @@ assert.equal(
   runningGraph.edges.find(edge => edge.from === 'designer' && edge.to === 'solution-designer').state,
   'inactive',
   'unfinished upstream should keep downstream edge inactive',
+)
+
+const waitingUserGraph = buildCollaborationExecutionGraphView(graphPreview, [
+  { stepId: 'step-orch', agentKey: 'collaboration-orchestrator', status: 'succeeded', name: '协作编排' },
+  { stepId: 'step-req', agentKey: 'requirement-analyst', status: 'succeeded', name: '需求分析' },
+  { stepId: 'step-design', agentKey: 'designer', status: 'waiting_user', name: '设计' },
+])
+assert.equal(
+  waitingUserGraph.edges.find(edge => edge.from === 'requirement-analyst' && edge.to === 'designer').state,
+  'blocked_waiting_user',
+  'waiting-user downstream should use amber blocked edge state',
+)
+
+const failedGraph = buildCollaborationExecutionGraphView(graphPreview, [
+  { stepId: 'step-orch', agentKey: 'collaboration-orchestrator', status: 'succeeded', name: '协作编排' },
+  { stepId: 'step-req', agentKey: 'requirement-analyst', status: 'failed', name: '需求分析' },
+  { stepId: 'step-design', agentKey: 'designer', status: 'pending', name: '设计' },
+])
+assert.equal(
+  failedGraph.edges.find(edge => edge.from === 'requirement-analyst' && edge.to === 'designer').state,
+  'blocked_failed',
+  'failed upstream should use red blocked edge state',
 )
 assert.ok(runningGraph.waves.length >= 5, 'graph should build multiple horizontal execution waves')
 assert.equal(runningGraph.summary.totalAgents, 7, 'summary should count collaboration agents, excluding user input')
