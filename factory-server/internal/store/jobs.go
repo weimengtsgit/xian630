@@ -622,7 +622,7 @@ func (s *Store) IncrementStepAttempt(ctx context.Context, stepID string) error {
 func (s *Store) MarkStepSucceeded(ctx context.Context, stepID string) error {
 	now := ms(time.Now())
 	_, err := s.db.ExecContext(ctx, `
-UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
+UPDATE job_steps SET status = ?, ended_at = ?, needs_user_input = 0, pending_questions = '' WHERE id = ?`,
 		string(model.StepStatusSucceeded), now, stepID)
 	return err
 }
@@ -643,6 +643,18 @@ func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID, questionsJSON s
 	_, err := s.db.ExecContext(ctx, `
 UPDATE job_steps SET status = ?, needs_user_input = 1, pending_questions = ?, ended_at = NULL WHERE id = ?`,
 		string(model.StepStatusWaitingUser), questionsJSON, stepID)
+	return err
+}
+
+// MarkStepAwaitingManualConfirmation pauses a completed step before downstream
+// execution. The step remains waiting_user because the next transition depends
+// on an explicit operator action, but ended_at is stamped to reflect that the
+// runner finished and only the handoff confirmation is outstanding.
+func (s *Store) MarkStepAwaitingManualConfirmation(ctx context.Context, stepID, questionsJSON string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps SET status = ?, needs_user_input = 1, pending_questions = ?, ended_at = ? WHERE id = ?`,
+		string(model.StepStatusWaitingUser), questionsJSON, now, stepID)
 	return err
 }
 

@@ -13,6 +13,7 @@ type Plan struct {
 	SchemaVersion           int                `json:"schemaVersion"`
 	Mode                    string             `json:"mode"`
 	Lanes                   []Lane             `json:"lanes"`
+	ExecutionPolicy         ExecutionPolicy    `json:"executionPolicy"`
 	RepairPolicy            RepairPolicy       `json:"repairPolicy"`
 	Agents                  []Agent            `json:"agents"`
 	Edges                   []Edge             `json:"edges"`
@@ -28,6 +29,10 @@ type Lane struct {
 type RepairPolicy struct {
 	MaxAutomaticRepairs                  int `json:"maxAutomaticRepairs"`
 	MaxAutomaticRepairsPerBlockingReason int `json:"maxAutomaticRepairsPerBlockingReason"`
+}
+
+type ExecutionPolicy struct {
+	ManualStepConfirmation bool `json:"manualStepConfirmation"`
 }
 
 type Agent struct {
@@ -124,9 +129,10 @@ func DefaultPlan(ctx RequirementContext) Plan {
 			{"generation", "生成 / 审查 / 修复"},
 			{"delivery", "验证 / 构建 / 部署"},
 		},
-		RepairPolicy: RepairPolicy{MaxAutomaticRepairs: 2, MaxAutomaticRepairsPerBlockingReason: 1},
-		Agents:       agents,
-		Edges:        edges,
+		ExecutionPolicy: executionPolicyFromRequirement(ctx.ConfirmedRequirementJSON),
+		RepairPolicy:    RepairPolicy{MaxAutomaticRepairs: 2, MaxAutomaticRepairsPerBlockingReason: 1},
+		Agents:          agents,
+		Edges:           edges,
 	}
 	return applyAdjustments(plan, adjustmentsFromRequirement(ctx.ConfirmedRequirementJSON))
 }
@@ -178,6 +184,19 @@ func adjustmentsFromRequirement(raw string) []AdjustmentRequest {
 		return nil
 	}
 	return doc.CollaborationAdjustments
+}
+
+func executionPolicyFromRequirement(raw string) ExecutionPolicy {
+	if strings.TrimSpace(raw) == "" {
+		return ExecutionPolicy{}
+	}
+	var doc struct {
+		ExecutionPolicy ExecutionPolicy `json:"executionPolicy"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return ExecutionPolicy{}
+	}
+	return doc.ExecutionPolicy
 }
 
 func applyAdjustments(plan Plan, requests []AdjustmentRequest) Plan {

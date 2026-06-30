@@ -59,6 +59,7 @@ export function ConversationWorkbench({
   drawerEntry,
   onToggleDrawerEntry,
   onOpenTaskStep,
+  onConfirmTaskStep,
   hasBoundApplication,
   onCancelTurn,
   onConfirmChange,
@@ -70,6 +71,7 @@ export function ConversationWorkbench({
   const [draftAnswers, setDraftAnswers] = useState({})
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
+  const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
   const textareaRef = useRef(null)
   const requestAbandonRequirement = () => {
     if (!onAbandon || submitting) return
@@ -100,6 +102,9 @@ export function ConversationWorkbench({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [moreMenuOpen, abandonConfirmOpen])
+  useEffect(() => {
+    setManualStepConfirmation(false)
+  }, [session && session.id])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
@@ -290,6 +295,9 @@ export function ConversationWorkbench({
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
             onOpenTaskStep={onOpenTaskStep}
+            onConfirmTaskStep={onConfirmTaskStep}
+            manualStepConfirmation={manualStepConfirmation}
+            onToggleManualStepConfirmation={setManualStepConfirmation}
             onPickClarification={(scope, value) => {
               if (!value) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
@@ -375,7 +383,12 @@ export function ConversationWorkbench({
 
       {canConfirm ? (
         <div className="cw-answer-bar">
-          <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => onConfirm && onConfirm({ executionPolicy: { manualStepConfirmation: !isBusiness && manualStepConfirmation } })}
+            disabled={submitting}
+          >
             {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
           </button>
         </div>
@@ -517,7 +530,7 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
   if (item.type === 'user_message') {
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
@@ -582,6 +595,9 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
         onOpenTask={card => {
           if (card && card.stepId && onOpenTaskStep) onOpenTaskStep(card)
         }}
+        onConfirmStep={onConfirmTaskStep}
+        manualStepConfirmation={manualStepConfirmation}
+        onToggleManualStepConfirmation={onToggleManualStepConfirmation}
       />
     )
   }

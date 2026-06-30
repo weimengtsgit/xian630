@@ -74,6 +74,14 @@ type dialoguePatchRequirementBody struct {
 	Requirement json.RawMessage `json:"requirement"`
 }
 
+type executionPolicyBody struct {
+	ManualStepConfirmation bool `json:"manualStepConfirmation"`
+}
+
+type confirmDialogueClarificationBody struct {
+	ExecutionPolicy executionPolicyBody `json:"executionPolicy"`
+}
+
 // recommendationCard is one validated existing-app candidate card: name,
 // user-facing match reason, status, and safe runtime URL. It never carries the
 // internal blueprint slug.
@@ -154,6 +162,7 @@ type collaborationPlanPreview struct {
 	SchemaVersion      int                              `json:"schemaVersion"`
 	Mode               string                           `json:"mode"`
 	Lanes              []collaboration.Lane             `json:"lanes"`
+	ExecutionPolicy    collaboration.ExecutionPolicy    `json:"executionPolicy"`
 	Agents             []collaboration.Agent            `json:"agents"`
 	Edges              []collaboration.Edge             `json:"edges"`
 	HighImpactWarnings []collaborationHighImpactWarning `json:"highImpactWarnings,omitempty"`
@@ -541,11 +550,12 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 func buildCollaborationPlanPreview(confirmedRequirementJSON string) *collaborationPlanPreview {
 	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: confirmedRequirementJSON})
 	preview := &collaborationPlanPreview{
-		SchemaVersion: plan.SchemaVersion,
-		Mode:          plan.Mode,
-		Lanes:         plan.Lanes,
-		Agents:        plan.Agents,
-		Edges:         plan.Edges,
+		SchemaVersion:   plan.SchemaVersion,
+		Mode:            plan.Mode,
+		Lanes:           plan.Lanes,
+		ExecutionPolicy: plan.ExecutionPolicy,
+		Agents:          plan.Agents,
+		Edges:           plan.Edges,
 	}
 	for _, a := range plan.Agents {
 		if a.HighImpact {
@@ -1903,6 +1913,13 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "session not ready to confirm", "status": sess.Status})
 		return
 	}
+	var body confirmDialogueClarificationBody
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
 	req := s.parseRequirement(sess.RequirementJSON)
 	if !blueprintRefsAllSafe(req.BlueprintRefs) {
 		writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
@@ -1910,6 +1927,7 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 	}
 	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
 	req.GenerationProfile = recomputeGenerationProfile(req)
+	req.ExecutionPolicy.ManualStepConfirmation = body.ExecutionPolicy.ManualStepConfirmation
 	if missing := missingRequiredFields(req); len(missing) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "confirmed requirement missing required fields", "missing": missing})
 		return
