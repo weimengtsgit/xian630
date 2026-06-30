@@ -87,6 +87,13 @@ assert.equal(css.includes('position: sticky'), true, 'graph must support fixed-i
 const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 assert.equal(clientSource.includes('uploadDialogueAttachment'), true, 'client must expose uploadDialogueAttachment')
 assert.equal(clientSource.includes('attachmentIds'), true, 'message send must carry attachmentIds')
+// Fix wave: createDialogue must support first-message multipart submission so a
+// file attached to the very first message is uploaded alongside dialogue
+// creation rather than silently discarded (the locally-staged File has no
+// attachment.id to thread into attachmentIds before the dialogue exists).
+assert.equal(clientSource.includes('createDialogue'), true, 'client must expose createDialogue')
+assert.equal(clientSource.includes("form.append('files'"), true, 'createDialogue must append files to a multipart form for first-message attachments')
+assert.equal(clientSource.includes('files.length'), true, 'createDialogue must branch on a non-empty files list')
 const composerSource = readFileSync(new URL('../src/components/AttachmentComposer.jsx', import.meta.url), 'utf8')
 assert.equal(composerSource.includes('X'), true, 'pending attachment chips must expose a remove icon')
 assert.equal(composerSource.includes('input type="file"'), true, 'composer must include file input')

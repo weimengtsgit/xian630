@@ -770,22 +770,50 @@ var errDialogueNotFound = errors.New("dialogue not found")
 // createDialogue handles POST /api/dialogues. It persists the first user
 // message, emits dialogue.created, schedules intent routing, and returns the
 // initial view without waiting for the model.
+//
+// It accepts EITHER a JSON body {prompt} OR a multipart/form-data body carrying
+// a `prompt` field plus one or more `files` parts (first-message attachments).
+// The multipart path exists so a file pinned to the very first message is not
+// silently lost: when no dialogue exists yet the composer stages the File
+// locally (no attachment.id to thread into attachmentIds), so the only way to
+// deliver it server-side is to upload it as part of the dialogue creation. On
+// multipart: the dialogue + first user message are created exactly as the JSON
+// path does, then each file is persisted via saveAttachment (sharing the same
+// credential / classification / size boundary as the follow-up upload) and
+// linked to that first message as DialogueAttachmentRef rows.
 func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
-	var body createDialogueBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	if strings.TrimSpace(body.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "missing prompt")
-		return
+	var prompt string
+	var firstMessageAttachments []string
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		// First-message multipart submission. Parse the form under the same 10MiB
+		// cap the follow-up upload enforces so a huge multipart body cannot OOM.
+		if err := r.ParseMultipartForm(maxDialogueAttachmentBytes); err != nil {
+			writeError(w, http.StatusBadRequest, "attachment too large")
+			return
+		}
+		prompt = strings.TrimSpace(r.FormValue("prompt"))
+		if prompt == "" {
+			writeError(w, http.StatusBadRequest, "missing prompt")
+			return
+		}
+	} else {
+		var body createDialogueBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if strings.TrimSpace(body.Prompt) == "" {
+			writeError(w, http.StatusBadRequest, "missing prompt")
+			return
+		}
+		prompt = body.Prompt
 	}
 	ctx := r.Context()
 	now := time.Now()
 	id := "dlg_" + idpkg.New()
 	dlg := model.DialogueSession{
 		ID:            id,
-		InitialPrompt: body.Prompt,
+		InitialPrompt: prompt,
 		Status:        model.DialogueStatusRouting,
 		Intent:        model.DialogueIntentRouting,
 		CreatedAt:     now,
@@ -797,16 +825,55 @@ func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 	}
 	promptMsg := model.DialogueMessage{
 		ID: "dmsg_" + idpkg.New(), DialogueID: id, Role: "user", Kind: "prompt",
-		Content: body.Prompt, CreatedAt: now,
+		Content: prompt, CreatedAt: now,
 	}
 	if err := s.store.AppendDialogueMessage(ctx, promptMsg); err != nil {
 		writeError(w, http.StatusInternalServerError, "persist prompt")
 		return
 	}
+	// Multipart path: persist each attached file via the shared saveAttachment
+	// core (same credential + classification + 10MiB boundary as the follow-up
+	// upload) and collect their ids. A credential or unsupported file is rejected
+	// with 400; the dialogue is already created, so the row stays (acceptable —
+	// the user can delete it) but no half-uploaded attachment is linked. The
+	// focus key defaults to business_logic for a brand-new dialogue.
+	if r.MultipartForm != nil && len(r.MultipartForm.File["files"]) > 0 {
+		focusKey := s.currentWorkbenchFocusKey(ctx, id)
+		for _, header := range r.MultipartForm.File["files"] {
+			file, ferr := header.Open()
+			if ferr != nil {
+				writeError(w, http.StatusBadRequest, "invalid attachment")
+				return
+			}
+			att, serr := s.saveAttachment(ctx, id, focusKey, header.Filename, header.Header.Get("Content-Type"), file)
+			_ = file.Close()
+			if serr != nil {
+				switch {
+				case errors.Is(serr, errAttachmentCredential):
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": "credentials must use controlled credential input"})
+				case errors.Is(serr, errAttachmentUnsupported):
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported attachment type"})
+				case errors.Is(serr, errAttachmentTooLarge):
+					writeError(w, http.StatusBadRequest, "attachment too large")
+				default:
+					writeError(w, http.StatusInternalServerError, "save attachment")
+				}
+				return
+			}
+			firstMessageAttachments = append(firstMessageAttachments, att.ID)
+		}
+		// Link the freshly-persisted attachments to the first user message so they
+		// appear in the dialogue alongside the prompt. Only attachment id + focus
+		// key are stored on the ref — never file content or credentials.
+		if err := s.createDialogueAttachmentRefs(ctx, id, promptMsg.ID, firstMessageAttachments, focusKey); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid attachment reference")
+			return
+		}
+	}
 	s.publishDialogueSimple("dialogue.created", id, dlg)
 
 	s.runAsync(func(asyncCtx context.Context) {
-		s.runDialogueRouting(asyncCtx, id, body.Prompt)
+		s.runDialogueRouting(asyncCtx, id, prompt)
 	})
 
 	view, err := s.composeDialogueView(ctx, id)

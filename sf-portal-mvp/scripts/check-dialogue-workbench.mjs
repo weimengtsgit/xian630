@@ -522,7 +522,7 @@ assert.match(dialogueHookJs, /optimisticUserMessage/, 'send must reference optim
 // Extract ONLY the send function body so the refresh-ordering assertion does not
 // trip on the other mutating actions (selectRoute/openApp/...) which legitimately
 // await refreshSessions before loadView.
-const sendFnMatch = dialogueHookJs.match(/const send = useCallback\(async content => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+const sendFnMatch = dialogueHookJs.match(/const send = useCallback\(async \(content, options = \{\}\) => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
 assert.ok(sendFnMatch, 'could not locate the send useCallback body for static checks')
 const sendBody = sendFnMatch[0]
 assert.ok(

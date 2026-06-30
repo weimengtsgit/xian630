@@ -288,7 +288,16 @@ export function useDialogueSessions() {
         // arrives, letting the routing analysis + thinking fold live. The flag is
         // cleared when selectedDialogueId becomes set (effect below) or on error.
         pendingNewDialogueRef.current = true
-        view = await factoryApi.createDialogue({ initialPrompt: prompt })
+        // First-message attachments: when no dialogue exists yet the composer
+        // stages files locally (status 'local', no attachment.id). Thread those
+        // File objects into createDialogue so the backend multipart-creates the
+        // dialogue AND uploads + links them to the first message in one call.
+        // submitText (App.jsx) calls clearPending() after send, so the local
+        // chips clear once the multipart create links them server-side.
+        const localFiles = Array.isArray(options.pendingAttachments)
+          ? options.pendingAttachments.map(item => item && item.file).filter(Boolean)
+          : []
+        view = await factoryApi.createDialogue({ initialPrompt: prompt, files: localFiles })
       } else {
         const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt, { attachmentIds: options.attachmentIds })
         // 202 ack (continuing session): result carries {dialogueId, turnId, acceptedAt}

@@ -175,8 +175,23 @@ export const factoryApi = {
   // (or a list of them). Path/methods mirror the backend routes exactly.
   listDialogues: () => request('/api/dialogues'),
   getDialogue: id => request(`/api/dialogues/${id}`),
-  createDialogue: ({ initialPrompt }) =>
-    request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
+  // createDialogue creates a brand-new dialogue from the user's first prompt.
+  // It accepts EITHER a plain JSON body ({initialPrompt}) OR, when one or more
+  // files are attached to that very first message, a multipart/form-data body
+  // (prompt field + files parts). The multipart path is required because before
+  // the dialogue exists there is no attachment.id to thread into attachmentIds —
+  // the composer stages such files locally, so the only way to deliver them is
+  // to upload them as part of the dialogue creation. The backend shares the
+  // same credential/classification/10MiB boundary as the follow-up upload.
+  createDialogue: ({ initialPrompt, files }) => {
+    if (Array.isArray(files) && files.length) {
+      const form = new FormData()
+      form.append('prompt', initialPrompt)
+      for (const file of files) form.append('files', file)
+      return requestMultipart('/api/dialogues', form)
+    }
+    return request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) })
+  },
   deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
   // archiveDialogue sets a dialogue's status to `archived`. The backend endpoint
   // is idempotent and emits `dialogue.archived`; it returns 200 with no required
