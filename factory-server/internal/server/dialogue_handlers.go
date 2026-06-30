@@ -2561,3 +2561,72 @@ func (s *Server) agentKeyTaken(ctx context.Context, nameSlug, candSerial string)
 	}
 	return false
 }
+
+// ---- controlled credential input boundary (Task 12) ----------------------
+
+// controlledCredentialBody is the request body for POST
+// /api/dialogues/:id/credentials. FocusKey/Label/Scope are user-facing metadata
+// describing WHICH credential the handle refers to (e.g. focusKey "data_capture",
+// label "API Key", scope "ontology"). Value is the PLAINTEXT credential — it is
+// accepted ONLY here at the boundary, stored solely in the server's in-memory
+// registry behind an opaque handle, and NEVER persisted, logged, or surfaced in
+// any response, SSE payload, attachment, project doc, or dialogue message.
+type controlledCredentialBody struct {
+	FocusKey string `json:"focusKey"`
+	Label    string `json:"label"`
+	Scope    string `json:"scope"`
+	Value    string `json:"value"`
+}
+
+// submitDialogueCredential accepts ONE controlled credential submission for a
+// dialogue. It swaps the plaintext value for an opaque handle (via
+// storeRuntimeSecret), persists ONLY the metadata row (handle + focus/label/
+// scope + expiry), and responds 201 with {credentialRef:{id,label,scope,
+// redacted:true}} — the response NEVER echoes the value. The persisted
+// ephemeral_credential_refs row and the in-memory secret both expire after 30m.
+//
+// Security contract (binding): the plaintext value lives ONLY in the in-memory
+// credentialSecrets registry. It is not written to the database, input.json,
+// output.json, project docs, attachments, dialogue message content, work traces,
+// SSE events, or logs. It is resolved solely by a future server-side data
+// verifier that accepts the handle (NOT built in this task).
+func (s *Server) submitDialogueCredential(w http.ResponseWriter, r *http.Request) {
+	dialogueID := Param(r, "id")
+	var body controlledCredentialBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if strings.TrimSpace(body.Value) == "" {
+		writeError(w, http.StatusBadRequest, "missing credential value")
+		return
+	}
+	// Swap the plaintext for an opaque handle. The value now lives ONLY in the
+	// in-memory registry; the handle is the sole identifier persisted below.
+	handle := s.storeRuntimeSecret(dialogueID, body.Scope, body.Value)
+	now := time.Now()
+	ref := model.EphemeralCredentialRef{
+		ID:         "cred_" + idpkg.New(),
+		DialogueID: dialogueID,
+		FocusKey:   body.FocusKey,
+		Label:      body.Label,
+		Scope:      body.Scope,
+		Handle:     handle,
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(30 * time.Minute),
+	}
+	if err := s.store.CreateEphemeralCredentialRef(r.Context(), ref); err != nil {
+		writeError(w, http.StatusInternalServerError, "save credential ref")
+		return
+	}
+	// Respond with metadata + a redacted flag. The plaintext value is NEVER
+	// echoed in any response field.
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"credentialRef": map[string]any{
+			"id":       ref.ID,
+			"label":    ref.Label,
+			"scope":    ref.Scope,
+			"redacted": true,
+		},
+	})
+}

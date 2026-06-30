@@ -388,3 +388,21 @@ CREATE INDEX IF NOT EXISTS idx_workbench_artifact_refs_dialogue
 ON workbench_artifact_refs(dialogue_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workbench_artifact_refs_job
 ON workbench_artifact_refs(job_id, created_at);
+
+-- Task 12: controlled credential input boundary. The row stores ONLY opaque
+-- metadata — handle, focus_key, label, scope, expiry. Plaintext credential
+-- VALUES live solely in the server's in-memory credentialSecrets registry,
+-- never in this table. CREATE TABLE IF NOT EXISTS (no ensureColumn): a fresh
+-- column set, brand-new DBs have it, and no legacy DB backfills it.
+CREATE TABLE IF NOT EXISTS ephemeral_credential_refs (
+    id          TEXT    PRIMARY KEY,
+    dialogue_id TEXT    NOT NULL,
+    focus_key   TEXT    NOT NULL DEFAULT '',
+    label       TEXT    NOT NULL DEFAULT '',
+    scope       TEXT    NOT NULL DEFAULT '',
+    handle      TEXT    NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ephemeral_credential_refs_dialogue
+ON ephemeral_credential_refs(dialogue_id, created_at);

@@ -223,6 +223,33 @@ export function ConversationWorkbench({
     openProjectDocument(artifact)
   }
 
+  // submitCredential is the controlled credential input boundary (Task 12). The
+  // plaintext value the user typed is sent ONLY via factoryApi.submitDialogueCredential,
+  // which swaps it for an opaque handle server-side and responds with metadata
+  // + redacted:true (never the value). The value is never rendered, logged, or
+  // persisted client-side beyond the transient password input draft. The
+  // question carries focusKey/label/scope metadata describing WHICH credential
+  // the handle refers to; we forward them so the data_integration step's
+  // input.json controlledCredentialRefs can label the handle without the value.
+  const submitCredential = async (question, value) => {
+    const dialogueId = session && session.id
+    if (!dialogueId || !value || submitting) return
+    try {
+      await factoryApi.submitDialogueCredential(dialogueId, {
+        focusKey: question.focusKey || aggregateGraph.activeCardKey || 'data_capture',
+        label: question.label || question.question || '凭证',
+        scope: question.scope || 'data_capture',
+        value,
+      })
+      // After a successful submit the credential handle is durable; nudge the
+      // view so the agent re-reads controlledCredentialRefs on its next input.
+      if (onSend) await onSend('', {})
+    } catch {
+      // Surface failure via the existing submitting/error UX implicitly; the
+      // boundary's own 4xx (e.g. empty value) is guarded before this call.
+    }
+  }
+
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -386,6 +413,7 @@ export function ConversationWorkbench({
               questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
               onConfirm={key => onConfirm && onConfirm({ aggregateCardKey: key })}
               onOpenArtifact={openArtifact}
+              onSubmitCredential={submitCredential}
             />
           ))}
 

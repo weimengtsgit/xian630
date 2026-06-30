@@ -49,7 +49,15 @@ type Question struct {
 	ID            string           `json:"id"`
 	Question      string           `json:"question"`
 	DefaultAnswer string           `json:"defaultAnswer"`
-	Options       []QuestionOption `json:"options,omitempty"`
+	// InputType marks a question whose answer must be supplied through a
+	// controlled input rather than free text. The data_integration step sets it
+	// to "credential" for credential-bearing questions so the conversation UI
+	// renders a password input backed by the controlled credential boundary
+	// (Task 12) — the plaintext value is NEVER routed through the normal answer
+	// path, dialogue message content, or input.json. Empty/absent means a normal
+	// choice or text question (no special handling).
+	InputType string           `json:"inputType,omitempty"`
+	Options   []QuestionOption `json:"options,omitempty"`
 }
 
 // UnmarshalJSON accepts the contract shape ({question, options:[{value,label}]})
@@ -63,6 +71,7 @@ func (q *Question) UnmarshalJSON(data []byte) error {
 		Question      string           `json:"question"`
 		Text          string           `json:"text"`
 		DefaultAnswer string           `json:"defaultAnswer"`
+		InputType     string           `json:"inputType"`
 		Options       []QuestionOption `json:"options"`
 	}
 	var r raw
@@ -75,6 +84,7 @@ func (q *Question) UnmarshalJSON(data []byte) error {
 		q.Question = r.Text
 	}
 	q.DefaultAnswer = r.DefaultAnswer
+	q.InputType = r.InputType
 	q.Options = r.Options
 	return nil
 }

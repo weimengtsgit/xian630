@@ -798,3 +798,23 @@ type DialogueAttachmentRef struct {
 	DeactivatedAt *time.Time         `json:"deactivated_at,omitempty"`
 	Attachment    DialogueAttachment `json:"attachment"`
 }
+
+// EphemeralCredentialRef is the persisted METADATA for a controlled credential
+// the user submitted via the dialogue credential boundary (Task 12). The row
+// stores ONLY opaque identifiers and expiry metadata — NEVER the credential
+// VALUE. The plaintext value lives solely in the Server's in-memory
+// credentialSecrets registry, keyed by Handle; it is resolved only by a future
+// server-side verifier that accepts the handle. FocusKey/Label/Scope are the
+// user-facing metadata that lets input.json's controlledCredentialRefs describe
+// WHICH credential a handle refers to (e.g. focusKey "data_capture", label "API
+// Key", scope "ontology") without ever disclosing the secret.
+type EphemeralCredentialRef struct {
+	ID         string    `json:"id"`
+	DialogueID string    `json:"dialogue_id"`
+	FocusKey   string    `json:"focus_key"`
+	Label      string    `json:"label"`
+	Scope      string    `json:"scope"`
+	Handle     string    `json:"handle"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}

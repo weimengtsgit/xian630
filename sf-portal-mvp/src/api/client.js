@@ -310,5 +310,13 @@ export const factoryApi = {
         accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
       ),
     }),
+  // submitDialogueCredential is the controlled credential input boundary (Task 12).
+  // The plaintext value is sent ONLY over this POST to the dialogue credential
+  // endpoint; the server swaps it for an opaque handle and responds with metadata
+  // + redacted:true — it NEVER echoes the value. The resolved credentialRef is
+  // later surfaced to the data_integration agent via input.json's
+  // controlledCredentialRefs (handle-only). body: { focusKey, label, scope, value }.
+  submitDialogueCredential: (id, body) =>
+    request(`/api/dialogues/${id}/credentials`, { method: 'POST', body: JSON.stringify(body) }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

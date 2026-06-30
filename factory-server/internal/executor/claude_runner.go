@@ -21,12 +21,26 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
 )
 
+// CredentialHandleResolver reports whether an opaque credential handle
+// identifies a live (present + unexpired) runtime secret. The executor consults
+// it before injecting a credential ref into input.json's
+// controlledCredentialRefs so a handle whose value has expired or been evicted
+// is dropped rather than surfaced to the agent. The resolver NEVER returns the
+// plaintext value — only a boolean availability verdict. Defined in the executor
+// package (not imported from server) so unit tests can construct a
+// ClaudeStepRunner without pulling in the server; the production wiring sets
+// CredentialResolver to the *server.Server (which satisfies this interface).
+type CredentialHandleResolver interface {
+	CredentialHandleAvailable(handle string) bool
+}
+
 type ClaudeStepRunner struct {
-	Store        *store.Store
-	Workspace    string
-	ArtifactRoot string
-	Claude       *runner.ClaudeRunner
-	AuditRunner  runner.CommandRunner
+	Store              *store.Store
+	Workspace          string
+	ArtifactRoot       string
+	Claude             *runner.ClaudeRunner
+	AuditRunner        runner.CommandRunner
+	CredentialResolver CredentialHandleResolver
 }
 
 // codeGenerationStepOutput is the executor-side decoding of the
@@ -110,16 +124,43 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
 	collaborationSnapshot := parseCollaborationStepSnapshot(step.SnapshotJSON)
 
+	// Task 12: collect LIVE, REDACTED credential refs for the data_integration
+	// step. Each ref exposes ONLY opaque metadata — id/label/scope/handle/expiry
+	// — NEVER the plaintext value (that lives in the server's in-memory registry,
+	// resolved solely by a future verifier accepting the handle). A ref whose
+	// handle is no longer available (expired/evicted, or no resolver wired in
+	// unit tests) is dropped. Nil-safe on c.CredentialResolver: the production
+	// wiring sets it to *server.Server; executor unit tests construct
+	// ClaudeStepRunner without it, in which case this loop is skipped and an
+	// empty controlledCredentialRefs array is injected.
+	credentialRefs := []map[string]any{}
+	if step.Kind == model.StepDataIntegration && job.DialogueID != "" && c.Store != nil {
+		refs, _ := c.Store.ListEphemeralCredentialRefs(ctx, job.DialogueID, "data_capture", time.Now())
+		for _, ref := range refs {
+			if c.CredentialResolver != nil && !c.CredentialResolver.CredentialHandleAvailable(ref.Handle) {
+				continue
+			}
+			credentialRefs = append(credentialRefs, map[string]any{
+				"id":       ref.ID,
+				"label":    ref.Label,
+				"scope":    ref.Scope,
+				"handle":   ref.Handle,
+				"expiresAt": ref.ExpiresAt,
+			})
+		}
+	}
+
 	input, err := json.MarshalIndent(map[string]any{
-		"job":                   job,
-		"step":                  step,
-		"confirmedRequirement":  confirmedReq,
-		"generationProfile":     profile,
-		"blueprintRefs":         blueprintRefs,
-		"skills":                skillPaths,
-		"blueprintDocs":         blueprintPaths,
-		"repairContext":         step.UserPrompt,
-		"collaborationSnapshot": collaborationSnapshot,
+		"job":                      job,
+		"step":                     step,
+		"confirmedRequirement":     confirmedReq,
+		"generationProfile":        profile,
+		"blueprintRefs":            blueprintRefs,
+		"skills":                   skillPaths,
+		"blueprintDocs":            blueprintPaths,
+		"repairContext":            step.UserPrompt,
+		"collaborationSnapshot":    collaborationSnapshot,
+		"controlledCredentialRefs": credentialRefs,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -401,6 +442,7 @@ func clarificationPayload(questions []runner.Question) string {
 		ID            string `json:"id,omitempty"`
 		Question      string `json:"question"`
 		DefaultAnswer string `json:"defaultAnswer,omitempty"`
+		InputType     string `json:"inputType,omitempty"`
 		Options       []opt  `json:"options,omitempty"`
 	}
 	out := make([]q, 0, len(questions))
@@ -409,7 +451,7 @@ func clarificationPayload(questions []runner.Question) string {
 		for _, o := range qq.Options {
 			opts = append(opts, opt{Value: o.Value, Label: o.Label, Recommended: o.Recommended})
 		}
-		out = append(out, q{ID: qq.ID, Question: qq.Question, DefaultAnswer: qq.DefaultAnswer, Options: opts})
+		out = append(out, q{ID: qq.ID, Question: qq.Question, DefaultAnswer: qq.DefaultAnswer, InputType: qq.InputType, Options: opts})
 	}
 	b, err := json.Marshal(struct {
 		Questions []q `json:"questions"`
