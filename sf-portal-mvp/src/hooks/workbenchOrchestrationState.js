@@ -105,6 +105,22 @@ export function buildWorkbenchOrchestrationView({ view, workTraceItems = [], job
   production.summary = latestTerminalSummary(production.steps)
 
   applyUpstreamWaiting(cardsByKey)
+  // Task 13: interface/data compatibility gate. When a confirmed data contract
+  // is incompatible with the interface preview (the data-integration step
+  // surfaced it as a data_contract artifact with status 'compatible_failed'),
+  // route the user back to INTERFACE confirmation rather than silently
+  // continuing. The data_integration step has failed (schema_validation_failed),
+  // so without this override the interface_parsing card stays 'confirmed' and
+  // the user is never prompted to reconcile the conflict. Force the interface
+  // card into waiting_artifact_confirmation BEFORE active-card selection so it
+  // becomes the active card. (The artifact scan mirrors artifactsForCard's
+  // view.workbenchArtifacts access.)
+  const compatArtifacts = view && Array.isArray(view.workbenchArtifacts) ? view.workbenchArtifacts : []
+  const hasCompatibilityFailure = compatArtifacts.some(item => item && item.kind === 'data_contract' && item.status === 'compatible_failed')
+  if (hasCompatibilityFailure) {
+    cardsByKey.interface_parsing.state = 'waiting_artifact_confirmation'
+    cardsByKey.interface_parsing.currentAction = '数据契约与界面预览不兼容，需要确认调整'
+  }
   const activeCardKey = firstActiveCardKey(cards)
   if (activeCardKey) cardsByKey[activeCardKey].active = true
   const edges = BASE_EDGES.map(([from, to]) => ({ from, to, state: edgeState(cardsByKey[from], cardsByKey[to]) }))

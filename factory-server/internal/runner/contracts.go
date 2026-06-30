@@ -604,7 +604,8 @@ func ValidateDesignContract(path string) (StepOutput, DesignContractOutput, erro
 // Schema: status (passed|needs_input), summary, sourceBoundary
 // (ontology|internet|demo), verification (per-boundary status+reason),
 // dataContract (fields + sampleCount), fallbackHistory (the ordered boundary
-// crossings the agent recorded), needsUserInput/questions (the shared
+// crossings the agent recorded), compatibility (the interface-vs-data
+// contract gate added in Task 13), needsUserInput/questions (the shared
 // clarification contract), and the shared workLog/warnings.
 type DataIntegrationOutput struct {
 	Status          string            `json:"status"`
@@ -613,9 +614,26 @@ type DataIntegrationOutput struct {
 	Verification    DataVerification  `json:"verification"`
 	DataContract    DataContract      `json:"dataContract"`
 	FallbackHistory []string          `json:"fallbackHistory"`
+	Compatibility   DataCompatibility `json:"compatibility"`
 	NeedsUserInput  bool              `json:"needsUserInput"`
 	Questions       []Question        `json:"questions"`
 	WorkLog         []workLogEntry    `json:"workLog"`
+}
+
+// DataCompatibility is the interface-vs-data contract gate the data step
+// records (Task 13). A confirmed data contract can still be INCOMPATIBLE with
+// the interface preview produced earlier (e.g. the contract is missing fields
+// the interface assumes). When Status is "failed" the step must surface that
+// conflict as a clarification (needsUserInput + question) so the user can
+// reconcile the interface; a compatibility failure with NO clarification is a
+// silent incompatibility the pipeline hard-rejects — see ValidateDataIntegration.
+// MissingFields names the fields the contract lacks; ConfirmedFallbacks lists
+// the fallbacks the user has already accepted (so the workbench can show which
+// boundary the incompatible contract came from).
+type DataCompatibility struct {
+	Status             string   `json:"status"`
+	MissingFields      []string `json:"missingFields"`
+	ConfirmedFallbacks []string `json:"confirmedFallbacks"`
 }
 
 // DataVerification is the per-boundary reachability verdict the data step
@@ -651,7 +669,8 @@ type DataContract struct {
 // can build the data-contract artifact from sourceBoundary + dataContract
 // without re-reading the file).
 //
-// Validation rules (decision #30/#31 — no silent degradation):
+// Validation rules (decision #30/#31 — no silent degradation; Task 13 —
+// interface/data compatibility gate):
 //   - needsUserInput / status:"needs_input" MUST carry at least one question.
 //     A fallback boundary crossing the agent cannot resolve on its own must be
 //     surfaced as a clarification, not a silent default — an empty questions
@@ -662,6 +681,12 @@ type DataContract struct {
 //   - A passed result MUST carry a non-empty dataContract.fields. An empty
 //     contract on success is meaningless downstream, so it hard-fails rather
 //     than producing an empty artifact.
+//   - A compatibility.Status of "failed" (the confirmed data contract is
+//     incompatible with the interface preview) MUST be accompanied by a
+//     clarification (needsUserInput). A compatibility failure with no question
+//     is a silent incompatibility — the pipeline cannot guess how to reconcile
+//     the interface with the contract, so it hard-fails with
+//     ErrSchemaValidationFailed rather than continuing to a broken preview.
 func ValidateDataIntegration(path string) (StepOutput, DataIntegrationOutput, error) {
 	var raw DataIntegrationOutput
 	if err := ReadAndDecode(path, &raw); err != nil {
@@ -678,6 +703,9 @@ func ValidateDataIntegration(path string) (StepOutput, DataIntegrationOutput, er
 	}
 	if len(raw.DataContract.Fields) == 0 {
 		return StepOutput{}, raw, fmt.Errorf("data contract fields required: %w", ErrSchemaValidationFailed)
+	}
+	if raw.Compatibility.Status == "failed" && !raw.NeedsUserInput {
+		return StepOutput{}, raw, fmt.Errorf("interface data compatibility requires user confirmation: %w", ErrSchemaValidationFailed)
 	}
 	return StepOutput{}, raw, nil
 }

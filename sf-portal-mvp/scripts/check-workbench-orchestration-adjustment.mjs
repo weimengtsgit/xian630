@@ -156,4 +156,29 @@ const userWait = buildWorkbenchOrchestrationView({
 assert.equal(userWait.cardsByKey.production_delivery.state, 'waiting_user_confirmation')
 assert.equal(userWait.cardsByKey.production_delivery.currentAction, '等待端口确认')
 
+// ---- Task 13: interface/data compatibility gate ---------------------------
+// When a confirmed data contract is incompatible with the interface preview
+// (data_contract artifact status 'compatible_failed'), the data_integration
+// step fails (schema_validation_failed) but the surface must route the user
+// back to INTERFACE confirmation rather than silently continuing: the
+// interface_parsing card is forced into waiting_artifact_confirmation and
+// becomes the active card, with a currentAction that names the conflict.
+const compatibilityFailure = buildWorkbenchOrchestrationView({
+  view: {
+    session: { id: 'dlg_compat', status: 'task_running' },
+    messages: [{ id: 'u', role: 'user', content: 'x' }],
+    workbenchArtifacts: [
+      { id: 'preview', cardKey: 'interface_parsing', kind: 'interface_preview', label: '界面预览', status: 'provisional' },
+      { id: 'contract', cardKey: 'data_capture', kind: 'data_contract', label: '数据契约', status: 'compatible_failed' },
+    ],
+  },
+  jobStepBlocks: [
+    { stepId: 'r', kind: 'requirement_analysis', status: 'succeeded' },
+    { stepId: 'd', kind: 'design_contract', status: 'succeeded' },
+    { stepId: 'data', kind: 'data_integration', status: 'failed', errorCode: 'schema_validation_failed', summary: '数据字段缺少审批状态' },
+  ],
+})
+assert.equal(compatibilityFailure.cardsByKey.interface_parsing.state, 'waiting_artifact_confirmation')
+assert.equal(compatibilityFailure.activeCardKey, 'interface_parsing')
+
 console.log('check-workbench-orchestration-adjustment: ok')
