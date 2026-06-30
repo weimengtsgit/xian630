@@ -16,6 +16,7 @@ import {
   HelpCircle,
   Loader2,
   MessageSquare,
+  MoreHorizontal,
   PlayCircle,
   RefreshCw,
   RotateCcw,
@@ -67,13 +68,18 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
   const textareaRef = useRef(null)
-  const handleAbandonRequirement = () => {
+  const requestAbandonRequirement = () => {
     if (!onAbandon || submitting) return
-    const ok = typeof window === 'undefined'
-      ? true
-      : window.confirm('确定放弃本次需求吗？这会结束当前需求澄清/生成对话，但不会取消已经在执行的任务。如需停止任务，请在「任务执行」中取消。')
-    if (ok) onAbandon()
+    setMoreMenuOpen(false)
+    setAbandonConfirmOpen(true)
+  }
+  const confirmAbandonRequirement = () => {
+    if (!onAbandon || submitting) return
+    setAbandonConfirmOpen(false)
+    onAbandon()
   }
   // Auto-grow the composer textarea with its content (capped by the CSS
   // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
@@ -84,6 +90,16 @@ export function ConversationWorkbench({
     el.style.height = `${el.scrollHeight}px`
   }
   useEffect(resizeTextarea, [input])
+  useEffect(() => {
+    if (!moreMenuOpen && !abandonConfirmOpen) return undefined
+    const onKeyDown = event => {
+      if (event.key !== 'Escape') return
+      setMoreMenuOpen(false)
+      setAbandonConfirmOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [moreMenuOpen, abandonConfirmOpen])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
@@ -218,8 +234,39 @@ export function ConversationWorkbench({
           >
             <span className="cw-drawer-btn-label">应用商店</span>
           </button>
+          {canAbandon ? (
+            <div className="cw-more">
+              <button
+                type="button"
+                className="cw-more-btn"
+                onClick={() => setMoreMenuOpen(open => !open)}
+                title="更多操作"
+                aria-label="更多操作"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                disabled={submitting}
+              >
+                <MoreHorizontal size={16} />
+              </button>
+              {moreMenuOpen ? (
+                <div className="cw-more-menu" role="menu">
+                  <button
+                    type="button"
+                    className="cw-more-danger"
+                    role="menuitem"
+                    onClick={requestAbandonRequirement}
+                    disabled={submitting}
+                  >
+                    放弃本次需求
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </header>
+
+      {moreMenuOpen ? <button type="button" className="cw-menu-backdrop" aria-label="关闭更多操作" onClick={() => setMoreMenuOpen(false)} /> : null}
 
       {/* Phase 1: the inline focus-task panel has been REMOVED from the center.
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
@@ -338,17 +385,6 @@ export function ConversationWorkbench({
 
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
-        {canAbandon ? (
-          <button
-            type="button"
-            className="cw-abandon-requirement"
-            onClick={handleAbandonRequirement}
-            disabled={submitting}
-            title="放弃本次需求"
-          >
-            放弃本次需求
-          </button>
-        ) : null}
         {/* Archive control: archive a resolved dialogue. The backend endpoint
             (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
             refreshes the view so the composer is replaced by a terminal hint. */}
@@ -391,6 +427,32 @@ export function ConversationWorkbench({
           </>
         )}
       </footer>
+
+      {abandonConfirmOpen ? (
+        <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>
+          <section
+            className="cw-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cw-abandon-title"
+            aria-describedby="cw-abandon-desc"
+            onMouseDown={event => event.stopPropagation()}
+          >
+            <h3 id="cw-abandon-title">放弃本次需求？</h3>
+            <p id="cw-abandon-desc">
+              将结束当前需求澄清/生成对话，后续不能继续补充或确认生成。已在执行的任务不会被取消，如需停止任务请到“任务执行”中取消。
+            </p>
+            <div className="cw-confirm-actions">
+              <button type="button" className="cw-confirm-secondary" onClick={() => setAbandonConfirmOpen(false)}>
+                继续处理
+              </button>
+              <button type="button" className="cw-confirm-danger" onClick={confirmAbandonRequirement} disabled={submitting}>
+                确认放弃
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   )
 }
