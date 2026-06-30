@@ -175,6 +175,7 @@ func (s *Server) getDialogueAttachmentContent(w http.ResponseWriter, r *http.Req
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if _, err := io.Copy(w, f); err != nil {
 		// Best-effort: a partial write after headers is unwinnable; just return.
 		return

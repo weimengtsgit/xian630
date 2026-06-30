@@ -704,7 +704,8 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-func isManualStepConfirmationQuestions(raw string) bool {	if strings.TrimSpace(raw) == "" {
+func isManualStepConfirmationQuestions(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
 		return false
 	}
 	var items []struct {
