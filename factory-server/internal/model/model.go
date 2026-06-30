@@ -735,6 +735,48 @@ type DialogueAttachment struct {
 	DeactivatedAt *time.Time            `json:"deactivated_at,omitempty"`
 }
 
+// WorkbenchArtifactKind categorizes a WorkbenchArtifactRef by the artifact it
+// points at. The string value is persisted verbatim into
+// workbench_artifact_refs.kind. project_document is the early docs/*.md
+// projection (Task 5); interface_preview is the design-contract-derived
+// interface snapshot (Task 8); data_contract / sample_data are reserved for the
+// later data-integration step.
+type WorkbenchArtifactKind string
+
+const (
+	WorkbenchArtifactProjectDocument  WorkbenchArtifactKind = "project_document"
+	WorkbenchArtifactInterfacePreview WorkbenchArtifactKind = "interface_preview"
+	WorkbenchArtifactDataContract     WorkbenchArtifactKind = "data_contract"
+	WorkbenchArtifactSampleData       WorkbenchArtifactKind = "sample_data"
+)
+
+// WorkbenchArtifactRef is one durable pointer to a task-owned workbench
+// artifact (a projected project document, an interface-preview snapshot, a
+// data contract). It is the aggregation layer's artifact surface: each ref is
+// tagged with the aggregate card it belongs to (CardKey) so the orchestration
+// view can render it on the right card, and carries a Kind so the frontend can
+// route artifact-open by kind. Path is relative to the configured artifact
+// root; PreviewURL is empty unless a serving endpoint is wired (deferred — the
+// interface preview stores a manifest, not a servable HTML page). Status is the
+// artifact lifecycle: provisional (snapshot retained, not yet promoted) or
+// active. SnapshotHash is a content hash of the stored artifact for change
+// detection.
+type WorkbenchArtifactRef struct {
+	ID           string                `json:"id"`
+	DialogueID   string                `json:"dialogue_id"`
+	JobID        string                `json:"job_id"`
+	StepID       string                `json:"step_id"`
+	CardKey      string                `json:"cardKey"`
+	Kind         WorkbenchArtifactKind `json:"kind"`
+	Label        string                `json:"label"`
+	Path         string                `json:"path"`
+	PreviewURL   string                `json:"previewUrl,omitempty"`
+	SnapshotHash string                `json:"snapshotHash,omitempty"`
+	Status       string                `json:"status"`
+	CreatedAt    time.Time             `json:"created_at"`
+	UpdatedAt    time.Time             `json:"updated_at"`
+}
+
 // DialogueAttachmentRef links a stored attachment to the dialogue message that
 // uses it. A single attachment can be referenced by multiple messages; refs
 // deactivate independently so removal from one message keeps the file alive

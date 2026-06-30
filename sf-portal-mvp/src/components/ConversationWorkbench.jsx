@@ -30,6 +30,7 @@ import { WorkbenchAgentBlock } from './WorkbenchAgentBlock'
 import { AttachmentComposer } from './AttachmentComposer'
 import { AttachmentPreviewModal } from './AttachmentPreviewModal'
 import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
+import { InterfacePreviewModal } from './InterfacePreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
@@ -189,6 +190,7 @@ export function ConversationWorkbench({
   })
   const [previewAttachment, setPreviewAttachment] = useState(null)
   const [previewDocument, setPreviewDocument] = useState(null)
+  const [previewInterface, setPreviewInterface] = useState(null)
   // openProjectDocument fetches a task-owned docs/*.md file for read-only rich
   // preview. Early in the pipeline (before code generation registers an
   // application) the job already carries an AppSlug, so the backend can resolve
@@ -203,6 +205,20 @@ export function ConversationWorkbench({
     } catch {
       setPreviewDocument(null)
     }
+  }
+
+  // openArtifact routes an artifact-open click by kind: project_document loads
+  // the markdown preview via openProjectDocument; interface_preview (Task 8)
+  // opens the InterfacePreviewModal. The interface-preview snapshot is retained
+  // server-side as a manifest with no serving endpoint yet, so the modal
+  // degrades gracefully (label + retention note) until one is wired.
+  const openArtifact = artifact => {
+    if (!artifact) return
+    if (artifact.kind === 'interface_preview') {
+      setPreviewInterface(artifact)
+      return
+    }
+    openProjectDocument(artifact)
   }
 
   useEffect(() => {
@@ -320,7 +336,7 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
-      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openProjectDocument} />
+      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openArtifact} />
 
       <div className="cw-body">
         {timeline.map(item => (
@@ -365,7 +381,7 @@ export function ConversationWorkbench({
               analysisLog=""
               questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
               onConfirm={key => onConfirm && onConfirm({ aggregateCardKey: key })}
-              onOpenArtifact={openProjectDocument}
+              onOpenArtifact={openArtifact}
             />
           ))}
 
@@ -509,6 +525,7 @@ export function ConversationWorkbench({
       ) : null}
 
       <ProjectDocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
+      <InterfacePreviewModal artifact={previewInterface} onClose={() => setPreviewInterface(null)} />
 
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>

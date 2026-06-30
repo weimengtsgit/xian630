@@ -3,6 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/projectdocs"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
@@ -177,12 +180,34 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := finishReviewGate(ctx, trace, step, ws.OutputPath())
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+	case model.StepDesignContract:
+		// Task 8: the design_contract step is the interface-parsing producer.
+		// Validate against the specialized design contract (summary +
+		// designDocument required), and on success retain a deterministic
+		// interface-preview snapshot derived from the validated designDocument.
+		// The snapshot is a Factory-owned manifest (the agent is forbidden from
+		// writing preview files); a snapshot write failure fails the step as a
+		// schema_validation_failed because the preview is a load-bearing artifact
+		// of a successful design step. The ref is upserted so the orchestration
+		// view can render the preview on the interface_parsing card.
+		out, design, err := runner.ValidateDesignContract(ws.OutputPath())
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		if res.Status == model.StepStatusSucceeded {
+			ref, perr := c.createInterfacePreviewSnapshot(ctx, job, step, ws, design)
+			if perr != nil {
+				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
+			}
+			c.upsertWorkbenchArtifact(ctx, ref)
+		}
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	default:
-		// The remaining admitted gate kinds (collaboration_orchestration,
-		// domain_analysis, design_contract, data_integration) are analysis/
-		// contract producers. They share the normal needsUserInput/questions
-		// contract so domain-level uncertainty can pause for user clarification
-		// instead of leaking prose into output.json and failing as invalid JSON.
+		// The remaining admitted producer kinds (collaboration_orchestration,
+		// domain_analysis, data_integration) are analysis/contract producers.
+		// They share the normal needsUserInput/questions contract so domain-level
+		// uncertainty can pause for user clarification instead of leaking prose
+		// into output.json and failing as invalid JSON. design_contract has its
+		// own case above (it derives an interface-preview snapshot).
 		out, err := validateCollaborationProducer(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
@@ -739,6 +764,15 @@ func isCollaborationProducerKind(kind model.StepKind) bool {
 }
 
 func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
+	// Task 8: the design_contract step is the interface-parsing producer. It has
+	// a specialized contract (designDocument + assumedDataFields) the generic
+	// collaboration prompt does not surface, and it is explicitly forbidden from
+	// writing preview files — the executor builds the task-owned snapshot from
+	// its designDocument. Route it to the dedicated prompt before the generic
+	// body. (data_integration gets its own branch in Task 9.)
+	if step.Kind == model.StepDesignContract {
+		return designContractPrompt(job, ws)
+	}
 	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
 		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
@@ -750,6 +784,24 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 		"workLog 必须是面向用户的简短过程摘要数组，每项包含 title 和 summary；warnings 用于记录非阻塞风险。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。" +
 		"用户需求：" + job.UserPrompt
+}
+
+// designContractPrompt is the specialized prompt for the design_contract
+// (interface-parsing) collaboration producer. Unlike the generic collaboration
+// prompt, it mandates the designDocument + assumedDataFields contract the
+// executor's interface-preview snapshot is derived from, and it forbids the
+// agent from writing any preview file — the preview is a Factory-owned,
+// deterministic artifact built from the design contract, so the agent must only
+// describe the design, never render it.
+func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的界面解析智能体。读取 input.json 中的 confirmedRequirement、附件摘要和已有字段假设，输出界面解析设计契约。" +
+		"不要修改文件，不要生成界面预览文件；界面预览由 Factory 执行器根据 designDocument 生成 task-owned 产物。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、workLog、warnings。" +
+		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
+		"designDocument 必须描述视图识别、布局分区、组件映射、交互状态、响应式约束、关键文案和字段呈现。assumedDataFields 是预览依赖但数据抓取尚未确认的字段名数组。" +
+		"需要用户澄清时，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
 }
 
 func collaborationProducerName(kind model.StepKind) string {
@@ -1021,6 +1073,70 @@ func (c *ClaudeStepRunner) artifactRoot() string {
 		return ".factory-runs"
 	}
 	return c.ArtifactRoot
+}
+
+// createInterfacePreviewSnapshot derives the task-owned interface-preview
+// artifact from a VALIDATED design contract (Task 8). The agent is forbidden
+// from writing preview files, so this is the single deterministic producer:
+// it projects the design contract's summary + designDocument + assumedDataFields
+// into a static manifest under the artifact root, content-hashes it, and
+// returns a WorkbenchArtifactRef (Kind=interface_preview, CardKey=
+// interface_parsing, Status=provisional) for the orchestration view to render.
+//
+// The manifest is the RETAINED SNAPSHOT only — a serving endpoint (HTML+ MIME
+// + CSP) is intentionally deferred (decision #38: Task 8 mandates snapshot
+// retention, not serving), so the ref carries no PreviewURL. The Path stays
+// under the artifact root (jobs/<job>/design_contract/attempt-<n>/interface-
+// preview/manifest.json) and contains ONLY design metadata — no credentials,
+// no provider reasoning (Constraint #9: the manifest is built from the public
+// design contract fields the agent authored, never from hidden provider data).
+func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput) (model.WorkbenchArtifactRef, error) {
+	raw, err := json.MarshalIndent(map[string]any{
+		"kind":             "static_manifest",
+		"summary":          design.Summary,
+		"designDocument":   design.DesignDocument,
+		"assumedDataFields": design.AssumedDataFields,
+	}, "", "  ")
+	if err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	previewRel := filepath.ToSlash(filepath.Join("jobs", job.ID, string(step.Kind), fmt.Sprintf("attempt-%d", step.Attempt), "interface-preview", "manifest.json"))
+	full := filepath.Join(c.artifactRoot(), filepath.FromSlash(previewRel))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	if err := os.WriteFile(full, raw, 0o644); err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	sum := sha256.Sum256(raw)
+	now := time.Now()
+	return model.WorkbenchArtifactRef{
+		ID:           "warf_" + id.New(),
+		DialogueID:   job.DialogueID,
+		JobID:        job.ID,
+		StepID:       step.ID,
+		CardKey:      "interface_parsing",
+		Kind:         model.WorkbenchArtifactInterfacePreview,
+		Label:        "界面预览",
+		Path:         previewRel,
+		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
+		Status:       "provisional",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
+}
+
+// upsertWorkbenchArtifact persists a WorkbenchArtifactRef so the orchestration
+// view can render it on its card. Nil-safe on c.Store (test runners may run
+// without a store) and on an empty ref ID (defensive: never upsert a ref that
+// was not populated). Errors are swallowed: a preview-snapshot persistence
+// failure must not fail an otherwise-successful design step after the snapshot
+// itself was already written to disk.
+func (c *ClaudeStepRunner) upsertWorkbenchArtifact(ctx context.Context, ref model.WorkbenchArtifactRef) {
+	if c.Store == nil || ref.ID == "" {
+		return
+	}
+	_ = c.Store.UpsertWorkbenchArtifactRef(ctx, ref)
 }
 
 func normalizeCreatedFiles(projectDir string, files []string) []string {

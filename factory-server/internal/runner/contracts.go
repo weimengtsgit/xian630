@@ -533,6 +533,55 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 	return StepOutput{NeedsUserInput: raw.NeedsUserInput, Questions: raw.Questions}, nil
 }
 
+// designContractOutput mirrors the design_contract step's output.json (Task 8).
+// The step is the interface-parsing collaboration producer: it analyzes the
+// confirmed requirement + scene references into a structured interface design
+// contract (view identification, layout partitioning, component mapping,
+// interaction states, responsive constraints, key copy and field presentation).
+// On success the executor derives a task-owned interface-preview snapshot from
+// DesignDocument + AssumedDataFields — the agent is explicitly forbidden from
+// writing preview files itself, so the design contract is the single source the
+// deterministic snapshot is built from.
+//
+// Schema: status (passed|needs_input), summary, needsUserInput/questions (the
+// shared clarification contract), designDocument (the structured interface
+// design — opaque to the runner, surfaced verbatim to the snapshot),
+// assumedDataFields (field names the preview depends on but data capture has
+// not yet confirmed), and the shared workLog/warnings.
+type DesignContractOutput struct {
+	Status            string        `json:"status"`
+	Summary           string        `json:"summary"`
+	NeedsUserInput    bool          `json:"needsUserInput"`
+	Questions         []Question    `json:"questions"`
+	DesignDocument    any           `json:"designDocument"`
+	AssumedDataFields []string      `json:"assumedDataFields"`
+	WorkLog           []workLogEntry `json:"workLog"`
+	Warnings          []string      `json:"warnings"`
+}
+
+// ValidateDesignContract decodes a design_contract attempt's output.json and
+// returns BOTH the executor-facing StepOutput (needsUserInput/questions for the
+// waiting-user signal) AND the decoded DesignContractOutput (so the executor
+// can build the interface-preview snapshot from designDocument +
+// assumedDataFields without re-reading the file). A needsUserInput result
+// returns early (no snapshot is built while the step is paused for
+// clarification); otherwise a non-empty Summary AND a non-nil DesignDocument
+// are required — the snapshot is meaningless without a design, so their absence
+// is a schema_validation_failed rather than a silent empty preview.
+func ValidateDesignContract(path string) (StepOutput, DesignContractOutput, error) {
+	var raw DesignContractOutput
+	if err := ReadAndDecode(path, &raw); err != nil {
+		return StepOutput{}, raw, err
+	}
+	if raw.NeedsUserInput {
+		return StepOutput{NeedsUserInput: true, Questions: raw.Questions}, raw, nil
+	}
+	if strings.TrimSpace(raw.Summary) == "" || raw.DesignDocument == nil {
+		return StepOutput{}, raw, fmt.Errorf("design summary and designDocument required: %w", ErrSchemaValidationFailed)
+	}
+	return StepOutput{}, raw, nil
+}
+
 // codeGenerationOutput mirrors design §5.3.
 //
 // Task 6: the step must report which project-local skills it loaded+followed

@@ -368,3 +368,23 @@ CREATE INDEX IF NOT EXISTS idx_dialogue_attachment_refs_dialogue
 ON dialogue_attachment_refs(dialogue_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_dialogue_attachment_refs_message
 ON dialogue_attachment_refs(message_id, created_at);
+
+CREATE TABLE IF NOT EXISTS workbench_artifact_refs (
+    id            TEXT    PRIMARY KEY,
+    dialogue_id   TEXT    NOT NULL DEFAULT '',
+    job_id        TEXT    NOT NULL DEFAULT '',
+    step_id       TEXT    NOT NULL DEFAULT '',
+    card_key      TEXT    NOT NULL DEFAULT '',
+    kind          TEXT    NOT NULL,
+    label         TEXT    NOT NULL DEFAULT '',
+    path          TEXT    NOT NULL DEFAULT '',
+    preview_url   TEXT    NOT NULL DEFAULT '',
+    snapshot_hash TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL DEFAULT 'active',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_artifact_refs_dialogue
+ON workbench_artifact_refs(dialogue_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_workbench_artifact_refs_job
+ON workbench_artifact_refs(job_id, created_at);
