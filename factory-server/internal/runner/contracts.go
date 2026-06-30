@@ -675,9 +675,18 @@ type DataContract struct {
 //     A fallback boundary crossing the agent cannot resolve on its own must be
 //     surfaced as a clarification, not a silent default — an empty questions
 //     array on a needs-input result is ErrSchemaValidationFailed.
-//   - sourceBoundary:"demo" with a non-empty fallbackHistory is REJECTED. Demo
-//     data requires an explicit user-confirmed trace; silently landing on demo
-//     after ontology+internet failed is forbidden.
+//   - sourceBoundary:"demo" is a legitimate terminal boundary, including the
+//     stepwise degradation path (ontology fails -> user confirms internet ->
+//     internet fails -> user confirms demo), which produces a passed demo
+//     result with a NON-empty fallbackHistory. That history IS the audit
+//     trace of the user-confirmed degradation and must NOT be rejected.
+//     "No silent degradation" (decision #30) is enforced procedurally — the
+//     dataIntegrationPrompt requires needsUserInput before each boundary
+//     crossing and the executor pauses on it — not by this stateless
+//     validator, which cannot distinguish a confirmed degradation from a
+//     silent one at the output layer. Rejecting demo+history here would
+//     block the spec's intended success path AND incentivize dropping the
+//     audit trail.
 //   - A passed result MUST carry a non-empty dataContract.fields. An empty
 //     contract on success is meaningless downstream, so it hard-fails rather
 //     than producing an empty artifact.
@@ -697,9 +706,6 @@ func ValidateDataIntegration(path string) (StepOutput, DataIntegrationOutput, er
 			return StepOutput{}, raw, fmt.Errorf("questions required for data fallback: %w", ErrSchemaValidationFailed)
 		}
 		return StepOutput{NeedsUserInput: true, Questions: raw.Questions}, raw, nil
-	}
-	if raw.SourceBoundary == "demo" && len(raw.FallbackHistory) > 0 {
-		return StepOutput{}, raw, fmt.Errorf("demo data fallback requires explicit user confirmation trace: %w", ErrSchemaValidationFailed)
 	}
 	if len(raw.DataContract.Fields) == 0 {
 		return StepOutput{}, raw, fmt.Errorf("data contract fields required: %w", ErrSchemaValidationFailed)

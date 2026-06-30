@@ -586,19 +586,19 @@ func TestValidateDataIntegrationRequiresStepwiseFallbackQuestion(t *testing.T) {
 	}
 }
 
-// TestValidateDataIntegrationRejectsSilentDemoFallback locks decision #31
-// (no silent degradation): a passed result whose sourceBoundary is "demo" but
-// which carries a non-empty fallbackHistory is REJECTED with
-// ErrSchemaValidationFailed. Demo data requires an explicit user-confirmed
-// trace — silently falling back to demo after ontology+internet failed is a
-// data-honesty violation the pipeline must hard-fail, not pause.
-func TestValidateDataIntegrationRejectsSilentDemoFallback(t *testing.T) {
+// TestValidateDataIntegrationAcceptsConfirmedDemoFallback locks decision #30:
+// the legitimate stepwise-degradation SUCCESS path produces a passed result
+// whose sourceBoundary is "demo" with a non-empty fallbackHistory (ontology
+// failed -> user confirmed internet -> internet failed -> user confirmed
+// demo). That history is the audit trace of the user-confirmed degradation,
+// so the validator must ACCEPT it. No-silent-degradation is enforced by the
+// prompt + executor needsUserInput flow, not here.
+func TestValidateDataIntegrationAcceptsConfirmedDemoFallback(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "output.json")
 	raw := `{"status":"passed","summary":"使用演示数据","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":["ontology_failed","internet_failed"]}`
-	_, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw))
-	if !errors.Is(err, ErrSchemaValidationFailed) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	if _, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw)); err != nil {
+		t.Fatalf("confirmed demo fallback must be accepted: %v", err)
 	}
 }
 
