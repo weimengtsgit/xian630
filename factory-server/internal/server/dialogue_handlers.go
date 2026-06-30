@@ -45,7 +45,8 @@ type createDialogueBody struct {
 }
 
 type addDialogueMessageBody struct {
-	Content string `json:"content"`
+	Content       string   `json:"content"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
 }
 
 type selectDialogueRouteBody struct {
@@ -1024,6 +1025,18 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add message")
 		return
 	}
+	// Link any attachments the user pinned to this message. Each attachmentID
+	// is validated against GetDialogueAttachment and rejected (400) if it is
+	// missing or not active — only the attachment id + focus key are persisted
+	// on the ref, never file content or credentials. Runs on both the
+	// continuing-session and pre-route paths so a ref is always tied to the
+	// user message that carried it.
+	if len(body.AttachmentIDs) > 0 {
+		if err := s.createDialogueAttachmentRefs(ctx, id, msg.ID, body.AttachmentIDs, s.currentWorkbenchFocusKey(ctx, id)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid attachment reference")
+			return
+		}
+	}
 
 	// Continuing session: async turn contract (202). Route is already
 	// established, so this message is a follow-up turn, not a re-route.
@@ -1067,6 +1080,61 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		"acceptedAt": now.UTC().Format(time.RFC3339),
 		"view":       view,
 	})
+}
+
+// createDialogueAttachmentRefs links the supplied attachment ids to a user
+// message as active DialogueAttachmentRef rows. Each id is validated against the
+// stored attachment for this dialogue: a missing attachment or one that is not
+// AttachmentStatusActive yields an error (surfaced as 400 by the caller). Only
+// the attachment id + the current focus key are persisted — never file content
+// or credentials. Duplicate ids within the same call are de-duplicated.
+func (s *Server) createDialogueAttachmentRefs(ctx context.Context, dialogueID, messageID string, attachmentIDs []string, focusKey string) error {
+	now := time.Now()
+	seen := map[string]bool{}
+	for _, attachmentID := range attachmentIDs {
+		attachmentID = strings.TrimSpace(attachmentID)
+		if attachmentID == "" || seen[attachmentID] {
+			continue
+		}
+		seen[attachmentID] = true
+		att, err := s.store.GetDialogueAttachment(ctx, dialogueID, attachmentID)
+		if err != nil {
+			return err
+		}
+		if att == nil || att.Status != model.AttachmentStatusActive {
+			return fmt.Errorf("attachment %s unavailable", attachmentID)
+		}
+		ref := model.DialogueAttachmentRef{
+			ID: "aref_" + idpkg.New(), DialogueID: dialogueID, MessageID: messageID,
+			AttachmentID: attachmentID, FocusKey: focusKey, Active: true, CreatedAt: now,
+		}
+		if err := s.store.CreateDialogueAttachmentRef(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// currentWorkbenchFocusKey projects the dialogue's most recent job's current
+// step kind onto the workbench focus key the aggregate orchestration view uses
+// (business_logic / interface_parsing / data_capture / production_delivery).
+// Any error or empty job list defaults to the business-logic focus.
+func (s *Server) currentWorkbenchFocusKey(ctx context.Context, dialogueID string) string {
+	jobs, err := s.store.ListJobsByDialogue(ctx, dialogueID)
+	if err != nil || len(jobs) == 0 {
+		return "business_logic"
+	}
+	job := jobs[len(jobs)-1]
+	switch job.CurrentStepKind {
+	case model.StepDesignContract:
+		return "interface_parsing"
+	case model.StepDataIntegration:
+		return "data_capture"
+	case model.StepSolutionDesign, model.StepCodeGeneration, model.StepCodeReview, model.StepSecurityReview, model.StepTestVerification, model.StepProductAcceptance, model.StepImageBuild, model.StepDeployment:
+		return "production_delivery"
+	default:
+		return "business_logic"
+	}
 }
 
 // cancelDialogueTurn handles POST /api/dialogues/:id/turns/:turnId/cancel. It

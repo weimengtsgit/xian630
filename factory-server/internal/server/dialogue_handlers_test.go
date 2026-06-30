@@ -3364,3 +3364,32 @@ func TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus(t *testing.T
 		})
 	}
 }
+
+func TestDialogueMessageCreatesAttachmentReferences(t *testing.T) {
+	srv, router, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	_ = srv.store.CreateDialogueSession(ctx, model.DialogueSession{ID: "dlg_att", Status: model.DialogueStatusActive, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true})
+	att := model.DialogueAttachment{
+		ID: "att_msg", DialogueID: "dlg_att", FocusKey: "business_logic", OriginalName: "req.md",
+		StoredPath: "dialogue-attachments/dlg_att/att_msg/req.md", Mime: "text/markdown", Extension: ".md",
+		SizeBytes: 12, SHA256: "sha256:1", PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: time.Now(),
+	}
+	if err := srv.store.CreateDialogueAttachment(ctx, att); err != nil {
+		t.Fatalf("CreateDialogueAttachment: %v", err)
+	}
+	body := strings.NewReader(`{"content":"补充需求","attachmentIds":["att_msg"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues/dlg_att/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, "dlg_att")
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 || refs[0].AttachmentID != "att_msg" || refs[0].MessageID == "" {
+		t.Fatalf("refs = %#v", refs)
+	}
+}

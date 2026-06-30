@@ -83,4 +83,15 @@ const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.
 assert.equal(css.includes('@media (prefers-reduced-motion: reduce)'), true, 'pulse motion must respect reduced motion')
 assert.equal(css.includes('position: sticky'), true, 'graph must support fixed-in-workbench placement')
 
+// ---- Task 4: attachment composer + message send-path ----------------------
+const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
+assert.equal(clientSource.includes('uploadDialogueAttachment'), true, 'client must expose uploadDialogueAttachment')
+assert.equal(clientSource.includes('attachmentIds'), true, 'message send must carry attachmentIds')
+const composerSource = readFileSync(new URL('../src/components/AttachmentComposer.jsx', import.meta.url), 'utf8')
+assert.equal(composerSource.includes('X'), true, 'pending attachment chips must expose a remove icon')
+assert.equal(composerSource.includes('input type="file"'), true, 'composer must include file input')
+const appSource = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+assert.equal(appSource.includes('onSend={(prompt, options = {})'), true, 'App must preserve onSend options')
+assert.equal(appSource.includes('dialogue.send(prompt, options)'), true, 'App must pass attachment options into dialogue.send')
+
 console.log('check-workbench-orchestration-adjustment: ok')

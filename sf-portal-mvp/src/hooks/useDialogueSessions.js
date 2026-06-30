@@ -260,7 +260,7 @@ export function useDialogueSessions() {
   // the backend returns a 202 ack {dialogueId, turnId, acceptedAt} instead of a
   // composed view — we surface it as a pending turn and let the trace stream
   // drive the follow-up refresh.
-  const send = useCallback(async content => {
+  const send = useCallback(async (content, options = {}) => {
     const prompt = String(content || '').trim()
     if (!prompt || submitting) return null
     setSubmitting(true)
@@ -290,7 +290,7 @@ export function useDialogueSessions() {
         pendingNewDialogueRef.current = true
         view = await factoryApi.createDialogue({ initialPrompt: prompt })
       } else {
-        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
+        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt, { attachmentIds: options.attachmentIds })
         // 202 ack (continuing session): result carries {dialogueId, turnId, acceptedAt}
         // and NO composed view. 200 path: result IS the composed view (has .session).
         if (result && result.session) {

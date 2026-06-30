@@ -379,3 +379,31 @@
 .cw-raw-thinking pre { margin-top: 6px !important; }
 .cw-raw-thinking-stream { max-height: 200px; overflow-y: auto; border: 1px solid rgba(111, 218, 255, 0.12); border-radius: 4px; padding: 6px 8px; background: rgba(0, 0, 0, 0.2); }
 .cw-raw-thinking-stream pre { margin: 0 !important; }
+
+/* ---- Task 4: attachment composer + preview modal ------------------------- */
+.cw-attachments { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.cw-attach-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; color: #d7eef8; cursor: pointer; }
+.cw-attach-btn input { display: none; }
+.cw-attach-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 210px; padding: 4px 6px; border: 1px solid rgba(111, 218, 255, 0.22); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; font-size: 11px; }
+.cw-attach-chip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-attach-name { cursor: pointer; }
+.cw-attach-name:hover { color: #68ddff; }
+.cw-attach-chip button { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: rgba(215, 238, 248, 0.7); cursor: pointer; }
+.cw-attach-uploading { color: rgba(104, 221, 255, 0.72); font-size: 11px; }
+/* preview modal overlay (gap-fill component; no backend /content route ships
+   in this task, so text/pdf bodies degrade to metadata + note) */
+.cw-preview-modal-layer { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.62); }
+.cw-preview-modal { width: min(720px, 92vw); max-height: 86vh; display: flex; flex-direction: column; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 10px; background: #03111d; color: #d7eef8; overflow: hidden; }
+.cw-preview-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(111, 218, 255, 0.18); }
+.cw-preview-modal-title { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+.cw-preview-modal-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-preview-modal-close { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: rgba(215, 238, 248, 0.7); cursor: pointer; border-radius: 6px; }
+.cw-preview-modal-close:hover { background: rgba(111, 218, 255, 0.12); color: #d7eef8; }
+.cw-preview-modal-body { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.cw-preview-image { max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 6px; align-self: center; }
+.cw-preview-text { margin: 0; padding: 10px 12px; max-height: 56vh; overflow: auto; border: 1px solid rgba(111, 218, 255, 0.16); border-radius: 6px; background: rgba(0, 0, 0, 0.25); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.cw-preview-pdf { width: 100%; height: 56vh; border: 1px solid rgba(111, 218, 255, 0.16); border-radius: 6px; background: #fff; }
+.cw-preview-note { margin: 0; font-size: 12px; color: rgba(215, 238, 248, 0.72); }
+.cw-preview-meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; padding: 10px 12px; border: 1px solid rgba(111, 218, 255, 0.14); border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-size: 11px; }
+.cw-preview-meta dt { color: rgba(215, 238, 248, 0.6); }
+.cw-preview-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

@@ -26,6 +26,9 @@ import {
 } from 'lucide-react'
 import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
 import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
+import { AttachmentComposer } from './AttachmentComposer'
+import { AttachmentPreviewModal } from './AttachmentPreviewModal'
+import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
@@ -174,6 +177,15 @@ export function ConversationWorkbench({
     jobStepBlocks: traceSteps,
   }), [view, traceItems, traceSteps])
 
+  // Session attachments (Task 4): pending composer attachments for the current
+  // message. focusKey mirrors the aggregate graph's active card so uploaded
+  // files are tagged with the workbench region the user is working in.
+  const attachmentState = useSessionAttachments({
+    dialogueId: session && session.id,
+    focusKey: aggregateGraph.activeCardKey || 'business_logic',
+  })
+  const [previewAttachment, setPreviewAttachment] = useState(null)
+
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -183,7 +195,8 @@ export function ConversationWorkbench({
     const value = input.trim()
     if (!value || submitting || (locked && !composerActive)) return
     setInput('')
-    await onSend(value)
+    await onSend(value, { attachmentIds: attachmentState.attachmentIds, pendingAttachments: attachmentState.pending })
+    attachmentState.clearPending()
   }
 
   const submitAnswers = async () => {
@@ -434,6 +447,13 @@ export function ConversationWorkbench({
                 正在回复任务内澄清{clarificationScopeLabel ? `：${clarificationScopeLabel}` : ''}。请先回答该问题。
               </div>
             ) : null}
+            <AttachmentComposer
+              items={attachmentState.pending}
+              uploading={attachmentState.uploading}
+              onAddFiles={attachmentState.addFiles}
+              onRemove={attachmentState.removePending}
+              onOpen={setPreviewAttachment}
+            />
             <div className="cw-composer-row">
               <textarea
                 ref={textareaRef}
@@ -450,6 +470,10 @@ export function ConversationWorkbench({
           </>
         )}
       </footer>
+
+      {previewAttachment ? (
+        <AttachmentPreviewModal attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />
+      ) : null}
 
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>

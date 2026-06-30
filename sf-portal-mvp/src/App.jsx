@@ -221,17 +221,18 @@ function App() {
               onOpenTaskStep={openTaskStepFromGraph}
               onConfirmTaskStep={jobs.confirmStep}
               hasBoundApplication={hasBoundApplication}
-              onSend={prompt => {
+              onSend={(prompt, options = {}) => {
                 if (activeClarification) {
                   return jobs.answerJob(activeClarification.taskId, prompt, {
                     stepId: activeClarification.stepId,
                     attempt: activeClarification.attempt,
+                    attachmentIds: options.attachmentIds || [],
                   })
                 }
                 if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
-                  return jobs.answerJob(dialogue.focusTask.id, prompt)
+                  return jobs.answerJob(dialogue.focusTask.id, prompt, { attachmentIds: options.attachmentIds || [] })
                 }
-                return dialogue.send(prompt)
+                return dialogue.send(prompt, options)
               }}
               onSelectRoute={dialogue.selectRoute}
               onOpenApp={dialogue.openApp}

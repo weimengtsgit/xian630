@@ -59,6 +59,26 @@ async function requestWithStatus(path, options = {}) {
   return { status: response.status, body }
 }
 
+// requestMultipart POSTs a FormData body (multipart/form-data) WITHOUT a
+// JSON content-type header — the browser sets the multipart boundary. Used for
+// attachment uploads. Errors share the SAME typed-error shape as `request`.
+async function requestMultipart(path, formData) {
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', body: formData })
+  if (!response.ok) {
+    const body = await response.text()
+    const err = new Error(`${response.status} ${body}`)
+    err.status = response.status
+    err.bodyText = body
+    try {
+      err.data = JSON.parse(body)
+    } catch {
+      err.data = null
+    }
+    throw err
+  }
+  return response.json()
+}
+
 // requestText mirrors `request` but resolves the body as TEXT (used for
 // artifact content, which the backend serves as plain text). On failure it
 // produces the SAME typed-error shape as `request` (status / message / bodyText
@@ -172,10 +192,11 @@ export const factoryApi = {
   // A locked session still 409s and surfaces via the typed error (preserved).
   // The hook inspects `.status` to decide whether to poll the trace stream
   // (202) or apply the returned view immediately (200).
-  async sendDialogueMessage(id, content) {
+  async sendDialogueMessage(id, content, options = {}) {
+    const attachmentIds = Array.isArray(options.attachmentIds) ? options.attachmentIds : []
     const { status, body } = await requestWithStatus(
       `/api/dialogues/${id}/messages`,
-      { method: 'POST', body: JSON.stringify({ content }) },
+      { method: 'POST', body: JSON.stringify({ content, attachmentIds }) },
     )
     if (status === 202) {
       if (body && body.view) return body.view
@@ -186,6 +207,22 @@ export const factoryApi = {
     }
     // 200: the composed view. Keep returning the view for the existing flow.
     return body
+  },
+  // uploadDialogueAttachment POSTs a multipart/form-data file to the dialogue
+  // attachment store. The backend writes the file under the artifact root,
+  // persists metadata to dialogue_attachments, and rejects credential-like
+  // payloads (400). Returns { attachment: {...} }.
+  uploadDialogueAttachment(id, { file, focusKey }) {
+    const form = new FormData()
+    form.append('file', file)
+    if (focusKey) form.append('focusKey', focusKey)
+    return requestMultipart(`/api/dialogues/${id}/attachments`, form)
+  },
+  // getDialogueAttachmentContent fetches the text preview body of a stored
+  // attachment (markdown/text/json/csv). The backend serves it as plain text;
+  // used by the attachment preview modal. May 404 if no preview body exists.
+  getDialogueAttachmentContent(id, attachmentId) {
+    return requestText(`/api/dialogues/${id}/attachments/${attachmentId}/content`)
   },
   // cancelDialogueTurn cancels the currently-processing turn of a continuing
   // session. Returns the cancel status (202 accepted / 200 already-terminal).
