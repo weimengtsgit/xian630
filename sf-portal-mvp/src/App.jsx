@@ -35,6 +35,7 @@ function App() {
   const [sessionNavCollapsed, setSessionNavCollapsed] = useState(false)
   const [drawerEntry, setDrawerEntry] = useState(null)
   const [currentPage, setCurrentPage] = useState('workbench')
+  const [taskStepOpenRequest, setTaskStepOpenRequest] = useState(null)
   const workbenchClass = [
     'workbench',
     sessionNavCollapsed ? 'session-nav-collapsed' : '',
@@ -159,11 +160,14 @@ function App() {
       (step && (step.attempt ?? step.latest_attempt)) ??
       (card.step && (card.step.attempt ?? card.step.latest_attempt)) ??
       1
+    const taskId = (step && (step.job_id || step.jobId)) || (card.step && (card.step.job_id || card.step.jobId)) || ''
+    if (taskId) setSelectedTaskId(taskId)
     setDrawerEntry('task')
     jobs.selectStepAttempt(stepId, attempt)
+    setTaskStepOpenRequest({ stepId, attempt, requestedAt: Date.now() })
   }, [jobs.summary, jobs.steps, jobs.selectStepAttempt])
 
-  // The 应用项目 entry is disabled until the current dialogue has a concrete
+  // The 工作空间 entry is disabled until the current dialogue has a concrete
   // generated application id. A seeded job alone can exist before code_generation
   // has registered the project, so it is not enough to enable the drawer.
   const view = dialogue.view
@@ -215,6 +219,7 @@ function App() {
               drawerEntry={drawerEntry}
               onToggleDrawerEntry={toggleDrawerEntry}
               onOpenTaskStep={openTaskStepFromGraph}
+              onConfirmTaskStep={jobs.confirmStep}
               hasBoundApplication={hasBoundApplication}
               onSend={prompt => {
                 if (activeClarification) {
@@ -273,6 +278,7 @@ function App() {
               selectedStepId: jobs.selectedStepId,
               selectedAttempt: jobs.selectedAttempt,
               selectStepAttempt: jobs.selectStepAttempt,
+              stepOpenRequest: taskStepOpenRequest,
               getRecords: jobs.getRecords,
               getUnreadCount: jobs.getUnreadCount,
               loadStepRecords: jobs.loadStepRecords,

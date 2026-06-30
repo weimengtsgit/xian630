@@ -385,6 +385,13 @@
   color: #ffc878;
 }
 .clar-abandon {
-  border-color: rgba(255, 120, 120, 0.4);
+  border-color: rgba(255, 120, 120, 0.22);
+  background: transparent;
+  color: rgba(255, 154, 154, 0.72);
+  font-size: 11px;
+}
+.clar-abandon:hover:not(:disabled) {
+  border-color: rgba(255, 120, 120, 0.42);
+  background: rgba(60, 24, 30, 0.26);
   color: #ff9a9a;
 }

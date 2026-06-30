@@ -291,6 +291,20 @@ export function useJobs() {
     [refresh],
   )
 
+  const confirmStep = useCallback(
+    async (jobId, stepId, attempt) => {
+      setError(null)
+      try {
+        await factoryApi.confirmJobStep(jobId, stepId, attempt)
+        await refresh()
+      } catch (err) {
+        setError(err.message || String(err))
+        throw err
+      }
+    },
+    [refresh],
+  )
+
   // -------------------------------------------------------------------------
   // SSE subscription: merge step.record.appended by id, track envelope seq for
   // gap detection, and schedule a debounced resync on gap / error / visibility.
@@ -396,6 +410,7 @@ export function useJobs() {
     createJob,
     cancelJob,
     answerJob,
+    confirmStep,
     retryCurrentStep,
     repairFromFailure,
     // New (Task 5):

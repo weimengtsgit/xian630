@@ -1,11 +1,11 @@
 // Phase 1 (workbench-drawer migration) regression check for the new right-side
 // 工作台抽屉 layout. The brief requires a dedicated check script that pins:
-//   - the 3 mutually-exclusive header buttons (任务执行 / 协作智能体 / 应用项目)
+//   - the 3 mutually-exclusive header buttons (任务执行 / 协作智能体 / 工作空间)
 //   - the WorkbenchDrawer overlay host rendering the active entry's content
 //   - the toggle mutual-exclusivity (clicking the active entry closes the
 //     drawer; clicking a different one switches to it)
-//   - 应用项目 disabled until the dialogue has a bound application
-//   - 任务执行 keeps a presence badge while a focus task exists
+//   - 工作空间 disabled until the dialogue has a bound application
+//   - 任务执行 keeps a status badge that reflects the current focus task state
 //
 // Runs under node with NO React import. It exercises the toggle reducer as a
 // pure function (mirrored from App.jsx) and asserts static source invariants.
@@ -17,6 +17,7 @@ const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkben
 const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
 const drawerJsx = readFileSync(new URL('../src/components/WorkbenchDrawer.jsx', import.meta.url), 'utf8')
 const drawerCss = readFileSync(new URL('../src/components/WorkbenchDrawer.css', import.meta.url), 'utf8')
+const jobCenterJsx = readFileSync(new URL('../src/components/JobCenter.jsx', import.meta.url), 'utf8')
 
 // ---- the 3 header buttons exist + are mutually exclusive --------------------
 
@@ -28,27 +29,38 @@ assert.match(appJsx, /setDrawerEntry\(prev => \(prev === entry \? null : entry\)
 // ConversationWorkbench renders the 3 buttons, each bound to its entry key.
 assert.match(workbenchJsx, /drawerEntry === 'task' \? ' is-active' : ''/, 'the 任务执行 button must highlight when it is the active entry')
 assert.match(workbenchJsx, /drawerEntry === 'agents' \? ' is-active' : ''/, 'the 协作智能体 button must highlight when it is the active entry')
-assert.match(workbenchJsx, /drawerEntry === 'application' \? ' is-active' : ''/, 'the 应用项目 button must highlight when it is the active entry')
+assert.match(workbenchJsx, /drawerEntry === 'application' \? ' is-active' : ''/, 'the 工作空间 button must highlight when it is the active entry')
 assert.match(workbenchJsx, /onToggleDrawerEntry\('task'\)/, 'the 任务执行 button must toggle the task entry')
 assert.match(workbenchJsx, /onToggleDrawerEntry\('agents'\)/, 'the 协作智能体 button must toggle the agents entry')
-assert.match(workbenchJsx, /onToggleDrawerEntry\('application'\)/, 'the 应用项目 button must toggle the application entry')
+assert.match(workbenchJsx, /onToggleDrawerEntry\('application'\)/, 'the 工作空间 button must toggle the application entry')
+assert.match(workbenchJsx, /aria-label="工作空间"/, 'the application drawer button should be labelled 工作空间')
+assert.match(workbenchJsx, /cw-drawer-btn-label">工作空间</, 'the application drawer button should display 工作空间')
+assert.doesNotMatch(workbenchJsx, /aria-label="应用项目"|cw-drawer-btn-label">应用项目</, 'the old 应用项目 button copy should not remain visible')
 // Active buttons are reachable as a styled group + share a class.
 assert.match(workbenchJsx, /cw-drawer-btn/, 'each header button must use the cw-drawer-btn class')
 assert.match(workbenchCss, /\.cw-drawer-btn\.is-active|\.is-active[\s\S]*cw-drawer-btn|cw-drawer-btn\.is-active/, 'the active drawer button must have a highlighted style')
 
-// ---- 应用项目 disabled gate -------------------------------------------------
+// ---- 工作空间 disabled gate -------------------------------------------------
 
 // The button is disabled when the composed view has no bound application.
-assert.match(workbenchJsx, /disabled=\{!hasBoundApplication\}/, 'the 应用项目 button must be disabled when no application is bound')
+assert.match(workbenchJsx, /disabled=\{!hasBoundApplication\}/, 'the 工作空间 button must be disabled when no application is bound')
 assert.match(appJsx, /hasBoundApplication/, 'App must derive a hasBoundApplication flag')
 assert.match(appJsx, /hasBoundApplication\s*=\s*!!applicationProjectId/, 'hasBoundApplication must require a concrete application project id')
 
 // ---- 任务执行 presence badge ------------------------------------------------
 
-// 任务执行 keeps a presence indicator while a focus task exists, even when
-// another entry is open (full agent-chip strip is Phase 2).
-assert.match(workbenchJsx, /focusTask \? <span className="cw-drawer-badge"/, 'the 任务执行 button must render a presence-dot badge while a focus task exists')
-assert.match(workbenchCss, /\.cw-drawer-badge/, 'the presence-dot badge must have a dedicated style')
+// 任务执行 keeps a state indicator while a focus task exists, even when another
+// entry is open. The badge must reflect status instead of staying green.
+assert.match(workbenchJsx, /taskDrawerBadgeInfo\(focusTask\)/, 'the 任务执行 button must derive badge metadata from the focus task status')
+assert.match(workbenchJsx, /taskBadge \? <span[\s\S]*cw-drawer-badge-state-\$\{taskBadge\.state\}/, 'the 任务执行 button must render a state-specific badge class')
+assert.match(workbenchJsx, /aria-label=\{`任务执行：\$\{taskBadge\.label\}`\}/, 'the 任务执行 badge must expose its status label to assistive tech')
+assert.match(workbenchJsx, /title=\{taskBadge \? `任务执行：\$\{taskBadge\.label\}` : '任务执行'\}/, 'the 任务执行 button title must include the task status')
+assert.doesNotMatch(workbenchJsx, /focusTask \? <span className="cw-drawer-badge"/, 'the old always-green focusTask badge must not remain')
+for (const cls of ['waiting-user', 'running', 'queued', 'failed', 'completed', 'canceled']) {
+  assert.match(workbenchCss, new RegExp(`\\.cw-drawer-badge-state-${cls}`), `the task badge must style ${cls} state`)
+}
+assert.match(workbenchCss, /@keyframes cwTaskBadgePulse/, 'waiting/running task badges should have a pulse animation')
+assert.match(workbenchCss, /@keyframes cwTaskBadgeQueue/, 'queued task badges should have a queue animation')
 
 // ---- WorkbenchDrawer host renders the active entry --------------------------
 
@@ -102,6 +114,10 @@ assert.match(workbenchJsx, /onOpenTaskStep/, 'ConversationWorkbench should pass 
 assert.doesNotMatch(workbenchJsx, /onToggleDrawerEntry && onToggleDrawerEntry\('task'\)/, 'graph card click must not only toggle the task drawer without selecting a step')
 assert.match(appJsx, /openTaskStepFromGraph/, 'App should own graph-card task-step navigation')
 assert.match(appJsx, /setDrawerEntry\('task'\)[\s\S]*jobs\.selectStepAttempt\(stepId,\s*attempt\)/, 'graph-card navigation should open task drawer and select the real step attempt')
+assert.match(appJsx, /setTaskStepOpenRequest\(\{ stepId,\s*attempt,\s*requestedAt:/, 'graph-card navigation should request direct entry into the selected task step detail')
+assert.match(appJsx, /stepOpenRequest:\s*taskStepOpenRequest/, 'App should pass graph-card detail-open requests into JobCenter task props')
+assert.match(jobCenterJsx, /stepOpenRequest/, 'JobCenter should accept graph-card detail-open requests')
+assert.match(jobCenterJsx, /setTaskView\('detail'\)[\s\S]*setDrawerOpen\(true\)/, 'graph-card detail-open requests should enter the task step detail instead of only highlighting the card')
 assert.match(graphJsx, /relatedCardKeys/, 'graph component should compute related upstream and downstream cards for hover focus')
 assert.match(graphJsx, /onOpenTask\(card\)/, 'graph component should call onOpenTask with the clicked card')
 assert.match(graphJsx, /aria-disabled=\{!canOpenTask && card\.kind !== 'origin'\}/, 'pre-confirmation non-origin cards should remain hoverable while not opening task details')

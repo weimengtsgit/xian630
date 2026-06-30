@@ -8,7 +8,7 @@
 .workbench-drawer {
   position: absolute;
   /* Start BELOW the center header so the overlay does NOT cover the 3 drawer
-   * buttons (任务执行 / 协作智能体 / 应用项目). The center header is ~54px tall
+   * buttons (任务执行 / 协作智能体 / 工作空间). The center header is ~54px tall
    * (workbench has 14px top padding), so ~74px clears it — keeping the buttons
    * clickable so the user can close-on-reclick and switch entries while the
    * drawer is open (mutual-exclusivity contract). */

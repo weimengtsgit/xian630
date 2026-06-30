@@ -16,6 +16,7 @@ import {
   HelpCircle,
   Loader2,
   MessageSquare,
+  MoreHorizontal,
   PlayCircle,
   RefreshCw,
   RotateCcw,
@@ -58,6 +59,7 @@ export function ConversationWorkbench({
   drawerEntry,
   onToggleDrawerEntry,
   onOpenTaskStep,
+  onConfirmTaskStep,
   hasBoundApplication,
   onCancelTurn,
   onConfirmChange,
@@ -67,7 +69,20 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
+  const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
   const textareaRef = useRef(null)
+  const requestAbandonRequirement = () => {
+    if (!onAbandon || submitting) return
+    setMoreMenuOpen(false)
+    setAbandonConfirmOpen(true)
+  }
+  const confirmAbandonRequirement = () => {
+    if (!onAbandon || submitting) return
+    setAbandonConfirmOpen(false)
+    onAbandon()
+  }
   // Auto-grow the composer textarea with its content (capped by the CSS
   // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
   const resizeTextarea = () => {
@@ -77,6 +92,19 @@ export function ConversationWorkbench({
     el.style.height = `${el.scrollHeight}px`
   }
   useEffect(resizeTextarea, [input])
+  useEffect(() => {
+    if (!moreMenuOpen && !abandonConfirmOpen) return undefined
+    const onKeyDown = event => {
+      if (event.key !== 'Escape') return
+      setMoreMenuOpen(false)
+      setAbandonConfirmOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [moreMenuOpen, abandonConfirmOpen])
+  useEffect(() => {
+    setManualStepConfirmation(false)
+  }, [session && session.id])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
@@ -133,6 +161,7 @@ export function ConversationWorkbench({
       .filter(Boolean)
       .join(' / ')
     : ''
+  const taskBadge = taskDrawerBadgeInfo(focusTask)
 
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
@@ -166,20 +195,19 @@ export function ConversationWorkbench({
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
           {/* Phase 1: the 3 top-right drawer-entry buttons. Mutually exclusive —
-              clicking the active one closes the drawer; 应用项目 is disabled until
-              the current dialogue has a bound application project. 任务执行 keeps a
-              presence-dot badge while a focus task exists, even when another entry
-              is open (full agent-chip strip is later). */}
+              clicking the active one closes the drawer; 工作空间 is disabled until
+              the current dialogue has a bound generated application. 任务执行 keeps a
+              state badge while a focus task exists, even when another entry is open. */}
           <button
             type="button"
             className={`cw-drawer-btn${drawerEntry === 'task' ? ' is-active' : ''}`}
             onClick={() => onToggleDrawerEntry('task')}
-            title="任务执行"
+            title={taskBadge ? `任务执行：${taskBadge.label}` : '任务执行'}
             aria-label="任务执行"
             aria-pressed={drawerEntry === 'task'}
           >
             <span className="cw-drawer-btn-label">任务执行</span>
-            {focusTask ? <span className="cw-drawer-badge" aria-label="有进行中的任务" /> : null}
+            {taskBadge ? <span className={`cw-drawer-badge cw-drawer-badge-state-${taskBadge.state}`} aria-label={`任务执行：${taskBadge.label}`} /> : null}
           </button>
           <button
             type="button"
@@ -195,12 +223,12 @@ export function ConversationWorkbench({
             type="button"
             className={`cw-drawer-btn${drawerEntry === 'application' ? ' is-active' : ''}`}
             onClick={() => onToggleDrawerEntry('application')}
-            title={hasBoundApplication ? '应用项目' : '当前会话未绑定应用项目'}
-            aria-label="应用项目"
+            title={hasBoundApplication ? '工作空间' : '当前会话未绑定工作空间'}
+            aria-label="工作空间"
             aria-pressed={drawerEntry === 'application'}
             disabled={!hasBoundApplication}
           >
-            <span className="cw-drawer-btn-label">应用项目</span>
+            <span className="cw-drawer-btn-label">工作空间</span>
           </button>
           <button
             type="button"
@@ -211,8 +239,39 @@ export function ConversationWorkbench({
           >
             <span className="cw-drawer-btn-label">应用商店</span>
           </button>
+          {canAbandon ? (
+            <div className="cw-more">
+              <button
+                type="button"
+                className="cw-more-btn"
+                onClick={() => setMoreMenuOpen(open => !open)}
+                title="更多操作"
+                aria-label="更多操作"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                disabled={submitting}
+              >
+                <MoreHorizontal size={16} />
+              </button>
+              {moreMenuOpen ? (
+                <div className="cw-more-menu" role="menu">
+                  <button
+                    type="button"
+                    className="cw-more-danger"
+                    role="menuitem"
+                    onClick={requestAbandonRequirement}
+                    disabled={submitting}
+                  >
+                    放弃本次需求
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </header>
+
+      {moreMenuOpen ? <button type="button" className="cw-menu-backdrop" aria-label="关闭更多操作" onClick={() => setMoreMenuOpen(false)} /> : null}
 
       {/* Phase 1: the inline focus-task panel has been REMOVED from the center.
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
@@ -236,6 +295,9 @@ export function ConversationWorkbench({
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
             onOpenTaskStep={onOpenTaskStep}
+            onConfirmTaskStep={onConfirmTaskStep}
+            manualStepConfirmation={manualStepConfirmation}
+            onToggleManualStepConfirmation={setManualStepConfirmation}
             onPickClarification={(scope, value) => {
               if (!value) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
@@ -321,7 +383,12 @@ export function ConversationWorkbench({
 
       {canConfirm ? (
         <div className="cw-answer-bar">
-          <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => onConfirm && onConfirm({ executionPolicy: { manualStepConfirmation: !isBusiness && manualStepConfirmation } })}
+            disabled={submitting}
+          >
             {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
           </button>
         </div>
@@ -331,7 +398,6 @@ export function ConversationWorkbench({
 
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
-        {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
         {/* Archive control: archive a resolved dialogue. The backend endpoint
             (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
             refreshes the view so the composer is replaced by a terminal hint. */}
@@ -374,6 +440,32 @@ export function ConversationWorkbench({
           </>
         )}
       </footer>
+
+      {abandonConfirmOpen ? (
+        <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>
+          <section
+            className="cw-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cw-abandon-title"
+            aria-describedby="cw-abandon-desc"
+            onMouseDown={event => event.stopPropagation()}
+          >
+            <h3 id="cw-abandon-title">放弃本次需求？</h3>
+            <p id="cw-abandon-desc">
+              将结束当前需求澄清/生成对话，后续不能继续补充或确认生成。已在执行的任务不会被取消，如需停止任务请到“任务执行”中取消。
+            </p>
+            <div className="cw-confirm-actions">
+              <button type="button" className="cw-confirm-secondary" onClick={() => setAbandonConfirmOpen(false)}>
+                继续处理
+              </button>
+              <button type="button" className="cw-confirm-danger" onClick={confirmAbandonRequirement} disabled={submitting}>
+                确认放弃
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -426,7 +518,19 @@ function CopyableBlock({ text, children, className = '', copyLabel = '复制' })
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep }) {
+function taskDrawerBadgeInfo(task) {
+  if (!task) return null
+  const status = task.status || ''
+  if (status === 'waiting_user' || status === 'waiting') return { state: 'waiting-user', label: '等待用户处理' }
+  if (status === 'running' || status === 'in_progress') return { state: 'running', label: '执行中' }
+  if (status === 'queued') return { state: 'queued', label: '排队中' }
+  if (status === 'failed') return { state: 'failed', label: '执行失败' }
+  if (status === 'completed' || status === 'succeeded') return { state: 'completed', label: '已完成' }
+  if (status === 'canceled' || status === 'cancelled') return { state: 'canceled', label: '已取消' }
+  return { state: 'unknown', label: '状态未知' }
+}
+
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
   if (item.type === 'user_message') {
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
@@ -491,6 +595,9 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
         onOpenTask={card => {
           if (card && card.stepId && onOpenTaskStep) onOpenTaskStep(card)
         }}
+        onConfirmStep={onConfirmTaskStep}
+        manualStepConfirmation={manualStepConfirmation}
+        onToggleManualStepConfirmation={onToggleManualStepConfirmation}
       />
     )
   }

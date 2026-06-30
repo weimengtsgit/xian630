@@ -1,12 +1,45 @@
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
 
+const DEFAULT_AGENT_DESCRIPTIONS = {
+  'collaboration-orchestrator': '根据确认需求摘要生成协作计划，并记录用户调整。',
+  'requirement-analyst': '整理用户需求并形成确认需求摘要。',
+  'domain-analyst': '注入领域知识和客户判断口径。',
+  designer: '产出结构化设计契约。',
+  'data-integration': '产出真实数据接入计划和演示数据契约。',
+  'solution-designer': '形成技术方案、文件计划和实现边界。',
+  'code-generator': '写入应用代码并生成 manifest。',
+  'code-reviewer': '阻断式质量门禁。',
+  'security-reviewer': '检查安全和权限风险。',
+  tester: '运行或分析构建与测试结果。',
+  'product-acceptance': '检查生成结果是否满足需求、设计和数据契约。',
+  'image-builder': '构建应用容器镜像。',
+  deployer: '部署容器并完成健康验证。',
+}
+
+const DEFAULT_ROLE_DESCRIPTIONS = {
+  collaboration_orchestration: DEFAULT_AGENT_DESCRIPTIONS['collaboration-orchestrator'],
+  requirement_analysis: DEFAULT_AGENT_DESCRIPTIONS['requirement-analyst'],
+  domain_analysis: DEFAULT_AGENT_DESCRIPTIONS['domain-analyst'],
+  design_contract: DEFAULT_AGENT_DESCRIPTIONS.designer,
+  data_integration: DEFAULT_AGENT_DESCRIPTIONS['data-integration'],
+  solution_design: DEFAULT_AGENT_DESCRIPTIONS['solution-designer'],
+  code_generation: DEFAULT_AGENT_DESCRIPTIONS['code-generator'],
+  code_review: DEFAULT_AGENT_DESCRIPTIONS['code-reviewer'],
+  security_review: DEFAULT_AGENT_DESCRIPTIONS['security-reviewer'],
+  test_verification: DEFAULT_AGENT_DESCRIPTIONS.tester,
+  product_acceptance: DEFAULT_AGENT_DESCRIPTIONS['product-acceptance'],
+  image_build: DEFAULT_AGENT_DESCRIPTIONS['image-builder'],
+  deployment: DEFAULT_AGENT_DESCRIPTIONS.deployer,
+}
+
 export const CARD_STATE_LABEL = {
   pending_confirmation: '待确认',
   waiting_upstream: '等待上游',
   ready: '待启动',
   running: '执行中',
   waiting_user: '等待用户',
+  manual_confirmation: '待人工确认',
   completed: '已完成',
   failed: '失败',
   skipped: '已跳过',
@@ -18,6 +51,9 @@ export const EDGE_STATE_LABEL = {
   flowing: '流转中',
   completed: '已完成',
   blocked: '阻塞',
+  blocked_failed: '失败阻塞',
+  blocked_waiting_user: '等待用户',
+  blocked_manual_confirmation: '等待确认',
 }
 
 export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []) {
@@ -42,6 +78,7 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
     title: '用户输入',
     subtitle: '需求描述',
     description: '来自对话中的确认需求',
+    tooltip: '来自对话中的确认需求',
     state: confirmed ? 'completed' : 'pending_confirmation',
     stateLabel: confirmed ? CARD_STATE_LABEL.completed : CARD_STATE_LABEL.pending_confirmation,
     lane: 'origin',
@@ -57,20 +94,24 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
       .filter(key => !isCompleted(cardStateForStep(stepByAgent[key], confirmed, [])))
       .map(key => agentByKey[key] && (agentByKey[key].name || agentByKey[key].key) || key)
     const state = cardStateForStep(step, confirmed, waitingFor)
+    const description = agentDescription(agent)
+    const manualConfirmation = isManualConfirmationStep(step)
     return {
       id: agent.key,
       kind: agent.key === ORCHESTRATOR_KEY ? 'orchestrator' : 'agent',
       agentKey: agent.key,
       title: agent.name || agent.key,
       subtitle: agent.role || agent.key,
-      description: agent.description || '',
+      description,
+      tooltip: description,
       state,
-      stateLabel: CARD_STATE_LABEL[state] || state,
+      stateLabel: manualConfirmation ? CARD_STATE_LABEL.manual_confirmation : CARD_STATE_LABEL[state] || state,
       lane: agent.lane || 'unassigned',
       wave: Math.max(1, (rankByAgent[agent.key] || 0) + 1),
       stepId: step && (step.stepId || step.step_id || step.id) || null,
       step,
-      summary: step && (step.summary || step.error || '') || '',
+      summary: manualConfirmation ? '任务已完成，等待人工确认继续。' : step && (step.summary || step.error || '') || '',
+      manualConfirmation,
       waitingFor,
       highImpact: !!agent.highImpact,
       upstream: upstreamKeys,
@@ -106,8 +147,17 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
     edges: graphEdges,
     waves,
     summary: summarize(cards),
+    manualStepConfirmation: !!(preview && preview.executionPolicy && preview.executionPolicy.manualStepConfirmation),
     adjustments: Array.isArray(preview && preview.adjustments) ? preview.adjustments : [],
   }
+}
+
+function agentDescription(agent) {
+  if (!agent) return ''
+  return DEFAULT_AGENT_DESCRIPTIONS[agent.key] ||
+    DEFAULT_ROLE_DESCRIPTIONS[agent.role] ||
+    agent.description ||
+    ''
 }
 
 function cardStateForStep(step, confirmed, waitingFor) {
@@ -122,10 +172,25 @@ function cardStateForStep(step, confirmed, waitingFor) {
   return waitingFor.length > 0 ? 'waiting_upstream' : 'ready'
 }
 
+function isManualConfirmationStep(step) {
+  if (!step) return false
+  if (step.manualConfirmation || step.manual_confirmation) return true
+  const raw = step.pendingQuestions || step.pending_questions || ''
+  if (!raw) return false
+  try {
+    const items = JSON.parse(raw)
+    return Array.isArray(items) && items.some(item => item && item.type === 'manual_step_confirmation' && item.confirm)
+  } catch {
+    return false
+  }
+}
+
 function edgeState(fromCard, toCard, confirmed) {
   if (!confirmed) return 'planned'
   if (!fromCard || !toCard) return 'inactive'
-  if (fromCard.state === 'failed' || toCard.state === 'failed' || toCard.state === 'waiting_user') return 'blocked'
+  if (fromCard.state === 'failed' || toCard.state === 'failed') return 'blocked_failed'
+  if (fromCard.manualConfirmation || toCard.manualConfirmation) return 'blocked_manual_confirmation'
+  if (toCard.state === 'waiting_user') return 'blocked_waiting_user'
   if (toCard.state === 'completed') return 'completed'
   if (fromCard.state === 'completed' && (toCard.state === 'ready' || toCard.state === 'running')) return 'flowing'
   return 'inactive'

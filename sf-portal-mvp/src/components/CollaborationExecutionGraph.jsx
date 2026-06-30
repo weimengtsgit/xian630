@@ -4,7 +4,19 @@ import './CollaborationExecutionGraph.css'
 
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
-const REVEAL_INITIAL_DELAY_MS = 450
+const ORCHESTRATION_PHASES = [
+  { label: '正在解析确认需求', duration: 1000 },
+  { label: '正在规划协作路径', duration: 1000 },
+  { label: '正在召唤协作智能体', duration: 1400 },
+  { label: '正在交接执行波次', duration: 900 },
+]
+const ORCHESTRATION_SUMMON_PHASE_INDEX = 2
+const ORCHESTRATION_HANDOFF_PHASE_INDEX = 3
+const ORCHESTRATION_PHASE_TRANSITION_MS = 260
+const REVEAL_INITIAL_DELAY_MS = ORCHESTRATION_PHASES
+  .slice(0, ORCHESTRATION_SUMMON_PHASE_INDEX)
+  .reduce((total, phase) => total + phase.duration, 0) +
+  (ORCHESTRATION_PHASE_TRANSITION_MS * ORCHESTRATION_SUMMON_PHASE_INDEX)
 const REVEAL_STEP_DELAY_MS = 520
 const REVEAL_CARD_ANIMATION_MS = 900
 
@@ -19,11 +31,12 @@ const STATE_ICON = {
   skipped: SkipForward,
 }
 
-export function CollaborationExecutionGraph({ graph, onOpenTask }) {
+export function CollaborationExecutionGraph({ graph, onOpenTask, onConfirmStep, manualStepConfirmation = false, onToggleManualStepConfirmation }) {
   const [activeKey, setActiveKey] = useState('')
   const [revealedKeys, setRevealedKeys] = useState(() => new Set())
   const [revealingKeys, setRevealingKeys] = useState(() => new Set())
   const [revealComplete, setRevealComplete] = useState(false)
+  const [orchestrationPhase, setOrchestrationPhase] = useState({ index: 0, exiting: false })
   const revealTimerRefs = useRef([])
   const lastGraphIdentityRef = useRef(null)
 
@@ -62,6 +75,11 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
 
   // Reveal plays for both the planned graph and the accepted execution graph.
   const isRevealRunning = !revealComplete && !prefersReducedMotion
+  const orchestrationPhaseIndex = orchestrationPhase.index
+  const orchestrationLabel = isRevealRunning
+    ? ORCHESTRATION_PHASES[orchestrationPhaseIndex]?.label || ORCHESTRATION_PHASES[0].label
+    : prefersReducedMotion ? '协作编排已生成' : ''
+  const manualPolicyEnabled = graph.confirmed ? !!graph.manualStepConfirmation : !!manualStepConfirmation
 
   const clearRevealTimers = useCallback(() => {
     for (const timer of revealTimerRefs.current) clearTimeout(timer)
@@ -86,6 +104,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       setRevealedKeys(new Set())
       setRevealingKeys(new Set())
       setRevealComplete(false)
+      setOrchestrationPhase({ index: 0, exiting: false })
       return
     }
 
@@ -103,10 +122,12 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     setRevealedKeys(initialKeys)
     setRevealingKeys(new Set())
     setRevealComplete(false)
+    setOrchestrationPhase({ index: 0, exiting: false })
 
     // 如果没有需要 reveal 的卡片，直接完成
     if (revealOrder.length === 0) {
       setRevealComplete(true)
+      setOrchestrationPhase({ index: ORCHESTRATION_HANDOFF_PHASE_INDEX, exiting: false })
       return
     }
 
@@ -116,7 +137,25 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
       setRevealedKeys(allKeys)
       setRevealingKeys(new Set())
       setRevealComplete(true)
+      setOrchestrationPhase({ index: ORCHESTRATION_HANDOFF_PHASE_INDEX, exiting: false })
       return
+    }
+
+    let phaseDelay = 0
+    const schedulePhaseChange = (index, delay) => {
+      scheduleRevealTimer(() => {
+        setOrchestrationPhase(prev => ({ ...prev, exiting: true }))
+      }, delay)
+      scheduleRevealTimer(() => {
+        setOrchestrationPhase({ index, exiting: false })
+      }, delay + ORCHESTRATION_PHASE_TRANSITION_MS)
+    }
+    for (let index = 1; index < ORCHESTRATION_HANDOFF_PHASE_INDEX; index += 1) {
+      phaseDelay += ORCHESTRATION_PHASES[index - 1].duration
+      if (index < ORCHESTRATION_HANDOFF_PHASE_INDEX) {
+        schedulePhaseChange(index, phaseDelay)
+      }
+      phaseDelay += ORCHESTRATION_PHASE_TRANSITION_MS
     }
 
     // 开始逐个 reveal 卡片
@@ -124,7 +163,10 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
     const revealNext = () => {
       if (currentIndex >= revealOrder.length) {
         setRevealingKeys(new Set())
-        setRevealComplete(true)
+        schedulePhaseChange(ORCHESTRATION_HANDOFF_PHASE_INDEX, 0)
+        scheduleRevealTimer(() => {
+          setRevealComplete(true)
+        }, ORCHESTRATION_PHASE_TRANSITION_MS + ORCHESTRATION_PHASES[ORCHESTRATION_HANDOFF_PHASE_INDEX].duration)
         return
       }
 
@@ -185,6 +227,25 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
           {graph.confirmed ? <span>{graph.summary.running} 执行中</span> : <span>待确认</span>}
           {graph.summary.waitingUser ? <span>{graph.summary.waitingUser} 等待用户</span> : null}
           {graph.summary.failed ? <span>{graph.summary.failed} 失败</span> : null}
+          {graph.confirmed ? (
+            <label
+              className="ceg-manual-toggle is-readonly"
+              title={manualPolicyEnabled ? '当前任务已开启逐步人工确认' : '当前任务未开启逐步人工确认；任务开始后不可修改'}
+            >
+              <input type="checkbox" checked={manualPolicyEnabled} disabled readOnly />
+              <span>逐步人工确认</span>
+            </label>
+          ) : (
+            <label className="ceg-manual-toggle" title="开启后，每个智能体任务完成后需要人工确认再继续下一个任务">
+              <input
+                type="checkbox"
+                checked={manualPolicyEnabled}
+                onChange={event => onToggleManualStepConfirmation && onToggleManualStepConfirmation(event.target.checked)}
+                disabled={!onToggleManualStepConfirmation}
+              />
+              <span>逐步人工确认</span>
+            </label>
+          )}
         </div>
       </header>
       <div className="ceg-canvas">
@@ -213,8 +274,11 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
                     onEnter={() => setActiveKey(card.agentKey)}
                     onLeave={() => setActiveKey('')}
                     onOpenTask={onOpenTask}
+                    onConfirmStep={onConfirmStep}
                     revealClass={getCardRevealClass(card.agentKey)}
                     isOrchestrating={isRevealRunning && card.agentKey === ORCHESTRATOR_KEY}
+                    orchestrationLabel={card.agentKey === ORCHESTRATOR_KEY ? orchestrationLabel : ''}
+                    orchestrationPhaseExiting={card.agentKey === ORCHESTRATOR_KEY ? orchestrationPhase.exiting : false}
                   />
                 ))}
               </div>
@@ -237,28 +301,41 @@ export function CollaborationExecutionGraph({ graph, onOpenTask }) {
   )
 }
 
-function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealClass, isOrchestrating }) {
-  const Icon = card.kind === 'origin' ? User : card.kind === 'orchestrator' ? GitBranch : STATE_ICON[card.state] || CircleDot
+function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, onConfirmStep, revealClass, isOrchestrating, orchestrationLabel, orchestrationPhaseExiting }) {
+  const Icon = card.kind === 'origin' ? User : card.kind === 'orchestrator' ? isOrchestrating ? Loader2 : GitBranch : STATE_ICON[card.state] || CircleDot
   const canOpenTask = !!card.stepId
+  const canConfirmStep = !!(card.manualConfirmation && card.stepId && card.step && card.step.jobId && onConfirmStep)
   const waitText = card.waitingFor && card.waitingFor.length > 0
     ? `等待：${card.waitingFor.slice(0, 2).join('、')}${card.waitingFor.length > 2 ? `等 ${card.waitingFor.length} 个上游` : ''}`
     : ''
+  const tooltipText = card.tooltip || card.description || '暂无描述'
+  const tooltipId = `ceg-card-tooltip-${card.id}`
+  const openTask = () => {
+    if (canOpenTask && onOpenTask) onOpenTask(card)
+  }
+  const onKeyDown = event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    openTask()
+  }
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={canOpenTask ? 0 : -1}
       className={`ceg-card ceg-card-state-${card.state} ceg-${card.kind}${active ? ' is-active' : ''}${dimmed ? ' is-dimmed' : ''} ${revealClass || ''}${isOrchestrating ? ' ceg-is-orchestrating' : ''}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onFocus={onEnter}
       onBlur={onLeave}
-      onClick={() => canOpenTask && onOpenTask && onOpenTask(card)}
+      onClick={openTask}
+      onKeyDown={onKeyDown}
       aria-disabled={!canOpenTask && card.kind !== 'origin'}
       data-agent-key={card.agentKey}
       aria-label={`${card.title}，${card.stateLabel}${canOpenTask ? '，打开任务详情' : ''}`}
-      title={canOpenTask ? '打开任务执行详情' : card.kind === 'origin' ? '用户输入起点' : '确认后可打开任务详情'}
+      aria-describedby={tooltipId}
     >
       <span className="ceg-card-icon">
-        <Icon size={18} className={card.state === 'running' ? 'ceg-spin' : ''} />
+        <Icon size={18} className={card.state === 'running' || isOrchestrating ? 'ceg-spin' : ''} />
       </span>
       <span className="ceg-card-main">
         <strong>{card.title}</strong>
@@ -266,9 +343,25 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, revealC
       </span>
       {card.highImpact ? <em className="ceg-gate">门禁</em> : null}
       <span className="ceg-card-desc">{card.summary || waitText || card.description || '等待编排流转'}</span>
+      {orchestrationLabel ? (
+        <span key={orchestrationLabel} className={`ceg-orchestration-phase${orchestrationPhaseExiting ? ' is-exiting' : ''}`}>{orchestrationLabel}</span>
+      ) : null}
       <span className="ceg-card-state">{card.stateLabel}</span>
+      {canConfirmStep ? (
+        <button
+          type="button"
+          className="ceg-card-confirm"
+          onClick={event => {
+            event.stopPropagation()
+            onConfirmStep(card.step.jobId, card.stepId, card.step.attempt)
+          }}
+        >
+          确认继续
+        </button>
+      ) : null}
       {waitText ? <span className="ceg-card-wait">{waitText}</span> : null}
-    </button>
+      <span id={tooltipId} className="ceg-card-tooltip" role="tooltip">{tooltipText}</span>
+    </div>
   )
 }
 
@@ -387,6 +480,9 @@ function classifyConnectorMode(fromCount, toCount) {
 
 function connectorStateForEdges(edges) {
   const states = edges.map(edge => edge.state || 'inactive')
+  if (states.includes('blocked_failed')) return 'blocked_failed'
+  if (states.includes('blocked_manual_confirmation')) return 'blocked_manual_confirmation'
+  if (states.includes('blocked_waiting_user')) return 'blocked_waiting_user'
   if (states.includes('blocked')) return 'blocked'
   if (states.includes('flowing')) return 'flowing'
   if (states.length > 0 && states.every(state => state === 'planned')) return 'planned'

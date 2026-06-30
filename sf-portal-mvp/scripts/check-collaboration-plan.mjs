@@ -10,7 +10,9 @@ const drawer = readFileSync(new URL('../src/components/StepExecutionDrawer.jsx',
 const state = readFileSync(new URL('../src/hooks/collaborationPlanState.js', import.meta.url), 'utf8')
 const execState = readFileSync(new URL('../src/hooks/executionRecordState.js', import.meta.url), 'utf8')
 const useJobs = readFileSync(new URL('../src/hooks/useJobs.js', import.meta.url), 'utf8')
+const apiClient = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const dialogueTimeline = readFileSync(new URL('../src/hooks/dialogueTimeline.js', import.meta.url), 'utf8')
+const graphState = readFileSync(new URL('../src/hooks/collaborationExecutionGraphState.js', import.meta.url), 'utf8')
 const graphComponent = readFileSync(new URL('../src/components/CollaborationExecutionGraph.jsx', import.meta.url), 'utf8')
 const graphCss = readFileSync(new URL('../src/components/CollaborationExecutionGraph.css', import.meta.url), 'utf8')
 assert.match(dialogueTimeline, /buildCollaborationExecutionGraphView/, 'dialogue timeline should build collaboration execution graph view data')
@@ -19,6 +21,8 @@ assert.match(dialogueTimeline, /graph:\s*buildCollaborationExecutionGraphView/, 
 assert.match(jobCenter, /collaborationLanes/, 'JobCenter should render collaboration lanes when a plan is available')
 assert.match(jobCenter, /getJobCollaborationPlan|collaborationPlan/, 'JobCenter should consume collaboration plan data')
 assert.match(useJobs, /getJobCollaborationPlan\(jobId\)/, 'useJobs should hydrate the selected job collaboration plan')
+assert.match(useJobs, /confirmStep/, 'useJobs should expose manual step confirmation action')
+assert.match(apiClient, /confirmJobStep/, 'API client should expose the manual step confirmation endpoint')
 assert.match(useJobs, /setCollaborationPlan\(collaborationPlanData\)/, 'useJobs should store the hydrated collaboration plan')
 assert.match(useJobs, /collaborationPlan,/, 'useJobs should return collaborationPlan so App can thread it into JobCenter')
 assert.match(state, /buildCollaborationCardView/, 'collaboration plan state helper should build card views')
@@ -26,8 +30,13 @@ assert.match(execState, /fixedSteps\s*=\s*\[\]/, 'execution record helper should
 assert.doesNotMatch(jobCenter, /3x2 matrix of the six fixed stages/, 'JobCenter should no longer describe only fixed six stages')
 assert.match(workbench, /collaboration_plan_preview/, 'confirm preview graph should render as a dialogue timeline item')
 assert.match(workbench, /CollaborationExecutionGraph/, 'ConversationWorkbench should render the extracted graph component')
+assert.match(workbench, /manualStepConfirmation/, 'ConversationWorkbench should own the manual step confirmation preference before generation')
+assert.match(workbench, /executionPolicy:\s*\{\s*manualStepConfirmation/, 'confirm action should submit the manual step confirmation execution policy')
 assert.doesNotMatch(workbench, /function CollaborationPlanPreviewCard/, 'old inline collaboration preview card should be removed')
 assert.match(graphComponent, /function CollaborationExecutionGraph/, 'graph component should export a CollaborationExecutionGraph component')
+assert.match(graphComponent, /onConfirmStep/, 'graph component should accept a manual step confirmation callback')
+assert.match(graphComponent, /ceg-manual-toggle/, 'graph header should render the manual step confirmation toggle before generation')
+assert.match(graphComponent, /ceg-card-confirm/, 'graph cards should render an inline confirm-continue action when manually gated')
 assert.match(graphComponent, /orchestrator/, 'graph component should render a prominent orchestrator card')
 assert.match(graphCss, /ceg-edge-flowing/, 'graph component should render edge state classes')
 assert.match(graphComponent, /ceg-edge-seg/, 'graph component should render segmented dependency lines instead of merging all edges into one state')
@@ -39,6 +48,12 @@ assert.match(graphComponent, /connectorMode/, 'graph component should classify c
 assert.match(graphComponent, /connectorState/, 'graph component should derive a visible connector state from its edge states')
 assert.match(graphComponent, /ceg-connector-mode-/, 'graph component should expose connector mode classes for fork and merge styling')
 assert.match(graphComponent, /card\.summary \|\| waitText \|\| card\.description/, 'graph cards should prefer live task summary before static agent description')
+assert.match(graphComponent, /card\.tooltip \|\| card\.description \|\| '暂无描述'/, 'graph card tooltip should show the agent role description, not execution summary text')
+assert.match(graphComponent, /aria-describedby=\{tooltipId\}/, 'graph cards should expose hover tooltip text through aria-describedby')
+assert.match(graphComponent, /className="ceg-card-tooltip"/, 'graph cards should render a hover tooltip')
+assert.doesNotMatch(graphComponent, /ceg-card-detail/, 'graph cards should not render an internal detail panel')
+assert.match(graphState, /DEFAULT_AGENT_DESCRIPTIONS/, 'graph state should provide stable default agent descriptions for tooltips')
+assert.match(graphState, /整理用户需求并形成确认需求摘要/, 'requirement analyst tooltip should describe the card responsibility')
 assert.doesNotMatch(graphComponent, /ceg-adjustments/, 'graph component should not render a separate long adjustment card below the execution graph')
 assert.match(graphCss, /@keyframes cegFlowRight/, 'graph css should define horizontal animated flow lines')
 
@@ -47,6 +62,15 @@ assert.match(graphComponent, /AlertTriangle/, 'graph component should import Ale
 assert.match(graphComponent, /revealedKeys/, 'graph component should have reveal state tracking')
 assert.match(graphComponent, /revealingKeys/, 'graph component should track cards that are currently playing their summon animation')
 assert.match(graphComponent, /revealComplete/, 'graph component should track reveal completion')
+assert.match(graphComponent, /ORCHESTRATION_PHASES/, 'graph component should define front-end orchestration phases for the fake orchestration animation')
+for (const label of ['正在解析确认需求', '正在规划协作路径', '正在召唤协作智能体', '正在交接执行波次']) {
+  assert.match(graphComponent, new RegExp(label), `orchestration phase label missing: ${label}`)
+}
+assert.match(graphComponent, /REVEAL_INITIAL_DELAY_MS\s*=\s*ORCHESTRATION_PHASES[\s\S]*reduce/, 'agent reveal should wait for the early orchestration phases before summoning cards')
+assert.match(graphComponent, /ORCHESTRATION_PHASE_TRANSITION_MS/, 'orchestration phase text should have a controlled transition interval')
+assert.match(graphComponent, /exiting:\s*true/, 'orchestration phase text should enter an exit state before the next label appears')
+assert.match(graphComponent, /isOrchestrating \? Loader2 : GitBranch/, 'orchestrator card should use a spinner icon while orchestrating')
+assert.match(graphComponent, /ceg-orchestration-phase/, 'orchestrator card should render the current orchestration phase inside the card')
 assert.doesNotMatch(graphComponent, /REVEAL_REPLAY_PAUSE_MS|resetReveal/, 'graph reveal should play once per graph identity and should not loop the orchestration sequence')
 assert.match(graphComponent, /ceg-card-is-hidden/, 'graph component should support hidden cards before reveal')
 assert.match(graphComponent, /ceg-card-is-revealed/, 'graph component should support revealed cards')
@@ -69,10 +93,28 @@ assert.match(graphCss, /\.ceg-connector-state-flowing/, 'graph css should make f
 assert.match(graphCss, /\.ceg-connector-state-completed/, 'graph css should make completed dependency lines visually distinct')
 assert.match(graphCss, /\.ceg-connector-state-inactive/, 'graph css should make inactive dependency lines visually distinct')
 assert.match(graphCss, /\.ceg-connector-state-blocked/, 'graph css should make blocked dependency lines visually distinct')
+assert.match(graphCss, /\.ceg-edge-blocked_waiting_user[\s\S]*243, 199, 97/, 'waiting-user blocked lines should use the same amber family as task waiting state')
+assert.match(graphCss, /\.ceg-edge-blocked_manual_confirmation[\s\S]*243, 199, 97/, 'manual-confirmation blocked lines should use the same amber family as task waiting state')
+assert.match(graphCss, /\.ceg-edge-blocked_failed[\s\S]*255, 102, 94/, 'failed blocked lines should use the same red family as task failed state')
+assert.match(graphComponent, /states\.includes\('blocked_failed'\)/, 'connector state should prioritize failed blocked edges')
+assert.match(graphComponent, /states\.includes\('blocked_manual_confirmation'\)/, 'connector state should preserve manual-confirmation blocked edges')
+assert.match(graphComponent, /states\.includes\('blocked_waiting_user'\)/, 'connector state should preserve waiting-user blocked edges')
 assert.match(graphCss, /\.ceg-card-is-hidden/, 'graph css should define hidden card styling')
 assert.match(graphCss, /\.ceg-card-is-revealed/, 'graph css should define revealed card styling')
 assert.match(graphCss, /\.ceg-card-is-revealing/, 'graph css should define a summoned-card enter animation')
-assert.match(graphCss, /@keyframes cegAgentReveal/, 'graph css should define a keyframed agent reveal animation')
+assert.match(graphCss, /\.ceg-orchestration-phase/, 'graph css should style the orchestrator phase text inside the card')
+assert.match(graphCss, /@keyframes cegPhaseSwap/, 'graph css should animate orchestration phase text transitions')
+assert.match(graphCss, /@keyframes cegPhaseExit/, 'graph css should animate orchestration phase text upward as it exits')
+assert.match(graphCss, /\.ceg-card-tooltip/, 'graph css should style a hover tooltip')
+assert.match(graphCss, /\.ceg-card-confirm/, 'graph css should style the inline manual confirmation button')
+assert.match(graphCss, /\.ceg-manual-toggle/, 'graph css should style the manual step confirmation toggle in the graph header')
+assert.match(graphCss, /\.ceg-card:hover \.ceg-card-tooltip/, 'graph css should show card tooltip on hover')
+assert.match(graphCss, /\.ceg-card:focus-visible \.ceg-card-tooltip/, 'graph css should show card tooltip on keyboard focus')
+assert.doesNotMatch(graphCss, /\.ceg-card-detail/, 'graph css should not style an internal card detail panel')
+assert.match(graphCss, /@keyframes cegAgentGlowReveal/, 'graph css should brighten summoned cards with a continuous glow reveal')
+assert.match(graphCss, /@keyframes cegAgentLightWash/, 'graph css should wash the dark reveal layer from left to right')
+assert.match(graphCss, /\.ceg-card-is-revealing::after(?:(?!@keyframes)[\s\S])*rgba\(6, 18, 29, 0\.86\)(?:(?!@keyframes)[\s\S])*animation:\s*cegAgentLightWash/, 'agent reveal should use a moving dark-to-light wash layer')
+assert.doesNotMatch(graphCss, /@keyframes cegAgentGlowReveal(?:(?!@keyframes)[\s\S])*clip-path/, 'agent reveal should avoid stepped clip-path opening')
 assert.match(graphCss, /@keyframes cegFlowDown/, 'graph css should define vertical animated flow lines')
 assert.match(graphCss, /\.ceg-card-state-running/, 'graph css should style running cards')
 assert.match(drawer, /sed-snapshot-skill-files/, 'step drawer should show snapshot skill files')
@@ -190,6 +232,11 @@ assert.equal(plannedGraph.cards[0].kind, 'origin', 'first graph card should be t
 assert.equal(plannedGraph.cards[1].agentKey, 'collaboration-orchestrator', 'second graph card should be the orchestration hub')
 assert.equal(plannedGraph.cards[1].kind, 'orchestrator', 'collaboration orchestrator should be marked as the hub card')
 assert.equal(plannedGraph.cards.find(card => card.agentKey === 'designer').state, 'pending_confirmation', 'unconfirmed agents should be pending confirmation')
+assert.equal(
+  plannedGraph.cards.find(card => card.agentKey === 'requirement-analyst').tooltip,
+  '整理用户需求并形成确认需求摘要。',
+  'requirement analyst tooltip should use the agent responsibility description, not step execution text',
+)
 assert.equal(plannedGraph.edges.every(edge => edge.state === 'planned'), true, 'unconfirmed graph edges should be planned')
 
 const runningGraph = buildCollaborationExecutionGraphView(graphPreview, [
@@ -204,6 +251,11 @@ const runningGraph = buildCollaborationExecutionGraphView(graphPreview, [
 assert.equal(runningGraph.confirmed, true, 'presence of real step blocks should make the graph accepted/execution-state')
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'collaboration-orchestrator').state, 'completed', 'succeeded orchestrator should be completed')
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'designer').state, 'running', 'running step should map to running card state')
+assert.equal(
+  runningGraph.cards.find(card => card.agentKey === 'designer').tooltip,
+  '产出结构化设计契约。',
+  'running card tooltip should remain the card responsibility description instead of the live execution summary',
+)
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'solution-designer').state, 'waiting_upstream', 'pending card with unfinished upstream should wait upstream')
 assert.equal(
   runningGraph.cards.find(card => card.agentKey === 'solution-designer').waitingFor.join('、'),
@@ -219,6 +271,56 @@ assert.equal(
   runningGraph.edges.find(edge => edge.from === 'designer' && edge.to === 'solution-designer').state,
   'inactive',
   'unfinished upstream should keep downstream edge inactive',
+)
+
+const waitingUserGraph = buildCollaborationExecutionGraphView(graphPreview, [
+  { stepId: 'step-orch', agentKey: 'collaboration-orchestrator', status: 'succeeded', name: '协作编排' },
+  { stepId: 'step-req', agentKey: 'requirement-analyst', status: 'succeeded', name: '需求分析' },
+  { stepId: 'step-design', agentKey: 'designer', status: 'waiting_user', name: '设计' },
+])
+assert.equal(
+  waitingUserGraph.edges.find(edge => edge.from === 'requirement-analyst' && edge.to === 'designer').state,
+  'blocked_waiting_user',
+  'waiting-user downstream should use amber blocked edge state',
+)
+
+const manualConfirmationGraph = buildCollaborationExecutionGraphView(
+  { ...graphPreview, executionPolicy: { manualStepConfirmation: true } },
+  [
+    { stepId: 'step-orch', agentKey: 'collaboration-orchestrator', status: 'succeeded', name: '协作编排' },
+    {
+      stepId: 'step-req',
+      jobId: 'job-manual',
+      agentKey: 'requirement-analyst',
+      status: 'waiting_user',
+      name: '需求分析',
+      manualConfirmation: true,
+      pendingQuestions: JSON.stringify([{ type: 'manual_step_confirmation', confirm: true }]),
+    },
+    { stepId: 'step-design', agentKey: 'designer', status: 'pending', name: '设计' },
+  ],
+)
+assert.equal(manualConfirmationGraph.manualStepConfirmation, true, 'graph should expose the manual step confirmation execution policy')
+assert.equal(
+  manualConfirmationGraph.cards.find(card => card.agentKey === 'requirement-analyst').stateLabel,
+  '待人工确认',
+  'manual confirmation card should show a distinct waiting label',
+)
+assert.equal(
+  manualConfirmationGraph.edges.find(edge => edge.from === 'requirement-analyst' && edge.to === 'designer').state,
+  'blocked_manual_confirmation',
+  'manual confirmation upstream should block downstream with a distinct amber edge state',
+)
+
+const failedGraph = buildCollaborationExecutionGraphView(graphPreview, [
+  { stepId: 'step-orch', agentKey: 'collaboration-orchestrator', status: 'succeeded', name: '协作编排' },
+  { stepId: 'step-req', agentKey: 'requirement-analyst', status: 'failed', name: '需求分析' },
+  { stepId: 'step-design', agentKey: 'designer', status: 'pending', name: '设计' },
+])
+assert.equal(
+  failedGraph.edges.find(edge => edge.from === 'requirement-analyst' && edge.to === 'designer').state,
+  'blocked_failed',
+  'failed upstream should use red blocked edge state',
 )
 assert.ok(runningGraph.waves.length >= 5, 'graph should build multiple horizontal execution waves')
 assert.equal(runningGraph.summary.totalAgents, 7, 'summary should count collaboration agents, excluding user input')
