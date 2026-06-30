@@ -85,6 +85,7 @@ async function requestText(path, options = {}) {
 
 export const factoryApi = {
   listApps: () => request('/api/apps'),
+  getAppGenerationStats: () => request('/api/apps/generationstats'),
   getApplicationProjectTree: (appId, dialogueId = '') => request(`/api/apps/${appId}/project-tree${dialogueId ? `?dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
   getApplicationProjectFile: (appId, path, dialogueId = '') => request(`/api/apps/${appId}/project-file?path=${encodeURIComponent(path)}${dialogueId ? `&dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
   saveApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -143,7 +144,7 @@ export const factoryApi = {
   answerClarificationBatch: (id, answers) => request(`/api/clarifications/${id}/answers/batch`, { method: 'POST', body: JSON.stringify({ answers }) }),
   patchClarificationRequirement: (id, requirement) => request(`/api/clarifications/${id}/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
   retryClarificationRound: id => request(`/api/clarifications/${id}/retry-current-round`, { method: 'POST' }),
-  confirmClarification: id => request(`/api/clarifications/${id}/confirm`, { method: 'POST' }),
+  confirmClarification: (id, options = {}) => request(`/api/clarifications/${id}/confirm`, { method: 'POST', body: JSON.stringify(options) }),
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
   listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
   deleteClarification: id => request(`/api/clarifications/${id}`, { method: 'DELETE' }),
@@ -231,8 +232,13 @@ export const factoryApi = {
     request(`/api/dialogues/${id}/clarification/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
   retryDialogueRound: id =>
     request(`/api/dialogues/${id}/clarification/retry-current-round`, { method: 'POST' }),
-  confirmDialogueClarification: id =>
-    request(`/api/dialogues/${id}/clarification/confirm`, { method: 'POST' }),
+  confirmDialogueClarification: (id, options = {}) =>
+    request(`/api/dialogues/${id}/clarification/confirm`, { method: 'POST', body: JSON.stringify(options) }),
+  confirmJobStep: (jobId, stepId, attempt) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ ...(attempt ? { attempt } : {}) }),
+    }),
   abandonDialogueClarification: id =>
     request(`/api/dialogues/${id}/clarification/abandon`, { method: 'POST' }),
   confirmDialogueBusinessAgent: id =>

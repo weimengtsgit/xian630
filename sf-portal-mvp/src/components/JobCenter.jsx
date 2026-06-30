@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -73,6 +73,7 @@ export function JobCenter({
   selectedStepId,
   selectedAttempt,
   selectStepAttempt,
+  stepOpenRequest,
   getRecords,
   getUnreadCount,
   loadStepRecords,
@@ -92,6 +93,12 @@ export function JobCenter({
   const multiTask = dialogueJobs.length > 1
   const [taskView, setTaskView] = useState('list')
   const view = multiTask ? taskView : 'detail'
+
+  useEffect(() => {
+    if (!stepOpenRequest || !stepOpenRequest.stepId) return
+    setTaskView('detail')
+    setDrawerOpen(true)
+  }, [stepOpenRequest])
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so

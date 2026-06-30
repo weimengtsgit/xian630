@@ -14,6 +14,7 @@
 // ignored. Blueprint refs / internal slugs / catalog availability never appear.
 
 import { buildThinkingByStepAttempt, thinkingKey } from './taskThinkingState.js';
+import { buildCollaborationExecutionGraphView } from './collaborationExecutionGraphState.js';
 
 export const initialDialogueState = () => ({
   selectedDialogueId: null,
@@ -146,6 +147,7 @@ export function buildTaskBlocks(steps, summary) {
       const latest = sm && (sm.latest_record || sm.latestRecord)
       const summaryText = latest && (latest.content || latest.text || latest.message) || ''
       const attention = STEP_ATTENTION_STATUSES.has(status)
+      const pendingQuestions = safeString(step.pending_questions || step.pendingQuestions)
       return {
         id: `taskblock_${step.job_id || step.jobId || ''}_${step.id}`,
         type: 'task_execution_block',
@@ -157,6 +159,9 @@ export function buildTaskBlocks(steps, summary) {
         status,
         summary: safeString(summaryText),
         error: safeString(step.error_message || step.errorMessage),
+        needsUserInput: !!(step.needs_user_input || step.needsUserInput),
+        pendingQuestions,
+        manualConfirmation: isManualStepConfirmation(pendingQuestions),
         startedAt: step.started_at || step.startedAt || '',
         endedAt: step.ended_at || step.endedAt || '',
         // safeExecution is populated by the builder from persisted work-trace
@@ -174,6 +179,16 @@ export function buildTaskBlocks(steps, summary) {
       if (sa !== sb) return sa - sb
       return a.stepId < b.stepId ? -1 : a.stepId > b.stepId ? 1 : 0
     })
+}
+
+function isManualStepConfirmation(raw) {
+  if (!raw) return false
+  try {
+    const items = JSON.parse(raw)
+    return Array.isArray(items) && items.some(item => item && item.type === 'manual_step_confirmation' && item.confirm)
+  } catch {
+    return false
+  }
 }
 
 // stepSeq looks up a step's seq by id (dependency/execution order). Returns
@@ -412,8 +427,10 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       id: `${view.session.id || 'dlg'}_collaboration_plan_preview`,
       type: 'collaboration_plan_preview',
       preview: collaborationPreview,
+      graph: buildCollaborationExecutionGraphView(collaborationPreview, jobStepBlocks),
     })
   }
+  const suppressTaskBlocksInConversation = !!collaborationPreview
 
   // 5. Business-agent drafting surface.
   // 5a. Open business-draft clarifying questions (parent agent question messages
@@ -531,7 +548,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   //      jobStepBlocks comes from hook state and must remain immutable/pure.
   let absorbedStepId = null
   const pushedClarificationIds = new Set()
-  if (taskBlocks.length > 0) {
+  if (taskBlocks.length > 0 && !suppressTaskBlocksInConversation) {
     const safeExecutionByStepAttempt = buildSafeExecutionByStepAttempt(workTraceItems)
     const thinkingByStepAttempt = buildThinkingByStepAttempt(taskThinkingItems)
     const liveStepId = liveAnalysis && liveAnalysis.kind === 'step' && liveAnalysis.key
