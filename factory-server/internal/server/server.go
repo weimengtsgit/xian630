@@ -542,7 +542,10 @@ func (s *Server) routes() *Router {
 
 	// Dialogue session attachments (Task 3). Multipart upload only; credential
 	// files are rejected at the boundary (use controlled credential input).
+	// The GET .../content route (F3) serves the stored file's bytes for
+	// click-to-preview, with strict ArtifactRoot path containment.
 	r.Handle("POST", "/api/dialogues/:id/attachments", s.uploadDialogueAttachment)
+	r.Handle("GET", "/api/dialogues/:id/attachments/:attachmentId/content", s.getDialogueAttachmentContent)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

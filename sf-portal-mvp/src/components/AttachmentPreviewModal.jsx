@@ -93,11 +93,21 @@ function isTextKind(kind) {
 }
 
 // contentURL derives a fetchable URL for the attachment when the backend serves
-// its bytes. No such route ships in this task, so this returns null and the
-// modal degrades to metadata — kept so a later task can wire the route without
-// touching this component.
+// its bytes inline — the click-to-preview content route (F3). Only image and pdf
+// kinds return a URL here (rendered via <img src> / <iframe src>); text kinds
+// (markdown/text/json/csv) are fetched as text via getDialogueAttachmentContent
+// and rendered into a <pre>, so they return null here. Other kinds have no
+// inline preview body (the backend 404s), so they also return null and the modal
+// falls back to a metadata-only card.
 function contentURL(attachment) {
   if (!attachment) return null
+  const dialogueId = attachment.dialogueId
+  const attachmentId = attachment.id
+  if (!dialogueId || !attachmentId) return null
+  const kind = attachment.previewKind || attachment.preview_kind
+  if (kind === 'image' || kind === 'pdf') {
+    return factoryApi.getDialogueAttachmentContentURL(dialogueId, attachmentId)
+  }
   return null
 }
 

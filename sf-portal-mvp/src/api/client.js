@@ -241,6 +241,16 @@ export const factoryApi = {
   getDialogueAttachmentContent(id, attachmentId) {
     return requestText(`/api/dialogues/${id}/attachments/${attachmentId}/content`)
   },
+  // getDialogueAttachmentContentURL returns the FULL URL for a stored
+  // attachment's bytes — the click-to-preview content route (F3). It is the
+  // absolute URL (<api base>/api/dialogues/:id/attachments/:attachmentId/content)
+  // because <img src> / <iframe src> need an absolute origin, unlike the JSON
+  // request() helpers which compose the base at fetch time. Used by the preview
+  // modal for image and pdf kinds; text kinds still go through the text fetch
+  // (getDialogueAttachmentContent) so the body can be rendered into a <pre>.
+  getDialogueAttachmentContentURL(id, attachmentId) {
+    return `${API_BASE_URL}/api/dialogues/${id}/attachments/${attachmentId}/content`
+  },
   // cancelDialogueTurn cancels the currently-processing turn of a continuing
   // session. Returns the cancel status (202 accepted / 200 already-terminal).
   cancelDialogueTurn: (id, turnId) =>

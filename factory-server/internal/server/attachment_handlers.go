@@ -132,6 +132,103 @@ func (s *Server) uploadDialogueAttachment(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, map[string]any{"attachment": att})
 }
 
+// getDialogueAttachmentContent handles GET
+// /api/dialogues/:id/attachments/:attachmentId/content — the click-to-preview
+// content route (F3). It serves the stored attachment's own file bytes under
+// ArtifactRoot with strict path containment: the resolved path MUST stay under
+// ArtifactRoot, rejecting any `..` or absolute traversal (404). The content-type
+// is derived from the attachment's PreviewKind: text kinds (markdown/text/json/
+// csv) are served as text/* so the frontend's text fetch renders them; image
+// kinds as image/<sub>; pdf as application/pdf. Kinds with no inline preview body
+// (metadata/office, blocked, missing-file) yield 404. Only StoredPath is ever
+// read; credential files never reach this table (rejected at upload), and the
+// handler serves nothing outside the attachment's own file.
+func (s *Server) getDialogueAttachmentContent(w http.ResponseWriter, r *http.Request) {
+	dialogueID := Param(r, "id")
+	attachmentID := Param(r, "attachmentId")
+	att, err := s.store.GetDialogueAttachment(r.Context(), dialogueID, attachmentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get attachment")
+		return
+	}
+	if att == nil || att.Status != model.AttachmentStatusActive {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	contentType, ok := attachmentContentContentType(att.PreviewKind, att.Mime)
+	if !ok {
+		// metadata/office/blocked: no inline preview body to serve.
+		writeError(w, http.StatusNotFound, "no preview content for this attachment kind")
+		return
+	}
+	full, ok := resolveAttachmentPath(s.cfg.ArtifactRoot, att.StoredPath)
+	if !ok {
+		// StoredPath escaped ArtifactRoot (traversal) or was absolute: never serve.
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		// Missing file on disk: degrade to 404 rather than surfacing FS errors.
+		writeError(w, http.StatusNotFound, "attachment content unavailable")
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", contentType)
+	if _, err := io.Copy(w, f); err != nil {
+		// Best-effort: a partial write after headers is unwinnable; just return.
+		return
+	}
+}
+
+// resolveAttachmentPath resolves StoredPath (slash-relative under ArtifactRoot)
+// to an absolute on-disk path and enforces strict containment: the cleaned,
+// joined path MUST remain under ArtifactRoot. A StoredPath containing `..` or an
+// absolute segment yields ok=false. ok is also false when StoredPath is empty.
+func resolveAttachmentPath(artifactRoot, storedPath string) (string, bool) {
+	if strings.TrimSpace(storedPath) == "" {
+		return "", false
+	}
+	root := filepath.Clean(artifactRoot)
+	full := filepath.Clean(filepath.Join(root, filepath.FromSlash(storedPath)))
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return "", false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return full, true
+}
+
+// attachmentContentContentType maps a preview kind to the HTTP Content-Type the
+// content route serves it as, returning ok=false for kinds with no inline
+// preview body (metadata/blocked). image sub-type is derived from Mime when
+// available, defaulting to jpeg.
+func attachmentContentContentType(kind model.AttachmentPreviewKind, mime string) (string, bool) {
+	switch kind {
+	case model.AttachmentPreviewMarkdown:
+		return "text/markdown; charset=utf-8", true
+	case model.AttachmentPreviewText:
+		return "text/plain; charset=utf-8", true
+	case model.AttachmentPreviewJSON:
+		return "application/json; charset=utf-8", true
+	case model.AttachmentPreviewCSV:
+		return "text/csv; charset=utf-8", true
+	case model.AttachmentPreviewPDF:
+		return "application/pdf", true
+	case model.AttachmentPreviewImage:
+		sub := "jpeg"
+		if strings.HasPrefix(mime, "image/") {
+			sub = strings.TrimPrefix(mime, "image/")
+		}
+		return "image/" + sub, true
+	default:
+		// metadata/blocked: no inline content to preview.
+		return "", false
+	}
+}
+
 func safeAttachmentName(name string) string {
 	name = filepath.Base(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, string(os.PathSeparator), "_")
