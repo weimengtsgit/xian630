@@ -201,6 +201,32 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 			c.upsertWorkbenchArtifact(ctx, ref)
 		}
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+	case model.StepDataIntegration:
+		// Task 9: the data_integration step is the data-capture producer. It
+		// enforces the ontology → internet → demo fallback order with explicit
+		// user confirmation at each boundary (no silent degradation). On success
+		// the executor upserts a task-owned data-contract artifact keyed by the
+		// source boundary the data actually came from, so the workbench can
+		// render whether the app is wired to ontology, internet, or demo data.
+		out, dataDetail, err := runner.ValidateDataIntegration(ws.OutputPath())
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		if res.Status == model.StepStatusSucceeded {
+			c.upsertWorkbenchArtifact(ctx, model.WorkbenchArtifactRef{
+				ID:         "warf_" + id.New(),
+				DialogueID: job.DialogueID,
+				JobID:      job.ID,
+				StepID:     step.ID,
+				CardKey:    "data_capture",
+				Kind:       model.WorkbenchArtifactDataContract,
+				Label:      "数据契约",
+				Path:       "docs/data-integration.md",
+				Status:     dataDetail.SourceBoundary,
+				CreatedAt:  time.Now(),
+				UpdatedAt:  time.Now(),
+			})
+		}
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	default:
 		// The remaining admitted producer kinds (collaboration_orchestration,
 		// domain_analysis, data_integration) are analysis/contract producers.
@@ -773,6 +799,9 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 	if step.Kind == model.StepDesignContract {
 		return designContractPrompt(job, ws)
 	}
+	if step.Kind == model.StepDataIntegration {
+		return dataIntegrationPrompt(job, ws)
+	}
 	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
 		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
@@ -801,6 +830,26 @@ func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
 		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
 		"designDocument 必须描述视图识别、布局分区、组件映射、交互状态、响应式约束、关键文案和字段呈现。assumedDataFields 是预览依赖但数据抓取尚未确认的字段名数组。" +
 		"需要用户澄清时，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
+}
+
+// dataIntegrationPrompt is the specialized prompt for the data_integration
+// (data-capture) collaboration producer. It enforces the data-capture fallback
+// contract (decision #30/#31): ontology boundary first, then internet, then
+// demo, and the agent MUST ask before crossing a fallback boundary — silent
+// degradation is forbidden. controlledCredentialRefs is referenced in the
+// input description for forward-compatibility (Task 12 injects controlled
+// credential handles); the prompt string is correct as-is even though the
+// field is not injected into input.json yet, because the agent tolerates a
+// missing optional input key.
+func dataIntegrationPrompt(job model.Job, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的数据抓取智能体。读取 input.json 中的 confirmedRequirement、controlledCredentialRefs、附件摘要和 [user_input] 回答，按本体接口优先、互联网抓取其次、演示数据最后的顺序做数据验证。" +
+		"不要静默降级：本体接口不可用时必须 needsUserInput=true 并询问是否降级为互联网抓取；互联网抓取不可用时必须 needsUserInput=true 并询问是否降级为演示数据。用户已在 [user_input] 明确选择边界时，从该边界开始。" +
+		"凭证类澄清问题必须设置 inputType:\"credential\"；普通选择问题使用 options，options 每项包含 value、label，可包含 recommended:true。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、sourceBoundary、verification、dataContract、fallbackHistory、needsUserInput、questions、workLog、warnings、compatibility。" +
+		"sourceBoundary 只能是 ontology、internet、demo；status 只能是 passed 或 needs_input。verification 必须包含 ontology/internet/demo 节点，每个节点包含 status 和 reason。" +
+		"dataContract.fields 是字段数组；成功通过数据契约时 fields 不得为空。compatibility.status 只能是 passed、failed、pending；failed 时必须 needsUserInput=true 并给出兼容性确认问题。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
 }
 

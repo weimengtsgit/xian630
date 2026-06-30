@@ -553,3 +553,59 @@ func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T)
 		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v", err)
 	}
 }
+
+// TestValidateDataIntegrationRequiresStepwiseFallbackQuestion is the Task-9
+// data-capture fallback contract: when the ontology boundary is unavailable
+// (verification.ontology.status="failed"), the step MUST surface a structured
+// clarification (needsUserInput + 1 question) rather than silently degrading to
+// internet or demo. The validator returns the executor-facing StepOutput
+// (NeedsUserInput true, 1 question) AND the decoded detail so the executor can
+// upsert the data-contract artifact with the source boundary.
+func TestValidateDataIntegrationRequiresStepwiseFallbackQuestion(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	raw := `{
+	  "status":"needs_input",
+	  "summary":"本体接口不可用",
+	  "sourceBoundary":"ontology",
+	  "verification":{"ontology":{"status":"failed","reason":"401"}},
+	  "needsUserInput":true,
+	  "questions":[{"id":"fallback-internet","question":"本体接口不可用，是否降级为互联网抓取？","options":[{"value":"internet","label":"降级为互联网抓取","recommended":true},{"value":"ontology","label":"继续提供本体接口信息"}]}],
+	  "dataContract":{"fields":[]},
+	  "workLog":[{"content":"已验证本体接口，返回 401"}]
+	}`
+	out, detail, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw))
+	if err != nil {
+		t.Fatalf("ValidateDataIntegration: %v", err)
+	}
+	if !out.NeedsUserInput || len(out.Questions) != 1 {
+		t.Fatalf("out = %#v", out)
+	}
+	if detail.SourceBoundary != "ontology" || detail.Verification.Ontology.Status != "failed" {
+		t.Fatalf("detail = %#v", detail)
+	}
+}
+
+// TestValidateDataIntegrationRejectsSilentDemoFallback locks decision #31
+// (no silent degradation): a passed result whose sourceBoundary is "demo" but
+// which carries a non-empty fallbackHistory is REJECTED with
+// ErrSchemaValidationFailed. Demo data requires an explicit user-confirmed
+// trace — silently falling back to demo after ontology+internet failed is a
+// data-honesty violation the pipeline must hard-fail, not pause.
+func TestValidateDataIntegrationRejectsSilentDemoFallback(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	raw := `{"status":"passed","summary":"使用演示数据","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":["ontology_failed","internet_failed"]}`
+	_, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw))
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	}
+}
+
+func writeTempFileForContractTest(t *testing.T, path, raw string) string {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}

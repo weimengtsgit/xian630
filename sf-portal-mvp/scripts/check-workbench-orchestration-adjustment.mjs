@@ -72,6 +72,20 @@ assert.equal(production.cardsByKey.production_delivery.state, 'running')
 assert.equal(production.cardsByKey.production_delivery.subStage, '代码生成')
 assert.equal(production.edges.find(edge => edge.from === 'data_capture' && edge.to === 'production_delivery').state, 'flowing')
 
+// ---- Task 9: data-capture fallback flow + data-flow track assertion -------
+// The data_integration step models the ontology → internet → demo fallback
+// order with explicit user confirmation at each boundary. When the ontology
+// boundary is unavailable, the step pauses for clarification (waiting_user),
+// and the data_capture card surfaces that state plus the agent's summary so
+// the user knows WHY the boundary failed (本体接口不可用).
+const dataGraph = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_data', status: 'task_running' }, messages: [{ id: 'u', role: 'user', content: 'x' }] },
+  jobStepBlocks: [{ stepId: 'data', kind: 'data_integration', agentKey: 'data-integration', status: 'waiting_user', summary: '本体接口不可用，等待降级确认' }],
+  workTraceItems: [{ stepId: 'data', type: 'clarification', payload: { questions: [{ id: 'fallback-internet', question: '是否降级为互联网抓取？' }] } }],
+})
+assert.equal(dataGraph.cardsByKey.data_capture.state, 'waiting_user_clarification')
+assert.equal(dataGraph.cardsByKey.data_capture.currentAction.includes('本体接口不可用'), true)
+
 assert.deepEqual(AGGREGATE_CARD_KEYS, ['user_input', 'business_logic', 'interface_parsing', 'data_capture', 'production_delivery'])
 
 const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')

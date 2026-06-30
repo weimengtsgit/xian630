@@ -582,6 +582,96 @@ func ValidateDesignContract(path string) (StepOutput, DesignContractOutput, erro
 	return StepOutput{}, raw, nil
 }
 
+// DataIntegrationOutput mirrors the data_integration step's output.json (Task 9).
+// The step is the data-capture producer: it validates data sources in a strict
+// priority order (ontology first, then internet, then demo) and MUST ask the
+// user before crossing a fallback boundary — silent degradation to demo is a
+// data-honesty violation the validator rejects. On success the executor derives
+// a task-owned data-contract artifact (the agent is forbidden from writing it)
+// from DataContract + Verification, keyed by SourceBoundary so the workbench
+// can surface which boundary the data came from.
+//
+// Schema: status (passed|needs_input), summary, sourceBoundary
+// (ontology|internet|demo), verification (per-boundary status+reason),
+// dataContract (fields + sampleCount), fallbackHistory (the ordered boundary
+// crossings the agent recorded), needsUserInput/questions (the shared
+// clarification contract), and the shared workLog/warnings.
+type DataIntegrationOutput struct {
+	Status          string            `json:"status"`
+	Summary         string            `json:"summary"`
+	SourceBoundary  string            `json:"sourceBoundary"`
+	Verification    DataVerification  `json:"verification"`
+	DataContract    DataContract      `json:"dataContract"`
+	FallbackHistory []string          `json:"fallbackHistory"`
+	NeedsUserInput  bool              `json:"needsUserInput"`
+	Questions       []Question        `json:"questions"`
+	WorkLog         []workLogEntry    `json:"workLog"`
+}
+
+// DataVerification is the per-boundary reachability verdict the data step
+// records. Each node's status is one of passed|failed|pending; the validator
+// does not enforce the enum (the executor surfaces the boundary, not the
+// per-node status) but the ontology node's status is the load-bearing signal
+// the workbench renders when the ontology boundary is unavailable.
+type DataVerification struct {
+	Ontology DataVerificationNode `json:"ontology"`
+	Internet DataVerificationNode `json:"internet"`
+	Demo     DataVerificationNode `json:"demo"`
+}
+
+// DataVerificationNode is one boundary's verification result.
+type DataVerificationNode struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// DataContract is the field-level contract the data step produces on a passed
+// result. Fields is an opaque array (each entry is a field descriptor the agent
+// authors); the validator only enforces that a passed result carries at least
+// one field — an empty contract on a success is a schema_validation_failed
+// because the downstream interface depends on confirmed field names.
+type DataContract struct {
+	Fields      []map[string]any `json:"fields"`
+	SampleCount int              `json:"sampleCount"`
+}
+
+// ValidateDataIntegration decodes a data_integration attempt's output.json and
+// returns BOTH the executor-facing StepOutput (needsUserInput/questions for the
+// waiting-user signal) AND the decoded DataIntegrationOutput (so the executor
+// can build the data-contract artifact from sourceBoundary + dataContract
+// without re-reading the file).
+//
+// Validation rules (decision #30/#31 — no silent degradation):
+//   - needsUserInput / status:"needs_input" MUST carry at least one question.
+//     A fallback boundary crossing the agent cannot resolve on its own must be
+//     surfaced as a clarification, not a silent default — an empty questions
+//     array on a needs-input result is ErrSchemaValidationFailed.
+//   - sourceBoundary:"demo" with a non-empty fallbackHistory is REJECTED. Demo
+//     data requires an explicit user-confirmed trace; silently landing on demo
+//     after ontology+internet failed is forbidden.
+//   - A passed result MUST carry a non-empty dataContract.fields. An empty
+//     contract on success is meaningless downstream, so it hard-fails rather
+//     than producing an empty artifact.
+func ValidateDataIntegration(path string) (StepOutput, DataIntegrationOutput, error) {
+	var raw DataIntegrationOutput
+	if err := ReadAndDecode(path, &raw); err != nil {
+		return StepOutput{}, raw, err
+	}
+	if raw.NeedsUserInput || strings.EqualFold(raw.Status, "needs_input") {
+		if len(raw.Questions) == 0 {
+			return StepOutput{}, raw, fmt.Errorf("questions required for data fallback: %w", ErrSchemaValidationFailed)
+		}
+		return StepOutput{NeedsUserInput: true, Questions: raw.Questions}, raw, nil
+	}
+	if raw.SourceBoundary == "demo" && len(raw.FallbackHistory) > 0 {
+		return StepOutput{}, raw, fmt.Errorf("demo data fallback requires explicit user confirmation trace: %w", ErrSchemaValidationFailed)
+	}
+	if len(raw.DataContract.Fields) == 0 {
+		return StepOutput{}, raw, fmt.Errorf("data contract fields required: %w", ErrSchemaValidationFailed)
+	}
+	return StepOutput{}, raw, nil
+}
+
 // codeGenerationOutput mirrors design §5.3.
 //
 // Task 6: the step must report which project-local skills it loaded+followed
