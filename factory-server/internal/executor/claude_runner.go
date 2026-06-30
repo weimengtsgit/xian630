@@ -252,19 +252,15 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		out, dataDetail, err := runner.ValidateDataIntegration(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
-		if res.Status == model.StepStatusSucceeded {
-			// F6: project the data-verification summary onto the data_contract
-			// artifact so the workbench's data-flow track can render REAL states
-			// (active/failed/succeeded/waiting) instead of a static label list.
-			// The summary is built from the decoded DataIntegrationOutput:
-			// sourceBoundary (which boundary the data actually came from), the
-			// per-boundary verification verdicts (so a failed ontology boundary
-			// shows red), the ordered fallback history, and the sample/field
-			// counts that annotate the processing nodes.
-			meta, mErr := buildDataContractMetadata(dataDetail)
-			if mErr != nil {
-				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: mErr.Error()}, nil
-			}
+		// F6 + review-round-2: project the data-verification summary onto the
+		// data_contract artifact on BOTH success AND needs_input (waiting_user).
+		// During the degradation-confirmation wait the workbench data-flow track
+		// must render the real per-boundary state (ontology red breakpoint +
+		// internet waiting), which requires the verification metadata to exist
+		// while the step is paused, not only after it succeeds (spec #32).
+		if meta, project, mErr := dataContractProjection(dataDetail, res.Status); mErr != nil {
+			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: mErr.Error()}, nil
+		} else if project {
 			c.upsertWorkbenchArtifact(ctx, model.WorkbenchArtifactRef{
 				ID:         "warf_" + id.New(),
 				DialogueID: job.DialogueID,
@@ -1319,4 +1315,24 @@ func buildDataContractMetadata(detail runner.DataIntegrationOutput) (string, err
 		return "", fmt.Errorf("marshal data-contract metadata: %w", err)
 	}
 	return string(raw), nil
+}
+
+// dataContractProjection decides whether the data_integration step should
+// project a data_contract workbench artifact for the given result status, and
+// when so returns the verification-summary metadata to carry on the ref. The
+// summary is projected on BOTH success AND needs_input (waiting_user): during
+// the degradation-confirmation wait the workbench data-flow track must render
+// the real per-boundary state (e.g. ontology red breakpoint + internet waiting),
+// not just a card-level waiting state (spec #32). Other statuses do not
+// project. err is non-nil only on the near-impossible metadata-marshal failure,
+// which the caller treats as a step failure (preserving the prior behavior).
+func dataContractProjection(detail runner.DataIntegrationOutput, resStatus model.StepStatus) (string, bool, error) {
+	if resStatus != model.StepStatusSucceeded && resStatus != model.StepStatusWaitingUser {
+		return "", false, nil
+	}
+	meta, err := buildDataContractMetadata(detail)
+	if err != nil {
+		return "", false, err
+	}
+	return meta, true, nil
 }
