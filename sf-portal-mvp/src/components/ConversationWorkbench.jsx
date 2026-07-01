@@ -713,7 +713,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     // D6: the persisted analysis lands after the round completes and renders
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
     // the full text. Rendered as plaintext only (never dangerouslySetInnerHTML).
-    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} />
+    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} rawThinking={item.rawThinking} />
   }
   if (item.type === 'task_execution_block') {
     // Phase 3: one block per executing task step. Running/waiting/failed steps
@@ -857,9 +857,10 @@ function ThinkingSummary({ item }) {
 // block with an expand/collapse toggle. The round's streamed analysis folds above
 // its conclusion once the persisted analysis lands; the user expands to read it.
 // Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
-function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
+function FoldedAnalysis({ content, label, expanded: initialExpanded, rawThinking }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
   const text = String(content || '')
+  const raw = String(rawThinking || '')
   return (
     <CopyableBlock text={text} className="cw-agent-wrap" copyLabel="复制分析">
       <div className="cw-item cw-agent cw-folded-analysis">
@@ -873,6 +874,12 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
           <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
         </button>
         {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+        {expanded && raw ? (
+          <details className="cw-raw-thinking">
+            <summary>原始思考过程</summary>
+            <pre className="cw-live-text">{raw}</pre>
+          </details>
+        ) : null}
       </div>
     </CopyableBlock>
   )

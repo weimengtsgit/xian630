@@ -58,3 +58,25 @@
     justify-content: flex-start;
   }
 }
+
+/* ---- interaction polish (scoped to the aggregate graph) ----
+   State changes (待启动 → 执行中 → 已确认) animate instead of snapping, and the
+   执行中 (running) card gets a subtle cyan tint + inset glow so the active
+   responsibility reads at a glance. The pulse ring itself comes from the shared
+   .ceg-card-state-running::before (already reduced-motion-guarded). */
+.aog .ceg-card {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.25s ease, transform 0.2s ease, opacity 0.22s ease;
+}
+.aog .ceg-card-state {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.aog .ceg-card-state-running {
+  background: linear-gradient(180deg, rgba(20, 70, 96, 0.96), rgba(10, 40, 58, 0.94));
+  box-shadow: inset 0 0 18px rgba(104, 221, 255, 0.14);
+}
+@media (prefers-reduced-motion: reduce) {
+  .aog .ceg-card,
+  .aog .ceg-card-state {
+    transition: none;
+  }
+}

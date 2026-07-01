@@ -105,6 +105,23 @@ export function buildWorkbenchOrchestrationView({ view, workTraceItems = [], job
   production.summary = latestTerminalSummary(production.steps)
 
   applyUpstreamWaiting(cardsByKey)
+  // Pre-task clarification: before the job is created, business_logic has NO
+  // job steps, so the upstream-waiting pass leaves it at 'ready' (待启动) even
+  // while the agent is actively running clarification rounds — the graph looks
+  // frozen. Reflect that activity: business_logic → 执行中 (running, which also
+  // pulses via ceg-card-state-running) + a currentAction naming the phase. Only
+  // applies when there are no business_logic steps (pre-job); once the job is
+  // seeded the step statuses drive the card as usual.
+  const sess = view && view.session
+  if (!cardsByKey.business_logic.steps.length && sess) {
+    if (sess.status === 'drafting_application') {
+      cardsByKey.business_logic.state = 'running'
+      if (!cardsByKey.business_logic.currentAction) cardsByKey.business_logic.currentAction = '需求澄清中'
+    } else if (sess.status === 'analyzing') {
+      cardsByKey.business_logic.state = 'running'
+      if (!cardsByKey.business_logic.currentAction) cardsByKey.business_logic.currentAction = '分析需求中'
+    }
+  }
   // Task 13: interface/data compatibility gate. When a confirmed data contract
   // is incompatible with the interface preview (the data-integration step
   // surfaced it as a data_contract artifact with status 'compatible_failed'),
