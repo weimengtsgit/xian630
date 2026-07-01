@@ -454,18 +454,16 @@ func requirementFieldsFromOutput(raw requirementAnalysisOutput) map[string]any {
 	})
 }
 
-// pickRequirementFields keeps only the summary-critical keys that define
-// WHETHER two requirements are the same requirement: the one-line summary plus
-// the stable identity/scenario fields. Audit color (generationProfile,
-// constraints, risks, workLog, validation) is excluded on purpose — it is not
-// part of what the user confirmed and must not gate the consistency check.
-// NOTE: `summary` is EXCLUDED — the confirmed requirement (from clarification)
-// carries NO free-text summary; only the analysis agent produces one, so
-// including it made the checksum always mismatch. The contract is the
-// structured fields the two sides share.
+// pickRequirementFields keeps only the BUSINESS-LOGIC keys the consistency check
+// compares: the identity/scenario fields the 业务逻辑 clarification settles.
+// `summary` is EXCLUDED (only the analysis agent produces one). `primaryView` and
+// `dataPolicy` are EXCLUDED too — they are deferred to later stages (界面解析 /
+// 数据抓取) and may be empty in the confirmed requirement while the analysis
+// freeze step fills them; comparing them would mismatch. mainEntities (the
+// business domain objects) IS compared.
 func pickRequirementFields(doc map[string]any) map[string]any {
 	out := map[string]any{}
-	for _, key := range []string{"appType", "appName", "coreScenario", "primaryView", "mainEntities", "dataPolicy", "acceptanceFocus"} {
+	for _, key := range []string{"appType", "appName", "coreScenario", "mainEntities", "acceptanceFocus"} {
 		if v, ok := doc[key]; ok {
 			out[key] = v
 		}

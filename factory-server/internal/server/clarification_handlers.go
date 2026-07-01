@@ -1713,6 +1713,13 @@ func compactAnswerList(values []string) []string {
 // generationProfile map. Returns the list of camelCase field names that are
 // missing (empty slice if all present). This is the verdict confirmClarification
 // uses for its 422 body.
+// missingRequiredFields lists the BUSINESS-LOGIC fields the 业务逻辑 clarification
+// must settle before ready_to_confirm. Interface (primaryView) and data-source
+// (dataPolicy) details are intentionally NOT required here — they are clarified
+// in later stages (界面解析 / 数据抓取), so the requirement may carry them empty
+// and the requirement_analysis freeze step + downstream contracts fill them.
+// mainEntities (the business domain objects) stays required — it is business
+// logic, not a data-source detail.
 func missingRequiredFields(req clarification.Requirement) []string {
 	var missing []string
 	if req.AppType == "" {
@@ -1727,14 +1734,8 @@ func missingRequiredFields(req clarification.Requirement) []string {
 	if req.CoreScenario == "" {
 		missing = append(missing, "coreScenario")
 	}
-	if req.PrimaryView == "" {
-		missing = append(missing, "primaryView")
-	}
 	if len(req.MainEntities) == 0 {
 		missing = append(missing, "mainEntities")
-	}
-	if req.DataPolicy == "" {
-		missing = append(missing, "dataPolicy")
 	}
 	if len(req.AcceptanceFocus) == 0 {
 		missing = append(missing, "acceptanceFocus")
