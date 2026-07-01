@@ -1,3 +1,6 @@
+import { nearestPointOnCoastNm, coastProximityLevel } from "./coast.js";
+import { buildSummary } from "./summary.js";
+
 const NM_PER_KM = 0.539956803;
 const EARTH_RADIUS_KM = 6371.0088;
 
@@ -150,6 +153,57 @@ function summarizeSegment(points, index, areas, targetMmsi, params) {
   };
 }
 
+export function computeTrackMetrics(points = [], coast = null) {
+  const sorted = sortedTrack(points);
+  if (sorted.length === 0) {
+    return { minCoastDistanceNm: null, nearestCoastPoint: null, maxSpeedSegment: null, activeDays: 0, reportCount: 0, avgSpeedKn: null, trackOrigin: null };
+  }
+  let minCoast = Infinity;
+  let nearestCoastPoint = null;
+  let maxSpeed = -1;
+  let maxSpeedSegment = null;
+  let speedSum = 0;
+  let speedCount = 0;
+  const days = new Set();
+  for (let i = 0; i < sorted.length; i += 1) {
+    const p = sorted[i];
+    if (coast) {
+      const np = nearestPointOnCoastNm(p, coast);
+      if (np.distanceNm !== null && np.distanceNm < minCoast) {
+        minCoast = np.distanceNm;
+        nearestCoastPoint = { lon: toNumber(p.lon), lat: toNumber(p.lat), time: p.time, segmentId: np.segmentId };
+      }
+    }
+    const sp = toNumber(p.speedKn);
+    if (sp !== null) { speedSum += sp; speedCount += 1; }
+    if (i > 0) {
+      const prev = sorted[i - 1];
+      const psp = toNumber(prev.speedKn);
+      if (psp !== null && psp > maxSpeed) {
+        maxSpeed = psp;
+        maxSpeedSegment = {
+          fromPoint: { lon: toNumber(prev.lon), lat: toNumber(prev.lat), time: prev.time },
+          toPoint: { lon: toNumber(p.lon), lat: toNumber(p.lat), time: p.time },
+          speedKn: psp,
+          time: p.time,
+        };
+      }
+    }
+    const ms = parseTimeMs(p.time);
+    if (ms !== null) days.add(new Date(ms).toISOString().slice(0, 10));
+  }
+  const first = sorted[0];
+  return {
+    minCoastDistanceNm: minCoast === Infinity ? null : minCoast,
+    nearestCoastPoint,
+    maxSpeedSegment,
+    activeDays: days.size,
+    reportCount: sorted.length,
+    avgSpeedKn: speedCount > 0 ? Number((speedSum / speedCount).toFixed(2)) : null,
+    trackOrigin: { lon: toNumber(first.lon), lat: toNumber(first.lat), time: first.time },
+  };
+}
+
 export function splitTrackSegments(points = [], options = {}) {
   const params = { ...DEFAULT_PARAMETERS, ...options };
   const areas = options.areas || [];
@@ -199,6 +253,9 @@ export function detectAisGaps(points = [], options = {}) {
       to: { lon: toNumber(point.lon), lat: toNumber(point.lat) },
       lon: (toNumber(prev.lon) + toNumber(point.lon)) / 2,
       lat: (toNumber(prev.lat) + toNumber(point.lat)) / 2,
+      preSpeedKn: toNumber(prev.speedKn),
+      postSpeedKn: toNumber(point.speedKn),
+      courseDeg: toNumber(prev.courseDeg) ?? toNumber(prev.heading) ?? null,
     });
   }
   return gaps;
@@ -271,6 +328,13 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
       lat: gap.lat,
       areaIds: gap.nearAreaIds,
       evidence: [`上一点 ${gap.fromTime}`, `下一点 ${gap.toTime}`, `缺口 ${Math.round(gap.gapMinutes)} 分钟`],
+      preSpeedKn: gap.preSpeedKn ?? null,
+      postSpeedKn: gap.postSpeedKn ?? null,
+      segmentAvgSpeedKn: gap.preSpeedKn != null && gap.postSpeedKn != null
+        ? Number(((gap.preSpeedKn + gap.postSpeedKn) / 2).toFixed(2))
+        : null,
+      courseDeg: gap.courseDeg ?? null,
+      trackOrigin: target?.trackOrigin || null,
     });
   }
   if (target?.dimension?.level === "review") {
@@ -289,6 +353,26 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
       evidence: ["客户强特征为 4*2", "附件存在 3*2 样本", "保留为待核验对象"],
     });
   }
+  const minD = toNumber(target?.minCoastDistanceNm);
+  const level = coastProximityLevel(minD, params);
+  if (level && target?.mmsi) {
+    const np = target.nearestCoastPoint;
+    alerts.push({
+      id: `${target.mmsi}-coast-proximity`,
+      targetMmsi: target.mmsi,
+      targetName,
+      type: "coast-proximity",
+      level,
+      severity: level === "high" ? "critical" : level === "medium" ? "warning" : "info",
+      title: "接近国土警戒区",
+      summary: `${targetName} 距中国海岸最近 ${minD.toFixed(1)} 海里`,
+      time: np?.time || target.latestTime || null,
+      lon: np?.lon ?? toNumber(target.lon),
+      lat: np?.lat ?? toNumber(target.lat),
+      areaIds: [],
+      evidence: [`最近距离 ${minD.toFixed(1)} 海里`, `等级 ${level}`, `警戒范围 ${params.coastAlertRangeNm} 海里`],
+    });
+  }
   return alerts;
 }
 
@@ -301,17 +385,23 @@ export function scoreTarget({ nameHit, dimension, latestAreaIds = [], hasObserve
   if (alerts.some((a) => a.type === "sustained-low-speed")) score += 20;
   if (alerts.some((a) => a.type === "repeated-activity")) score += 15;
   if (alerts.some((a) => a.type === "ais-gap")) score += 10;
+  const co = alerts.find((a) => a.type === "coast-proximity");
+  if (co) {
+    if (co.level === "high") score += 25;
+    else if (co.level === "medium") score += 15;
+    else score += 8;
+  }
   return Math.min(100, score);
 }
 
 function classifyStatus(score, alerts, hasObservedTrack) {
-  if (alerts.some((a) => a.severity === "critical" || a.type === "sustained-low-speed" || a.type === "repeated-activity")) return "异常行为目标";
+  if (alerts.some((a) => a.severity === "critical" || a.type === "sustained-low-speed" || a.type === "repeated-activity" || (a.type === "coast-proximity" && a.level === "high"))) return "异常行为目标";
   if (score >= 65 && hasObservedTrack) return "高可信目标";
   if (score >= 40) return "待核验目标";
   return "仅最新位置";
 }
 
-export function analyzePayload(payload) {
+export function analyzePayload(payload, coast = null) {
   const params = { ...DEFAULT_PARAMETERS, ...(payload.parameters || {}) };
   const areas = payload.monitoredAreas || [];
   const trackByMmsi = new Map();
@@ -331,6 +421,7 @@ export function analyzePayload(payload) {
     const hasObservedTrack = points.length > 0;
     const segments = splitTrackSegments(points, { ...params, areas });
     const aisGaps = detectAisGaps(points, { ...params, areas });
+    const metrics = computeTrackMetrics(points, coast);
     const targetBase = {
       ...rawTarget,
       nameHit,
@@ -338,6 +429,7 @@ export function analyzePayload(payload) {
       latestAreaIds,
       hasObservedTrack,
       trackSource: hasObservedTrack ? "真实附件轨迹" : "仅最新位置",
+      ...metrics,
     };
     const alerts = buildAlerts({ target: targetBase, segments, aisGaps, areas, params });
     const score = scoreTarget({ nameHit, dimension, latestAreaIds, hasObservedTrack, alerts });
@@ -348,7 +440,7 @@ export function analyzePayload(payload) {
     allAlerts.push(...alerts);
     return target;
   });
-  return {
+  const analysis = {
     ...payload,
     parameters: params,
     targets: sortAnalyses(targets),
@@ -362,6 +454,7 @@ export function analyzePayload(payload) {
       return Date.parse(b.time || 0) - Date.parse(a.time || 0);
     }),
   };
+  return { ...analysis, summary: buildSummary(analysis, params) };
 }
 
 export function sortAnalyses(targets = []) {
