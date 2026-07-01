@@ -35,7 +35,7 @@ import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
 import { InterfacePreviewModal } from './InterfacePreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
-import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
 import { factoryApi } from '../api/client'
@@ -137,6 +137,10 @@ export function ConversationWorkbench({
   const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
+  // Surface WHY a session failed (e.g. 模型服务余额不足), not just "已失败". The
+  // raw error_message is operator-grade; describeSessionError maps it to a
+  // plain-Chinese {title, detail, hint} and never leaks the raw blob.
+  const sessionError = status === 'failed' ? describeSessionError(session && session.error_code, session && session.error_message) : null
 
   // ---- continuous-workbench derived state (Task 7) ------------------------
   const traceItems = Array.isArray(workTrace) ? workTrace : []
@@ -521,7 +525,16 @@ export function ConversationWorkbench({
         {status === 'resolved' && !composerActive ? (
           <p className="cw-terminal-hint">会话已完成，在左侧「会话导航」开始新的需求。</p>
         ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
-          <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
+          <>
+            {sessionError ? (
+              <div className="cw-session-error" role="alert">
+                <div className="cw-session-error-title">{sessionError.title}</div>
+                {sessionError.detail ? <div className="cw-session-error-detail">{sessionError.detail}</div> : null}
+                {sessionError.hint ? <div className="cw-session-error-hint">{sessionError.hint}</div> : null}
+              </div>
+            ) : null}
+            <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
+          </>
         ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (

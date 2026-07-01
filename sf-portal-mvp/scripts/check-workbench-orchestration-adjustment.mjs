@@ -6,6 +6,7 @@ import {
   buildWorkbenchOrchestrationView,
   aggregateCardLabel,
 } from '../src/hooks/workbenchOrchestrationState.js'
+import { describeSessionError } from '../src/hooks/dialogueTimeline.js'
 
 const empty = buildWorkbenchOrchestrationView({ view: null, workTraceItems: [], jobStepBlocks: [] })
 assert.deepEqual(
@@ -310,5 +311,23 @@ assert.equal(aggregateGraphSrc.includes('aog-card-actions'), false, 'aggregate c
 assert.equal(aggregateGraphSrc.includes('aog-connector-merge'), false, 'aggregate graph should use the old connector model instead of a manual merge class')
 assert.equal(css.includes('.aog-connector'), false, 'aggregate CSS should not override the old connector geometry')
 assert.equal(css.includes('.aog-action-link'), false, 'aggregate CSS should not add non-legacy card action buttons')
+
+// describeSessionError turns a raw session failure into plain-Chinese
+// {title, detail, hint} and MUST NOT leak the operator-grade raw blob.
+const e402 = describeSessionError('route_failed', 'claude exit 1: {"type":"result","is_error":true,"api_error_status":402,"result":"API Error: 402 Insufficient Balance"}: runner_exit_nonzero')
+assert.equal(e402 && e402.title.includes('余额'), true, '402 → 余额不足 title')
+assert.equal(e402 && e402.hint && e402.hint.length > 0, true, 'error must carry an actionable hint')
+assert.equal(JSON.stringify(e402).includes('claude exit'), false, 'friendly error must not leak raw "claude exit" blob')
+assert.equal(JSON.stringify(e402).includes('api_error_status'), false, 'friendly error must not leak raw JSON')
+assert.equal(describeSessionError('', 'api_error_status: 401 Unauthorized').title.includes('鉴权'), true, '401 → 鉴权')
+assert.equal(describeSessionError('', 'context deadline exceeded').title.includes('超时'), true, 'timeout → 超时')
+assert.equal(describeSessionError('', 'dial tcp: connection refused').title.includes('连接'), true, 'conn refused → 连接失败')
+const eUnknown = describeSessionError('', 'something weird happened')
+assert.equal(eUnknown.title, '会话处理失败', 'unknown → generic title')
+assert.equal(eUnknown.detail.includes('something weird happened'), true, 'unknown fallback surfaces cleaned cause')
+assert.equal(describeSessionError('', ''), null, 'no error → null')
+// ConversationWorkbench must surface the session error (not just "已失败").
+assert.equal(workbenchSrc.includes('describeSessionError'), true, 'ConversationWorkbench must render the session error via describeSessionError')
+assert.equal(workbenchSrc.includes('cw-session-error'), true, 'ConversationWorkbench must render a session-error block')
 
 console.log('check-workbench-orchestration-adjustment: ok')

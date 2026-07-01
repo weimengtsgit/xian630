@@ -379,6 +379,29 @@ func TestCreateDialoguePersistsMessageAndRoutes(t *testing.T) {
 	}
 }
 
+func TestCreateDialogueExplicitApplicationCreationUsesLLMRoute(t *testing.T) {
+	fr := &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}
+	_, r, _ := newDialogueTestServer(t, fr)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "请做一个后勤管理应用"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Session.Status == model.DialogueStatusFailed {
+		t.Fatalf("explicit application creation should not fail routing: %#v", view.Session)
+	}
+	if view.Route.Intent != dialogue.IntentApplicationGeneration {
+		t.Fatalf("route intent = %q, want application_generation", view.Route.Intent)
+	}
+	if fr.routeCalls != 1 {
+		t.Fatalf("explicit application creation must use the LLM route, got %d calls", fr.routeCalls)
+	}
+}
+
 func TestCreateDialogueCanRecommendManagedAgent(t *testing.T) {
 	_, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeManagedAgentOutput})
 
@@ -682,6 +705,36 @@ func TestCreateDialogueRejectsInventedSlug(t *testing.T) {
 	}
 	if strings.Contains(persisted.DraftJSON, "this-app-does-not-exist") {
 		t.Fatalf("invented slug persisted in DraftJSON: %s", persisted.DraftJSON)
+	}
+}
+
+func TestCreateDialogueMarksFailedWhenRouterUnavailable(t *testing.T) {
+	srv, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeErr: true})
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "请做一个后勤管理应用"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.Session.Status != model.DialogueStatusFailed {
+		t.Fatalf("session status = %q, want failed when routing runner is unavailable", view.Session.Status)
+	}
+	if view.Route.Intent != "" {
+		t.Fatalf("failed routing must not persist a fallback route, got %q", view.Route.Intent)
+	}
+
+	persisted, err := srv.store.GetDialogueSession(context.Background(), view.Session.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("re-read dialogue: %v", err)
+	}
+	if persisted.Status != model.DialogueStatusFailed {
+		t.Fatalf("persisted status = %q, want failed", persisted.Status)
+	}
+	if persisted.ErrorCode != "route_failed" || !strings.Contains(persisted.ErrorMessage, runner.ErrRunnerExitNonzero.Error()) {
+		t.Fatalf("persisted error = %q/%q, want route_failed runner_exit_nonzero", persisted.ErrorCode, persisted.ErrorMessage)
 	}
 }
 
@@ -2289,7 +2342,7 @@ func TestDialogueDoesNotProposeChangeBeforeInitialApplicationReady(t *testing.T)
 	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
 		Intent: model.TurnIntentApplicationModification,
 		Summary: dialogue.TurnSummary{
-			UserFacingText:     "保留 XX 智能体作为正式名称",
+			UserFacingText:    "保留 XX 智能体作为正式名称",
 			ChangeDescription: "保留 XX 智能体作为正式名称",
 		},
 	}))
@@ -3171,14 +3224,14 @@ func TestConfirmDialogueChangeRejectsMissingDocumentDraft(t *testing.T) {
 
 	// Create a turn summary with a documentDraftChange referencing non-existent draft
 	summary := dialogue.TurnSummary{
-		Intent:         model.TurnIntentApplicationModification,
-		UserFacingText: "Change",
+		Intent:            model.TurnIntentApplicationModification,
+		UserFacingText:    "Change",
 		ChangeDescription: "Change",
 		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
-			DraftID: "non-existent-draft",
-			ApplicationID: "app_demo",
-			DialogueID: "dlg_test",
-			Path: "docs/overview.md",
+			DraftID:        "non-existent-draft",
+			ApplicationID:  "app_demo",
+			DialogueID:     "dlg_test",
+			Path:           "docs/overview.md",
 			SourceChecksum: "sha256:abc123",
 		},
 	}
@@ -3250,14 +3303,14 @@ func TestConfirmDialogueChangeRejectsMismatchedDocumentDraftOwnership(t *testing
 
 	// Create turn summary referencing the draft
 	summary := dialogue.TurnSummary{
-		Intent:         model.TurnIntentApplicationModification,
-		UserFacingText: "Change",
+		Intent:            model.TurnIntentApplicationModification,
+		UserFacingText:    "Change",
 		ChangeDescription: "Change",
 		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
-			DraftID: "draft_1",
-			ApplicationID: "app_correct", // Mismatch with draft's app
-			DialogueID: "dlg_test",
-			Path: "docs/overview.md",
+			DraftID:        "draft_1",
+			ApplicationID:  "app_correct", // Mismatch with draft's app
+			DialogueID:     "dlg_test",
+			Path:           "docs/overview.md",
 			SourceChecksum: "sha256:abc123",
 		},
 	}
@@ -3327,14 +3380,14 @@ func TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus(t *testing.T
 
 			// Create turn summary
 			summary := dialogue.TurnSummary{
-				Intent:         model.TurnIntentApplicationModification,
-				UserFacingText: "Change",
+				Intent:            model.TurnIntentApplicationModification,
+				UserFacingText:    "Change",
 				ChangeDescription: "Change",
 				DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
-					DraftID: "draft_1",
-					ApplicationID: "app_demo",
-					DialogueID: "dlg_test",
-					Path: "docs/overview.md",
+					DraftID:        "draft_1",
+					ApplicationID:  "app_demo",
+					DialogueID:     "dlg_test",
+					Path:           "docs/overview.md",
 					SourceChecksum: "sha256:abc123",
 				},
 			}
