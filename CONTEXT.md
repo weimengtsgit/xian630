@@ -72,6 +72,18 @@ _Avoid_: 固定右栏, 任务区, 悬浮恢复按钮
 A visual grouping of collaboration-agent task cards whose dependency position allows them to be understood together in the task execution drawer. It describes dependency grouping, not necessarily concurrent execution.
 _Avoid_: 并行任务, 固定六阶段泳道, 实际并发保证
 
+**协作编排执行图**:
+A conversation-flow visualization of collaboration-agent participation and dependency flow for one generation task, showing each collaboration agent as a task card with its user-facing execution state and upstream/downstream relationship. It uses horizontal execution waves derived from the dependency graph, with a user-input origin card before the first collaboration-agent wave. Before confirmation it represents the planned orchestration; after confirmation it represents the accepted orchestration with real task execution state.
+_Avoid_: 静态参与列表, 模拟执行动画, 真实并发保证, 自由漂浮网络图
+
+**编排卡片状态**:
+The user-facing execution state shown on one card in the collaboration orchestration execution graph, derived from the planned/accepted orchestration and the real generation-task step state. The status language includes pending confirmation, waiting for upstream, ready to start, running, waiting for user input, completed, failed, and skipped; it is not a raw database status display.
+_Avoid_: 原始 step.status, 假进度百分比, 仅颜色提示
+
+**编排依赖线状态**:
+The user-facing state of a dependency edge in the collaboration orchestration execution graph, derived from the upstream and downstream card states. A dependency line may be planned, inactive, flowing, completed, or blocked; animation communicates dependency readiness or execution flow, not fabricated progress.
+_Avoid_: 假数据流, 纯装饰线条, 真实并发保证
+
 **生成任务**:
 A confirmed, independently executable unit of work within a dialogue session that creates or modifies one application version through the software factory pipeline.
 _Avoid_: 澄清会话, 对话, 应用
@@ -361,7 +373,7 @@ A collaboration agent whose removal or disabling can change quality gates, data-
 _Avoid_: 普通显示开关, 静默删除, 低风险配置项
 
 **协作编排智能体**:
-A collaboration agent that proposes the default collaboration plan before task creation, explains agent selection and dependencies, interprets natural-language plan adjustments, and records user adjustments. After confirmation it appears as a completed task card so the generation task retains the plan rationale.
+A collaboration agent that proposes the default collaboration plan before task creation, explains agent selection and dependencies, interprets natural-language plan adjustments, and records user adjustments. In the collaboration orchestration execution graph it appears as a visually prominent orchestration hub card between the user-input origin and later execution waves, so the task retains the plan rationale and scheduling flow after confirmation.
 _Avoid_: 隐式调度器, 用户不可见默认值, 生成能力画像
 
 **协作智能体配置快照**:
