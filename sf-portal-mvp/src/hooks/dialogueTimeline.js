@@ -890,6 +890,7 @@ function appendChildItems(items, child, parentSession) {
         id: `${parentSession.id || 'dlg'}_analysis_round_${bucket.round}`,
         type: 'analysis_stream',
         content: bucket.entries.join('\n\n'),
+        rawThinking: bucket.rawThinking || '',
         folded: true,
         expanded: true,
         label: `分析过程 · 第${bucket.round}轮`,
@@ -906,17 +907,16 @@ function appendChildItems(items, child, parentSession) {
     if (msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
       if (msg.content) {
         const analysis = safeString(msg.content)
-        if (pendingThinking) {
-          items.push({
-            id: pendingThinking.id || `${parentSession.id || 'dlg'}_thinking_round_${pendingThinking.round}`,
-            type: 'thinking_summary',
-            content: pendingThinking.content,
-            summary: analysis,
-            label: `思考摘要 · 第${pendingThinking.round}轮`,
-          })
+        if (!bucket) bucket = { round, entries: [], rawThinking: '' }
+        // The round's raw thinking (kind='thinking') is the 原始思考过程. Attach
+        // it to the 分析过程 block as a collapsible drill-down instead of a
+        // separate 思考摘要 block — that block's summary just restated this same
+        // analysis, so keeping both duplicated the text. Keep the round's first
+        // thinking; flushPendingThinking still handles the rare no-analysis case.
+        if (pendingThinking && !bucket.rawThinking) {
+          bucket.rawThinking = pendingThinking.content
           pendingThinking = null
         }
-        if (!bucket) bucket = { round, entries: [] }
         bucket.entries.push(analysis)
       }
       prevWasUser = false

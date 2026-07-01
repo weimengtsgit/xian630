@@ -6,7 +6,7 @@ import {
   buildWorkbenchOrchestrationView,
   aggregateCardLabel,
 } from '../src/hooks/workbenchOrchestrationState.js'
-import { describeSessionError } from '../src/hooks/dialogueTimeline.js'
+import { describeSessionError, buildDialogueTimeline } from '../src/hooks/dialogueTimeline.js'
 
 const empty = buildWorkbenchOrchestrationView({ view: null, workTraceItems: [], jobStepBlocks: [] })
 assert.deepEqual(
@@ -114,6 +114,23 @@ assert.equal(dataGraph.cardsByKey.data_capture.currentAction.includes('本体接
 
 assert.deepEqual(AGGREGATE_CARD_KEYS, ['user_input', 'business_logic', 'interface_parsing', 'data_capture', 'production_delivery'])
 
+// ---- pre-task clarification: business_logic is the active responsibility ---
+// Before the job is created, business_logic has NO job steps, so without a
+// dialogue-aware override the card sits at 'ready' (待启动) even while the agent
+// is actively running clarification rounds — the graph looks frozen. The card
+// must reflect that activity (执行中 + 需求澄清中 / 分析需求中).
+const clarifying = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_clar', status: 'drafting_application', intent: 'application_generation' }, messages: [{ id: 'u', role: 'user', content: '做一个后勤管理应用' }] },
+  jobStepBlocks: [],
+})
+assert.equal(clarifying.cardsByKey.business_logic.state, 'running', 'business_logic must be running during pre-task clarification (not 待启动)')
+assert.equal(/澄清|分析/.test(clarifying.cardsByKey.business_logic.currentAction), true, 'business_logic currentAction must say it is clarifying/analyzing')
+const analyzingDlg = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_ana', status: 'analyzing', intent: 'application_generation' }, messages: [{ id: 'u', role: 'user', content: 'x' }] },
+  jobStepBlocks: [],
+})
+assert.equal(analyzingDlg.cardsByKey.business_logic.state, 'running', 'business_logic must be running while the dialogue is analyzing')
+
 const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
 assert.equal(graphSource.includes('协作编排'), false, 'aggregate graph must not render 协作编排 as a card')
 const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.css', import.meta.url), 'utf8')
@@ -125,6 +142,8 @@ assert.equal(css.includes('max-height'), false, 'aggregate graph should not cap 
 assert.equal(css.includes('justify-content: center'), true, 'aggregate graph cards should be centered in the overview canvas')
 assert.equal(css.includes('.aog .ceg-canvas'), true, 'aggregate graph must tune the canvas without changing shared ceg styles')
 assert.equal(css.includes('padding: 12px 2px 10px'), true, 'aggregate graph should reduce top padding after removing wave labels')
+assert.equal(css.includes('.aog .ceg-card-state-running'), true, 'aggregate 执行中 card carries a scoped running tint')
+assert.equal(/\.aog \.ceg-card\b[\s\S]*?transition:/.test(css), true, 'aggregate card state changes animate (transition) instead of snapping')
 
 // ---- Task 4: attachment composer + message send-path ----------------------
 const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
@@ -326,6 +345,28 @@ const eUnknown = describeSessionError('', 'something weird happened')
 assert.equal(eUnknown.title, '会话处理失败', 'unknown → generic title')
 assert.equal(eUnknown.detail.includes('something weird happened'), true, 'unknown fallback surfaces cleaned cause')
 assert.equal(describeSessionError('', ''), null, 'no error → null')
+
+// 分析过程 / 思考摘要 merge: a clarification round with BOTH a thinking message
+// and an analysis_work_log must render ONE 分析过程 block (carrying the
+// comprehensive analysis + the raw thinking as a collapsible 原始思考过程) and NO
+// standalone 思考摘要 block — the old behavior duplicated the analysis text across
+// both. flushPendingThinking still covers the rare thinking-without-analysis case.
+const mergeItems = buildDialogueTimeline({
+  session: { id: 'dlg_merge', status: 'drafting_application', intent: 'application_generation' },
+  messages: [],
+  child: {
+    messages: [
+      { id: 'm1', role: 'agent', kind: 'thinking', content: 'RAWTHINK 识别为后勤管理类应用' },
+      { id: 'm2', role: 'agent', kind: 'analysis_work_log', content: 'THEANALYSIS 识别为后勤管理类应用，推荐物资调度模式' },
+    ],
+  },
+})
+const mergeTypes = mergeItems.map(i => i.type)
+assert.equal(mergeTypes.includes('thinking_summary'), false, '思考摘要 block must merge away when 分析过程 exists for the round')
+const mergedAnalysis = mergeItems.find(i => i.type === 'analysis_stream')
+assert.equal(!!mergedAnalysis, true, '分析过程 block must render for the round')
+assert.equal(mergedAnalysis.content.includes('THEANALYSIS'), true, '分析过程 carries the comprehensive analysis text')
+assert.equal(!!(mergedAnalysis.rawThinking && mergedAnalysis.rawThinking.includes('RAWTHINK')), true, '原始思考过程 must attach to 分析过程 as rawThinking')
 // ConversationWorkbench must surface the session error (not just "已失败").
 assert.equal(workbenchSrc.includes('describeSessionError'), true, 'ConversationWorkbench must render the session error via describeSessionError')
 assert.equal(workbenchSrc.includes('cw-session-error'), true, 'ConversationWorkbench must render a session-error block')
