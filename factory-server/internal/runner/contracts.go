@@ -454,16 +454,14 @@ func requirementFieldsFromOutput(raw requirementAnalysisOutput) map[string]any {
 	})
 }
 
-// pickRequirementFields keeps only the BUSINESS-LOGIC keys the consistency check
-// compares: the identity/scenario fields the 业务逻辑 clarification settles.
-// `summary` is EXCLUDED (only the analysis agent produces one). `primaryView` and
-// `dataPolicy` are EXCLUDED too — they are deferred to later stages (界面解析 /
-// 数据抓取) and may be empty in the confirmed requirement while the analysis
-// freeze step fills them; comparing them would mismatch. mainEntities (the
-// business domain objects) IS compared.
+// pickRequirementFields keeps only the summary-critical keys the consistency
+// check compares: the identity/scenario/interface/data fields the 业务逻辑
+// clarification settles. `summary` is EXCLUDED (only the analysis agent produces
+// one; the confirmed requirement carries none), so a faithful freeze that adds a
+// summary still matches.
 func pickRequirementFields(doc map[string]any) map[string]any {
 	out := map[string]any{}
-	for _, key := range []string{"appType", "appName", "coreScenario", "mainEntities", "acceptanceFocus"} {
+	for _, key := range []string{"appType", "appName", "coreScenario", "primaryView", "mainEntities", "dataPolicy", "acceptanceFocus"} {
 		if v, ok := doc[key]; ok {
 			out[key] = v
 		}
