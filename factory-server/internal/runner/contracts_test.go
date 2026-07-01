@@ -522,13 +522,16 @@ func TestValidateRequirementAnalysisToleratesThinkingAndWorkLog(t *testing.T) {
 	}
 }
 
-func TestValidateRequirementAnalysisRejectsSummaryChecksumMismatch(t *testing.T) {
+func TestValidateRequirementAnalysisRejectsStructuredFieldMismatch(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "output.json")
+	// The output's appType diverges from the confirmed requirement — a real
+	// structured-contract mismatch the consistency check must catch. (`summary`
+	// is no longer part of the check — see the accept-test below.)
 	raw := `{
 	  "confirmedRequirementId":"clar_1",
 	  "summary":"需求摘要 B",
-	  "appType":"operations_tool",
+	  "appType":"operations_management",
 	  "appName":"请假审批",
 	  "targetUsers":["员工"],
 	  "coreScenario":"提交和审批请假",
@@ -544,19 +547,23 @@ func TestValidateRequirementAnalysisRejectsSummaryChecksumMismatch(t *testing.T)
 	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
 		t.Fatalf("write output: %v", err)
 	}
-	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, `{"summary":"需求摘要 A","appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假"}`)
+	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, `{"appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假"}`)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed (appType mismatch)", err)
 	}
 }
 
-func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T) {
+func TestValidateRequirementAnalysisAcceptsMatchingStructuredFields(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "output.json")
-	confirmed := `{"summary":"需求摘要 A","appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	// Production shape: the confirmed requirement (from clarification) carries
+	// NO free-text `summary` — only the 7 structured fields. The analysis agent
+	// produces its own summary, which MUST NOT affect the consistency check. So
+	// even with a totally different summary, matching structured fields → accept.
+	confirmed := `{"appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
 	raw := `{
 	  "confirmedRequirementId":"clar_1",
-	  "summary":"需求摘要 A",
+	  "summary":"agent 生成的摘要，与确认需求无关，不应影响一致性校验",
 	  "appType":"operations_tool",
 	  "appName":"请假审批",
 	  "targetUsers":["员工"],
@@ -574,7 +581,7 @@ func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T)
 		t.Fatalf("write output: %v", err)
 	}
 	if _, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed); err != nil {
-		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v", err)
+		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v (summary must be ignored)", err)
 	}
 }
 
