@@ -35,7 +35,7 @@ func readPrototypeBundle(ws runner.AttemptWorkspace) (prototypeBundle, error) {
 	if err := readJSONFile(contractPath, &contract); err != nil {
 		return prototypeBundle{}, err
 	}
-	if manifest.DefaultPage != "home" || len(manifest.Pages) == 0 {
+	if len(manifest.Pages) == 0 {
 		return prototypeBundle{}, fmt.Errorf("prototype manifest home page required")
 	}
 	for _, page := range manifest.Pages {
