@@ -235,7 +235,14 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration || isCollaborationProducerKind(step.Kind)) {
 		prompt += "\n\n[user_input]\n" + step.UserPrompt + "\n"
 	}
-	if err := c.Claude.Run(ctx, ws, prompt, input, step.Kind == model.StepCodeGeneration, emit); err != nil {
+	mode := runner.ClaudeRunReadOnly
+	if step.Kind == model.StepCodeGeneration {
+		mode = runner.ClaudeRunWorkspaceWrite
+	}
+	if step.Kind == model.StepDesignContract {
+		mode = runner.ClaudeRunAttemptWrite
+	}
+	if err := c.Claude.RunWithMode(ctx, ws, prompt, input, mode, emit); err != nil {
 		// Even on failure, capture sanitized audit copies of whatever operational
 		// files exist (input/prompt are always written by ClaudeRunner.Run before
 		// the agent runs; output may or may not exist). Best-effort: a capture
@@ -271,20 +278,21 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		res := finishReviewGate(ctx, trace, step, ws.OutputPath())
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepDesignContract:
-		// Task 8: the design_contract step is the interface-parsing producer.
+		// Task 8: the design_contract step is the prototype-design producer.
 		// Validate against the specialized design contract (summary +
-		// designDocument required), and on success retain a deterministic
-		// interface-preview snapshot derived from the validated designDocument.
-		// The snapshot is a Factory-owned manifest (the agent is forbidden from
-		// writing preview files); a snapshot write failure fails the step as a
-		// schema_validation_failed because the preview is a load-bearing artifact
-		// of a successful design step. The ref is upserted so the orchestration
-		// view can render the preview on the interface_parsing card.
+		// designDocument + prototype required), and on success read the
+		// prototype artifacts the agent wrote inside the attempt directory.
+		// The preview-manifest.json and prototype-contract.json become the
+		// task-owned workbench artifact ref for the interface_parsing card.
 		out, design, err := runner.ValidateDesignContract(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		if res.Status == model.StepStatusSucceeded {
-			ref, perr := c.createInterfacePreviewSnapshot(ctx, job, step, ws, design)
+			bundle, perr := readPrototypeBundle(ws)
+			if perr != nil {
+				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
+			}
+			ref, perr := c.createPrototypePreviewArtifact(ctx, job, step, ws, design, bundle)
 			if perr != nil {
 				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
 			}
@@ -1427,6 +1435,37 @@ func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, j
 		PreviewURL:   fmt.Sprintf("/api/jobs/%s/interface-preview?artifactId=%s", job.ID, refID),
 		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
 		Status:       "provisional",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
+}
+
+func (c *ClaudeStepRunner) createPrototypePreviewArtifact(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput, bundle prototypeBundle) (model.WorkbenchArtifactRef, error) {
+	raw, err := json.Marshal(bundle.Manifest)
+	if err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	sum := sha256.Sum256(raw)
+	now := time.Now()
+	refID := "warf_" + id.New()
+	metaRaw, _ := json.Marshal(map[string]any{
+		"contractPath": bundle.ContractRelPath,
+		"indexPath":    bundle.IndexRelPath,
+		"prototype":    design.Prototype,
+	})
+	return model.WorkbenchArtifactRef{
+		ID:           refID,
+		DialogueID:   job.DialogueID,
+		JobID:        job.ID,
+		StepID:       step.ID,
+		CardKey:      "interface_parsing",
+		Kind:         model.WorkbenchArtifactInterfacePreview,
+		Label:        "原型预览",
+		Path:         bundle.PreviewRelPath,
+		PreviewURL:   fmt.Sprintf("/api/jobs/%s/steps/%s/prototype/preview", job.ID, step.ID),
+		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
+		Status:       "unconfirmed",
+		Metadata:     string(metaRaw),
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
