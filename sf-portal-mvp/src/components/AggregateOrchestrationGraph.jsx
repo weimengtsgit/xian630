@@ -231,7 +231,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
     <div
       role="button"
       tabIndex={canOpenTask ? 0 : -1}
-      className={`ceg-card ceg-card-state-${card.state}${active ? ' is-active' : ''}${dimmed ? ' is-dimmed' : ''}`}
+      className={`ceg-card ceg-card-state-${card.state}${active ? ' is-active' : ''}${dimmed ? ' is-dimmed' : ''}${active && card.state === 'running' ? ' ceg-is-orchestrating' : ''}`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onFocus={onEnter}

@@ -597,6 +597,9 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
+	if incoming.Description != "" {
+		current.Description = incoming.Description
+	}
 	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	// Always (re)compute the profile from the application type and internal
@@ -1342,6 +1345,9 @@ func mergeRequirementDefaults(next, current clarification.Requirement) clarifica
 	}
 	if len(next.AcceptanceFocus) == 0 {
 		next.AcceptanceFocus = append([]string(nil), current.AcceptanceFocus...)
+	}
+	if next.Description == "" {
+		next.Description = current.Description
 	}
 	next.JudgementBoundary = mergeJudgementBoundaryDefaults(next.JudgementBoundary, current.JudgementBoundary)
 	if len(next.GenerationProfile) == 0 {

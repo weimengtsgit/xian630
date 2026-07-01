@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusText } from '../hooks/clarificationLogic'
+import { formatAppType } from '../utils/formatLabels'
 import './ClarificationPanel.css'
 
 // Renders the clarification flow: streaming analysis work-logs, structured
@@ -258,8 +259,11 @@ export function ClarificationPanel({
         {requirement && (
           <div className="clar-summary">
             <strong className="clar-summary-title">确认需求摘要</strong>
+            {requirement.description ? (
+              <p className="clar-summary-desc">{requirement.description}</p>
+            ) : null}
             <div className="clar-summary-grid">
-              <SummaryRow label="应用类型" value={requirement.appType} />
+              <SummaryRow label="应用类型" value={formatAppType(requirement.appType)} />
               <SummaryRow label="应用名称" value={requirement.appName} />
               <SummaryRow label="核心场景" value={requirement.coreScenario} />
               <SummaryRow label="主视图" value={requirement.primaryView} />

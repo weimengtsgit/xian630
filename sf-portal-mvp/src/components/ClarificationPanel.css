@@ -302,6 +302,18 @@
   color: #68ddff;
   margin-bottom: 6px;
 }
+.clar-summary-desc {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(214, 243, 255, 0.82);
+  background: rgba(11, 29, 44, 0.55);
+  border-left: 2px solid rgba(111, 218, 255, 0.45);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .clar-summary-grid {
   display: grid;
   gap: 3px;
