@@ -133,7 +133,13 @@ const (
 	// returned status:"blocked". It is the only code a blocking-review failure
 	// carries, and it is repairable under the bounded auto-repair policy.
 	ErrorBlockingReview ErrorCode = "blocking_review"
-	ErrorUnknown        ErrorCode = "unknown"
+	// ErrorUserRejectedConfirmation is set on a step that was paused
+	// waiting_user for a required user confirmation (e.g. a deployment port
+	// confirmation) and was then explicitly rejected by the user via
+	// RejectRequiredConfirmation. The step is marked failed with this code and
+	// the job transitions to failed.
+	ErrorUserRejectedConfirmation ErrorCode = "user_rejected_confirmation"
+	ErrorUnknown                  ErrorCode = "unknown"
 )
 
 // ExecutionRecordKind is the kind tag of a StepExecutionRecord: system
@@ -689,4 +695,135 @@ type TaskThinkingEvent struct {
 	Content          string    `json:"content"`
 	Redacted         bool      `json:"redacted"`
 	CreatedAt        time.Time `json:"created_at"`
+}
+
+// AttachmentStatus is the lifecycle state of a dialogue attachment. Active
+// attachments are usable by agents; deactivated ones remain for audit history.
+type AttachmentStatus string
+
+const (
+	AttachmentStatusActive      AttachmentStatus = "active"
+	AttachmentStatusDeactivated AttachmentStatus = "deactivated"
+)
+
+// AttachmentPreviewKind selects how the UI renders a stored attachment. The
+// value is persisted verbatim into dialogue_attachments.preview_kind.
+type AttachmentPreviewKind string
+
+const (
+	AttachmentPreviewImage    AttachmentPreviewKind = "image"
+	AttachmentPreviewMarkdown AttachmentPreviewKind = "markdown"
+	AttachmentPreviewText     AttachmentPreviewKind = "text"
+	AttachmentPreviewJSON     AttachmentPreviewKind = "json"
+	AttachmentPreviewCSV      AttachmentPreviewKind = "csv"
+	AttachmentPreviewPDF      AttachmentPreviewKind = "pdf"
+	AttachmentPreviewMetadata AttachmentPreviewKind = "metadata"
+	AttachmentPreviewBlocked  AttachmentPreviewKind = "blocked"
+)
+
+// DialogueAttachment is a file uploaded into a dialogue session. Stored on
+// disk under ArtifactRoot/dialogue-attachments/<dialogueID>/<id>/<name>; its
+// metadata is persisted in dialogue_attachments. Credential-like files must
+// never reach this table (rejected at the upload boundary).
+type DialogueAttachment struct {
+	ID            string                `json:"id"`
+	DialogueID    string                `json:"dialogue_id"`
+	FocusKey      string                `json:"focus_key"`
+	OriginalName  string                `json:"original_name"`
+	StoredPath    string                `json:"stored_path,omitempty"`
+	Mime          string                `json:"mime"`
+	Extension     string                `json:"extension"`
+	SizeBytes     int64                 `json:"size_bytes"`
+	SHA256        string                `json:"sha256"`
+	PreviewKind   AttachmentPreviewKind `json:"preview_kind"`
+	Status        AttachmentStatus      `json:"status"`
+	CreatedAt     time.Time             `json:"created_at"`
+	DeactivatedAt *time.Time            `json:"deactivated_at,omitempty"`
+}
+
+// WorkbenchArtifactKind categorizes a WorkbenchArtifactRef by the artifact it
+// points at. The string value is persisted verbatim into
+// workbench_artifact_refs.kind. project_document is the early docs/*.md
+// projection (Task 5); interface_preview is the design-contract-derived
+// interface snapshot (Task 8); data_contract / sample_data are reserved for the
+// later data-integration step.
+type WorkbenchArtifactKind string
+
+const (
+	WorkbenchArtifactProjectDocument  WorkbenchArtifactKind = "project_document"
+	WorkbenchArtifactInterfacePreview WorkbenchArtifactKind = "interface_preview"
+	WorkbenchArtifactDataContract     WorkbenchArtifactKind = "data_contract"
+	WorkbenchArtifactSampleData       WorkbenchArtifactKind = "sample_data"
+)
+
+// WorkbenchArtifactRef is one durable pointer to a task-owned workbench
+// artifact (a projected project document, an interface-preview snapshot, a
+// data contract). It is the aggregation layer's artifact surface: each ref is
+// tagged with the aggregate card it belongs to (CardKey) so the orchestration
+// view can render it on the right card, and carries a Kind so the frontend can
+// route artifact-open by kind. Path is relative to the configured artifact
+// root; PreviewURL carries the serving-endpoint path for kinds that are served
+// (interface_preview points at the manifest inspection route; empty otherwise).
+// Status is the
+// artifact lifecycle: provisional (snapshot retained, not yet promoted) or
+// active. SnapshotHash is a content hash of the stored artifact for change
+// detection.
+type WorkbenchArtifactRef struct {
+	ID           string                `json:"id"`
+	DialogueID   string                `json:"dialogue_id"`
+	JobID        string                `json:"job_id"`
+	StepID       string                `json:"step_id"`
+	CardKey      string                `json:"cardKey"`
+	Kind         WorkbenchArtifactKind `json:"kind"`
+	Label        string                `json:"label"`
+	Path         string                `json:"path"`
+	PreviewURL   string                `json:"previewUrl,omitempty"`
+	SnapshotHash string                `json:"snapshotHash,omitempty"`
+	Status       string                `json:"status"`
+	// Metadata carries producer-authored, JSON-encoded detail that the
+	// orchestration view projects onto the card. For the data_capture card's
+	// data_contract artifact it is the data-verification summary the executor
+	// builds from the decoded DataIntegrationOutput (sourceBoundary, per-boundary
+	// verification verdicts, fallback history, sample/field counts) so the
+	// data-flow track can render real active/failed/succeeded/waiting states
+	// instead of a static label list. Empty for artifact kinds that carry none.
+	Metadata     string                `json:"metadata,omitempty"`
+	CreatedAt    time.Time             `json:"created_at"`
+	UpdatedAt    time.Time             `json:"updated_at"`
+}
+
+// DialogueAttachmentRef links a stored attachment to the dialogue message that
+// uses it. A single attachment can be referenced by multiple messages; refs
+// deactivate independently so removal from one message keeps the file alive
+// for others.
+type DialogueAttachmentRef struct {
+	ID            string             `json:"id"`
+	DialogueID    string             `json:"dialogue_id"`
+	MessageID     string             `json:"message_id"`
+	AttachmentID  string             `json:"attachment_id"`
+	FocusKey      string             `json:"focus_key"`
+	Active        bool               `json:"active"`
+	CreatedAt     time.Time          `json:"created_at"`
+	DeactivatedAt *time.Time         `json:"deactivated_at,omitempty"`
+	Attachment    DialogueAttachment `json:"attachment"`
+}
+
+// EphemeralCredentialRef is the persisted METADATA for a controlled credential
+// the user submitted via the dialogue credential boundary (Task 12). The row
+// stores ONLY opaque identifiers and expiry metadata — NEVER the credential
+// VALUE. The plaintext value lives solely in the Server's in-memory
+// credentialSecrets registry, keyed by Handle; it is resolved only by a future
+// server-side verifier that accepts the handle. FocusKey/Label/Scope are the
+// user-facing metadata that lets input.json's controlledCredentialRefs describe
+// WHICH credential a handle refers to (e.g. focusKey "data_capture", label "API
+// Key", scope "ontology") without ever disclosing the secret.
+type EphemeralCredentialRef struct {
+	ID         string    `json:"id"`
+	DialogueID string    `json:"dialogue_id"`
+	FocusKey   string    `json:"focus_key"`
+	Label      string    `json:"label"`
+	Scope      string    `json:"scope"`
+	Handle     string    `json:"handle"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }

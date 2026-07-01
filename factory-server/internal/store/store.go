@@ -146,6 +146,19 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate job_steps.pending_questions: %w", err)
 	}
+	// workbench_artifact_refs.metadata: producer-authored JSON the orchestration
+	// view projects onto a card (e.g. the data_capture card's data-verification
+	// summary — sourceBoundary + per-boundary verdicts + fallback history + sample/
+	// field counts — so the data-flow track renders real states, not a static
+	// label list). It lives in schema.sql's CREATE TABLE, so brand-new DBs have
+	// it, but DBs created before the column shipped need this backfill —
+	// otherwise the upsert/list scans (which reference metadata) fail with
+	// "no such column: metadata".
+	if err := s.ensureColumn(ctx, "workbench_artifact_refs", "metadata",
+		`ALTER TABLE workbench_artifact_refs ADD COLUMN metadata TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate workbench_artifact_refs.metadata: %w", err)
+	}
 	return s, nil
 }
 

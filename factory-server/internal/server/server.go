@@ -39,6 +39,14 @@ type Server struct {
 	runtime     deploy.ContainerRuntime                                            // container runtime (Podman or Docker)
 	healthCheck func(ctx context.Context, url string, timeout time.Duration) error // default: deploy.CheckHTTP
 	appLocks    sync.Map                                                           // map[appID]*sync.Mutex, per-app start/stop/rebuild mutual exclusion
+	// credentialSecrets is the in-memory registry of controlled credential
+	// VALUES keyed by opaque handle ("secret_<id>"). Plaintext values live ONLY
+	// here — never in DB rows, input.json, SSE payloads, logs, project docs,
+	// attachments, or dialogue messages. The persisted ephemeral_credential_refs
+	// row stores ONLY {id, dialogue_id, focus_key, label, scope, handle, expiry};
+	// the value is resolved solely by a future server-side verifier accepting
+	// the handle. Zero-value ready (no init needed); sync.Map is concurrency-safe.
+	credentialSecrets sync.Map // map[string]runtimeCredentialSecret
 
 	// Job pipeline executor (Task 10). Runs the fixed six-step factory pipeline
 	// one step at a time; the real step runners land in Tasks 11/12, so New
@@ -266,11 +274,12 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	}
 	s.turnWorker = NewTurnWorker(s, st, s.turnClassifier)
 	var claude executor.StepRunner = &executor.ClaudeStepRunner{
-		Store:        st,
-		Workspace:    cfg.WorkspaceRoot,
-		ArtifactRoot: cfg.ArtifactRoot,
-		Claude:       &runner.ClaudeRunner{Runner: claudeCmd, WorkDir: cfg.WorkspaceRoot},
-		AuditRunner:  claudeCmd,
+		Store:              st,
+		Workspace:          cfg.WorkspaceRoot,
+		ArtifactRoot:       cfg.ArtifactRoot,
+		Claude:             &runner.ClaudeRunner{Runner: claudeCmd, WorkDir: cfg.WorkspaceRoot},
+		AuditRunner:        claudeCmd,
+		CredentialResolver: s,
 	}
 	if truthy(os.Getenv("FACTORY_FAKE_CLAUDE")) {
 		claude = &executor.FakeClaudeRunner{
@@ -468,6 +477,8 @@ func (s *Server) routes() *Router {
 	r.Handle("PATCH", "/api/jobs/:id/steps/:stepID/snapshot", s.patchJobStepSnapshot)
 	r.Handle("GET", "/api/jobs/:id/artifacts", s.jobArtifacts)
 	r.Handle("GET", "/api/jobs/:id/execution-summary", s.jobExecutionSummary)
+	r.Handle("GET", "/api/jobs/:id/project-docs/file", s.jobProjectDocumentFile)
+	r.Handle("GET", "/api/jobs/:id/interface-preview", s.jobInterfacePreview)
 	r.Handle("GET", "/api/jobs/:id/collaboration-plan", s.getJobCollaborationPlan)
 	r.Handle("POST", "/api/jobs/:id/cancel", s.cancelJob)
 	r.Handle("POST", "/api/jobs/:id/answer", s.answerJob)
@@ -512,6 +523,10 @@ func (s *Server) routes() *Router {
 	r.Handle("POST", "/api/dialogues/:id/business-agent/confirm", s.confirmDialogueBusinessAgent)
 	r.Handle("POST", "/api/dialogues/:id/business-agent/continue", s.continueDialogueBusinessAgent)
 	r.Handle("POST", "/api/dialogues/:id/business-agent/consolidation", s.applyDialogueBusinessConsolidation)
+	// Controlled credential input boundary (Task 12). The ONLY path a plaintext
+	// credential value enters the server: it is swapped for an opaque handle,
+	// stored solely in the in-memory registry, and persisted as metadata only.
+	r.Handle("POST", "/api/dialogues/:id/credentials", s.submitDialogueCredential)
 
 	// Dialogue-scoped visible work-trace transport (Task 3). REST hydration +
 	// SSE stream, both filtered to :id, sequence-replayable. Constraint #7: the
@@ -525,6 +540,13 @@ func (s *Server) routes() *Router {
 	// stream, both filtered to :id, sequence-replayable, persist-before-publish.
 	r.Handle("GET", "/api/dialogues/:id/task-thinking", s.dialogueTaskThinkingEvents)
 	r.Handle("GET", "/api/dialogues/:id/task-thinking/stream", s.dialogueTaskThinkingStream)
+
+	// Dialogue session attachments (Task 3). Multipart upload only; credential
+	// files are rejected at the boundary (use controlled credential input).
+	// The GET .../content route (F3) serves the stored file's bytes for
+	// click-to-preview, with strict ArtifactRoot path containment.
+	r.Handle("POST", "/api/dialogues/:id/attachments", s.uploadDialogueAttachment)
+	r.Handle("GET", "/api/dialogues/:id/attachments/:attachmentId/content", s.getDialogueAttachmentContent)
 
 	r.Handle("GET", "/api/artifacts/:id/content", s.artifactContent)
 	r.Handle("GET", "/api/events", s.events)

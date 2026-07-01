@@ -12,8 +12,10 @@ import {
   Edit3,
   ExternalLink,
   FileCode,
+  FileText,
   GitCommit,
   HelpCircle,
+  Image as ImageIcon,
   Loader2,
   MessageSquare,
   MoreHorizontal,
@@ -25,9 +27,18 @@ import {
   XCircle,
 } from 'lucide-react'
 import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
+import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
+import { WorkbenchAgentBlock } from './WorkbenchAgentBlock'
+import { AttachmentComposer } from './AttachmentComposer'
+import { AttachmentPreviewModal } from './AttachmentPreviewModal'
+import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
+import { InterfacePreviewModal } from './InterfacePreviewModal'
+import { useSessionAttachments } from '../hooks/useSessionAttachments'
+import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
+import { factoryApi } from '../api/client'
 import './ConversationWorkbench.css'
 
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
@@ -48,6 +59,7 @@ export function ConversationWorkbench({
   onAnswerBatch,
   onAcceptConsolidation,
   onConfirm,
+  onConfirmCard,
   onRetry,
   onAbandon,
   workTrace,
@@ -163,6 +175,82 @@ export function ConversationWorkbench({
     : ''
   const taskBadge = taskDrawerBadgeInfo(focusTask)
 
+  // Aggregate orchestration graph (Task 2): a fixed five-card overview of the
+  // whole pipeline (用户输入/业务逻辑/界面解析/数据抓取/生产交付) that stays pinned
+  // above the conversation body and reflects the latest view + trace state.
+  const aggregateGraph = useMemo(() => buildWorkbenchOrchestrationView({
+    view,
+    workTraceItems: traceItems,
+    jobStepBlocks: traceSteps,
+  }), [view, traceItems, traceSteps])
+
+  // Session attachments (Task 4): pending composer attachments for the current
+  // message. focusKey mirrors the aggregate graph's active card so uploaded
+  // files are tagged with the workbench region the user is working in.
+  const attachmentState = useSessionAttachments({
+    dialogueId: session && session.id,
+    focusKey: aggregateGraph.activeCardKey || 'business_logic',
+  })
+  const [previewAttachment, setPreviewAttachment] = useState(null)
+  const [previewDocument, setPreviewDocument] = useState(null)
+  const [previewInterface, setPreviewInterface] = useState(null)
+  // openProjectDocument fetches a task-owned docs/*.md file for read-only rich
+  // preview. Early in the pipeline (before code generation registers an
+  // application) the job already carries an AppSlug, so the backend can resolve
+  // the project root and serve the projected document.
+  const openProjectDocument = async artifact => {
+    if (!artifact || !artifact.path) return
+    const jobId = artifact.jobId || (focusTask && focusTask.id)
+    if (!jobId) return
+    try {
+      const doc = await factoryApi.getJobProjectDocument(jobId, artifact.path)
+      setPreviewDocument(doc)
+    } catch {
+      setPreviewDocument(null)
+    }
+  }
+
+  // openArtifact routes an artifact-open click by kind: project_document loads
+  // the markdown preview via openProjectDocument; interface_preview (Task 8)
+  // opens the InterfacePreviewModal. The interface-preview snapshot is retained
+  // server-side as a manifest with no serving endpoint yet, so the modal
+  // degrades gracefully (label + retention note) until one is wired.
+  const openArtifact = artifact => {
+    if (!artifact) return
+    if (artifact.kind === 'interface_preview') {
+      setPreviewInterface(artifact)
+      return
+    }
+    openProjectDocument(artifact)
+  }
+
+  // submitCredential is the controlled credential input boundary (Task 12). The
+  // plaintext value the user typed is sent ONLY via factoryApi.submitDialogueCredential,
+  // which swaps it for an opaque handle server-side and responds with metadata
+  // + redacted:true (never the value). The value is never rendered, logged, or
+  // persisted client-side beyond the transient password input draft. The
+  // question carries focusKey/label/scope metadata describing WHICH credential
+  // the handle refers to; we forward them so the data_integration step's
+  // input.json controlledCredentialRefs can label the handle without the value.
+  const submitCredential = async (question, value) => {
+    const dialogueId = session && session.id
+    if (!dialogueId || !value || submitting) return
+    try {
+      await factoryApi.submitDialogueCredential(dialogueId, {
+        focusKey: question.focusKey || aggregateGraph.activeCardKey || 'data_capture',
+        label: question.label || question.question || '凭证',
+        scope: question.scope || 'data_capture',
+        value,
+      })
+      // Credential handle persisted server-side (durable). The data_integration
+      // step reads controlledCredentialRefs from the store on its next run;
+      // resuming the waiting step after a credential submit is deferred wiring.
+    } catch {
+      // Surface failure via the existing submitting/error UX implicitly; the
+      // boundary's own 4xx (e.g. empty value) is guarded before this call.
+    }
+  }
+
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -172,7 +260,8 @@ export function ConversationWorkbench({
     const value = input.trim()
     if (!value || submitting || (locked && !composerActive)) return
     setInput('')
-    await onSend(value)
+    await onSend(value, { attachmentIds: attachmentState.attachmentIds, pendingAttachments: attachmentState.pending })
+    attachmentState.clearPending()
   }
 
   const submitAnswers = async () => {
@@ -277,10 +366,9 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
+      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openArtifact} onOpenTaskStep={onOpenTaskStep} />
+
       <div className="cw-body">
-        {timeline.length === 0 && traceItems.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有智能体，还是生成新智能体。</div>
-        ) : null}
         {timeline.map(item => (
           <TimelineItem
             key={item.id}
@@ -289,11 +377,13 @@ export function ConversationWorkbench({
             setDraftAnswers={setDraftAnswers}
             submitting={submitting}
             focusRequirement={focusRequirement}
+            dialogueId={session && session.id}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
+            onOpenPreviewAttachment={setPreviewAttachment}
             onOpenTaskStep={onOpenTaskStep}
             onConfirmTaskStep={onConfirmTaskStep}
             manualStepConfirmation={manualStepConfirmation}
@@ -312,6 +402,21 @@ export function ConversationWorkbench({
             }}
           />
         ))}
+
+        {aggregateGraph.cards
+          .filter(card => card.key !== 'user_input' && card.state !== 'not_started' && card.state !== 'waiting_upstream')
+          .map(card => (
+            <WorkbenchAgentBlock
+              key={card.key}
+              card={card}
+              thinking=""
+              analysisLog=""
+              questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
+              onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
+              onOpenArtifact={openArtifact}
+              onSubmitCredential={submitCredential}
+            />
+          ))}
 
         {/* Continuous-workbench trace surface (Task 7): the dialogue-scoped,
             sequence-replayable visible work-trace. Rendered as a compact
@@ -424,6 +529,13 @@ export function ConversationWorkbench({
                 正在回复任务内澄清{clarificationScopeLabel ? `：${clarificationScopeLabel}` : ''}。请先回答该问题。
               </div>
             ) : null}
+            <AttachmentComposer
+              items={attachmentState.pending}
+              uploading={attachmentState.uploading}
+              onAddFiles={attachmentState.addFiles}
+              onRemove={attachmentState.removePending}
+              onOpen={setPreviewAttachment}
+            />
             <div className="cw-composer-row">
               <textarea
                 ref={textareaRef}
@@ -440,6 +552,17 @@ export function ConversationWorkbench({
           </>
         )}
       </footer>
+
+      {previewAttachment ? (
+        <AttachmentPreviewModal attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />
+      ) : null}
+
+      <ProjectDocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
+      <InterfacePreviewModal
+        artifact={previewInterface}
+        jobId={(focusTask && focusTask.id) || ''}
+        onClose={() => setPreviewInterface(null)}
+      />
 
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>
@@ -530,11 +653,30 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, manualStepConfirmation, onToggleManualStepConfirmation }) {
   if (item.type === 'user_message') {
+    // Submitted attachment refs (Task 11 / spec decision #22): after send, the
+    // persisted user_message carries `attachments` [{ id, active, name,
+    // previewKind }]. Render each as a clickable chip BELOW the content. Inactive
+    // refs (active===false) stay visible but muted with a 已停用 marker (decision
+    // #23: deactivated refs remain for replay/audit). Clicking opens the existing
+    // AttachmentPreviewModal via the shared preview setter (no second modal).
+    const attachments = Array.isArray(item.attachments) ? item.attachments : []
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
         <div className="cw-item cw-user">{item.content}</div>
+        {attachments.length > 0 ? (
+          <div className="cw-user-attachments">
+            {attachments.map(ref => (
+              <MessageAttachmentChip
+                key={ref.id}
+                ref_={ref}
+                dialogueId={dialogueId}
+                onOpen={onOpenPreviewAttachment}
+              />
+            ))}
+          </div>
+        ) : null}
       </CopyableBlock>
     )
   }
@@ -635,6 +777,30 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     return <div className="cw-system">{statusText(item.status)}</div>
   }
   return null
+}
+
+// MessageAttachmentChip renders one submitted attachment reference under a
+// user_message. It reuses the existing `.cw-attach-chip` look. Clicking opens the
+// shared AttachmentPreviewModal (Task 4 wiring). The ref carries only
+// { id, active, name, previewKind }; we attach dialogueId + name + previewKind so
+// the modal degrades to its metadata path when there is no content route yet.
+function MessageAttachmentChip({ ref_, dialogueId, onOpen }) {
+  const active = ref_.active !== false
+  const isImage = ref_.previewKind === 'image'
+  const name = ref_.name || '附件'
+  const open = () => {
+    if (!onOpen || !ref_.id) return
+    onOpen({ id: ref_.id, name, previewKind: ref_.previewKind, dialogueId, originalName: name })
+  }
+  return (
+    <span className={`cw-attach-chip cw-attach-chip-ref${active ? '' : ' cw-attach-chip-inactive'}`}>
+      {isImage ? <ImageIcon size={14} /> : <FileText size={14} />}
+      <button type="button" className="cw-attach-name" onClick={open} title={active ? '预览附件' : '附件已停用'} disabled={!ref_.id || !onOpen}>
+        {name}
+      </button>
+      {active ? null : <em className="cw-attach-deactivated">已停用</em>}
+    </span>
+  )
 }
 
 function ThinkingSummary({ item }) {

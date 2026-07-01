@@ -3,6 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/projectdocs"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
@@ -18,12 +21,26 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
 )
 
+// CredentialHandleResolver reports whether an opaque credential handle
+// identifies a live (present + unexpired) runtime secret. The executor consults
+// it before injecting a credential ref into input.json's
+// controlledCredentialRefs so a handle whose value has expired or been evicted
+// is dropped rather than surfaced to the agent. The resolver NEVER returns the
+// plaintext value — only a boolean availability verdict. Defined in the executor
+// package (not imported from server) so unit tests can construct a
+// ClaudeStepRunner without pulling in the server; the production wiring sets
+// CredentialResolver to the *server.Server (which satisfies this interface).
+type CredentialHandleResolver interface {
+	CredentialHandleAvailable(handle string) bool
+}
+
 type ClaudeStepRunner struct {
-	Store        *store.Store
-	Workspace    string
-	ArtifactRoot string
-	Claude       *runner.ClaudeRunner
-	AuditRunner  runner.CommandRunner
+	Store              *store.Store
+	Workspace          string
+	ArtifactRoot       string
+	Claude             *runner.ClaudeRunner
+	AuditRunner        runner.CommandRunner
+	CredentialResolver CredentialHandleResolver
 }
 
 // codeGenerationStepOutput is the executor-side decoding of the
@@ -107,16 +124,43 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
 	collaborationSnapshot := parseCollaborationStepSnapshot(step.SnapshotJSON)
 
+	// Task 12: collect LIVE, REDACTED credential refs for the data_integration
+	// step. Each ref exposes ONLY opaque metadata — id/label/scope/handle/expiry
+	// — NEVER the plaintext value (that lives in the server's in-memory registry,
+	// resolved solely by a future verifier accepting the handle). A ref whose
+	// handle is no longer available (expired/evicted, or no resolver wired in
+	// unit tests) is dropped. Nil-safe on c.CredentialResolver: the production
+	// wiring sets it to *server.Server; executor unit tests construct
+	// ClaudeStepRunner without it, in which case this loop is skipped and an
+	// empty controlledCredentialRefs array is injected.
+	credentialRefs := []map[string]any{}
+	if step.Kind == model.StepDataIntegration && job.DialogueID != "" && c.Store != nil {
+		refs, _ := c.Store.ListEphemeralCredentialRefs(ctx, job.DialogueID, "data_capture", time.Now())
+		for _, ref := range refs {
+			if c.CredentialResolver != nil && !c.CredentialResolver.CredentialHandleAvailable(ref.Handle) {
+				continue
+			}
+			credentialRefs = append(credentialRefs, map[string]any{
+				"id":        ref.ID,
+				"label":     ref.Label,
+				"scope":     ref.Scope,
+				"handle":    ref.Handle,
+				"expiresAt": ref.ExpiresAt,
+			})
+		}
+	}
+
 	input, err := json.MarshalIndent(map[string]any{
-		"job":                   job,
-		"step":                  step,
-		"confirmedRequirement":  confirmedReq,
-		"generationProfile":     profile,
-		"blueprintRefs":         blueprintRefs,
-		"skills":                skillPaths,
-		"blueprintDocs":         blueprintPaths,
-		"repairContext":         step.UserPrompt,
-		"collaborationSnapshot": collaborationSnapshot,
+		"job":                      job,
+		"step":                     step,
+		"confirmedRequirement":     confirmedReq,
+		"generationProfile":        profile,
+		"blueprintRefs":            blueprintRefs,
+		"skills":                   skillPaths,
+		"blueprintDocs":            blueprintPaths,
+		"repairContext":            step.UserPrompt,
+		"collaborationSnapshot":    collaborationSnapshot,
+		"controlledCredentialRefs": credentialRefs,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -154,7 +198,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 
 	switch step.Kind {
 	case model.StepRequirementAnalysis:
-		out, err := runner.ValidateRequirementAnalysis(ws.OutputPath())
+		out, err := runner.ValidateRequirementAnalysisWithConfirmedSummary(ws.OutputPath(), string(confirmedReq))
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
@@ -177,12 +221,69 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := finishReviewGate(ctx, trace, step, ws.OutputPath())
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+	case model.StepDesignContract:
+		// Task 8: the design_contract step is the interface-parsing producer.
+		// Validate against the specialized design contract (summary +
+		// designDocument required), and on success retain a deterministic
+		// interface-preview snapshot derived from the validated designDocument.
+		// The snapshot is a Factory-owned manifest (the agent is forbidden from
+		// writing preview files); a snapshot write failure fails the step as a
+		// schema_validation_failed because the preview is a load-bearing artifact
+		// of a successful design step. The ref is upserted so the orchestration
+		// view can render the preview on the interface_parsing card.
+		out, design, err := runner.ValidateDesignContract(ws.OutputPath())
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		if res.Status == model.StepStatusSucceeded {
+			ref, perr := c.createInterfacePreviewSnapshot(ctx, job, step, ws, design)
+			if perr != nil {
+				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
+			}
+			c.upsertWorkbenchArtifact(ctx, ref)
+		}
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+	case model.StepDataIntegration:
+		// Task 9: the data_integration step is the data-capture producer. It
+		// enforces the ontology → internet → demo fallback order with explicit
+		// user confirmation at each boundary (no silent degradation). On success
+		// the executor upserts a task-owned data-contract artifact keyed by the
+		// source boundary the data actually came from, so the workbench can
+		// render whether the app is wired to ontology, internet, or demo data.
+		out, dataDetail, err := runner.ValidateDataIntegration(ws.OutputPath())
+		c.emitWorkLog(ctx, emit, ws.OutputPath())
+		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		// F6 + review-round-2: project the data-verification summary onto the
+		// data_contract artifact on BOTH success AND needs_input (waiting_user).
+		// During the degradation-confirmation wait the workbench data-flow track
+		// must render the real per-boundary state (ontology red breakpoint +
+		// internet waiting), which requires the verification metadata to exist
+		// while the step is paused, not only after it succeeds (spec #32).
+		if proj, mErr := dataContractProjection(dataDetail, res.Status); mErr != nil {
+			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: mErr.Error()}, nil
+		} else if proj.Project {
+			c.upsertWorkbenchArtifact(ctx, model.WorkbenchArtifactRef{
+				ID:         "warf_" + id.New(),
+				DialogueID: job.DialogueID,
+				JobID:      job.ID,
+				StepID:     step.ID,
+				CardKey:    "data_capture",
+				Kind:       model.WorkbenchArtifactDataContract,
+				Label:      proj.Label,
+				Path:       proj.Path,
+				Status:     proj.Status,
+				Metadata:   proj.Metadata,
+				CreatedAt:  time.Now(),
+				UpdatedAt:  time.Now(),
+			})
+		}
+		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	default:
-		// The remaining admitted gate kinds (collaboration_orchestration,
-		// domain_analysis, design_contract, data_integration) are analysis/
-		// contract producers. They share the normal needsUserInput/questions
-		// contract so domain-level uncertainty can pause for user clarification
-		// instead of leaking prose into output.json and failing as invalid JSON.
+		// The remaining admitted producer kinds (collaboration_orchestration,
+		// domain_analysis, data_integration) are analysis/contract producers.
+		// They share the normal needsUserInput/questions contract so domain-level
+		// uncertainty can pause for user clarification instead of leaking prose
+		// into output.json and failing as invalid JSON. design_contract has its
+		// own case above (it derives an interface-preview snapshot).
 		out, err := validateCollaborationProducer(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
@@ -350,6 +451,7 @@ func clarificationPayload(questions []runner.Question) string {
 		ID            string `json:"id,omitempty"`
 		Question      string `json:"question"`
 		DefaultAnswer string `json:"defaultAnswer,omitempty"`
+		InputType     string `json:"inputType,omitempty"`
 		Options       []opt  `json:"options,omitempty"`
 	}
 	out := make([]q, 0, len(questions))
@@ -358,7 +460,7 @@ func clarificationPayload(questions []runner.Question) string {
 		for _, o := range qq.Options {
 			opts = append(opts, opt{Value: o.Value, Label: o.Label, Recommended: o.Recommended})
 		}
-		out = append(out, q{ID: qq.ID, Question: qq.Question, DefaultAnswer: qq.DefaultAnswer, Options: opts})
+		out = append(out, q{ID: qq.ID, Question: qq.Question, DefaultAnswer: qq.DefaultAnswer, InputType: qq.InputType, Options: opts})
 	}
 	b, err := json.Marshal(struct {
 		Questions []q `json:"questions"`
@@ -590,6 +692,12 @@ func (c *ClaudeStepRunner) projectDocsAfterStep(ctx context.Context, trace runne
 			}
 		}
 	}
+	if root == "" && job.AppSlug != "" {
+		root = filepath.Join(c.Workspace, "generated-apps", filepath.FromSlash(job.AppSlug))
+	}
+	if root != "" {
+		_ = os.MkdirAll(filepath.Join(root, "docs"), 0o755)
+	}
 	if root == "" {
 		return res
 	}
@@ -733,6 +841,18 @@ func isCollaborationProducerKind(kind model.StepKind) bool {
 }
 
 func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.AttemptWorkspace) string {
+	// Task 8: the design_contract step is the interface-parsing producer. It has
+	// a specialized contract (designDocument + assumedDataFields) the generic
+	// collaboration prompt does not surface, and it is explicitly forbidden from
+	// writing preview files — the executor builds the task-owned snapshot from
+	// its designDocument. Route it to the dedicated prompt before the generic
+	// body. (data_integration gets its own branch in Task 9.)
+	if step.Kind == model.StepDesignContract {
+		return designContractPrompt(job, ws)
+	}
+	if step.Kind == model.StepDataIntegration {
+		return dataIntegrationPrompt(job, ws)
+	}
 	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
 		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
@@ -746,6 +866,44 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 		"用户需求：" + job.UserPrompt
 }
 
+// designContractPrompt is the specialized prompt for the design_contract
+// (interface-parsing) collaboration producer. Unlike the generic collaboration
+// prompt, it mandates the designDocument + assumedDataFields contract the
+// executor's interface-preview snapshot is derived from, and it forbids the
+// agent from writing any preview file — the preview is a Factory-owned,
+// deterministic artifact built from the design contract, so the agent must only
+// describe the design, never render it.
+func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的界面解析智能体。读取 input.json 中的 confirmedRequirement、附件摘要和已有字段假设，输出界面解析设计契约。" +
+		"不要修改文件，不要生成界面预览文件；界面预览由 Factory 执行器根据 designDocument 生成 task-owned 产物。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、workLog、warnings。" +
+		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
+		"designDocument 必须描述视图识别、布局分区、组件映射、交互状态、响应式约束、关键文案和字段呈现。assumedDataFields 是预览依赖但数据抓取尚未确认的字段名数组。" +
+		"需要用户澄清时，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
+}
+
+// dataIntegrationPrompt is the specialized prompt for the data_integration
+// (data-capture) collaboration producer. It enforces the data-capture fallback
+// contract (decision #30/#31): ontology boundary first, then internet, then
+// demo, and the agent MUST ask before crossing a fallback boundary — silent
+// degradation is forbidden. controlledCredentialRefs is referenced in the
+// input description for forward-compatibility (Task 12 injects controlled
+// credential handles); the prompt string is correct as-is even though the
+// field is not injected into input.json yet, because the agent tolerates a
+// missing optional input key.
+func dataIntegrationPrompt(job model.Job, ws runner.AttemptWorkspace) string {
+	return "你是软件工厂的数据抓取智能体。读取 input.json 中的 confirmedRequirement、controlledCredentialRefs、附件摘要和 [user_input] 回答，按本体接口优先、互联网抓取其次、演示数据最后的顺序做数据验证。" +
+		"不要静默降级：本体接口不可用时必须 needsUserInput=true 并询问是否降级为互联网抓取；互联网抓取不可用时必须 needsUserInput=true 并询问是否降级为演示数据。用户已在 [user_input] 明确选择边界时，从该边界开始。" +
+		"凭证类澄清问题必须设置 inputType:\"credential\"；普通选择问题使用 options，options 每项包含 value、label，可包含 recommended:true。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"JSON 必须包含：status、summary、sourceBoundary、verification、dataContract、fallbackHistory、needsUserInput、questions、workLog、warnings、compatibility。" +
+		"sourceBoundary 只能是 ontology、internet、demo；status 只能是 passed 或 needs_input。verification 必须包含 ontology/internet/demo 节点，每个节点包含 status 和 reason。" +
+		"dataContract.fields 是字段数组；成功通过数据契约时 fields 不得为空。compatibility.status 只能是 passed、failed、pending；failed 时必须 needsUserInput=true 并给出兼容性确认问题。" +
+		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
+}
+
 func collaborationProducerName(kind model.StepKind) string {
 	switch kind {
 	case model.StepCollaborationOrchestration:
@@ -753,7 +911,7 @@ func collaborationProducerName(kind model.StepKind) string {
 	case model.StepDomainAnalysis:
 		return "领域分析"
 	case model.StepDesignContract:
-		return "设计契约"
+		return "界面设计"
 	case model.StepDataIntegration:
 		return "数据接入"
 	default:
@@ -1017,6 +1175,73 @@ func (c *ClaudeStepRunner) artifactRoot() string {
 	return c.ArtifactRoot
 }
 
+// createInterfacePreviewSnapshot derives the task-owned interface-preview
+// artifact from a VALIDATED design contract (Task 8). The agent is forbidden
+// from writing preview files, so this is the single deterministic producer:
+// it projects the design contract's summary + designDocument + assumedDataFields
+// into a static manifest under the artifact root, content-hashes it, and
+// returns a WorkbenchArtifactRef (Kind=interface_preview, CardKey=
+// interface_parsing, Status=provisional) for the orchestration view to render.
+//
+// PreviewURL points at the GET /api/jobs/:id/interface-preview serving endpoint
+// (F4) so the view model surfaces a fetchable URL. It serves the manifest JSON
+// for inspection; rendering it as a runnable HTML preview is a separate, larger
+// generation-capability follow-up (deferred). The Path stays under the artifact
+// root (jobs/<job>/design_contract/attempt-<n>/interface-preview/manifest.json)
+// and contains ONLY design metadata — no credentials, no provider reasoning
+// (Constraint #9: the manifest is built from the public design contract fields
+// the agent authored, never from hidden provider data).
+func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput) (model.WorkbenchArtifactRef, error) {
+	raw, err := json.MarshalIndent(map[string]any{
+		"kind":              "static_manifest",
+		"summary":           design.Summary,
+		"designDocument":    design.DesignDocument,
+		"assumedDataFields": design.AssumedDataFields,
+	}, "", "  ")
+	if err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	previewRel := filepath.ToSlash(filepath.Join("jobs", job.ID, string(step.Kind), fmt.Sprintf("attempt-%d", step.Attempt), "interface-preview", "manifest.json"))
+	full := filepath.Join(c.artifactRoot(), filepath.FromSlash(previewRel))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	if err := os.WriteFile(full, raw, 0o644); err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	sum := sha256.Sum256(raw)
+	now := time.Now()
+	refID := "warf_" + id.New()
+	return model.WorkbenchArtifactRef{
+		ID:           refID,
+		DialogueID:   job.DialogueID,
+		JobID:        job.ID,
+		StepID:       step.ID,
+		CardKey:      "interface_parsing",
+		Kind:         model.WorkbenchArtifactInterfacePreview,
+		Label:        "界面预览",
+		Path:         previewRel,
+		PreviewURL:   fmt.Sprintf("/api/jobs/%s/interface-preview?artifactId=%s", job.ID, refID),
+		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
+		Status:       "provisional",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
+}
+
+// upsertWorkbenchArtifact persists a WorkbenchArtifactRef so the orchestration
+// view can render it on its card. Nil-safe on c.Store (test runners may run
+// without a store) and on an empty ref ID (defensive: never upsert a ref that
+// was not populated). Errors are swallowed: a preview-snapshot persistence
+// failure must not fail an otherwise-successful design step after the snapshot
+// itself was already written to disk.
+func (c *ClaudeStepRunner) upsertWorkbenchArtifact(ctx context.Context, ref model.WorkbenchArtifactRef) {
+	if c.Store == nil || ref.ID == "" {
+		return
+	}
+	_ = c.Store.UpsertWorkbenchArtifactRef(ctx, ref)
+}
+
 func normalizeCreatedFiles(projectDir string, files []string) []string {
 	out := make([]string, 0, len(files))
 	projectDir = filepath.ToSlash(strings.Trim(projectDir, "/"))
@@ -1041,4 +1266,97 @@ func slugFromProjectDir(projectDir string) string {
 	}
 	parts := strings.Split(projectDir, "/")
 	return parts[len(parts)-1]
+}
+
+// dataContractVerification is the per-boundary verdict projected onto the
+// data_capture card. It mirrors runner.DataVerificationNode but lives here so
+// the projection is an explicit, frontend-facing contract rather than a leak of
+// the runner's internal struct tags.
+type dataContractVerificationNode struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+type dataContractProjectionResult struct {
+	Metadata string
+	Status   string
+	Label    string
+	Path     string
+	Project  bool
+}
+
+// buildDataContractMetadata marshals a frontend-facing verification summary from
+// the decoded DataIntegrationOutput. The shape is fixed:
+//
+//	{
+//	  "sourceBoundary": <ontology|internet|demo>,
+//	  "verification": { "ontology": {...}, "internet": {...}, "demo": {...} },
+//	  "fallbackHistory": [...],
+//	  "sampleCount": <n>,
+//	  "fieldCount": <n>
+//	}
+//
+// The data_capture card's data-flow track reads this to derive node states: the
+// sourceBoundary node is the selected source (succeeded/active), a boundary in
+// fallbackHistory (or whose verification status is "failed") renders red, and
+// fieldCount/sampleCount annotate the processing nodes.
+func buildDataContractMetadata(detail runner.DataIntegrationOutput) (string, error) {
+	summary := struct {
+		SourceBoundary  string                                  `json:"sourceBoundary"`
+		Verification    map[string]dataContractVerificationNode `json:"verification"`
+		FallbackHistory []string                                `json:"fallbackHistory"`
+		SampleCount     int                                     `json:"sampleCount"`
+		FieldCount      int                                     `json:"fieldCount"`
+	}{
+		SourceBoundary: detail.SourceBoundary,
+		Verification: map[string]dataContractVerificationNode{
+			"ontology": {Status: detail.Verification.Ontology.Status, Reason: detail.Verification.Ontology.Reason},
+			"internet": {Status: detail.Verification.Internet.Status, Reason: detail.Verification.Internet.Reason},
+			"demo":     {Status: detail.Verification.Demo.Status, Reason: detail.Verification.Demo.Reason},
+		},
+		FallbackHistory: detail.FallbackHistory,
+		SampleCount:     detail.DataContract.SampleCount,
+		FieldCount:      len(detail.DataContract.Fields),
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		return "", fmt.Errorf("marshal data-contract metadata: %w", err)
+	}
+	return string(raw), nil
+}
+
+// dataContractProjection decides whether the data_integration step should
+// project a data_contract workbench artifact for the given result status, and
+// when so returns the verification-summary metadata to carry on the ref. The
+// summary is projected on BOTH success AND needs_input (waiting_user): during
+// the degradation-confirmation wait the workbench data-flow track must render
+// the real per-boundary state (e.g. ontology red breakpoint + internet waiting),
+// not just a card-level waiting state (spec #32). Other statuses do not
+// project. err is non-nil only on the near-impossible metadata-marshal failure,
+// which the caller treats as a step failure (preserving the prior behavior).
+func dataContractProjection(detail runner.DataIntegrationOutput, resStatus model.StepStatus) (dataContractProjectionResult, error) {
+	if resStatus != model.StepStatusSucceeded && resStatus != model.StepStatusWaitingUser {
+		return dataContractProjectionResult{}, nil
+	}
+	meta, err := buildDataContractMetadata(detail)
+	if err != nil {
+		return dataContractProjectionResult{}, err
+	}
+	proj := dataContractProjectionResult{
+		Metadata: meta,
+		Status:   detail.SourceBoundary,
+		Label:    "数据契约",
+		Path:     "docs/data-integration.md",
+		Project:  true,
+	}
+	if resStatus == model.StepStatusWaitingUser {
+		proj.Label = "数据验证状态"
+		proj.Path = ""
+	}
+	if strings.EqualFold(detail.Compatibility.Status, "failed") {
+		proj.Status = "compatible_failed"
+		proj.Label = "界面兼容待确认"
+		proj.Path = ""
+	}
+	return proj, nil
 }

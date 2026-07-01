@@ -33,6 +33,8 @@ assert.match(workbench, /CollaborationExecutionGraph/, 'ConversationWorkbench sh
 assert.match(workbench, /manualStepConfirmation/, 'ConversationWorkbench should own the manual step confirmation preference before generation')
 assert.match(workbench, /executionPolicy:\s*\{\s*manualStepConfirmation/, 'confirm action should submit the manual step confirmation execution policy')
 assert.doesNotMatch(workbench, /function CollaborationPlanPreviewCard/, 'old inline collaboration preview card should be removed')
+assert.match(jobCenter, /collaborationLanes[\s\S]*find\(v => v\.stepId === selectedStepId\)/, 'JobCenter drawer title should resolve selected collaboration step labels from collaboration lanes')
+assert.match(drawer, /collaborationAgentName/, 'StepExecutionDrawer should normalize collaboration snapshot display names')
 assert.match(graphComponent, /function CollaborationExecutionGraph/, 'graph component should export a CollaborationExecutionGraph component')
 assert.match(graphComponent, /onConfirmStep/, 'graph component should accept a manual step confirmation callback')
 assert.match(graphComponent, /ceg-manual-toggle/, 'graph header should render the manual step confirmation toggle before generation')
@@ -140,6 +142,17 @@ assert.equal(
   13,
   'collaboration plan card view should render every planned agent task, not fall back to the fixed six stages',
 )
+const legacyDesignerCards = buildCollaborationCardView([], [], {
+  plan: {
+    lanes: [{ id: 'analysis', label: '分析' }],
+    agents: [{ key: 'designer', name: '设计', role: 'design_contract', lane: 'analysis' }],
+  },
+})
+assert.equal(
+  legacyDesignerCards[0].cards[0].label,
+  '界面设计',
+  'collaboration task drawer cards should normalize legacy designer names',
+)
 
 const confirmedDialogueTimeline = buildDialogueTimeline({
   session: { id: 'dlg-confirmed', status: 'task_running', intent: 'application_generation' },
@@ -232,6 +245,7 @@ assert.equal(plannedGraph.cards[0].kind, 'origin', 'first graph card should be t
 assert.equal(plannedGraph.cards[1].agentKey, 'collaboration-orchestrator', 'second graph card should be the orchestration hub')
 assert.equal(plannedGraph.cards[1].kind, 'orchestrator', 'collaboration orchestrator should be marked as the hub card')
 assert.equal(plannedGraph.cards.find(card => card.agentKey === 'designer').state, 'pending_confirmation', 'unconfirmed agents should be pending confirmation')
+assert.equal(plannedGraph.cards.find(card => card.agentKey === 'designer').title, '界面设计', 'legacy designer agent name should display as interface design')
 assert.equal(
   plannedGraph.cards.find(card => card.agentKey === 'requirement-analyst').tooltip,
   '整理用户需求并形成确认需求摘要。',
@@ -259,7 +273,7 @@ assert.equal(
 assert.equal(runningGraph.cards.find(card => card.agentKey === 'solution-designer').state, 'waiting_upstream', 'pending card with unfinished upstream should wait upstream')
 assert.equal(
   runningGraph.cards.find(card => card.agentKey === 'solution-designer').waitingFor.join('、'),
-  '设计、数据接入',
+  '界面设计、数据接入',
   'waiting card should name unfinished upstream agents',
 )
 assert.equal(

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -3362,5 +3364,205 @@ func TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus(t *testing.T
 				t.Fatalf("confirm status=%d, want 409 Conflict for status=%s", rec.Code, status)
 			}
 		})
+	}
+}
+
+func TestDialogueMessageCreatesAttachmentReferences(t *testing.T) {
+	srv, router, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	_ = srv.store.CreateDialogueSession(ctx, model.DialogueSession{ID: "dlg_att", Status: model.DialogueStatusActive, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true})
+	att := model.DialogueAttachment{
+		ID: "att_msg", DialogueID: "dlg_att", FocusKey: "business_logic", OriginalName: "req.md",
+		StoredPath: "dialogue-attachments/dlg_att/att_msg/req.md", Mime: "text/markdown", Extension: ".md",
+		SizeBytes: 12, SHA256: "sha256:1", PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: time.Now(),
+	}
+	if err := srv.store.CreateDialogueAttachment(ctx, att); err != nil {
+		t.Fatalf("CreateDialogueAttachment: %v", err)
+	}
+	body := strings.NewReader(`{"content":"补充需求","attachmentIds":["att_msg"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues/dlg_att/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, "dlg_att")
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 || refs[0].AttachmentID != "att_msg" || refs[0].MessageID == "" {
+		t.Fatalf("refs = %#v", refs)
+	}
+}
+
+// createDialogueMultipartBody builds a multipart/form-data body carrying a
+// `prompt` field plus one or more `files` parts, returning the body and the
+// content-type (with boundary) to set on the request. Used by the first-message
+// multipart createDialogue tests.
+func createDialogueMultipartBody(t *testing.T, prompt string, files map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("prompt", prompt); err != nil {
+		t.Fatalf("WriteField prompt: %v", err)
+	}
+	for name, content := range files {
+		fw, err := w.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatalf("CreateFormFile %s: %v", name, err)
+		}
+		if _, err := fw.Write([]byte(content)); err != nil {
+			t.Fatalf("Write %s: %v", name, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return &body, w.FormDataContentType()
+}
+
+// TestCreateDialogueMultipartPersistsFirstMessageAttachmentRefs verifies the
+// first-message multipart path: a file attached to the very first prompt (no
+// dialogue exists yet) is uploaded as part of POST /api/dialogues, persisted as
+// a DialogueAttachment, and linked to the first user message via a ref. Without
+// this path the locally-staged File is silently discarded by clearPending.
+func TestCreateDialogueMultipartPersistsFirstMessageAttachmentRefs(t *testing.T) {
+	srv, router, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	ctx := testCtx()
+	body, contentType := createDialogueMultipartBody(t, "生成排班系统", map[string]string{"requirements.md": "# 排班需求\n"})
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("unmarshal view: %v", err)
+	}
+	dialogueID := view.Session.ID
+	if dialogueID == "" {
+		t.Fatal("missing dialogue id")
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, dialogueID)
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 first-message ref, got %d: %#v", len(refs), refs)
+	}
+	if refs[0].MessageID == "" {
+		t.Fatalf("ref missing message id: %#v", refs[0])
+	}
+	if refs[0].Attachment.OriginalName != "requirements.md" {
+		t.Fatalf("ref original name = %q, want requirements.md", refs[0].Attachment.OriginalName)
+	}
+	// The first user message must carry the prompt content.
+	var sawPrompt bool
+	for _, m := range view.Messages {
+		if m.Role == "user" && m.Kind == "prompt" && m.Content == "生成排班系统" {
+			sawPrompt = true
+			break
+		}
+	}
+	if !sawPrompt {
+		t.Fatalf("first prompt message not in view: %#v", view.Messages)
+	}
+}
+
+// TestCreateDialogueMultipartRejectsCredentialFile verifies the multipart path
+// applies the SAME credential boundary as the follow-up upload: a token.env
+// file is rejected with 400 before its content is persisted. No plaintext
+// credential ever lands on disk or in the attachment table.
+func TestCreateDialogueMultipartRejectsCredentialFile(t *testing.T) {
+	srv, router, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	ctx := testCtx()
+	body, contentType := createDialogueMultipartBody(t, "上传密钥", map[string]string{"token.env": "API_KEY=secret\n"})
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "controlled credential input") {
+		t.Fatalf("credential rejection message missing: %s", rec.Body.String())
+	}
+	// Recover the dialogue id the backend created before the credential was
+	// rejected so we can assert NO attachment row survived for it.
+	rows, err := srv.store.ListDialogueSessions(ctx, 50)
+	if err != nil {
+		t.Fatalf("ListDialogueSessions: %v", err)
+	}
+	var createdID string
+	for _, s := range rows {
+		if s.InitialPrompt == "上传密钥" {
+			createdID = s.ID
+			break
+		}
+	}
+	if createdID == "" {
+		t.Fatal("credential rejection aborted before the dialogue row was created")
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, createdID)
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("credential file must not be linked: %#v", refs)
+	}
+	// And no file matching the credential name may exist anywhere under the
+	// artifact root.
+	matches, _ := filepath.Glob(filepath.Join(srv.cfg.ArtifactRoot, "dialogue-attachments", createdID, "*", "token.env"))
+	if len(matches) != 0 {
+		t.Fatalf("credential file persisted on disk: %#v", matches)
+	}
+}
+
+func TestConfirmDialogueClarificationSeedsJobWithAppSlug(t *testing.T) {
+	srv, router, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	dlg := model.DialogueSession{ID: "dlg_slug", Status: model.DialogueStatusDraftingApplication, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true, ClarificationSessionID: "clar_slug", CreatedAt: testNow(), UpdatedAt: testNow()}
+	if err := srv.store.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("CreateDialogueSession: %v", err)
+	}
+	req := `{"appType":"operations_management","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","targetUsers":["员工"],"mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	clar := model.ClarificationSession{ID: "clar_slug", Status: model.ClarificationStatusReadyToConfirm, InitialPrompt: "做请假审批", RequirementJSON: req, CreatedAt: testNow(), UpdatedAt: testNow()}
+	if err := srv.store.CreateClarificationSession(ctx, clar); err != nil {
+		t.Fatalf("CreateClarificationSession: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/dialogues/dlg_slug/clarification/confirm", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	jobs, err := srv.store.ListJobsByDialogue(ctx, "dlg_slug")
+	if err != nil {
+		t.Fatalf("ListJobsByDialogue: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].AppSlug == "" {
+		t.Fatalf("confirmed dialogue must seed job with AppSlug for early project docs: %#v", jobs)
+	}
+}
+
+func TestComposeDialogueViewIncludesAttachmentRefsAndWorkbenchArtifacts(t *testing.T) {
+	srv, _, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	_ = srv.store.CreateDialogueSession(ctx, model.DialogueSession{ID: "dlg_view", Status: model.DialogueStatusActive, Intent: model.DialogueIntentApplicationGeneration})
+	_ = srv.store.AppendDialogueMessage(ctx, model.DialogueMessage{ID: "dmsg_view", DialogueID: "dlg_view", Role: "user", Kind: "message", Content: "带附件", CreatedAt: time.Now()})
+	_ = srv.store.CreateDialogueAttachment(ctx, model.DialogueAttachment{ID: "att_view", DialogueID: "dlg_view", OriginalName: "req.md", StoredPath: "dialogue-attachments/dlg_view/att_view/req.md", PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: time.Now()})
+	_ = srv.store.CreateDialogueAttachmentRef(ctx, model.DialogueAttachmentRef{ID: "aref_view", DialogueID: "dlg_view", MessageID: "dmsg_view", AttachmentID: "att_view", Active: true, CreatedAt: time.Now()})
+	_ = srv.store.UpsertWorkbenchArtifactRef(ctx, model.WorkbenchArtifactRef{ID: "warf_view", DialogueID: "dlg_view", JobID: "job_1", CardKey: "business_logic", Kind: model.WorkbenchArtifactProjectDocument, Label: "需求文档", Path: "docs/01-requirements.md", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	view, err := srv.composeDialogueView(ctx, "dlg_view")
+	if err != nil {
+		t.Fatalf("composeDialogueView: %v", err)
+	}
+	if len(view.AttachmentRefs) != 1 || view.AttachmentRefs[0].Attachment.OriginalName != "req.md" {
+		t.Fatalf("AttachmentRefs = %#v", view.AttachmentRefs)
+	}
+	if len(view.WorkbenchArtifacts) != 1 || view.WorkbenchArtifacts[0].Path != "docs/01-requirements.md" {
+		t.Fatalf("WorkbenchArtifacts = %#v", view.WorkbenchArtifacts)
 	}
 }

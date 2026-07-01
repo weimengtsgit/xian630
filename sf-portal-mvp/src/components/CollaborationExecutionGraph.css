@@ -249,6 +249,10 @@
     animation: none !important;
   }
 
+  .ceg-card-state-running::before {
+    animation: none !important;
+  }
+
   .ceg-is-orchestrating::after {
     animation: none !important;
   }

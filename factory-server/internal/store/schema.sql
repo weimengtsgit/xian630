@@ -335,3 +335,75 @@ CREATE TABLE IF NOT EXISTS project_document_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_project_document_drafts_scope
 ON project_document_drafts(application_id, dialogue_id, path);
+
+CREATE TABLE IF NOT EXISTS dialogue_attachments (
+    id             TEXT    PRIMARY KEY,
+    dialogue_id    TEXT    NOT NULL,
+    focus_key      TEXT    NOT NULL DEFAULT '',
+    original_name  TEXT    NOT NULL,
+    stored_path    TEXT    NOT NULL DEFAULT '',
+    mime           TEXT    NOT NULL DEFAULT '',
+    extension      TEXT    NOT NULL DEFAULT '',
+    size_bytes     INTEGER NOT NULL DEFAULT 0,
+    sha256         TEXT    NOT NULL DEFAULT '',
+    preview_kind   TEXT    NOT NULL DEFAULT 'metadata',
+    status         TEXT    NOT NULL DEFAULT 'active',
+    created_at     INTEGER NOT NULL,
+    deactivated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_attachments_dialogue
+ON dialogue_attachments(dialogue_id, created_at);
+
+CREATE TABLE IF NOT EXISTS dialogue_attachment_refs (
+    id             TEXT    PRIMARY KEY,
+    dialogue_id    TEXT    NOT NULL,
+    message_id     TEXT    NOT NULL,
+    attachment_id  TEXT    NOT NULL,
+    focus_key      TEXT    NOT NULL DEFAULT '',
+    active         INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL,
+    deactivated_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_dialogue_attachment_refs_dialogue
+ON dialogue_attachment_refs(dialogue_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_dialogue_attachment_refs_message
+ON dialogue_attachment_refs(message_id, created_at);
+
+CREATE TABLE IF NOT EXISTS workbench_artifact_refs (
+    id            TEXT    PRIMARY KEY,
+    dialogue_id   TEXT    NOT NULL DEFAULT '',
+    job_id        TEXT    NOT NULL DEFAULT '',
+    step_id       TEXT    NOT NULL DEFAULT '',
+    card_key      TEXT    NOT NULL DEFAULT '',
+    kind          TEXT    NOT NULL,
+    label         TEXT    NOT NULL DEFAULT '',
+    path          TEXT    NOT NULL DEFAULT '',
+    preview_url   TEXT    NOT NULL DEFAULT '',
+    snapshot_hash TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL DEFAULT 'active',
+    metadata      TEXT    NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workbench_artifact_refs_dialogue
+ON workbench_artifact_refs(dialogue_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_workbench_artifact_refs_job
+ON workbench_artifact_refs(job_id, created_at);
+
+-- Task 12: controlled credential input boundary. The row stores ONLY opaque
+-- metadata — handle, focus_key, label, scope, expiry. Plaintext credential
+-- VALUES live solely in the server's in-memory credentialSecrets registry,
+-- never in this table. CREATE TABLE IF NOT EXISTS (no ensureColumn): a fresh
+-- column set, brand-new DBs have it, and no legacy DB backfills it.
+CREATE TABLE IF NOT EXISTS ephemeral_credential_refs (
+    id          TEXT    PRIMARY KEY,
+    dialogue_id TEXT    NOT NULL,
+    focus_key   TEXT    NOT NULL DEFAULT '',
+    label       TEXT    NOT NULL DEFAULT '',
+    scope       TEXT    NOT NULL DEFAULT '',
+    handle      TEXT    NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ephemeral_credential_refs_dialogue
+ON ephemeral_credential_refs(dialogue_id, created_at);

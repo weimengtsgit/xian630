@@ -756,6 +756,157 @@ func TestAnswerJobRoutesToProvidedWaitingStep(t *testing.T) {
 	}
 }
 
+// TestAnswerJobBindsTaskInternalAttachmentRefs verifies F1: when a task-internal
+// clarification answer carries attachmentIds, the backend binds each id to the
+// freshly-appended dialogue answer message via createDialogueAttachmentRefs, so
+// the attachments the user pinned in a 业务逻辑/界面解析/数据抓取 phase are not
+// dropped. The job must carry a DialogueID for the binding branch to run.
+func TestAnswerJobBindsTaskInternalAttachmentRefs(t *testing.T) {
+	srv, r, st := newJobsTestServer(t, config.Config{})
+
+	dialogueID := "dlg_f1"
+	if err := st.CreateDialogueSession(context.Background(), model.DialogueSession{
+		ID: dialogueID, Status: model.DialogueStatusTaskRunning,
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: testNow(), UpdatedAt: testNow(),
+	}); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
+	}
+	// An active dialogue attachment the user uploaded earlier.
+	attID := "att_f1"
+	if err := st.CreateDialogueAttachment(context.Background(), model.DialogueAttachment{
+		ID: attID, DialogueID: dialogueID, FocusKey: "business_logic",
+		OriginalName: "spec.md", StoredPath: "dialogue-attachments/" + dialogueID + "/" + attID + "/spec.md",
+		PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: testNow(),
+	}); err != nil {
+		t.Fatalf("seed attachment: %v", err)
+	}
+
+	// Seed a job WITH a DialogueID so the task-internal binding branch runs.
+	now := time.Now()
+	jobID := "job_f1"
+	job := model.Job{
+		ID: jobID, UserPrompt: "p", Status: model.JobStatusWaitingUser,
+		CurrentStepKind:          model.StepRequirementAnalysis,
+		ConfirmedRequirementJSON: testConfirmedRequirement,
+		DialogueID:               dialogueID, CreatedAt: now, UpdatedAt: now,
+	}
+	stepID := "step_f1"
+	steps := []model.JobStep{{
+		ID: stepID, JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1,
+		Status: model.StepStatusWaitingUser, NeedsUserInput: true, Attempt: 0,
+	}}
+	if err := st.SeedJob(context.Background(), job, steps); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+jobID+"/answer", map[string]any{
+		"answer":        "选 A 方案",
+		"stepId":        stepID,
+		"attempt":       0,
+		"attachmentIds": []string{attID},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	refs, err := st.ListDialogueAttachmentRefs(context.Background(), dialogueID)
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 attachment ref bound to the answer, got %d: %#v", len(refs), refs)
+	}
+	if refs[0].AttachmentID != attID {
+		t.Fatalf("ref attachment id = %q, want %q", refs[0].AttachmentID, attID)
+	}
+	if refs[0].MessageID == "" || !strings.HasPrefix(refs[0].MessageID, "msg_") {
+		t.Fatalf("ref message id = %q, want the task-internal answer's dlgMsg id (msg_...)", refs[0].MessageID)
+	}
+	_ = srv
+}
+
+func TestAnswerJobReroutesCompatibilityFailureToDesignContract(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	ctx := context.Background()
+	now := time.Now()
+	dialogueID := "dlg_compat_route"
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: dialogueID, Status: model.DialogueStatusTaskRunning,
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
+	}
+	jobID := "job_compat_route"
+	job := model.Job{
+		ID: jobID, UserPrompt: "p", Status: model.JobStatusWaitingUser,
+		CurrentStepKind:          model.StepDataIntegration,
+		ConfirmedRequirementJSON: testConfirmedRequirement,
+		DialogueID:               dialogueID, CreatedAt: now, UpdatedAt: now,
+	}
+	steps := []model.JobStep{
+		{ID: "step_req", JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1, Status: model.StepStatusSucceeded, Attempt: 1},
+		{ID: "step_design", JobID: jobID, Kind: model.StepDesignContract, Seq: 2, Status: model.StepStatusSucceeded, Attempt: 1},
+		{ID: "step_data", JobID: jobID, Kind: model.StepDataIntegration, Seq: 3, Status: model.StepStatusWaitingUser, NeedsUserInput: true, Attempt: 1},
+	}
+	if err := st.SeedJob(ctx, job, steps); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if err := st.UpsertWorkbenchArtifactRef(ctx, model.WorkbenchArtifactRef{
+		ID: "warf_compat", DialogueID: dialogueID, JobID: jobID, StepID: "step_data",
+		CardKey: "data_capture", Kind: model.WorkbenchArtifactDataContract,
+		Label: "界面兼容待确认", Status: "compatible_failed",
+		Metadata:  `{"sourceBoundary":"internet","verification":{"ontology":{"status":"failed"},"internet":{"status":"passed"},"demo":{"status":"pending"}},"fallbackHistory":["ontology_failed"]}`,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+jobID+"/answer", map[string]any{
+		"answer":  "请调整界面，不再展示审批状态字段",
+		"stepId":  "step_data",
+		"attempt": 1,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	updatedJob, err := st.GetJob(ctx, jobID)
+	if err != nil || updatedJob == nil {
+		t.Fatalf("GetJob: %#v %v", updatedJob, err)
+	}
+	if updatedJob.CurrentStepKind != model.StepDesignContract {
+		t.Fatalf("CurrentStepKind = %s, want design_contract", updatedJob.CurrentStepKind)
+	}
+	if updatedJob.Status != model.JobStatusQueued {
+		t.Fatalf("job status = %s, want queued", updatedJob.Status)
+	}
+	updatedSteps, err := st.ListJobSteps(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	var design, data model.JobStep
+	for _, step := range updatedSteps {
+		if step.ID == "step_design" {
+			design = step
+		}
+		if step.ID == "step_data" {
+			data = step
+		}
+	}
+	if design.Status != model.StepStatusPending || design.UserPrompt != "请调整界面，不再展示审批状态字段" {
+		t.Fatalf("design step = %#v, want pending with user prompt", design)
+	}
+	if data.Status != model.StepStatusPending || data.NeedsUserInput {
+		t.Fatalf("data step = %#v, want compatibility wait closed to pending", data)
+	}
+	refs, err := st.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Status == "compatible_failed" {
+		t.Fatalf("compatibility artifact status should no longer force interface revalidation after answer, got %#v", refs)
+	}
+}
+
 func TestAnswerJobRejectsStaleStepAttempt(t *testing.T) {
 	_, r, st := newJobsTestServer(t, config.Config{})
 	create := createJobViaAPI(t, r, "p")

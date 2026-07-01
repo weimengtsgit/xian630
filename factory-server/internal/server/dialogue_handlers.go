@@ -45,7 +45,8 @@ type createDialogueBody struct {
 }
 
 type addDialogueMessageBody struct {
-	Content string `json:"content"`
+	Content       string   `json:"content"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
 }
 
 type selectDialogueRouteBody struct {
@@ -150,6 +151,8 @@ type dialogueView struct {
 	ResolvedApplication      *model.Application            `json:"resolvedApplication,omitempty"`
 	CreatedAgent             *model.Agent                  `json:"createdAgent,omitempty"`
 	SeededJob                *model.Job                    `json:"seededJob,omitempty"`
+	AttachmentRefs           []model.DialogueAttachmentRef `json:"attachmentRefs,omitempty"`
+	WorkbenchArtifacts       []model.WorkbenchArtifactRef  `json:"workbenchArtifacts,omitempty"`
 }
 
 // collaborationPlanPreview is the confirm-summary preview of the collaboration
@@ -481,6 +484,15 @@ func (s *Server) composeDialogueView(ctx context.Context, id string) (*dialogueV
 		return nil, err
 	}
 	view := &dialogueView{Session: *dlg, Messages: msgs}
+	// Project attachment refs and workbench artifacts into the composed view so
+	// the workbench timeline can render attachment chips on user messages and
+	// surface produced artifacts without extra round-trips.
+	if refs, err := s.store.ListDialogueAttachmentRefs(ctx, id); err == nil {
+		view.AttachmentRefs = refs
+	}
+	if artifacts, err := s.store.ListWorkbenchArtifactRefsByDialogue(ctx, id); err == nil {
+		view.WorkbenchArtifacts = artifacts
+	}
 	// The embedded Session.DraftJSON carries the raw route record INCLUDING the
 	// hidden internalBlueprintSlug. It is parsed below to build the redacted
 	// Route payload, then BLANKED so it can never leak into a JSON response.
@@ -769,22 +781,50 @@ var errDialogueNotFound = errors.New("dialogue not found")
 // createDialogue handles POST /api/dialogues. It persists the first user
 // message, emits dialogue.created, schedules intent routing, and returns the
 // initial view without waiting for the model.
+//
+// It accepts EITHER a JSON body {prompt} OR a multipart/form-data body carrying
+// a `prompt` field plus one or more `files` parts (first-message attachments).
+// The multipart path exists so a file pinned to the very first message is not
+// silently lost: when no dialogue exists yet the composer stages the File
+// locally (no attachment.id to thread into attachmentIds), so the only way to
+// deliver it server-side is to upload it as part of the dialogue creation. On
+// multipart: the dialogue + first user message are created exactly as the JSON
+// path does, then each file is persisted via saveAttachment (sharing the same
+// credential / classification / size boundary as the follow-up upload) and
+// linked to that first message as DialogueAttachmentRef rows.
 func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
-	var body createDialogueBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	if strings.TrimSpace(body.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "missing prompt")
-		return
+	var prompt string
+	var firstMessageAttachments []string
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		// First-message multipart submission. Parse the form under the same 10MiB
+		// cap the follow-up upload enforces so a huge multipart body cannot OOM.
+		if err := r.ParseMultipartForm(maxDialogueAttachmentBytes); err != nil {
+			writeError(w, http.StatusBadRequest, "attachment too large")
+			return
+		}
+		prompt = strings.TrimSpace(r.FormValue("prompt"))
+		if prompt == "" {
+			writeError(w, http.StatusBadRequest, "missing prompt")
+			return
+		}
+	} else {
+		var body createDialogueBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+		if strings.TrimSpace(body.Prompt) == "" {
+			writeError(w, http.StatusBadRequest, "missing prompt")
+			return
+		}
+		prompt = body.Prompt
 	}
 	ctx := r.Context()
 	now := time.Now()
 	id := "dlg_" + idpkg.New()
 	dlg := model.DialogueSession{
 		ID:            id,
-		InitialPrompt: body.Prompt,
+		InitialPrompt: prompt,
 		Status:        model.DialogueStatusRouting,
 		Intent:        model.DialogueIntentRouting,
 		CreatedAt:     now,
@@ -796,16 +836,55 @@ func (s *Server) createDialogue(w http.ResponseWriter, r *http.Request) {
 	}
 	promptMsg := model.DialogueMessage{
 		ID: "dmsg_" + idpkg.New(), DialogueID: id, Role: "user", Kind: "prompt",
-		Content: body.Prompt, CreatedAt: now,
+		Content: prompt, CreatedAt: now,
 	}
 	if err := s.store.AppendDialogueMessage(ctx, promptMsg); err != nil {
 		writeError(w, http.StatusInternalServerError, "persist prompt")
 		return
 	}
+	// Multipart path: persist each attached file via the shared saveAttachment
+	// core (same credential + classification + 10MiB boundary as the follow-up
+	// upload) and collect their ids. A credential or unsupported file is rejected
+	// with 400; the dialogue is already created, so the row stays (acceptable —
+	// the user can delete it) but no half-uploaded attachment is linked. The
+	// focus key defaults to business_logic for a brand-new dialogue.
+	if r.MultipartForm != nil && len(r.MultipartForm.File["files"]) > 0 {
+		focusKey := s.currentWorkbenchFocusKey(ctx, id)
+		for _, header := range r.MultipartForm.File["files"] {
+			file, ferr := header.Open()
+			if ferr != nil {
+				writeError(w, http.StatusBadRequest, "invalid attachment")
+				return
+			}
+			att, serr := s.saveAttachment(ctx, id, focusKey, header.Filename, header.Header.Get("Content-Type"), file)
+			_ = file.Close()
+			if serr != nil {
+				switch {
+				case errors.Is(serr, errAttachmentCredential):
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": "credentials must use controlled credential input"})
+				case errors.Is(serr, errAttachmentUnsupported):
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported attachment type"})
+				case errors.Is(serr, errAttachmentTooLarge):
+					writeError(w, http.StatusBadRequest, "attachment too large")
+				default:
+					writeError(w, http.StatusInternalServerError, "save attachment")
+				}
+				return
+			}
+			firstMessageAttachments = append(firstMessageAttachments, att.ID)
+		}
+		// Link the freshly-persisted attachments to the first user message so they
+		// appear in the dialogue alongside the prompt. Only attachment id + focus
+		// key are stored on the ref — never file content or credentials.
+		if err := s.createDialogueAttachmentRefs(ctx, id, promptMsg.ID, firstMessageAttachments, focusKey); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid attachment reference")
+			return
+		}
+	}
 	s.publishDialogueSimple("dialogue.created", id, dlg)
 
 	s.runAsync(func(asyncCtx context.Context) {
-		s.runDialogueRouting(asyncCtx, id, body.Prompt)
+		s.runDialogueRouting(asyncCtx, id, prompt)
 	})
 
 	view, err := s.composeDialogueView(ctx, id)
@@ -1024,6 +1103,18 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add message")
 		return
 	}
+	// Link any attachments the user pinned to this message. Each attachmentID
+	// is validated against GetDialogueAttachment and rejected (400) if it is
+	// missing or not active — only the attachment id + focus key are persisted
+	// on the ref, never file content or credentials. Runs on both the
+	// continuing-session and pre-route paths so a ref is always tied to the
+	// user message that carried it.
+	if len(body.AttachmentIDs) > 0 {
+		if err := s.createDialogueAttachmentRefs(ctx, id, msg.ID, body.AttachmentIDs, s.currentWorkbenchFocusKey(ctx, id)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid attachment reference")
+			return
+		}
+	}
 
 	// Continuing session: async turn contract (202). Route is already
 	// established, so this message is a follow-up turn, not a re-route.
@@ -1067,6 +1158,61 @@ func (s *Server) addDialogueMessage(w http.ResponseWriter, r *http.Request) {
 		"acceptedAt": now.UTC().Format(time.RFC3339),
 		"view":       view,
 	})
+}
+
+// createDialogueAttachmentRefs links the supplied attachment ids to a user
+// message as active DialogueAttachmentRef rows. Each id is validated against the
+// stored attachment for this dialogue: a missing attachment or one that is not
+// AttachmentStatusActive yields an error (surfaced as 400 by the caller). Only
+// the attachment id + the current focus key are persisted — never file content
+// or credentials. Duplicate ids within the same call are de-duplicated.
+func (s *Server) createDialogueAttachmentRefs(ctx context.Context, dialogueID, messageID string, attachmentIDs []string, focusKey string) error {
+	now := time.Now()
+	seen := map[string]bool{}
+	for _, attachmentID := range attachmentIDs {
+		attachmentID = strings.TrimSpace(attachmentID)
+		if attachmentID == "" || seen[attachmentID] {
+			continue
+		}
+		seen[attachmentID] = true
+		att, err := s.store.GetDialogueAttachment(ctx, dialogueID, attachmentID)
+		if err != nil {
+			return err
+		}
+		if att == nil || att.Status != model.AttachmentStatusActive {
+			return fmt.Errorf("attachment %s unavailable", attachmentID)
+		}
+		ref := model.DialogueAttachmentRef{
+			ID: "aref_" + idpkg.New(), DialogueID: dialogueID, MessageID: messageID,
+			AttachmentID: attachmentID, FocusKey: focusKey, Active: true, CreatedAt: now,
+		}
+		if err := s.store.CreateDialogueAttachmentRef(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// currentWorkbenchFocusKey projects the dialogue's most recent job's current
+// step kind onto the workbench focus key the aggregate orchestration view uses
+// (business_logic / interface_parsing / data_capture / production_delivery).
+// Any error or empty job list defaults to the business-logic focus.
+func (s *Server) currentWorkbenchFocusKey(ctx context.Context, dialogueID string) string {
+	jobs, err := s.store.ListJobsByDialogue(ctx, dialogueID)
+	if err != nil || len(jobs) == 0 {
+		return "business_logic"
+	}
+	job := jobs[len(jobs)-1]
+	switch job.CurrentStepKind {
+	case model.StepDesignContract:
+		return "interface_parsing"
+	case model.StepDataIntegration:
+		return "data_capture"
+	case model.StepSolutionDesign, model.StepCodeGeneration, model.StepCodeReview, model.StepSecurityReview, model.StepTestVerification, model.StepProductAcceptance, model.StepImageBuild, model.StepDeployment:
+		return "production_delivery"
+	default:
+		return "business_logic"
+	}
 }
 
 // cancelDialogueTurn handles POST /api/dialogues/:id/turns/:turnId/cancel. It
@@ -2414,4 +2560,73 @@ func (s *Server) agentKeyTaken(ctx context.Context, nameSlug, candSerial string)
 		}
 	}
 	return false
+}
+
+// ---- controlled credential input boundary (Task 12) ----------------------
+
+// controlledCredentialBody is the request body for POST
+// /api/dialogues/:id/credentials. FocusKey/Label/Scope are user-facing metadata
+// describing WHICH credential the handle refers to (e.g. focusKey "data_capture",
+// label "API Key", scope "ontology"). Value is the PLAINTEXT credential — it is
+// accepted ONLY here at the boundary, stored solely in the server's in-memory
+// registry behind an opaque handle, and NEVER persisted, logged, or surfaced in
+// any response, SSE payload, attachment, project doc, or dialogue message.
+type controlledCredentialBody struct {
+	FocusKey string `json:"focusKey"`
+	Label    string `json:"label"`
+	Scope    string `json:"scope"`
+	Value    string `json:"value"`
+}
+
+// submitDialogueCredential accepts ONE controlled credential submission for a
+// dialogue. It swaps the plaintext value for an opaque handle (via
+// storeRuntimeSecret), persists ONLY the metadata row (handle + focus/label/
+// scope + expiry), and responds 201 with {credentialRef:{id,label,scope,
+// redacted:true}} — the response NEVER echoes the value. The persisted
+// ephemeral_credential_refs row and the in-memory secret both expire after 30m.
+//
+// Security contract (binding): the plaintext value lives ONLY in the in-memory
+// credentialSecrets registry. It is not written to the database, input.json,
+// output.json, project docs, attachments, dialogue message content, work traces,
+// SSE events, or logs. It is resolved solely by a future server-side data
+// verifier that accepts the handle (NOT built in this task).
+func (s *Server) submitDialogueCredential(w http.ResponseWriter, r *http.Request) {
+	dialogueID := Param(r, "id")
+	var body controlledCredentialBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if strings.TrimSpace(body.Value) == "" {
+		writeError(w, http.StatusBadRequest, "missing credential value")
+		return
+	}
+	// Swap the plaintext for an opaque handle. The value now lives ONLY in the
+	// in-memory registry; the handle is the sole identifier persisted below.
+	handle := s.storeRuntimeSecret(dialogueID, body.Scope, body.Value)
+	now := time.Now()
+	ref := model.EphemeralCredentialRef{
+		ID:         "cred_" + idpkg.New(),
+		DialogueID: dialogueID,
+		FocusKey:   body.FocusKey,
+		Label:      body.Label,
+		Scope:      body.Scope,
+		Handle:     handle,
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(30 * time.Minute),
+	}
+	if err := s.store.CreateEphemeralCredentialRef(r.Context(), ref); err != nil {
+		writeError(w, http.StatusInternalServerError, "save credential ref")
+		return
+	}
+	// Respond with metadata + a redacted flag. The plaintext value is NEVER
+	// echoed in any response field.
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"credentialRef": map[string]any{
+			"id":       ref.ID,
+			"label":    ref.Label,
+			"scope":    ref.Scope,
+			"redacted": true,
+		},
+	})
 }

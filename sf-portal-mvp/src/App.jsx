@@ -49,14 +49,6 @@ function App() {
     dialogue.setJobsForFocus(jobs.jobs)
   }, [jobs.jobs, dialogue.setJobsForFocus])
 
-  // Feed the active task's step/summary state into the dialogue hook so the
-  // conversation timeline can render a task_execution_block per executing step
-  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
-  // low-frequency change (useJobs refresh on SSE step.updated).
-  useEffect(() => {
-    dialogue.setJobStepBlocks(buildTaskBlocks(jobs.steps, jobs.summary))
-  }, [jobs.steps, jobs.summary, dialogue.setJobStepBlocks])
-
   // The 任务执行 drawer shows ALL generation tasks for the selected dialogue,
   // defaulting to the focus task (plan §Task Execution Drawer). The drawer's
   // task list is the dialogue's jobs ranked by attention priority (focus task
@@ -70,6 +62,24 @@ function App() {
   const effectiveTaskId = selectedTaskId || (dialogue.focusTask && dialogue.focusTask.id) || null
   const activeJob =
     dialogueJobs.find(j => j.id === effectiveTaskId) || dialogue.focusTask || null
+  const activeJobId = activeJob && activeJob.id
+  const scopedTraceSteps = useMemo(() => {
+    if (!activeJobId) return []
+    const list = Array.isArray(jobs.steps) ? jobs.steps : []
+    return list.filter(step => {
+      const stepJobId = step && (step.job_id || step.jobId || '')
+      return !stepJobId || stepJobId === activeJobId
+    })
+  }, [jobs.steps, activeJobId])
+
+  // Feed the active task's step/summary state into the dialogue hook so the
+  // conversation timeline can render a task_execution_block per executing step
+  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
+  // low-frequency change (useJobs refresh on SSE step.updated).
+  useEffect(() => {
+    dialogue.setJobStepBlocks(buildTaskBlocks(scopedTraceSteps, jobs.summary))
+  }, [scopedTraceSteps, jobs.summary, dialogue.setJobStepBlocks])
+
   const [selectedClarificationScope, setSelectedClarificationScope] = useState(null)
   const openClarifications = useMemo(() => {
     const items = Array.isArray(dialogue.timeline) ? dialogue.timeline : []
@@ -215,29 +225,58 @@ function App() {
               focusTask={dialogue.focusTask}
               clarificationScope={activeClarification}
               onSelectClarificationScope={onSelectClarificationScope}
-              traceSteps={jobs.steps}
+              traceSteps={scopedTraceSteps}
               drawerEntry={drawerEntry}
               onToggleDrawerEntry={toggleDrawerEntry}
               onOpenTaskStep={openTaskStepFromGraph}
               onConfirmTaskStep={jobs.confirmStep}
               hasBoundApplication={hasBoundApplication}
-              onSend={prompt => {
+              onSend={(prompt, options = {}) => {
                 if (activeClarification) {
                   return jobs.answerJob(activeClarification.taskId, prompt, {
                     stepId: activeClarification.stepId,
                     attempt: activeClarification.attempt,
+                    attachmentIds: options.attachmentIds || [],
                   })
                 }
                 if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
-                  return jobs.answerJob(dialogue.focusTask.id, prompt)
+                  return jobs.answerJob(dialogue.focusTask.id, prompt, { attachmentIds: options.attachmentIds || [] })
                 }
-                return dialogue.send(prompt)
+                return dialogue.send(prompt, options)
               }}
               onSelectRoute={dialogue.selectRoute}
               onOpenApp={dialogue.openApp}
               onAnswerBatch={dialogue.answerBatch}
               onAcceptConsolidation={dialogue.acceptConsolidation}
               onConfirm={dialogue.confirm}
+              // onConfirmCard advances a card's artifact package. A task-phase
+              // card (界面解析/数据抓取/生产交付) backs a waiting job step, NOT a
+              // pre-task clarification child — confirmDialogueClarification
+              // (dialogue.confirm) returns 409 there. So route the task-phase
+              // confirm through jobs.answerJob (the same path onSend uses to
+              // advance a waiting_user step), passing the card's confirm label as
+              // the affirmative answer. Only the pre-task branch (no active
+              // clarification/task) falls back to dialogue.confirm, preserving the
+              // business_logic requirement-summary confirm flow.
+              onConfirmCard={cardKey => {
+                const CONFIRM_ANSWER = {
+                  business_logic: '确认业务逻辑并继续',
+                  interface_parsing: '确认界面解析并继续',
+                  data_capture: '确认数据抓取并继续',
+                  production_delivery: '确认生产交付并继续',
+                }
+                const answer = CONFIRM_ANSWER[cardKey] || '确认并继续'
+                if (activeClarification) {
+                  return jobs.answerJob(activeClarification.taskId, answer, {
+                    stepId: activeClarification.stepId,
+                    attempt: activeClarification.attempt,
+                  })
+                }
+                if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
+                  return jobs.answerJob(dialogue.focusTask.id, answer, {})
+                }
+                return dialogue.confirm()
+              }}
               onRetry={dialogue.retry}
               onAbandon={dialogue.abandon}
               onCancelTurn={dialogue.cancelTurn}

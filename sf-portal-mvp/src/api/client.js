@@ -59,6 +59,26 @@ async function requestWithStatus(path, options = {}) {
   return { status: response.status, body }
 }
 
+// requestMultipart POSTs a FormData body (multipart/form-data) WITHOUT a
+// JSON content-type header — the browser sets the multipart boundary. Used for
+// attachment uploads. Errors share the SAME typed-error shape as `request`.
+async function requestMultipart(path, formData) {
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', body: formData })
+  if (!response.ok) {
+    const body = await response.text()
+    const err = new Error(`${response.status} ${body}`)
+    err.status = response.status
+    err.bodyText = body
+    try {
+      err.data = JSON.parse(body)
+    } catch {
+      err.data = null
+    }
+    throw err
+  }
+  return response.json()
+}
+
 // requestText mirrors `request` but resolves the body as TEXT (used for
 // artifact content, which the backend serves as plain text). On failure it
 // produces the SAME typed-error shape as `request` (status / message / bodyText
@@ -118,6 +138,7 @@ export const factoryApi = {
       answer,
       ...(scope.stepId ? { stepId: scope.stepId } : {}),
       ...(scope.attempt ? { attempt: scope.attempt } : {}),
+      ...(scope.attachmentIds && scope.attachmentIds.length ? { attachmentIds: scope.attachmentIds } : {}),
     }),
   }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
@@ -134,6 +155,16 @@ export const factoryApi = {
       }&limit=200`,
     ),
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
+  getJobProjectDocument: (jobId, path) =>
+    request(`/api/jobs/${jobId}/project-docs/file?path=${encodeURIComponent(path)}`),
+  // getJobInterfacePreview fetches the retained interface-preview manifest (F4)
+  // the design_contract step wrote. The backend resolves the interface_preview
+  // workbench artifact ref by artifactId under ArtifactRoot and returns its
+  // decoded manifest: { summary, designDocument, assumedDataFields, snapshotHash,
+  // path }. The modal renders this readably instead of the prior "快照已保留"
+  // placeholder (spec #7: the proposed interface must be inspectable).
+  getJobInterfacePreview: (jobId, artifactId) =>
+    request(`/api/jobs/${jobId}/interface-preview?artifactId=${encodeURIComponent(artifactId)}`),
   getArtifactContent: async id => requestText(`/api/artifacts/${id}/content`),
   createClarification: prompt => request('/api/clarifications', { method: 'POST', body: JSON.stringify({ prompt }) }),
   getActiveClarification: () => request('/api/clarifications/active'),
@@ -155,8 +186,23 @@ export const factoryApi = {
   // (or a list of them). Path/methods mirror the backend routes exactly.
   listDialogues: () => request('/api/dialogues'),
   getDialogue: id => request(`/api/dialogues/${id}`),
-  createDialogue: ({ initialPrompt }) =>
-    request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
+  // createDialogue creates a brand-new dialogue from the user's first prompt.
+  // It accepts EITHER a plain JSON body ({initialPrompt}) OR, when one or more
+  // files are attached to that very first message, a multipart/form-data body
+  // (prompt field + files parts). The multipart path is required because before
+  // the dialogue exists there is no attachment.id to thread into attachmentIds —
+  // the composer stages such files locally, so the only way to deliver them is
+  // to upload them as part of the dialogue creation. The backend shares the
+  // same credential/classification/10MiB boundary as the follow-up upload.
+  createDialogue: ({ initialPrompt, files }) => {
+    if (Array.isArray(files) && files.length) {
+      const form = new FormData()
+      form.append('prompt', initialPrompt)
+      for (const file of files) form.append('files', file)
+      return requestMultipart('/api/dialogues', form)
+    }
+    return request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) })
+  },
   deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
   // archiveDialogue sets a dialogue's status to `archived`. The backend endpoint
   // is idempotent and emits `dialogue.archived`; it returns 200 with no required
@@ -172,10 +218,11 @@ export const factoryApi = {
   // A locked session still 409s and surfaces via the typed error (preserved).
   // The hook inspects `.status` to decide whether to poll the trace stream
   // (202) or apply the returned view immediately (200).
-  async sendDialogueMessage(id, content) {
+  async sendDialogueMessage(id, content, options = {}) {
+    const attachmentIds = Array.isArray(options.attachmentIds) ? options.attachmentIds : []
     const { status, body } = await requestWithStatus(
       `/api/dialogues/${id}/messages`,
-      { method: 'POST', body: JSON.stringify({ content }) },
+      { method: 'POST', body: JSON.stringify({ content, attachmentIds }) },
     )
     if (status === 202) {
       if (body && body.view) return body.view
@@ -186,6 +233,32 @@ export const factoryApi = {
     }
     // 200: the composed view. Keep returning the view for the existing flow.
     return body
+  },
+  // uploadDialogueAttachment POSTs a multipart/form-data file to the dialogue
+  // attachment store. The backend writes the file under the artifact root,
+  // persists metadata to dialogue_attachments, and rejects credential-like
+  // payloads (400). Returns { attachment: {...} }.
+  uploadDialogueAttachment(id, { file, focusKey }) {
+    const form = new FormData()
+    form.append('file', file)
+    if (focusKey) form.append('focusKey', focusKey)
+    return requestMultipart(`/api/dialogues/${id}/attachments`, form)
+  },
+  // getDialogueAttachmentContent fetches the text preview body of a stored
+  // attachment (markdown/text/json/csv). The backend serves it as plain text;
+  // used by the attachment preview modal. May 404 if no preview body exists.
+  getDialogueAttachmentContent(id, attachmentId) {
+    return requestText(`/api/dialogues/${id}/attachments/${attachmentId}/content`)
+  },
+  // getDialogueAttachmentContentURL returns the FULL URL for a stored
+  // attachment's bytes — the click-to-preview content route (F3). It is the
+  // absolute URL (<api base>/api/dialogues/:id/attachments/:attachmentId/content)
+  // because <img src> / <iframe src> need an absolute origin, unlike the JSON
+  // request() helpers which compose the base at fetch time. Used by the preview
+  // modal for image and pdf kinds; text kinds still go through the text fetch
+  // (getDialogueAttachmentContent) so the body can be rendered into a <pre>.
+  getDialogueAttachmentContentURL(id, attachmentId) {
+    return `${API_BASE_URL}/api/dialogues/${id}/attachments/${attachmentId}/content`
   },
   // cancelDialogueTurn cancels the currently-processing turn of a continuing
   // session. Returns the cancel status (202 accepted / 200 already-terminal).
@@ -256,5 +329,13 @@ export const factoryApi = {
         accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
       ),
     }),
+  // submitDialogueCredential is the controlled credential input boundary (Task 12).
+  // The plaintext value is sent ONLY over this POST to the dialogue credential
+  // endpoint; the server swaps it for an opaque handle and responds with metadata
+  // + redacted:true — it NEVER echoes the value. The resolved credentialRef is
+  // later surfaced to the data_integration agent via input.json's
+  // controlledCredentialRefs (handle-only). body: { focusKey, label, scope, value }.
+  submitDialogueCredential: (id, body) =>
+    request(`/api/dialogues/${id}/credentials`, { method: 'POST', body: JSON.stringify(body) }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

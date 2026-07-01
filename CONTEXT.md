@@ -12,6 +12,30 @@ _Avoid_: 生成任务, Job, 任务
 A persistent, resumable conversation for one application lineage that first identifies the user's intent, then routes to an existing application recommendation or application-generation requirement clarification. It may contain multiple generation tasks over time, including later application modifications; a request for a distinct application starts a new dialogue session; business-processing agent drafting is not a user-visible route in the current phase.
 _Avoid_: 单次路由结果, 生成任务, 仅需求澄清会话
 
+**会话附件**:
+A user-uploaded source file attached to a dialogue session and, when applicable, to the current orchestration clarification focus. It may support requirements, interface parsing, or data capture, but it is not itself a generated project document or machine execution contract.
+_Avoid_: 项目文档, 机器执行契约, 明文密钥文件
+
+**受控凭证输入**:
+A sensitive authentication value or secret supplied for external data access, handled through a controlled credential path rather than as a normal session attachment. It may be used for runtime verification or configuration only under authorization and lifecycle rules; redaction applies before persistence, streaming, logging, audit display, or project-document output.
+_Avoid_: 普通会话附件, 项目文档内容, 工作轨迹明文
+
+**待发送附件**:
+A session attachment staged in the conversation composer before the user sends the message. It appears as a thumbnail or file chip and can be removed from the pending message before submission.
+_Avoid_: 已确认附件引用, 项目文档, 任务产物
+
+**会话附件引用**:
+The immutable message-level reference to an attachment after the user sends a conversation message. It remains visible on the message timeline and can be opened for preview, so later agent work can trace which attachment supported the turn.
+_Avoid_: 可随意抹除的临时文件, 项目文档链接, 机器执行契约
+
+**附件引用停用**:
+A user action that prevents an already-sent attachment reference from being used as context in later agent work while preserving the historical message reference for replay and audit. It is not a hard deletion of the uploaded file or message history.
+_Avoid_: 硬删除附件, 清空历史消息, 隐式移除已用输入
+
+**附件投影**:
+The controlled copy, extraction, or summary of a relevant session attachment into the generated application project after a generation task exists. It gives task steps stable project-local inputs without depending on browser upload temp files.
+_Avoid_: 浏览器临时文件引用, 未归属复制, 直接覆盖项目文档
+
 **会话阶段**:
 The current interaction stage within a continuing dialogue session, such as clarification, change confirmation, task execution, deployment outcome, or waiting for user input. A phase does not end the dialogue session.
 _Avoid_: 会话终态, 任务状态, 生成完成即关闭
@@ -73,11 +97,43 @@ A visual grouping of collaboration-agent task cards whose dependency position al
 _Avoid_: 并行任务, 固定六阶段泳道, 实际并发保证
 
 **协作编排执行图**:
-A conversation-flow visualization of collaboration-agent participation and dependency flow for one generation task, showing each collaboration agent as a task card with its user-facing execution state and upstream/downstream relationship. It uses horizontal execution waves derived from the dependency graph, with a user-input origin card before the first collaboration-agent wave. Before confirmation it represents the planned orchestration; after confirmation it represents the accepted orchestration with real task execution state.
+A conversation-flow visualization of collaboration-agent participation and dependency flow for one generation task, showing either collaboration agents or user-facing aggregate orchestration cards with their execution state and upstream/downstream relationship. It uses horizontal execution waves derived from the dependency graph, with a user-input origin card before the first agent or aggregate wave. Before confirmation it represents the planned orchestration; after confirmation it represents the accepted orchestration with real task execution state.
 _Avoid_: 静态参与列表, 模拟执行动画, 真实并发保证, 自由漂浮网络图
 
+**编排聚合卡片**:
+A user-facing card in the conversation-workbench orchestration graph that presents one generation responsibility label or aggregates several downstream collaboration-agent responsibilities. The visible labels may be 业务逻辑, 界面解析, 数据抓取, and 生产交付, but this does not rename collaboration agents, change their bounded responsibilities, or merge their machine execution contracts.
+_Avoid_: 协作智能体替换, 机器执行契约合并, 原始执行记录重命名
+
+**编排澄清焦点**:
+The single orchestration card whose clarification request is currently active in the conversation workbench. The execution graph may show sibling cards in the same wave, but the conversation input answers one clarification focus at a time before moving to the next focus.
+_Avoid_: 并行澄清输入, 多智能体同框待答, 无归属用户回复
+
+**编排产物确认**:
+A user action that approves the current orchestration card's produced artifact package and allows Factory to advance the clarification focus or production flow. It confirms the artifact's acceptability; it is not a manual scheduler command.
+_Avoid_: 手动调度下一步, 普通聊天回复, 无产物确认
+
+**业务逻辑结果包**:
+The business-logic card's user-visible result across two moments: before task creation the user confirms the confirmed requirement summary; after task creation the requirement-analysis step projects the associated requirement document. The task-owned document must validate against the confirmed summary, but it is not a second pre-task user confirmation gate.
+_Avoid_: 任务创建前确认需求文档, 任务创建后的二次需求确认, 摘要文档不一致
+
+**需求文档一致性校验**:
+A machine validation that checks whether the task-owned requirement document projected from requirement analysis matches the user-confirmed requirement summary that created the task. A mismatch is repaired at the requirement-analysis step boundary rather than treated as a new pre-task confirmation.
+_Avoid_: 人工二次确认需求, 跳过摘要校验, 下游静默采用冲突文档
+
+**业务逻辑分析轨道**:
+A lightweight expanded business-logic conversation-block visualization that shows the inputs, analysis steps, clarification needs, and outputs that lead to the business-logic result package. It communicates real analysis state without replacing the thinking process, requirement summary, or requirement document.
+_Avoid_: 复杂流程编排图, 原始思维链替代品, 纯装饰进度
+
+**上游变更回退**:
+A user-confirmed return to an earlier orchestration card after its artifact package was already confirmed. It keeps superseded artifacts in history while marking downstream artifacts as needing regeneration or revalidation.
+_Avoid_: 静默覆盖已确认产物, 删除历史产物, 无影响提示的返工
+
+**折叠澄清摘要卡**:
+The compact retained form of a completed orchestration clarification block in the conversation workbench. It keeps the agent label, completion state, thinking summary, confirmed artifact links, confirmation time, and an expand action after the detailed conversation folds.
+_Avoid_: 删除历史澄清, 隐藏产物入口, 只显示完成图标
+
 **编排卡片状态**:
-The user-facing execution state shown on one card in the collaboration orchestration execution graph, derived from the planned/accepted orchestration and the real generation-task step state. The status language includes pending confirmation, waiting for upstream, ready to start, running, waiting for user input, completed, failed, and skipped; it is not a raw database status display.
+The user-facing execution state shown on one card in the collaboration orchestration execution graph, derived from the planned/accepted orchestration and the real generation-task step state. The status language includes pending confirmation, waiting for upstream, ready to start, running, waiting for user input, completed, failed, and skipped; production-delivery aggregate cards may add automatic-repair and waiting-for-user-confirmation states. It is not a raw database status display.
 _Avoid_: 原始 step.status, 假进度百分比, 仅颜色提示
 
 **编排依赖线状态**:
@@ -152,6 +208,10 @@ _Avoid_: 用户可编辑文档, Markdown 说明文档, 项目文档
 A human-readable document in the application project, usually Markdown, projected from machine execution contracts and related context for user review.
 _Avoid_: 机器执行契约, 审计附件, 任务执行日志
 
+**项目文档预览**:
+A read-only rich rendering of a project document inside the conversation workbench. User changes to the underlying content must be requested through the conversation so the owning task output, machine contract, document, and downstream inputs stay consistent.
+_Avoid_: 直接编辑器, 绕过机器执行契约, 无归属文档修改
+
 **项目文档索引**:
 A factory-owned metadata file in an application project that links each project document to its source machine execution contract and generation attribution.
 _Avoid_: 应用运行 manifest, 审计附件列表, 用户文档内容
@@ -178,11 +238,18 @@ _Avoid_: 原始思考过程, 思维链, 系统状态日志
 
 **模型分析过程**:
 The analysis portion of the visible work trace shown inside a clarification conversation, composed from structured analysis work logs and model output summaries.
-**模型思考过程 (思考过程)**: The model's raw reasoning (`thinking_delta`), streamed live on the conversation surface as a 思考过程 block (distinct from 分析过程). Shown to the user token-by-token; the conversation flow surfaces it (the executor/trace pipeline is a separate surface).
+
+**模型思考过程 (思考过程)**:
+The model thinking stream shown live on the conversation surface as a 思考过程 block, distinct from 分析过程. It may be folded after completion and should not be labeled 原始思考过程 in the user interface.
+_Avoid_: 原始思考过程, 分析工作日志, 系统状态日志
 
 **任务思考过程**:
 The `thinking_delta` emitted by a generation-task agent while a task card is executing, carried by a dedicated task-attributed thinking stream and shown in the dialogue conversation flow with credential redaction but without summarization or semantic rewriting. It is distinct from analysis work logs, visible work trace events, and step execution records.
 _Avoid_: 分析工作日志, 可见工作轨迹, 步骤执行记录
+
+**思考摘要**:
+A concise user-facing summary shown after a 思考过程 block completes and folds. It helps the user review what the agent concluded without replacing the underlying task output, clarification request, requirement summary, or project document.
+_Avoid_: 确认需求摘要, 项目文档, 分析工作日志
 
 **任务执行块**:
 A dialogue conversation-flow block representing one executing generation-task card or collaboration-agent step, containing its task thinking process, safe execution process, and step-level summary while remaining attributed to the parent generation task.
@@ -239,6 +306,22 @@ _Avoid_: 任意互联网数据, 未授权平台搜索, 默认可爬取
 **可接入数据源**:
 A data source that Factory may offer or confirm during clarification because it has a documented connector, authentication path where needed, request shape, coverage boundary, and failure behavior. A source mentioned only by a scenario or by the user is not accessible until this evidence exists.
 _Avoid_: 凭空数据源, 场景文字里的来源, 未验证公网接口
+
+**数据契约预览**:
+A user-facing preview produced by the data-capture clarification flow that summarizes data sources, access paths, authentication assumptions, field mappings, refresh strategy, unavailable-data behavior, and sample records before production delivery consumes the data contract.
+_Avoid_: 正式数据接入实现, 代码生成临时造数, 隐式数据承诺
+
+**数据流验证轨道**:
+An expanded data-capture conversation-block visualization that shows the current data source, verification or extraction steps, field-mapping progress, and downstream flow into the data contract, interface compatibility check, and production delivery. It communicates real validation state and fallback history, not fabricated progress.
+_Avoid_: 顶部编排图细节, 假进度条, 纯装饰数据流
+
+**数据链路摘要**:
+The compact folded summary of the data-flow validation track, preserving the selected source path, failed fallback attempts, sample count, field count, and data-contract link after the data-capture block folds.
+_Avoid_: 隐藏降级历史, 只显示完成图标, 无来源说明
+
+**数据接入降级确认**:
+A user-confirmed change from a preferred data-source boundary to a fallback boundary after the preferred source is unreachable, unauthorized, empty, or otherwise unusable. The fallback order for customer-facing generation is ontology data first, then public internet capture, then an explicit demonstration-data contract.
+_Avoid_: 静默降级, mock 伪装真实数据, 自动放弃真实数据
 
 **推荐收敛确认**:
 A late-stage clarification interaction that presents the remaining decisions with their recommended values, so the user can accept the recommended set or make a targeted adjustment before confirming the requirement summary.
@@ -373,12 +456,28 @@ A collaboration agent whose removal or disabling can change quality gates, data-
 _Avoid_: 普通显示开关, 静默删除, 低风险配置项
 
 **协作编排智能体**:
-A collaboration agent that proposes the default collaboration plan before task creation, explains agent selection and dependencies, interprets natural-language plan adjustments, and records user adjustments. In the collaboration orchestration execution graph it appears as a visually prominent orchestration hub card between the user-input origin and later execution waves, so the task retains the plan rationale and scheduling flow after confirmation.
+A collaboration agent that proposes the default collaboration plan before task creation, explains agent selection and dependencies, interprets natural-language plan adjustments, and records user adjustments. It may appear as a visible orchestration hub in detailed or productized graph modes, but a simplified aggregate graph may hide it as an internal planning capability while still retaining its rationale and scheduling flow.
 _Avoid_: 隐式调度器, 用户不可见默认值, 生成能力画像
 
 **协作智能体配置快照**:
 The per-generation persisted editable copy of a collaboration agent's name, description, selected skills, task-specific instructions, and copied skill content overrides. Editing this snapshot affects only the pending or running generation task; referenced skill files are viewable by default, and writing changes back to a global generation capability package requires separate explicit confirmation.
 _Avoid_: 直接修改全局 Skill, 业务处理智能体 Prompt, 临时 UI 状态
+
+**协作智能体库**:
+The product surface that lists reusable collaboration-agent definitions for viewing, enabling, disabling, copying, and creating custom versions. Built-in definitions are system-owned defaults; custom definitions may be selected into a dialogue or task plan and are still frozen into a task-local snapshot before execution.
+_Avoid_: 任务执行记录列表, 纳管智能体页面, 直接编辑内置流水线契约
+
+**协作智能体定义**:
+The reusable global definition of a collaboration agent, including its key, label, role, description, selected skills, default instructions, category, and enablement state. It is distinct from a task participation plan and from the task-local configuration snapshot used during execution.
+_Avoid_: 任务步骤, 运行中子进程, 业务处理智能体 Prompt
+
+**内置协作智能体**:
+A system-owned collaboration-agent definition that ships with Factory and participates in default generation plans. It may be viewed, enabled, disabled, or copied, but direct mutation is avoided so default pipeline behavior and historical replay remain stable.
+_Avoid_: 可直接覆盖的自定义智能体, 业务处理智能体, 临时任务配置
+
+**自定义协作智能体**:
+A user-created or copied collaboration-agent definition that may be selected into future collaboration plans. It does not rewrite existing task snapshots and must still be frozen into a task-local collaboration-agent configuration snapshot before execution.
+_Avoid_: 修改历史任务, 全局替换内置智能体, 未冻结运行配置
 
 **协作智能体任务卡片**:
 A task-area card representing one collaboration agent that participates in the confirmed collaboration plan. Cards are grouped by execution lane but keep their own status, detail drawer, editable snapshot, execution records, artifacts, and retry or repair actions.
@@ -408,13 +507,45 @@ _Avoid_: 固定海事智能体, 场景蓝本, 生成能力包
 A collaboration agent that defines data-source boundaries for a generation task, including real data integration plans, required capability packages, runtime-accessible connectors, unavailable-data behavior, and demo data contracts. It owns mock data shape as a replaceable contract, not as a substitute for real data promises.
 _Avoid_: 代码生成临时造数, mock 伪装真实数据, 单个数据 Skill
 
-**设计智能体**:
+**界面设计智能体**:
 A collaboration agent that turns confirmed requirements, domain analysis, and data contracts into a structured design contract for generated application views, layout regions, components, interaction states, UI data mapping, responsive constraints, and visual style boundaries.
 _Avoid_: 纯文本设计建议, 代码实现计划, 营销页包装
 
 **设计契约**:
-The structured output of the design agent that code generation consumes as a UI and interaction contract. It includes view inventory, layout structure, component responsibilities, loading/empty/error states, field-to-UI mapping, mobile constraints, and visual style constraints.
+The structured output of the interface-design agent that code generation consumes as a UI and interaction contract. It includes view inventory, layout structure, component responsibilities, loading/empty/error states, field-to-UI mapping, mobile constraints, and visual style constraints.
 _Avoid_: 灵感稿, 最终代码, 非结构化设计说明
+
+**界面预览产物**:
+A task-owned preview artifact produced after interface-parsing clarification so the user can inspect the proposed interaction surface before production delivery. It may be static files or a preview build, but it is not an effective application version, application-store entry, or deployment outcome.
+_Avoid_: 生效版本, 正式应用, 生产交付结果
+
+**界面解析结果包**:
+The confirmed output set of interface parsing, consisting of the structured design document and the interface preview artifact. The two must stay consistent; when a user-confirmed preview changes the intended interface, the design contract and design document must be updated to match it.
+_Avoid_: 只有预览无契约, 只有文档无预览, 文档预览不一致
+
+**界面构成轨道**:
+A lightweight expanded interface-parsing conversation-block visualization that shows inputs, parsing steps, and outputs for the interface result package. It highlights real progress through view recognition, layout partitioning, component mapping, interaction states, and preview generation without competing with the preview itself.
+_Avoid_: 复杂独立流程图, 纯装饰动效, 替代界面预览
+
+**界面验收基准**:
+The user-confirmed interface preview artifact that production delivery must preserve as the user-facing baseline for layout, core interaction paths, visual style, density, key copy, and field presentation. It remains subject to data-contract compatibility checks; significant production or data-driven deviations require an explicit interface-difference explanation and user confirmation.
+_Avoid_: 仅供参考的灵感稿, 可静默重做的页面, 无兼容校验的生效版本
+
+**界面验收快照**:
+An immutable retained record of the confirmed interface preview, such as a static build artifact, screenshot set, preview manifest, content hash, or equivalent evidence. It may be retained while the baseline is still provisional and becomes the comparison evidence once data-contract compatibility promotes the preview to the interface acceptance baseline.
+_Avoid_: 临时预览运行时, 可变预览链接, 无法回放的视觉记忆
+
+**界面数据兼容校验**:
+A check that compares the field and state assumptions used by a confirmed interface preview with the later confirmed data contract. At minimum, every field or state the preview depends on must be available in the data contract or have an explicitly confirmed fallback before production delivery can treat the preview as compatible.
+_Avoid_: 静默字段替换, 数据契约冲突后继续交付, 只看视觉截图
+
+**生产交付聚合卡片**:
+The orchestration graph card that represents the downstream delivery sequence after business logic, interface parsing, and data capture are confirmed. It summarizes the currently executing internal collaboration-agent stage while preserving each underlying task step, document, artifact, and audit attribution.
+_Avoid_: 单个真实智能体, 隐藏步骤执行记录, 跳过生产门禁
+
+**临时预览部署**:
+A temporary runtime used only when an interface preview needs dynamic interaction, routing, state, or mock runtime data to be inspected. It supports design confirmation and is discarded or superseded before production delivery.
+_Avoid_: 生效版本部署, 应用商店运行实例, 生产交付
 
 **业务处理智能体**:
 A dormant future concept for a user-confirmed business-handling role definition. It is not the current user-facing product produced by the software factory; requests to create an intelligent business tool are treated as application generation.

@@ -379,3 +379,104 @@
 .cw-raw-thinking pre { margin-top: 6px !important; }
 .cw-raw-thinking-stream { max-height: 200px; overflow-y: auto; border: 1px solid rgba(111, 218, 255, 0.12); border-radius: 4px; padding: 6px 8px; background: rgba(0, 0, 0, 0.2); }
 .cw-raw-thinking-stream pre { margin: 0 !important; }
+
+/* ---- Task 4: attachment composer + preview modal ------------------------- */
+.cw-attachments { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.cw-attach-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; color: #d7eef8; cursor: pointer; }
+.cw-attach-btn input { display: none; }
+.cw-attach-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 210px; padding: 4px 6px; border: 1px solid rgba(111, 218, 255, 0.22); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; font-size: 11px; }
+.cw-attach-chip span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-attach-name { cursor: pointer; }
+.cw-attach-name:hover { color: #68ddff; }
+.cw-attach-chip button { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: rgba(215, 238, 248, 0.7); cursor: pointer; }
+.cw-attach-uploading { color: rgba(104, 221, 255, 0.72); font-size: 11px; }
+/* Submitted attachment refs on a user_message (Task 11 fix). Reuses .cw-attach-chip;
+   the container lays chips out under the message content. Inactive refs (active===false)
+   stay visible but muted for replay/audit (spec decision #23). */
+.cw-user-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cw-attach-chip-ref .cw-attach-name { width: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(215, 238, 248, 0.9); font-size: 11px; }
+.cw-attach-chip-ref .cw-attach-name:disabled { cursor: default; opacity: 0.6; }
+.cw-attach-chip-ref .cw-attach-name:not(:disabled):hover { color: #68ddff; }
+.cw-attach-chip-inactive { opacity: 0.55; }
+.cw-attach-chip-inactive .cw-attach-name { text-decoration: line-through; }
+.cw-attach-deactivated { font-style: normal; font-size: 10px; color: rgba(255, 173, 122, 0.85); }
+/* preview modal overlay (gap-fill component; no backend /content route ships
+   in this task, so text/pdf bodies degrade to metadata + note) */
+.cw-preview-modal-layer { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.62); }
+.cw-preview-modal { width: min(720px, 92vw); max-height: 86vh; display: flex; flex-direction: column; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 10px; background: #03111d; color: #d7eef8; overflow: hidden; }
+.cw-preview-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(111, 218, 255, 0.18); }
+.cw-preview-modal-title { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+.cw-preview-modal-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-preview-modal-close { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: rgba(215, 238, 248, 0.7); cursor: pointer; border-radius: 6px; }
+.cw-preview-modal-close:hover { background: rgba(111, 218, 255, 0.12); color: #d7eef8; }
+.cw-preview-modal-body { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.cw-preview-image { max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 6px; align-self: center; }
+.cw-preview-text { margin: 0; padding: 10px 12px; max-height: 56vh; overflow: auto; border: 1px solid rgba(111, 218, 255, 0.16); border-radius: 6px; background: rgba(0, 0, 0, 0.25); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.cw-preview-pdf { width: 100%; height: 56vh; border: 1px solid rgba(111, 218, 255, 0.16); border-radius: 6px; background: #fff; }
+.cw-preview-note { margin: 0; font-size: 12px; color: rgba(215, 238, 248, 0.72); }
+.cw-preview-meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; padding: 10px 12px; border: 1px solid rgba(111, 218, 255, 0.14); border-radius: 6px; background: rgba(0, 0, 0, 0.2); font-size: 11px; }
+.cw-preview-meta dt { color: rgba(215, 238, 248, 0.6); }
+.cw-preview-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* Task 5: read-only rich Markdown preview for task-owned project documents. */
+.cw-doc-modal-layer { position: absolute; inset: 0; z-index: 32; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(3, 11, 18, 0.64); }
+.cw-doc-modal { width: min(760px, 100%); max-height: min(78vh, 760px); display: flex; flex-direction: column; border: 1px solid rgba(111, 218, 255, 0.26); border-radius: 8px; background: rgba(4, 18, 30, 0.98); }
+.cw-doc-modal header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid rgba(111, 218, 255, 0.18); color: #edfaff; }
+.cw-doc-modal header button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: rgba(11, 29, 44, 0.72); color: #d7eef8; cursor: pointer; }
+.cw-doc-rich { overflow: auto; padding: 16px 18px; color: #d7eef8; line-height: 1.62; }
+.cw-doc-rich h1 { margin: 0 0 14px; font-size: 20px; color: #edfaff; }
+.cw-doc-rich h2 { margin: 18px 0 8px; font-size: 16px; color: #edfaff; }
+.cw-doc-rich h3 { margin: 14px 0 6px; font-size: 14px; color: #68ddff; }
+.cw-doc-rich p { margin: 0 0 8px; }
+.cw-doc-li::before { content: '• '; color: #68ddff; }
+
+/* ---- Task 7: workbench agent blocks + responsibility tracks ---------------- */
+.cw-agent-block { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; background: rgba(11, 29, 44, 0.55); overflow: hidden; }
+.cw-agent-block-head { width: 100%; display: grid; grid-template-columns: 16px minmax(90px, 130px) minmax(0, 1fr); align-items: center; gap: 8px; padding: 9px 10px; border: 0; background: transparent; color: #d7eef8; cursor: pointer; text-align: left; }
+.cw-agent-block-head strong { color: #edfaff; font-size: 13px; }
+.cw-agent-block-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(215, 238, 248, 0.68); font-size: 12px; }
+.cw-agent-block-body { display: flex; flex-direction: column; gap: 10px; padding: 0 10px 10px; }
+.cw-agent-section { border-top: 1px solid rgba(111, 218, 255, 0.12); padding-top: 8px; }
+.cw-agent-section h4 { margin: 0 0 6px; color: #68ddff; font-size: 11px; }
+.cw-agent-section p { margin: 0; color: rgba(215, 238, 248, 0.82); font-size: 12px; line-height: 1.5; }
+.cw-agent-section pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: rgba(215, 238, 248, 0.78); font-size: 12px; line-height: 1.5; }
+.cw-track { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 6px; margin: 0; padding: 8px 0 0; list-style: none; }
+.cw-track li { min-width: 0; display: flex; align-items: center; gap: 5px; color: rgba(215, 238, 248, 0.58); font-size: 11px; }
+.cw-track li span { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 999px; background: rgba(143, 176, 191, 0.5); }
+.cw-track li.is-active { color: #68ddff; }
+.cw-track li.is-active span { background: #68ddff; box-shadow: 0 0 10px rgba(104, 221, 255, 0.56); }
+.cw-track li.is-failed { color: #ffb0b0; }
+.cw-track li.is-failed span { background: #ff665e; }
+/* F6: data-flow track node states. Real CSS states (no animation) driven by
+   the verification metadata projected onto the data_contract artifact. */
+.cw-track li.cw-track-node-succeeded { color: #9be3a8; }
+.cw-track li.cw-track-node-succeeded span { background: #4ec96a; }
+.cw-track li.cw-track-node-active { color: #68ddff; }
+.cw-track li.cw-track-node-active span { background: #68ddff; box-shadow: 0 0 10px rgba(104, 221, 255, 0.56); }
+.cw-track li.cw-track-node-failed { color: #ffb0b0; }
+.cw-track li.cw-track-node-failed span { background: #ff665e; }
+.cw-track li.cw-track-node-waiting { color: #ffd98a; }
+.cw-track li.cw-track-node-waiting span { background: #f0b84a; }
+.cw-data-flow-track { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 0; }
+.cw-data-flow-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cw-artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-artifact-list h4 { flex-basis: 100%; }
+.cw-artifact-list button, .cw-agent-folded button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; cursor: pointer; font-size: 11px; }
+.cw-agent-confirm { align-self: flex-end; padding: 6px 10px; border: 1px solid rgba(126, 231, 135, 0.46); border-radius: 6px; background: rgba(20, 64, 50, 0.58); color: #bff6c4; cursor: pointer; }
+.cw-agent-folded { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px 34px; }
+
+/* ---- F4: interface preview modal (manifest render) ---------------------- */
+.cw-interface-modal .cw-doc-rich { padding: 14px 16px; }
+.cw-interface-loading { display: flex; align-items: center; gap: 8px; color: rgba(215, 238, 248, 0.7); }
+.cw-interface-error p { color: #ffb0b0; margin: 0; }
+.cw-interface-summary { margin: 0 0 12px; font-size: 14px; color: #edfaff; line-height: 1.6; }
+.cw-interface-section { margin: 0 0 12px; }
+.cw-interface-section h3 { margin: 0 0 6px; color: #68ddff; font-size: 12px; }
+.cw-interface-text { margin: 0; white-space: pre-wrap; word-break: break-word; color: rgba(215, 238, 248, 0.85); font-size: 12px; line-height: 1.55; }
+.cw-interface-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.cw-interface-list-item { min-width: 0; color: rgba(215, 238, 248, 0.82); font-size: 12px; line-height: 1.5; }
+.cw-interface-json { margin: 0; max-height: 280px; overflow: auto; white-space: pre; word-break: normal; background: rgba(3, 17, 29, 0.7); border: 1px solid rgba(111, 218, 255, 0.14); border-radius: 6px; padding: 8px 10px; color: rgba(215, 238, 248, 0.86); font-size: 11.5px; line-height: 1.5; }
+.cw-interface-empty { margin: 0; color: rgba(215, 238, 248, 0.45); font-size: 12px; }
+.cw-interface-fields h3 { margin: 8px 0 6px; }
+.cw-interface-field-list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-interface-field-chip { padding: 3px 8px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 999px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; font-size: 11px; }

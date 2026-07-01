@@ -260,7 +260,7 @@ export function useDialogueSessions() {
   // the backend returns a 202 ack {dialogueId, turnId, acceptedAt} instead of a
   // composed view — we surface it as a pending turn and let the trace stream
   // drive the follow-up refresh.
-  const send = useCallback(async content => {
+  const send = useCallback(async (content, options = {}) => {
     const prompt = String(content || '').trim()
     if (!prompt || submitting) return null
     setSubmitting(true)
@@ -288,9 +288,18 @@ export function useDialogueSessions() {
         // arrives, letting the routing analysis + thinking fold live. The flag is
         // cleared when selectedDialogueId becomes set (effect below) or on error.
         pendingNewDialogueRef.current = true
-        view = await factoryApi.createDialogue({ initialPrompt: prompt })
+        // First-message attachments: when no dialogue exists yet the composer
+        // stages files locally (status 'local', no attachment.id). Thread those
+        // File objects into createDialogue so the backend multipart-creates the
+        // dialogue AND uploads + links them to the first message in one call.
+        // submitText (App.jsx) calls clearPending() after send, so the local
+        // chips clear once the multipart create links them server-side.
+        const localFiles = Array.isArray(options.pendingAttachments)
+          ? options.pendingAttachments.map(item => item && item.file).filter(Boolean)
+          : []
+        view = await factoryApi.createDialogue({ initialPrompt: prompt, files: localFiles })
       } else {
-        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
+        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt, { attachmentIds: options.attachmentIds })
         // 202 ack (continuing session): result carries {dialogueId, turnId, acceptedAt}
         // and NO composed view. 200 path: result IS the composed view (has .session).
         if (result && result.session) {

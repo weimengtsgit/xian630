@@ -540,11 +540,12 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 // answerJobBody is accepted by POST /api/jobs/:id/answer; either "answer" or
 // "content" is accepted for interoperability with older clients.
 type answerJobBody struct {
-	Answer      string `json:"answer"`
-	Content     string `json:"content"`
-	StepID      string `json:"stepId"`
-	StepIDSnake string `json:"step_id"`
-	Attempt     int    `json:"attempt"`
+	Answer        string   `json:"answer"`
+	Content       string   `json:"content"`
+	StepID        string   `json:"stepId"`
+	StepIDSnake   string   `json:"step_id"`
+	Attempt       int      `json:"attempt"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
 }
 
 // answerJob handles POST /api/jobs/:id/answer — appends a user conversation
@@ -614,6 +615,20 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		}
 		targetStep = step
 	}
+	originalTargetStep := targetStep
+	reroutedForCompatibility := false
+	if targetStep != nil {
+		routeStep, rerouted, err := s.compatibilityRevalidationTarget(r.Context(), job, targetStep)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "route compatibility revalidation")
+			return
+		}
+		if rerouted && routeStep != nil {
+			targetStep = routeStep
+			stepID = targetStep.ID
+			reroutedForCompatibility = true
+		}
+	}
 
 	msg := model.ConversationMessage{
 		ID:        "conv_" + idpkg.New(),
@@ -646,6 +661,18 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "append dialogue answer")
 			return
 		}
+		// Bind any attachments the user pinned to this task-internal clarification
+		// answer. Each id is validated (active check) by createDialogueAttachmentRefs;
+		// only the attachment id + focus key are persisted, never file content or
+		// credentials. Without this the attachments the user supplied during a
+		// 业务逻辑/界面解析/数据抓取 phase were dropped.
+		if len(body.AttachmentIDs) > 0 {
+			focusKey := stepKindToFocusKey(targetStep.Kind)
+			if err := s.createDialogueAttachmentRefs(r.Context(), job.DialogueID, dlgMsg.ID, body.AttachmentIDs, focusKey); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid attachment reference")
+				return
+			}
+		}
 	}
 	if job.Status == model.JobStatusWaitingUser && targetStep != nil {
 		if isManualStepConfirmationQuestions(targetStep.PendingQuestions) {
@@ -665,6 +692,17 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.ResetStepToPending(r.Context(), targetStep.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "reset step")
 			return
+		}
+		if reroutedForCompatibility && originalTargetStep != nil && originalTargetStep.ID != targetStep.ID {
+			if err := s.store.ResetStepToPending(r.Context(), originalTargetStep.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "reset compatibility step")
+				return
+			}
+			if err := s.markCompatibilityRevalidationRequested(r.Context(), id, originalTargetStep.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "mark compatibility revalidation")
+				return
+			}
+			s.publishStepUpdated(r.Context(), originalTargetStep.ID)
 		}
 		// Step-scoped answers may target a waiting step that is not the job's current
 		// pointer. Move current_step_kind before re-queueing so the executor reruns
@@ -691,6 +729,56 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+func (s *Server) compatibilityRevalidationTarget(ctx context.Context, job *model.Job, targetStep *model.JobStep) (*model.JobStep, bool, error) {
+	if job == nil || targetStep == nil || targetStep.Kind != model.StepDataIntegration {
+		return targetStep, false, nil
+	}
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	hasCompatibilityFailure := false
+	for _, ref := range refs {
+		if ref.Kind == model.WorkbenchArtifactDataContract && ref.Status == "compatible_failed" {
+			hasCompatibilityFailure = true
+			break
+		}
+	}
+	if !hasCompatibilityFailure {
+		return targetStep, false, nil
+	}
+	steps, err := s.store.ListJobSteps(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := range steps {
+		if steps[i].Kind == model.StepDesignContract {
+			return &steps[i], true, nil
+		}
+	}
+	return targetStep, false, nil
+}
+
+func (s *Server) markCompatibilityRevalidationRequested(ctx context.Context, jobID string, dataStepID string) error {
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		if ref.Kind != model.WorkbenchArtifactDataContract || ref.Status != "compatible_failed" {
+			continue
+		}
+		if dataStepID != "" && ref.StepID != dataStepID {
+			continue
+		}
+		ref.Status = "interface_revalidation_requested"
+		if err := s.store.UpsertWorkbenchArtifactRef(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func isManualStepConfirmationQuestions(raw string) bool {
 	if strings.TrimSpace(raw) == "" {
 		return false
@@ -708,6 +796,23 @@ func isManualStepConfirmationQuestions(raw string) bool {
 		}
 	}
 	return false
+}
+
+// stepKindToFocusKey projects a job step kind onto the workbench focus key the
+// task-internal clarification binding uses. It mirrors currentWorkbenchFocusKey
+// (dialogue_handlers.go) so an attachment pinned during a task-internal
+// clarification lands on the same focus lane as the step that asked for it.
+func stepKindToFocusKey(kind model.StepKind) string {
+	switch kind {
+	case model.StepDesignContract:
+		return "interface_parsing"
+	case model.StepDataIntegration:
+		return "data_capture"
+	case model.StepSolutionDesign, model.StepCodeGeneration, model.StepCodeReview, model.StepSecurityReview, model.StepTestVerification, model.StepProductAcceptance, model.StepImageBuild, model.StepDeployment:
+		return "production_delivery"
+	default:
+		return "business_logic"
+	}
 }
 
 // retryCurrentStep handles POST /api/jobs/:id/retry-current-step. It resets the
