@@ -773,6 +773,43 @@ func TestValidateDesignContractRequiresPrototypeHomePage(t *testing.T) {
 	}
 }
 
+func TestValidateDesignContractAcceptsStructuredAssumedDataFields(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":         "passed",
+		"summary":        "首页静态原型已生成",
+		"needsUserInput": false,
+		"questions":      []any{},
+		"designDocument": map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []any{
+			map[string]any{"entity": "会议室", "fields": []any{
+				map[string]any{"name": "roomId", "type": "string", "description": "会议室唯一标识"},
+				map[string]any{"name": "name", "type": "string"},
+			}},
+			map[string]any{"entity": "预约记录", "field": "reservationId", "type": "string"},
+		},
+		"prototype": map[string]any{
+			"style":          "ued_review",
+			"targetAudience": "ued",
+			"targetPlatform": "responsive",
+			"fidelity":       "static",
+			"defaultPage":    "home",
+			"pages": []any{
+				map[string]any{"id": "home", "title": "首页", "generated": true, "visibleByDefault": true},
+			},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	_, detail, err := ValidateDesignContract(path)
+	if err != nil {
+		t.Fatalf("ValidateDesignContract err = %v", err)
+	}
+	if len(detail.AssumedDataFields) != 3 {
+		t.Fatalf("AssumedDataFields = %+v, want 3 normalized field names", detail.AssumedDataFields)
+	}
+}
 func TestValidateDesignContractRejectsPrototypeWithoutHome(t *testing.T) {
 	path := writeTempJSON(t, map[string]any{
 		"status":            "passed",

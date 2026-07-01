@@ -1,4 +1,4 @@
-.conversation-workbench {
+﻿.conversation-workbench {
   position: relative;
   flex: 1 1 0;
   min-height: 0;
@@ -513,4 +513,117 @@
   color: #d7eef8;
   padding: 0 10px;
   font-size: 12px;
+}
+
+.cw-agent-question {
+  display: grid;
+  gap: 8px;
+}
+
+.cw-agent-question p {
+  margin: 0;
+}
+
+.cw-agent-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cw-agent-question-options button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid rgba(35, 46, 72, 0.16);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2937;
+  padding: 0 10px;
+}
+
+.cw-agent-question-options em {
+  font-style: normal;
+  color: #2563eb;
+}
+
+.cw-prototype-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  margin: 6px 0;
+  border: 1px solid rgba(111, 218, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(3, 17, 29, 0.94);
+  color: rgba(215, 238, 248, 0.86);
+  font-size: 12px;
+}
+
+.cw-prototype-dock span {
+  min-width: 0;
+}
+
+.cw-prototype-dock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.cw-prototype-dock button,
+.cw-prototype-feedback button {
+  min-height: 30px;
+  border: 1px solid rgba(111, 218, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(3, 17, 29, 0.66);
+  color: #d7eef8;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cw-prototype-dock .cw-prototype-confirm,
+.cw-prototype-feedback button[type="submit"] {
+  border-color: rgba(126, 231, 135, 0.46);
+  background: rgba(20, 64, 50, 0.58);
+  color: #bff6c4;
+}
+
+.cw-prototype-feedback {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cw-prototype-feedback textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  border-radius: 6px;
+  background: rgba(3, 17, 29, 0.78);
+  color: #d7eef8;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cw-prototype-feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cw-prototype-preview-modal {
+  width: min(1180px, 96vw);
+  height: min(820px, 90vh);
+}
+
+.cw-prototype-preview-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
 }

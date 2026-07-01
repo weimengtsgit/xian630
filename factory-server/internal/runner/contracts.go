@@ -617,15 +617,15 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 // assumedDataFields (field names the preview depends on but data capture has
 // not yet confirmed), and the shared workLog/warnings.
 type DesignContractOutput struct {
-	Status            string              `json:"status"`
-	Summary           string              `json:"summary"`
-	NeedsUserInput    bool                `json:"needsUserInput"`
-	Questions         []Question          `json:"questions"`
-	DesignDocument    any                 `json:"designDocument"`
-	AssumedDataFields []string            `json:"assumedDataFields"`
-	Prototype         model.PrototypeSpec `json:"prototype"`
-	WorkLog           []workLogEntry      `json:"workLog"`
-	Warnings          []string            `json:"warnings"`
+	Status            string                  `json:"status"`
+	Summary           string                  `json:"summary"`
+	NeedsUserInput    bool                    `json:"needsUserInput"`
+	Questions         []Question              `json:"questions"`
+	DesignDocument    any                     `json:"designDocument"`
+	AssumedDataFields model.AssumedDataFields `json:"assumedDataFields"`
+	Prototype         model.PrototypeSpec     `json:"prototype"`
+	WorkLog           []workLogEntry          `json:"workLog"`
+	Warnings          []string                `json:"warnings"`
 }
 
 // ValidateDesignContract decodes a design_contract attempt's output.json and

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,7 +89,11 @@ func (c *ClaudeStepRunner) businessDesignHandoff(job model.Job, step model.JobSt
 	if step.Kind != model.StepDesignContract {
 		return businessDesignHandoff{}, nil
 	}
-	path := filepath.ToSlash(filepath.Join("jobs", job.ID, string(model.StepRequirementAnalysis), "attempt-1", "output.json"))
+	attempt, err := c.latestRequirementAnalysisAttempt(job.ID)
+	if err != nil {
+		return businessDesignHandoff{}, err
+	}
+	path := filepath.ToSlash(filepath.Join("jobs", job.ID, string(model.StepRequirementAnalysis), fmt.Sprintf("attempt-%d", attempt), "output.json"))
 	full := filepath.Join(c.artifactRoot(), filepath.FromSlash(path))
 	raw, err := os.ReadFile(full)
 	if err != nil {
@@ -98,6 +103,42 @@ func (c *ClaudeStepRunner) businessDesignHandoff(job model.Job, step model.JobSt
 		return businessDesignHandoff{}, err
 	}
 	return businessDesignHandoff{Content: json.RawMessage(raw), ArtifactPath: path}, nil
+}
+
+func (c *ClaudeStepRunner) latestRequirementAnalysisAttempt(jobID string) (int, error) {
+	if c.Store != nil {
+		step, err := c.Store.GetStepByKind(context.Background(), jobID, model.StepRequirementAnalysis)
+		if err != nil {
+			return 0, err
+		}
+		if step != nil && step.Attempt > 0 {
+			return step.Attempt, nil
+		}
+	}
+	latest := 1
+	dir := filepath.Join(c.artifactRoot(), "jobs", jobID, string(model.StepRequirementAnalysis))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return latest, nil
+		}
+		return 0, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "attempt-") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), "attempt-"))
+		if err != nil || n <= latest {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, entry.Name(), "output.json")); err == nil {
+			latest = n
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+	}
+	return latest, nil
 }
 
 type finalDataAccessInput struct {
@@ -291,26 +332,30 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepDesignContract:
 		// Task 8: the design_contract step is the prototype-design producer.
-		// Validate against the specialized design contract (summary +
-		// designDocument + prototype required), and on success read the
-		// prototype artifacts the agent wrote inside the attempt directory.
-		// The preview-manifest.json and prototype-contract.json become the
+		// Skip output.json validation — only require the prototype/html
+		// artifacts the agent wrote inside the attempt directory. The
+		// preview-manifest.json and prototype-contract.json become the
 		// task-owned workbench artifact ref for the interface_parsing card.
-		out, design, err := runner.ValidateDesignContract(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		res := c.resultFromValidatedOutput(ctx, trace, out, err)
-		if res.Status == model.StepStatusSucceeded {
+		{
 			bundle, perr := readPrototypeBundle(ws)
 			if perr != nil {
 				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
 			}
+			var design runner.DesignContractOutput
 			ref, perr := c.createPrototypePreviewArtifact(ctx, job, step, ws, design, bundle)
 			if perr != nil {
 				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
 			}
 			c.upsertWorkbenchArtifact(ctx, ref)
+			questions := []runner.Question{{
+				ID:       "prototype_confirmation",
+				Question: "原型设计已生成，请确认原型并继续，或预览后提出修改意见。",
+				Options:  []runner.QuestionOption{{Value: "confirm", Label: "确定原型并继续", Recommended: true}, {Value: "revise", Label: "提出修改意见"}},
+			}}
+			emitClarificationTrace(ctx, trace, questions, nil)
+			return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: questions}, nil
 		}
-		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepDataIntegration:
 		if dataIntegrationUsesFinalDataAccessContract(ws.OutputPath()) {
 			res := c.finishDataIntegration(ctx, trace, job, step, ws.OutputPath())

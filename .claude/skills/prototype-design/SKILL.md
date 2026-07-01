@@ -97,9 +97,67 @@ Do not put `(A)/(B)/(C)` choices inside the question text. Options must be machi
 
 ## Output Contract
 
-Return exactly one raw JSON object. Do not output Markdown, code fences, hidden reasoning, or prose outside JSON.
+Return exactly one raw JSON object to stdout. Do not output Markdown, code fences, hidden reasoning, or prose outside JSON.
 
-Required top-level fields:
+When `status="passed"`, also write these files under the current attempt directory before returning JSON:
+
+```text
+prototype/
+  index.html
+  styles.css
+  preview-manifest.json
+  prototype-contract.json
+```
+
+`prototype/index.html` is required. It is the prototype-design overview page, not the final application. It must be a static HTML page that lets UED, product, developers, or business reviewers inspect the design quickly. The page must include:
+
+- requirement/business-design summary;
+- resolved design dimensions: style, targetAudience, targetPlatform, fidelity, density, navigationModel, dataHonesty;
+- homepage layout overview with visible regions, components, fields, states, and action controls;
+- planned page inventory and which page is visible by default;
+- responsive constraints and downstream implementation constraints;
+- mock/unknown data labels when data availability is unconfirmed.
+
+`prototype/styles.css` must contain the page styling used by `index.html`. Keep it static and local; do not depend on remote assets, build tools, framework bundles, or production APIs.
+
+`prototype/preview-manifest.json` must summarize the preview entry point for Factory:
+
+```json
+{
+  "mode": "static_prototype",
+  "defaultPage": "home",
+  "fidelity": "static",
+  "pages": [
+    {
+      "id": "home",
+      "title": "首页",
+      "purpose": "承载核心任务入口、关键指标和主要操作流",
+      "file": "prototype/index.html",
+      "generated": true,
+      "visibleByDefault": true,
+      "sections": [
+        {"id": "overview", "title": "总览区", "content": "核心指标、状态摘要、风险提示"}
+      ],
+      "states": ["default", "empty", "loading", "error"]
+    }
+  ]
+}
+```
+
+`prototype/prototype-contract.json` must preserve the downstream contract used by later steps:
+
+```json
+{
+  "prototypeStatus": "unconfirmed_reference",
+  "downstreamConstraintLevel": "reference",
+  "immutable": false,
+  "prototype": {"style": "enterprise_dense", "defaultPage": "home", "pages": []},
+  "designDocument": {},
+  "assumedDataFields": []
+}
+```
+
+Required top-level stdout JSON fields:
 
 ```json
 {
@@ -112,6 +170,12 @@ Required top-level fields:
     {"title": "原型决策", "summary": "默认采用响应式首页静态原型，并记录后续约束。"}
   ],
   "warnings": [],
+  "designDocument": {
+    "views": ["home"],
+    "layout": "首页概览、主任务区、辅助信息区、状态反馈区",
+    "components": ["顶部导航", "核心指标", "任务列表", "操作按钮", "状态提示"]
+  },
+  "assumedDataFields": ["name", "status", "updatedAt"],
   "prototype": {
     "style": "enterprise_dense",
     "targetAudience": "mixed",
@@ -158,17 +222,19 @@ When input is still required:
 - set `status` to `needs_input`;
 - set `needsUserInput` to `true`;
 - include one or more concrete `questions`;
-- still include `workLog`, `warnings`, and a partial `prototype` showing current assumptions.
+- still include `workLog`, `warnings`, and a partial `prototype` showing current assumptions;
+- do not write final prototype files until the answer is sufficient to return `status="passed"`.
 
 ## Self-review Checklist
 
 Before returning, verify:
 
-- Every required top-level field exists.
+- Every required top-level field exists, including `designDocument`, `assumedDataFields`, and `prototype`.
 - Every human-readable value is Simplified Chinese.
 - `prototype.designDecisions` resolves all dimensions from the table.
-- Static homepage is present as `pages[0]` with `id=home`.
+- Static homepage is present as `pages[0]` with `id=home`, `generated=true`, `visibleByDefault=true`, and `file="prototype/index.html"` in `preview-manifest.json`.
 - `fidelity=high_fidelity_interactive` appears only after explicit user intent.
 - Mock or unknown data is visibly labeled through `dataHonesty` and constraints.
 - Questions use structured `options`; no choices are embedded only in text.
-- The output contains no Markdown wrapper and no explanatory prose outside JSON.
+- `prototype/index.html`, `prototype/styles.css`, `prototype/preview-manifest.json`, and `prototype/prototype-contract.json` exist before returning `status="passed"`.
+- The stdout output contains no Markdown wrapper and no explanatory prose outside JSON.

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -130,6 +131,12 @@ func (s *Server) setPrototypeStatus(w http.ResponseWriter, r *http.Request, stat
 		writeError(w, http.StatusInternalServerError, "update prototype")
 		return
 	}
+	if status == "confirmed" || status == "continued_without_confirmation" {
+		if err := s.advancePrototypeStepAfterDecision(r.Context(), ref.JobID, ref.StepID); err != nil {
+			writeError(w, http.StatusInternalServerError, "advance prototype step")
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"artifactId": ref.ID,
 		"status":     ref.Status,
@@ -138,6 +145,50 @@ func (s *Server) setPrototypeStatus(w http.ResponseWriter, r *http.Request, stat
 	})
 }
 
+func (s *Server) advancePrototypeStepAfterDecision(ctx context.Context, jobID, stepID string) error {
+	steps, err := s.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	var current *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			current = &steps[i]
+			break
+		}
+	}
+	if current == nil || current.Kind != model.StepDesignContract || current.Status != model.StepStatusWaitingUser {
+		return nil
+	}
+	if err := s.store.MarkStepSucceeded(ctx, current.ID); err != nil {
+		return err
+	}
+	var next *model.JobStep
+	for i := range steps {
+		if steps[i].Seq > current.Seq && (next == nil || steps[i].Seq < next.Seq) {
+			next = &steps[i]
+		}
+	}
+	if next == nil {
+		if err := s.store.MarkJobCompleted(ctx, jobID); err != nil {
+			return err
+		}
+		s.publishStepUpdated(ctx, current.ID)
+		s.hub.Publish(Event{Type: "job.updated", Data: map[string]any{"id": jobID, "status": model.JobStatusCompleted}})
+		return nil
+	}
+	if err := s.store.AdvanceJobStep(ctx, jobID, next.Kind); err != nil {
+		return err
+	}
+	if err := s.store.MarkJobQueued(ctx, jobID); err != nil {
+		return err
+	}
+	s.publishStepUpdated(ctx, current.ID)
+	if s.exec != nil {
+		s.exec.Signal()
+	}
+	return nil
+}
 func (s *Server) jobPrototypeFeedback(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Feedback string `json:"feedback"`
