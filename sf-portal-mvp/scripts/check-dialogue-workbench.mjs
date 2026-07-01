@@ -185,6 +185,39 @@ const generationChoiceView = {
 const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')
 assert.ok(generationChoice, 'application generation must render a route-selection action')
 assert.equal(generationChoice.canReuseExistingApplication, false, 'an empty existing-app match must not render a reuse action')
+const routingPendingTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_routing_pending', status: 'routing', intent: 'routing', route_locked: false, initial_prompt: '请做一个后勤管理应用' },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '请做一个后勤管理应用' }],
+  route: { intent: '', confidence: '', needsRouteConfirmation: false, userFacingReason: '' },
+})
+assert.equal(
+  routingPendingTimeline.some(item => item.type === 'live_thinking' && item.pending),
+  true,
+  'routing view without a route result must show a pending thinking item',
+)
+const generationChoiceTypes = buildDialogueTimeline(generationChoiceView).map(item => item.type)
+const generationChoiceTimeline = buildDialogueTimeline(generationChoiceView)
+assert.equal(
+  generationChoiceTypes.includes('thinking_summary'),
+  true,
+  'route result must render a thinking summary before user confirmation',
+)
+assert.equal(
+  generationChoiceTypes.indexOf('thinking_summary') < generationChoiceTypes.indexOf('route_recommendation'),
+  true,
+  'thinking summary must appear before the route confirmation card',
+)
+const generationChoiceThinking = generationChoiceTimeline.find(item => item.type === 'thinking_summary')
+assert.equal(
+  generationChoiceThinking.content,
+  '',
+  'deterministic route summaries must not fabricate raw thinking content',
+)
+assert.equal(
+  generationChoiceThinking.summary,
+  '我会澄清需求并生成一个可运行的新应用。',
+  'deterministic route summary should carry only the user-facing route summary',
+)
 
 // resolved/abandoned/failed => terminal => composer locked
 for (const status of ['resolved', 'abandoned', 'failed']) {
