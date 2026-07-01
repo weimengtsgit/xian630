@@ -141,10 +141,10 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 				continue
 			}
 			credentialRefs = append(credentialRefs, map[string]any{
-				"id":       ref.ID,
-				"label":    ref.Label,
-				"scope":    ref.Scope,
-				"handle":   ref.Handle,
+				"id":        ref.ID,
+				"label":     ref.Label,
+				"scope":     ref.Scope,
+				"handle":    ref.Handle,
 				"expiresAt": ref.ExpiresAt,
 			})
 		}
@@ -258,9 +258,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		// must render the real per-boundary state (ontology red breakpoint +
 		// internet waiting), which requires the verification metadata to exist
 		// while the step is paused, not only after it succeeds (spec #32).
-		if meta, project, mErr := dataContractProjection(dataDetail, res.Status); mErr != nil {
+		if proj, mErr := dataContractProjection(dataDetail, res.Status); mErr != nil {
 			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: mErr.Error()}, nil
-		} else if project {
+		} else if proj.Project {
 			c.upsertWorkbenchArtifact(ctx, model.WorkbenchArtifactRef{
 				ID:         "warf_" + id.New(),
 				DialogueID: job.DialogueID,
@@ -268,10 +268,10 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 				StepID:     step.ID,
 				CardKey:    "data_capture",
 				Kind:       model.WorkbenchArtifactDataContract,
-				Label:      "数据契约",
-				Path:       "docs/data-integration.md",
-				Status:     dataDetail.SourceBoundary,
-				Metadata:   meta,
+				Label:      proj.Label,
+				Path:       proj.Path,
+				Status:     proj.Status,
+				Metadata:   proj.Metadata,
 				CreatedAt:  time.Now(),
 				UpdatedAt:  time.Now(),
 			})
@@ -1193,9 +1193,9 @@ func (c *ClaudeStepRunner) artifactRoot() string {
 // the agent authored, never from hidden provider data).
 func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput) (model.WorkbenchArtifactRef, error) {
 	raw, err := json.MarshalIndent(map[string]any{
-		"kind":             "static_manifest",
-		"summary":          design.Summary,
-		"designDocument":   design.DesignDocument,
+		"kind":              "static_manifest",
+		"summary":           design.Summary,
+		"designDocument":    design.DesignDocument,
 		"assumedDataFields": design.AssumedDataFields,
 	}, "", "  ")
 	if err != nil {
@@ -1277,6 +1277,14 @@ type dataContractVerificationNode struct {
 	Reason string `json:"reason"`
 }
 
+type dataContractProjectionResult struct {
+	Metadata string
+	Status   string
+	Label    string
+	Path     string
+	Project  bool
+}
+
 // buildDataContractMetadata marshals a frontend-facing verification summary from
 // the decoded DataIntegrationOutput. The shape is fixed:
 //
@@ -1294,11 +1302,11 @@ type dataContractVerificationNode struct {
 // fieldCount/sampleCount annotate the processing nodes.
 func buildDataContractMetadata(detail runner.DataIntegrationOutput) (string, error) {
 	summary := struct {
-		SourceBoundary  string                                    `json:"sourceBoundary"`
-		Verification    map[string]dataContractVerificationNode  `json:"verification"`
-		FallbackHistory []string                                  `json:"fallbackHistory"`
-		SampleCount     int                                       `json:"sampleCount"`
-		FieldCount      int                                       `json:"fieldCount"`
+		SourceBoundary  string                                  `json:"sourceBoundary"`
+		Verification    map[string]dataContractVerificationNode `json:"verification"`
+		FallbackHistory []string                                `json:"fallbackHistory"`
+		SampleCount     int                                     `json:"sampleCount"`
+		FieldCount      int                                     `json:"fieldCount"`
 	}{
 		SourceBoundary: detail.SourceBoundary,
 		Verification: map[string]dataContractVerificationNode{
@@ -1326,13 +1334,29 @@ func buildDataContractMetadata(detail runner.DataIntegrationOutput) (string, err
 // not just a card-level waiting state (spec #32). Other statuses do not
 // project. err is non-nil only on the near-impossible metadata-marshal failure,
 // which the caller treats as a step failure (preserving the prior behavior).
-func dataContractProjection(detail runner.DataIntegrationOutput, resStatus model.StepStatus) (string, bool, error) {
+func dataContractProjection(detail runner.DataIntegrationOutput, resStatus model.StepStatus) (dataContractProjectionResult, error) {
 	if resStatus != model.StepStatusSucceeded && resStatus != model.StepStatusWaitingUser {
-		return "", false, nil
+		return dataContractProjectionResult{}, nil
 	}
 	meta, err := buildDataContractMetadata(detail)
 	if err != nil {
-		return "", false, err
+		return dataContractProjectionResult{}, err
 	}
-	return meta, true, nil
+	proj := dataContractProjectionResult{
+		Metadata: meta,
+		Status:   detail.SourceBoundary,
+		Label:    "数据契约",
+		Path:     "docs/data-integration.md",
+		Project:  true,
+	}
+	if resStatus == model.StepStatusWaitingUser {
+		proj.Label = "数据验证状态"
+		proj.Path = ""
+	}
+	if strings.EqualFold(detail.Compatibility.Status, "failed") {
+		proj.Status = "compatible_failed"
+		proj.Label = "界面兼容待确认"
+		proj.Path = ""
+	}
+	return proj, nil
 }

@@ -786,9 +786,9 @@ func TestAnswerJobBindsTaskInternalAttachmentRefs(t *testing.T) {
 	jobID := "job_f1"
 	job := model.Job{
 		ID: jobID, UserPrompt: "p", Status: model.JobStatusWaitingUser,
-		CurrentStepKind: model.StepRequirementAnalysis,
+		CurrentStepKind:          model.StepRequirementAnalysis,
 		ConfirmedRequirementJSON: testConfirmedRequirement,
-		DialogueID: dialogueID, CreatedAt: now, UpdatedAt: now,
+		DialogueID:               dialogueID, CreatedAt: now, UpdatedAt: now,
 	}
 	stepID := "step_f1"
 	steps := []model.JobStep{{
@@ -823,6 +823,88 @@ func TestAnswerJobBindsTaskInternalAttachmentRefs(t *testing.T) {
 		t.Fatalf("ref message id = %q, want the task-internal answer's dlgMsg id (msg_...)", refs[0].MessageID)
 	}
 	_ = srv
+}
+
+func TestAnswerJobReroutesCompatibilityFailureToDesignContract(t *testing.T) {
+	_, r, st := newJobsTestServer(t, config.Config{})
+	ctx := context.Background()
+	now := time.Now()
+	dialogueID := "dlg_compat_route"
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: dialogueID, Status: model.DialogueStatusTaskRunning,
+		Intent: model.DialogueIntentApplicationGeneration, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed dialogue: %v", err)
+	}
+	jobID := "job_compat_route"
+	job := model.Job{
+		ID: jobID, UserPrompt: "p", Status: model.JobStatusWaitingUser,
+		CurrentStepKind:          model.StepDataIntegration,
+		ConfirmedRequirementJSON: testConfirmedRequirement,
+		DialogueID:               dialogueID, CreatedAt: now, UpdatedAt: now,
+	}
+	steps := []model.JobStep{
+		{ID: "step_req", JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1, Status: model.StepStatusSucceeded, Attempt: 1},
+		{ID: "step_design", JobID: jobID, Kind: model.StepDesignContract, Seq: 2, Status: model.StepStatusSucceeded, Attempt: 1},
+		{ID: "step_data", JobID: jobID, Kind: model.StepDataIntegration, Seq: 3, Status: model.StepStatusWaitingUser, NeedsUserInput: true, Attempt: 1},
+	}
+	if err := st.SeedJob(ctx, job, steps); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if err := st.UpsertWorkbenchArtifactRef(ctx, model.WorkbenchArtifactRef{
+		ID: "warf_compat", DialogueID: dialogueID, JobID: jobID, StepID: "step_data",
+		CardKey: "data_capture", Kind: model.WorkbenchArtifactDataContract,
+		Label: "界面兼容待确认", Status: "compatible_failed",
+		Metadata:  `{"sourceBoundary":"internet","verification":{"ontology":{"status":"failed"},"internet":{"status":"passed"},"demo":{"status":"pending"}},"fallbackHistory":["ontology_failed"]}`,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/api/jobs/"+jobID+"/answer", map[string]any{
+		"answer":  "请调整界面，不再展示审批状态字段",
+		"stepId":  "step_data",
+		"attempt": 1,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	updatedJob, err := st.GetJob(ctx, jobID)
+	if err != nil || updatedJob == nil {
+		t.Fatalf("GetJob: %#v %v", updatedJob, err)
+	}
+	if updatedJob.CurrentStepKind != model.StepDesignContract {
+		t.Fatalf("CurrentStepKind = %s, want design_contract", updatedJob.CurrentStepKind)
+	}
+	if updatedJob.Status != model.JobStatusQueued {
+		t.Fatalf("job status = %s, want queued", updatedJob.Status)
+	}
+	updatedSteps, err := st.ListJobSteps(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ListJobSteps: %v", err)
+	}
+	var design, data model.JobStep
+	for _, step := range updatedSteps {
+		if step.ID == "step_design" {
+			design = step
+		}
+		if step.ID == "step_data" {
+			data = step
+		}
+	}
+	if design.Status != model.StepStatusPending || design.UserPrompt != "请调整界面，不再展示审批状态字段" {
+		t.Fatalf("design step = %#v, want pending with user prompt", design)
+	}
+	if data.Status != model.StepStatusPending || data.NeedsUserInput {
+		t.Fatalf("data step = %#v, want compatibility wait closed to pending", data)
+	}
+	refs, err := st.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Status == "compatible_failed" {
+		t.Fatalf("compatibility artifact status should no longer force interface revalidation after answer, got %#v", refs)
+	}
 }
 
 func TestAnswerJobRejectsStaleStepAttempt(t *testing.T) {

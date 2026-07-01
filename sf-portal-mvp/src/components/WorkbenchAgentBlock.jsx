@@ -19,6 +19,7 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
   const [credentialDrafts, setCredentialDrafts] = useState({})
   if (!card) return null
   const canConfirm = ['waiting_artifact_confirmation', 'waiting_user_clarification'].includes(card.state) && CONFIRM_LABEL[card.key]
+  const previewableArtifacts = (card.artifacts || []).filter(isPreviewableArtifact)
   return (
     <section className={`cw-agent-block cw-agent-block-${card.key} ${open ? 'is-open' : 'is-folded'}`}>
       <button type="button" className="cw-agent-block-head" onClick={() => setOpen(v => !v)}>
@@ -33,16 +34,21 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
           {card.summary ? <section className="cw-agent-section"><h4>思考摘要</h4><p>{card.summary}</p></section> : null}
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}
           {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
-          {card.artifacts.length ? <ArtifactList artifacts={card.artifacts} onOpenArtifact={onOpenArtifact} /> : null}
+          {previewableArtifacts.length ? <ArtifactList artifacts={previewableArtifacts} onOpenArtifact={onOpenArtifact} /> : null}
           {canConfirm ? <button type="button" className="cw-agent-confirm" onClick={() => onConfirm && onConfirm(card.key)}>{CONFIRM_LABEL[card.key]}</button> : null}
         </div>
       ) : (
         <div className="cw-agent-folded">
-          {card.artifacts.map(item => <button key={item.id || item.path} type="button" onClick={() => onOpenArtifact && onOpenArtifact(item)}>{item.label || item.path}</button>)}
+          {previewableArtifacts.map(item => <button key={item.id || item.path} type="button" onClick={() => onOpenArtifact && onOpenArtifact(item)}>{item.label || item.path}</button>)}
         </div>
       )}
     </section>
   )
+}
+
+function isPreviewableArtifact(item) {
+  if (!item) return false
+  return item.kind === 'interface_preview' || !!item.path || !!item.previewUrl
 }
 
 function isFolded(card) {

@@ -366,7 +366,7 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
-      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openArtifact} />
+      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openArtifact} onOpenTaskStep={onOpenTaskStep} />
 
       <div className="cw-body">
         {timeline.map(item => (

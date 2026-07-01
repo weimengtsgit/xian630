@@ -615,6 +615,20 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		}
 		targetStep = step
 	}
+	originalTargetStep := targetStep
+	reroutedForCompatibility := false
+	if targetStep != nil {
+		routeStep, rerouted, err := s.compatibilityRevalidationTarget(r.Context(), job, targetStep)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "route compatibility revalidation")
+			return
+		}
+		if rerouted && routeStep != nil {
+			targetStep = routeStep
+			stepID = targetStep.ID
+			reroutedForCompatibility = true
+		}
+	}
 
 	msg := model.ConversationMessage{
 		ID:        "conv_" + idpkg.New(),
@@ -679,6 +693,17 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "reset step")
 			return
 		}
+		if reroutedForCompatibility && originalTargetStep != nil && originalTargetStep.ID != targetStep.ID {
+			if err := s.store.ResetStepToPending(r.Context(), originalTargetStep.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "reset compatibility step")
+				return
+			}
+			if err := s.markCompatibilityRevalidationRequested(r.Context(), id, originalTargetStep.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "mark compatibility revalidation")
+				return
+			}
+			s.publishStepUpdated(r.Context(), originalTargetStep.ID)
+		}
 		// Step-scoped answers may target a waiting step that is not the job's current
 		// pointer. Move current_step_kind before re-queueing so the executor reruns
 		// the step the user actually answered.
@@ -702,6 +727,56 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) compatibilityRevalidationTarget(ctx context.Context, job *model.Job, targetStep *model.JobStep) (*model.JobStep, bool, error) {
+	if job == nil || targetStep == nil || targetStep.Kind != model.StepDataIntegration {
+		return targetStep, false, nil
+	}
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	hasCompatibilityFailure := false
+	for _, ref := range refs {
+		if ref.Kind == model.WorkbenchArtifactDataContract && ref.Status == "compatible_failed" {
+			hasCompatibilityFailure = true
+			break
+		}
+	}
+	if !hasCompatibilityFailure {
+		return targetStep, false, nil
+	}
+	steps, err := s.store.ListJobSteps(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := range steps {
+		if steps[i].Kind == model.StepDesignContract {
+			return &steps[i], true, nil
+		}
+	}
+	return targetStep, false, nil
+}
+
+func (s *Server) markCompatibilityRevalidationRequested(ctx context.Context, jobID string, dataStepID string) error {
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		if ref.Kind != model.WorkbenchArtifactDataContract || ref.Status != "compatible_failed" {
+			continue
+		}
+		if dataStepID != "" && ref.StepID != dataStepID {
+			continue
+		}
+		ref.Status = "interface_revalidation_requested"
+		if err := s.store.UpsertWorkbenchArtifactRef(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isManualStepConfirmationQuestions(raw string) bool {

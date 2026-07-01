@@ -261,7 +261,7 @@ function firstActiveCardKey(cards) {
   for (const key of order) {
     const card = cards.find(item => item.key === key)
     if (!card) continue
-    if (['running', 'waiting_user_clarification', 'waiting_artifact_confirmation', 'waiting_user_confirmation', 'auto_repairing'].includes(card.state)) return key
+    if (['running', 'waiting_user_clarification', 'waiting_artifact_confirmation', 'waiting_user_confirmation', 'auto_repairing', 'failed'].includes(card.state)) return key
   }
   const ready = cards.find(card => card.state === 'ready')
   return ready ? ready.key : ''
@@ -269,7 +269,7 @@ function firstActiveCardKey(cards) {
 
 function edgeState(fromCard, toCard) {
   if (!fromCard || !toCard) return 'inactive'
-  if (fromCard.state === 'failed' || toCard.state === 'failed') return 'blocked'
+  if (fromCard.state === 'failed' || toCard.state === 'failed') return 'blocked_failed'
   if (fromCard.state === 'confirmed' || fromCard.state === 'delivered') {
     if (['running', 'waiting_user_clarification', 'waiting_user_confirmation', 'auto_repairing'].includes(toCard.state)) return 'flowing'
     if (toCard.state === 'confirmed' || toCard.state === 'delivered') return 'completed'

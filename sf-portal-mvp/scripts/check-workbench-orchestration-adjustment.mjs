@@ -72,6 +72,20 @@ assert.equal(production.cardsByKey.production_delivery.state, 'running')
 assert.equal(production.cardsByKey.production_delivery.subStage, '代码生成')
 assert.equal(production.edges.find(edge => edge.from === 'data_capture' && edge.to === 'production_delivery').state, 'flowing')
 
+const productionFailure = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_failed', status: 'task_running', intent: 'application_generation' }, messages: [{ id: 'u2', role: 'user', kind: 'prompt', content: '生成系统' }] },
+  jobStepBlocks: [
+    { stepId: 'r', kind: 'requirement_analysis', agentKey: 'requirement-analyst', status: 'succeeded', summary: '需求完成' },
+    { stepId: 'd', kind: 'design_contract', agentKey: 'designer', status: 'succeeded', summary: '界面完成' },
+    { stepId: 'x', kind: 'data_integration', agentKey: 'data-integration', status: 'succeeded', summary: '数据契约完成' },
+    { stepId: 'c', kind: 'code_generation', agentKey: 'code-generator', status: 'failed', error: 'Read generated-apps/ops/src/components/SummaryMetrics.tsx failed' },
+  ],
+})
+assert.equal(productionFailure.cardsByKey.production_delivery.state, 'failed')
+assert.equal(productionFailure.activeCardKey, 'production_delivery', 'failed production delivery must be the headline active stage')
+assert.equal(productionFailure.edges.find(edge => edge.from === 'data_capture' && edge.to === 'production_delivery').state, 'blocked_failed')
+assert.equal(productionFailure.edges.find(edge => edge.from === 'interface_parsing' && edge.to === 'production_delivery').state, 'blocked_failed')
+
 // ---- Task 9: data-capture fallback flow + data-flow track assertion -------
 // The data_integration step models the ontology → internet → demo fallback
 // order with explicit user confirmation at each boundary. When the ontology
@@ -90,12 +104,15 @@ assert.deepEqual(AGGREGATE_CARD_KEYS, ['user_input', 'business_logic', 'interfac
 
 const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
 assert.equal(graphSource.includes('协作编排'), false, 'aggregate graph must not render 协作编排 as a card')
-for (const label of ['用户输入', '业务逻辑', '界面解析', '数据抓取', '生产交付']) {
-  assert.equal(graphSource.includes(label), true, `graph source must render ${label}`)
-}
 const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.css', import.meta.url), 'utf8')
-assert.equal(css.includes('@media (prefers-reduced-motion: reduce)'), true, 'pulse motion must respect reduced motion')
+const collaborationGraphCss = readFileSync(new URL('../src/components/CollaborationExecutionGraph.css', import.meta.url), 'utf8')
+assert.equal(collaborationGraphCss.includes('@media (prefers-reduced-motion: reduce)'), true, 'shared ceg pulse motion must respect reduced motion')
+assert.equal(collaborationGraphCss.includes('.ceg-card-state-running::before') && collaborationGraphCss.includes('.ceg-card-state-running::before {\n    animation: none !important;'), true, 'running card pulse must be disabled under reduced motion')
 assert.equal(css.includes('position: sticky'), true, 'graph must support fixed-in-workbench placement')
+assert.equal(css.includes('max-height'), false, 'aggregate graph should not cap the old collaboration-graph visual canvas')
+assert.equal(css.includes('justify-content: center'), true, 'aggregate graph cards should be centered in the overview canvas')
+assert.equal(css.includes('.aog .ceg-canvas'), true, 'aggregate graph must tune the canvas without changing shared ceg styles')
+assert.equal(css.includes('padding: 12px 2px 10px'), true, 'aggregate graph should reduce top padding after removing wave labels')
 
 // ---- Task 4: attachment composer + message send-path ----------------------
 const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
@@ -238,5 +255,46 @@ assert.equal(workbenchSrc.includes('onConfirmCard ? onConfirmCard(key)'), true, 
 const clientSrc = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const answerJobBody = clientSrc.slice(clientSrc.indexOf('answerJob:'), clientSrc.indexOf('retryCurrentStep:'))
 assert.equal(answerJobBody.includes('attachmentIds'), true, 'answerJob request body must include scope.attachmentIds')
+
+// Waiting-user data-flow metadata refs may be kind=data_contract but pathless:
+// they exist for the data-flow track, not as clickable final data-contract docs.
+const agentBlockSrc = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
+assert.equal(agentBlockSrc.includes('previewableArtifacts'), true, 'WorkbenchAgentBlock must filter metadata-only artifacts before rendering artifact buttons')
+const aggregateGraphSrc = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
+
+// The pinned aggregate overview is the same visual language as the historical
+// collaboration execution graph, only with the fixed five-card topology. It must
+// reuse the ceg container/card/state classes instead of drifting into a separate
+// aog-only card system.
+assert.equal(aggregateGraphSrc.includes("import './CollaborationExecutionGraph.css'"), true, 'AggregateOrchestrationGraph must import the collaboration graph stylesheet')
+assert.equal(aggregateGraphSrc.includes('className="ceg aog"'), true, 'AggregateOrchestrationGraph root must reuse the ceg container class')
+assert.equal(aggregateGraphSrc.includes('className="ceg-head'), true, 'AggregateOrchestrationGraph header must reuse the ceg head class')
+assert.equal(aggregateGraphSrc.includes('className="ceg-canvas'), true, 'AggregateOrchestrationGraph canvas must reuse the ceg canvas class')
+assert.equal(aggregateGraphSrc.includes('用户输入 → 业务逻辑 → 界面解析 / 数据抓取 → 生产交付'), false, 'aggregate graph must not render the path subtitle under the title')
+assert.equal(aggregateGraphSrc.includes('ceg-wave-label'), false, 'aggregate graph must not render wave labels above the cards')
+assert.equal(aggregateGraphSrc.includes('ceg-card ceg-card-state-'), true, 'AggregateOrchestrationGraph cards must reuse ceg card and state classes')
+assert.equal(aggregateGraphSrc.includes('className="ceg-card-icon'), true, 'AggregateOrchestrationGraph icons must reuse the ceg card icon class')
+assert.equal(aggregateGraphSrc.includes('className="ceg-card-state'), true, 'AggregateOrchestrationGraph state badge must reuse the ceg state badge class')
+assert.equal(aggregateGraphSrc.includes('aria-disabled="true"'), false, 'AggregateOrchestrationGraph cards must not mark clickable artifact descendants as aria-disabled')
+assert.equal(aggregateGraphSrc.includes('<small>{card.subtitle}</small>'), false, 'aggregate cards must not render English subtitles under Chinese titles')
+assert.equal(aggregateGraphSrc.includes('SUBTITLES'), false, 'aggregate cards must not carry English key subtitles')
+assert.equal(aggregateGraphSrc.includes('getCardDescription'), true, 'AggregateOrchestrationGraph must derive user-facing short card descriptions')
+assert.equal(aggregateGraphSrc.includes('需求已提交，已进入编排'), true, 'confirmed user input must not keep saying it is waiting for orchestration')
+assert.equal(aggregateGraphSrc.includes('正在执行'), true, 'running card text must be a short status label')
+assert.equal(aggregateGraphSrc.includes('步骤已完成'), true, 'completed card text must be a short status label')
+assert.equal(aggregateGraphSrc.includes('执行失败，查看详情'), true, 'failed card text must be a short status label')
+assert.equal(aggregateGraphSrc.includes('读取生成文件失败'), true, 'file-read failures must be shortened on the card')
+assert.equal(aggregateGraphSrc.includes('getCardTooltip'), true, 'aggregate graph must keep full card descriptions in the tooltip')
+assert.equal(aggregateGraphSrc.includes('onOpenTaskStep'), true, 'failed cards must expose a task detail entry')
+assert.equal(aggregateGraphSrc.includes('step.step_id'), true, 'task detail entry must support backend step_id fields')
+assert.equal(aggregateGraphSrc.includes('function WaveConnector'), true, 'aggregate graph must restore the old WaveConnector renderer')
+assert.equal(aggregateGraphSrc.includes('function EdgeSegment'), true, 'aggregate graph must restore the old EdgeSegment renderer')
+assert.equal(aggregateGraphSrc.includes('function buildConnectorModel'), true, 'aggregate graph must restore the old fork/merge connector model')
+assert.equal(aggregateGraphSrc.includes('function classifyConnectorMode'), true, 'aggregate graph must classify connector modes like the old collaboration graph')
+assert.equal(aggregateGraphSrc.includes('function AggregateConnector'), false, 'aggregate graph must not keep the simplified hand-written connector')
+assert.equal(aggregateGraphSrc.includes('aog-card-actions'), false, 'aggregate cards should open task details by card click, not an extra action row')
+assert.equal(aggregateGraphSrc.includes('aog-connector-merge'), false, 'aggregate graph should use the old connector model instead of a manual merge class')
+assert.equal(css.includes('.aog-connector'), false, 'aggregate CSS should not override the old connector geometry')
+assert.equal(css.includes('.aog-action-link'), false, 'aggregate CSS should not add non-legacy card action buttons')
 
 console.log('check-workbench-orchestration-adjustment: ok')
