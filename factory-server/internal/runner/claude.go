@@ -66,31 +66,42 @@ func (r *ClaudeRunner) binary() string {
 // line; the parser (streamClaudeEvents) ignores thinking/reasoning and every
 // other hidden provider field — only tool_use + the public workLog in the final
 // result become records.
+// ClaudeRunMode controls the tool-permission profile and working directory for
+// one claude invocation. ReadOnly grants Read/Grep/Glob only (the analysis
+// stages); WorkspaceWrite additionally grants Edit/Write and runs in the
+// configured WorkDir (code_generation); AttemptWrite grants Edit/Write but runs
+// inside the attempt artifact directory (prototype design under design_contract).
+type ClaudeRunMode string
+
+const (
+	ClaudeRunReadOnly       ClaudeRunMode = "read_only"
+	ClaudeRunWorkspaceWrite ClaudeRunMode = "workspace_write"
+	ClaudeRunAttemptWrite   ClaudeRunMode = "attempt_write"
+)
+
 func claudeArgv(codegen bool) []string {
+	if codegen {
+		return claudeArgvForMode(ClaudeRunWorkspaceWrite)
+	}
+	return claudeArgvForMode(ClaudeRunReadOnly)
+}
+
+func claudeArgvForMode(mode ClaudeRunMode) []string {
 	modelArgs := claudeModelArgs()
 	stream := []string{
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
 	}
-	if codegen {
-		return append(append([]string{
-			"--print",
-			"--permission-mode", "acceptEdits",
-			"--allowedTools", "Read,Grep,Glob,Edit,Write",
-			"--disallowedTools", "Bash",
-		}, modelArgs...), stream...)
+	base := []string{"--print", "--permission-mode", "acceptEdits"}
+	switch mode {
+	case ClaudeRunWorkspaceWrite:
+		return append(append(append(base, "--allowedTools", "Read,Grep,Glob,Edit,Write", "--disallowedTools", "Bash"), modelArgs...), stream...)
+	case ClaudeRunAttemptWrite:
+		return append(append(append(base, "--allowedTools", "Read,Grep,Glob,Edit,Write", "--disallowedTools", "Bash"), modelArgs...), stream...)
+	default:
+		return append(append(append(base, "--allowedTools", "Read,Grep,Glob", "--disallowedTools", "Bash,Edit,Write"), modelArgs...), stream...)
 	}
-	// Read-only stages intentionally avoid plan mode. DeepSeek-on-Claude-compatible
-	// endpoints can turn plan mode into an approval loop and emit prose instead of
-	// the required JSON contract. acceptEdits here does not grant write ability
-	// because Edit/Write remain disallowed.
-	return append(append([]string{
-		"--print",
-		"--permission-mode", "acceptEdits",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write",
-	}, modelArgs...), stream...)
 }
 
 func claudeModelArgs() []string {
@@ -117,6 +128,20 @@ func claudeModelArgs() []string {
 // field are ignored by streamClaudeEvents. A nil emit is treated as a no-op so
 // tests that don't care about records can pass nil.
 func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt string, inputData []byte, codegen bool, emit StepRecordEmitter) error {
+	mode := ClaudeRunReadOnly
+	if codegen {
+		mode = ClaudeRunWorkspaceWrite
+	}
+	return r.RunWithMode(ctx, ws, prompt, inputData, mode, emit)
+}
+
+// RunWithMode writes the attempt input.json and prompt.md, then invokes the
+// claude binary with stage-tightened tool permissions determined by mode.
+// ClaudeRunReadOnly runs with Read/Grep/Glob only in the attempt directory.
+// ClaudeRunWorkspaceWrite runs with Edit/Write in the configured WorkDir (code
+// generation). ClaudeRunAttemptWrite runs with Edit/Write in the attempt
+// artifact directory (prototype design).
+func (r *ClaudeRunner) RunWithMode(ctx context.Context, ws AttemptWorkspace, prompt string, inputData []byte, mode ClaudeRunMode, emit StepRecordEmitter) error {
 	if emit == nil {
 		emit = NopEmitter{}
 	}
@@ -132,21 +157,15 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 
 	streamRunner, ok := r.Runner.(streamCommandRunner)
 	if ok {
-		return r.runStream(ctx, ws, prompt, codegen, emit, streamRunner)
+		return r.runStreamWithMode(ctx, ws, prompt, mode, emit, streamRunner)
 	}
 	inputRunner, ok := r.Runner.(inputCommandRunner)
 	if !ok {
 		return fmt.Errorf("claude runner does not support stdin")
 	}
-	runDir := ws.Dir()
-	if codegen && r.WorkDir != "" {
-		runDir = r.WorkDir
-	}
-	stage := "analysis_step"
-	if codegen {
-		stage = "code_generation"
-	}
-	args := claudeArgv(codegen)
+	runDir := runDirForMode(ws, r.WorkDir, mode)
+	stage := stageForMode(mode)
+	args := claudeArgvForMode(mode)
 	LLMConsoleRequest(stage, r.binary(), args, prompt)
 	res, err := inputRunner.RunWithInput(ctx, runDir, prompt, r.binary(), args...)
 	// Capture whatever we got, even on failure, for audit/debugging.
@@ -195,6 +214,24 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 	return nil
 }
 
+func runDirForMode(ws AttemptWorkspace, workDir string, mode ClaudeRunMode) string {
+	if mode == ClaudeRunWorkspaceWrite && workDir != "" {
+		return workDir
+	}
+	return ws.Dir()
+}
+
+func stageForMode(mode ClaudeRunMode) string {
+	switch mode {
+	case ClaudeRunWorkspaceWrite:
+		return "code_generation"
+	case ClaudeRunAttemptWrite:
+		return "prototype_design"
+	default:
+		return "analysis_step"
+	}
+}
+
 // streamCommandRunner is the optional interface a CommandRunner can implement to
 // stream stdout/stderr line-by-line as the process runs. The OSRunner
 // implements it; test fakes implement RunWithInput and fall through to the
@@ -203,21 +240,15 @@ type streamCommandRunner interface {
 	RunStreamWithInput(ctx context.Context, dir, input string, onStdout func(string), onStderr func(string), name string, args ...string) (CommandResult, error)
 }
 
-// runStream invokes claude via the streaming runner, forwarding each stdout
-// line to streamClaudeEvents (which emits activity records for safe tool_use
-// events and ignores thinking/reasoning) and each stderr line to a
+// runStreamWithMode invokes claude via the streaming runner, forwarding each
+// stdout line to streamClaudeEvents (which emits activity records for safe
+// tool_use events and ignores thinking/reasoning) and each stderr line to a
 // command_stderr record. stdout/stderr are also captured in full for the audit
 // log + output.json fallback.
-func (r *ClaudeRunner) runStream(ctx context.Context, ws AttemptWorkspace, prompt string, codegen bool, emit StepRecordEmitter, sr streamCommandRunner) error {
-	runDir := ws.Dir()
-	if codegen && r.WorkDir != "" {
-		runDir = r.WorkDir
-	}
-	stage := "analysis_step"
-	if codegen {
-		stage = "code_generation"
-	}
-	args := claudeArgv(codegen)
+func (r *ClaudeRunner) runStreamWithMode(ctx context.Context, ws AttemptWorkspace, prompt string, mode ClaudeRunMode, emit StepRecordEmitter, sr streamCommandRunner) error {
+	runDir := runDirForMode(ws, r.WorkDir, mode)
+	stage := stageForMode(mode)
+	args := claudeArgvForMode(mode)
 	LLMConsoleRequest(stage, r.binary(), args, prompt)
 	var stdoutBuf, stderrBuf strings.Builder
 	onStdout := func(line string) {

@@ -8,7 +8,20 @@ const CONFIRM_LABEL = {
   data_capture: '确认数据抓取并继续',
 }
 
-export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [], onConfirm, onOpenArtifact, onSubmitCredential }) {
+export function WorkbenchAgentBlock({
+  card,
+  thinking,
+  analysisLog,
+  questions = [],
+  prototype,
+  onConfirm,
+  onOpenArtifact,
+  onSubmitCredential,
+  onOpenPrototype,
+  onPrototypeFeedback,
+  onConfirmPrototype,
+  onContinuePrototype,
+}) {
   const [open, setOpen] = useState(!isFolded(card))
   // credentialDrafts holds the in-progress plaintext credential the user is
   // typing for each credential question, keyed by question id. The draft lives
@@ -35,6 +48,19 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}
           {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
           {previewableArtifacts.length ? <ArtifactList artifacts={previewableArtifacts} onOpenArtifact={onOpenArtifact} /> : null}
+          {prototype ? (
+            <section className="cw-agent-section cw-prototype-card">
+              <h4>原型预览</h4>
+              <p>{prototype.label} · {prototype.fidelity} · 默认页：{prototype.defaultPage}</p>
+              {prototype.pageLabels.length ? <p>页面清单：{prototype.pageLabels.join(' / ')}</p> : null}
+              <div className="cw-prototype-actions">
+                <button type="button" onClick={() => onOpenPrototype && onOpenPrototype(prototype)}>打开预览</button>
+                <button type="button" onClick={() => onPrototypeFeedback && onPrototypeFeedback(prototype)}>提出修改</button>
+                {prototype.canConfirm ? <button type="button" onClick={() => onConfirmPrototype && onConfirmPrototype(prototype)}>确认原型并继续</button> : null}
+                {prototype.canContinue ? <button type="button" onClick={() => onContinuePrototype && onContinuePrototype(prototype)}>直接进入方案设计</button> : null}
+              </div>
+            </section>
+          ) : null}
           {canConfirm ? <button type="button" className="cw-agent-confirm" onClick={() => onConfirm && onConfirm(card.key)}>{CONFIRM_LABEL[card.key]}</button> : null}
         </div>
       ) : (

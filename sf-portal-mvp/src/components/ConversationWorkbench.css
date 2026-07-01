@@ -486,3 +486,27 @@
 .cw-session-error-title { color: #ffb0b0; font-size: 13px; font-weight: 600; }
 .cw-session-error-detail { margin-top: 4px; color: rgba(255, 176, 176, 0.9); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .cw-session-error-hint { margin-top: 6px; color: rgba(215, 238, 248, 0.72); font-size: 12px; line-height: 1.5; }
+
+.cw-prototype-card {
+  border: 1px solid rgba(35, 46, 72, 0.14);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(3, 17, 29, 0.55);
+}
+
+.cw-prototype-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cw-prototype-actions button {
+  min-height: 32px;
+  border: 1px solid rgba(111, 218, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(3, 17, 29, 0.66);
+  color: #d7eef8;
+  padding: 0 10px;
+  font-size: 12px;
+}

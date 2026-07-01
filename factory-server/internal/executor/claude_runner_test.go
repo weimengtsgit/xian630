@@ -546,6 +546,44 @@ func TestClaudeStepRunnerPassesRepairContextToCodeGeneration(t *testing.T) {
 	}
 }
 
+func TestDesignContractPromptUsesPrototypeDesignSkill(t *testing.T) {
+	ws := runner.AttemptWorkspace{
+		Root:     t.TempDir(),
+		JobID:    "job_design_contract_prompt",
+		StepKind: model.StepDesignContract,
+		Attempt:  1,
+	}
+	job, step := claudeJobStep(model.StepDesignContract)
+	prompt := collaborationProducerPrompt(job, step, ws)
+
+	for _, want := range []string{
+		"原型设计协作智能体",
+		".claude/skills/prototype-design/SKILL.md",
+		"先 Read 并严格遵循项目本地 skill",
+		"prototype 必须描述静态原型页面方案",
+		"默认 fidelity=static",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("design contract prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "设计契约") {
+		t.Fatalf("design contract prompt should use 原型设计 terminology, got:\n%s", prompt)
+	}
+}
+
+func TestGenericCollaborationProducerPromptDoesNotUsePrototypeSkill(t *testing.T) {
+	ws := runner.AttemptWorkspace{Root: t.TempDir(), JobID: "job_domain_prompt", StepKind: model.StepDomainAnalysis, Attempt: 1}
+	job, step := claudeJobStep(model.StepDomainAnalysis)
+	prompt := collaborationProducerPrompt(job, step, ws)
+
+	if strings.Contains(prompt, ".claude/skills/prototype-design/SKILL.md") {
+		t.Fatalf("domain analysis prompt must not load prototype skill:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "领域分析协作智能体") {
+		t.Fatalf("domain analysis prompt lost generic producer wording:\n%s", prompt)
+	}
+}
 func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T) {
 	workspace := t.TempDir()
 	artifactRoot := filepath.Join(t.TempDir(), ".factory-runs")

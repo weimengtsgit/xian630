@@ -34,6 +34,7 @@ import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
 import { InterfacePreviewModal } from './InterfacePreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
+import { normalizePrototypeSummary } from '../hooks/prototypeState'
 import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy, formatAppType } from '../utils/formatLabels'
@@ -275,6 +276,39 @@ export function ConversationWorkbench({
     }
   }
 
+  function prototypeFromCard(c) {
+    const artifact = (c.artifacts || []).find(item => item.kind === 'interface_preview')
+    if (!artifact) return null
+    return normalizePrototypeSummary({
+      artifactId: artifact.id,
+      status: artifact.status,
+      label: artifact.label,
+      previewUrl: artifact.previewUrl,
+      jobId: artifact.jobId,
+      stepId: artifact.stepId,
+      manifest: artifact.metadata && artifact.metadata.manifest ? artifact.metadata.manifest : {},
+      contract: artifact.metadata && artifact.metadata.contract ? artifact.metadata.contract : {},
+    })
+  }
+
+  async function handleOpenPrototype(proto) {
+    if (proto.previewUrl) window.open(proto.previewUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  async function handlePrototypeFeedback(proto) {
+    const feedback = window.prompt('请输入原型修改意见')
+    if (!feedback || !feedback.trim()) return
+    await factoryApi.sendPrototypeFeedback(proto.jobId, proto.stepId, feedback.trim())
+  }
+
+  async function handleConfirmPrototype(proto) {
+    await factoryApi.confirmPrototype(proto.jobId, proto.stepId)
+  }
+
+  async function handleContinuePrototype(proto) {
+    await factoryApi.continuePrototypeWithoutConfirmation(proto.jobId, proto.stepId)
+  }
+
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -443,9 +477,14 @@ export function ConversationWorkbench({
               thinking=""
               analysisLog=""
               questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
+              prototype={card.key === 'interface_parsing' ? prototypeFromCard(card) : null}
               onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
               onOpenArtifact={openArtifact}
               onSubmitCredential={submitCredential}
+              onOpenPrototype={handleOpenPrototype}
+              onPrototypeFeedback={handlePrototypeFeedback}
+              onConfirmPrototype={handleConfirmPrototype}
+              onContinuePrototype={handleContinuePrototype}
             />
           ))}
 

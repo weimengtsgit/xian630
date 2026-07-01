@@ -78,6 +78,28 @@ type collaborationSkillDoc struct {
 	Scope   string `json:"scope"`
 }
 
+type businessDesignHandoff struct {
+	Content      json.RawMessage `json:"content,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	ArtifactPath string          `json:"artifactPath,omitempty"`
+}
+
+func (c *ClaudeStepRunner) businessDesignHandoff(job model.Job, step model.JobStep) (businessDesignHandoff, error) {
+	if step.Kind != model.StepDesignContract {
+		return businessDesignHandoff{}, nil
+	}
+	path := filepath.ToSlash(filepath.Join("jobs", job.ID, string(model.StepRequirementAnalysis), "attempt-1", "output.json"))
+	full := filepath.Join(c.artifactRoot(), filepath.FromSlash(path))
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return businessDesignHandoff{Summary: "未找到需求分析产物，使用 confirmedRequirement 作为兼容输入。", ArtifactPath: path}, nil
+		}
+		return businessDesignHandoff{}, err
+	}
+	return businessDesignHandoff{Content: json.RawMessage(raw), ArtifactPath: path}, nil
+}
+
 type finalDataAccessInput struct {
 	Status               string             `json:"status"`
 	Version              string             `json:"version"`
@@ -165,6 +187,11 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		}
 	}
 
+	businessDesign, err := c.businessDesignHandoff(job, step)
+	if err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
+	}
+
 	input, err := json.MarshalIndent(map[string]any{
 		"job":                      job,
 		"step":                     step,
@@ -177,6 +204,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		"collaborationSnapshot":    collaborationSnapshot,
 		"controlledCredentialRefs": credentialRefs,
 		"dataAccess":               dataAccessInput,
+		"businessDesign":           businessDesign.Content,
+		"businessDesignSummary":    businessDesign.Summary,
+		"businessDesignArtifact":   businessDesign.ArtifactPath,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -196,6 +226,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	if block := collaborationSnapshotPromptBlock(collaborationSnapshot); block != "" {
 		prompt += block
 	}
+	if block := c.prototypeContextPromptBlock(ctx, job.ID, step.Kind); block != "" {
+		prompt += block
+	}
 	// step.UserPrompt carries the user's answer when a step is re-run after
 	// pausing for clarification (waiting_user → answerJob → SetStepUserPrompt),
 	// OR a repair-from-failure instruction. For generative steps we surface it
@@ -205,7 +238,14 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		(step.Kind == model.StepSolutionDesign || step.Kind == model.StepCodeGeneration || isCollaborationProducerKind(step.Kind)) {
 		prompt += "\n\n[user_input]\n" + step.UserPrompt + "\n"
 	}
-	if err := c.Claude.Run(ctx, ws, prompt, input, step.Kind == model.StepCodeGeneration, emit); err != nil {
+	mode := runner.ClaudeRunReadOnly
+	if step.Kind == model.StepCodeGeneration {
+		mode = runner.ClaudeRunWorkspaceWrite
+	}
+	if step.Kind == model.StepDesignContract {
+		mode = runner.ClaudeRunAttemptWrite
+	}
+	if err := c.Claude.RunWithMode(ctx, ws, prompt, input, mode, emit); err != nil {
 		// Even on failure, capture sanitized audit copies of whatever operational
 		// files exist (input/prompt are always written by ClaudeRunner.Run before
 		// the agent runs; output may or may not exist). Best-effort: a capture
@@ -241,20 +281,21 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		res := finishReviewGate(ctx, trace, step, ws.OutputPath())
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepDesignContract:
-		// Task 8: the design_contract step is the interface-parsing producer.
+		// Task 8: the design_contract step is the prototype-design producer.
 		// Validate against the specialized design contract (summary +
-		// designDocument required), and on success retain a deterministic
-		// interface-preview snapshot derived from the validated designDocument.
-		// The snapshot is a Factory-owned manifest (the agent is forbidden from
-		// writing preview files); a snapshot write failure fails the step as a
-		// schema_validation_failed because the preview is a load-bearing artifact
-		// of a successful design step. The ref is upserted so the orchestration
-		// view can render the preview on the interface_parsing card.
+		// designDocument + prototype required), and on success read the
+		// prototype artifacts the agent wrote inside the attempt directory.
+		// The preview-manifest.json and prototype-contract.json become the
+		// task-owned workbench artifact ref for the interface_parsing card.
 		out, design, err := runner.ValidateDesignContract(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		if res.Status == model.StepStatusSucceeded {
-			ref, perr := c.createInterfacePreviewSnapshot(ctx, job, step, ws, design)
+			bundle, perr := readPrototypeBundle(ws)
+			if perr != nil {
+				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
+			}
+			ref, perr := c.createPrototypePreviewArtifact(ctx, job, step, ws, design, bundle)
 			if perr != nil {
 				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorSchemaValidationFailed, ErrorMessage: perr.Error()}, nil
 			}
@@ -1027,20 +1068,19 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 }
 
 // designContractPrompt is the specialized prompt for the design_contract
-// (interface-parsing) collaboration producer. Unlike the generic collaboration
-// prompt, it mandates the designDocument + assumedDataFields contract the
-// executor's interface-preview snapshot is derived from, and it forbids the
-// agent from writing any preview file — the preview is a Factory-owned,
-// deterministic artifact built from the design contract, so the agent must only
-// describe the design, never render it.
+// (prototype design) collaboration producer. It routes the agent to the
+// prototype-design skill, feeds businessDesign as the primary input, and
+// constrains the agent to writing files only inside the attempt directory.
 func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
-	return "你是软件工厂的界面解析智能体。读取 input.json 中的 confirmedRequirement、附件摘要和已有字段假设，输出界面解析设计契约。" +
-		"不要修改文件，不要生成界面预览文件；界面预览由 Factory 执行器根据 designDocument 生成 task-owned 产物。" +
+	return "你是软件工厂的原型设计协作智能体，运行在用户可见的界面解析阶段。先 Read 并严格遵循项目本地 skill：.claude/skills/prototype-design/SKILL.md。" +
+		"读取 input.json，其中 businessDesign 是原型设计的主输入，来自业务智能体完整设计方案；confirmedRequirement 只作为边界与一致性校验，不能替代完整设计方案。" +
+		"如果 businessDesign 缺失，只能使用 confirmedRequirement 兼容推进，并在 warnings 记录降级原因。" +
+		"需要在原型风格、目标用户、目标平台或保真度缺失、冲突、影响验收时，输出 status=\"needs_input\"、needsUserInput=true 和结构化 questions。" +
+		"默认 fidelity=static，targetPlatform=responsive，prototype 必须描述静态原型页面方案，默认首页为 home。" +
+		"允许在当前 attempt 目录下写入 prototype/index.html、prototype/styles.css、prototype/preview-manifest.json、prototype/prototype-contract.json；禁止写入仓库工作目录或最终应用目录，禁止调用 Bash。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
-		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、workLog、warnings。" +
-		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
-		"designDocument 必须描述视图识别、布局分区、组件映射、交互状态、响应式约束、关键文案和字段呈现。assumedDataFields 是预览依赖但数据抓取尚未确认的字段名数组。" +
-		"需要用户澄清时，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、prototype、workLog、warnings。" +
+		"designDocument 与 prototype 必须描述同一套页面设计；如用户后续确认原型，预览将成为后续验收基线。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
 }
 
@@ -1399,6 +1439,70 @@ func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, j
 		PreviewURL:   fmt.Sprintf("/api/jobs/%s/interface-preview?artifactId=%s", job.ID, refID),
 		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
 		Status:       "provisional",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}, nil
+}
+
+func (c *ClaudeStepRunner) prototypeContextPromptBlock(ctx context.Context, jobID string, kind model.StepKind) string {
+	if c.Store == nil || (kind != model.StepSolutionDesign && kind != model.StepCodeGeneration && kind != model.StepProductAcceptance) {
+		return ""
+	}
+	refs, err := c.Store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return ""
+	}
+	var ref *model.WorkbenchArtifactRef
+	for i := range refs {
+		if refs[i].Kind == model.WorkbenchArtifactInterfacePreview && refs[i].CardKey == "interface_parsing" {
+			if ref == nil || refs[i].UpdatedAt.After(ref.UpdatedAt) {
+				ref = &refs[i]
+			}
+		}
+	}
+	if ref == nil {
+		return ""
+	}
+	level := "reference"
+	if ref.Status == "confirmed" {
+		level = "hard_constraint"
+	}
+	contractPath := strings.TrimSuffix(ref.Path, "/preview-manifest.json") + "/prototype-contract.json"
+	return "\n\n[prototype 原型设计约束]\n" +
+		"本任务已有界面解析/原型设计产物，必须读取并遵循：\n" +
+		"- preview-manifest: " + ref.Path + "\n" +
+		"- prototype-contract: " + contractPath + "\n" +
+		"- prototypeStatus: " + ref.Status + "\n" +
+		"- downstreamConstraintLevel: " + level + "\n" +
+		"当 downstreamConstraintLevel=hard_constraint 时，不得自由改变首页结构、核心组件、主要交互和响应式约束；当为 reference 时，只能作为参考，不能声称用户已确认原型。"
+}
+
+func (c *ClaudeStepRunner) createPrototypePreviewArtifact(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput, bundle prototypeBundle) (model.WorkbenchArtifactRef, error) {
+	raw, err := json.Marshal(bundle.Manifest)
+	if err != nil {
+		return model.WorkbenchArtifactRef{}, err
+	}
+	sum := sha256.Sum256(raw)
+	now := time.Now()
+	refID := "warf_" + id.New()
+	metaRaw, _ := json.Marshal(map[string]any{
+		"contractPath": bundle.ContractRelPath,
+		"indexPath":    bundle.IndexRelPath,
+		"prototype":    design.Prototype,
+	})
+	return model.WorkbenchArtifactRef{
+		ID:           refID,
+		DialogueID:   job.DialogueID,
+		JobID:        job.ID,
+		StepID:       step.ID,
+		CardKey:      "interface_parsing",
+		Kind:         model.WorkbenchArtifactInterfacePreview,
+		Label:        "原型预览",
+		Path:         bundle.PreviewRelPath,
+		PreviewURL:   fmt.Sprintf("/api/jobs/%s/steps/%s/prototype/preview", job.ID, step.ID),
+		SnapshotHash: "sha256:" + hex.EncodeToString(sum[:]),
+		Status:       "unconfirmed",
+		Metadata:     string(metaRaw),
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
