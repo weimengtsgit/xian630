@@ -43,6 +43,8 @@ import './ConversationWorkbench.css'
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
 // its business-facing content is being reworked. Flip to true to bring it back.
 const SHOW_WORK_TRACE = false
+const WORKBENCH_BODY_FOLLOW_BOTTOM_THRESHOLD = 24
+const LIVE_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
 const TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
 
 export function ConversationWorkbench({
@@ -87,6 +89,8 @@ export function ConversationWorkbench({
   const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
   const [aggregateGraphCompactOverride, setAggregateGraphCompactOverride] = useState(null)
   const textareaRef = useRef(null)
+  const cwBodyScrollRef = useRef(null)
+  const cwBodyShouldFollowRef = useRef(true)
   const previousHasSubmittedRequirementRef = useRef(false)
   const requestAbandonRequirement = () => {
     if (!onAbandon || submitting) return
@@ -120,6 +124,7 @@ export function ConversationWorkbench({
   useEffect(() => {
     setManualStepConfirmation(false)
     setAggregateGraphCompactOverride(null)
+    cwBodyShouldFollowRef.current = true
     previousHasSubmittedRequirementRef.current = false
   }, [session && session.id])
   const status = session && session.status
@@ -183,6 +188,34 @@ export function ConversationWorkbench({
       .join(' / ')
     : ''
   const taskBadge = taskDrawerBadgeInfo(focusTask)
+  const timelineFollowSignature = useMemo(() => {
+    const items = Array.isArray(timeline) ? timeline : []
+    return items.map(item => [
+      item.id,
+      item.type,
+      item.content || '',
+      item.summary || '',
+      item.taskThinking || '',
+      item.safeExecution || '',
+      item.error || '',
+      item.rawThinking || '',
+      item.pending ? 'pending' : '',
+      item.expanded ? 'expanded' : '',
+    ].join(':')).join('|')
+  }, [timeline])
+  const updateWorkbenchBodyFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    cwBodyShouldFollowRef.current = distanceToBottom <= WORKBENCH_BODY_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = cwBodyScrollRef.current
+    if (!el || !cwBodyShouldFollowRef.current) return
+    // 只有用户停在底部时才跟随新增思考内容；上滑查看历史时不打断。
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [timelineFollowSignature])
 
   // Aggregate orchestration graph (Task 2): a fixed five-card overview of the
   // whole pipeline (用户输入/业务逻辑/界面解析/数据抓取/生产交付) that stays pinned
@@ -399,7 +432,7 @@ export function ConversationWorkbench({
         onOpenTaskStep={onOpenTaskStep}
       />
 
-      <div className="cw-body">
+      <div ref={cwBodyScrollRef} className="cw-body" onScroll={updateWorkbenchBodyFollowState}>
         {timeline.map(item => (
           <TimelineItem
             key={item.id}
@@ -842,6 +875,24 @@ function ThinkingSummary({ item }) {
   const raw = String(item.content || '').trim()
   const copyValue = summary || raw
   const live = item.pending || item.type === 'live_thinking'
+  const liveThinkingScrollRef = useRef(null)
+  const liveThinkingShouldFollowRef = useRef(true)
+  useEffect(() => {
+    liveThinkingShouldFollowRef.current = true
+  }, [item.id])
+  const updateLiveThinkingFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    liveThinkingShouldFollowRef.current = distanceToBottom <= LIVE_THINKING_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = liveThinkingScrollRef.current
+    if (!el || !live || !liveThinkingShouldFollowRef.current) return
+    // 思考流内部也按“贴底才跟随”处理，避免用户上滑阅读时被拉回底部。
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [raw, live])
   return (
     <CopyableBlock text={copyValue} className="cw-agent-wrap" copyLabel="复制思考摘要">
       <div className="cw-item cw-agent cw-live-thinking cw-thinking-summary">
@@ -850,7 +901,11 @@ function ThinkingSummary({ item }) {
           {live ? '正在思考…' : '思考摘要'}
         </span>
         {live && raw ? (
-          <div className="cw-raw-thinking-stream">
+          <div
+            ref={liveThinkingScrollRef}
+            className="cw-raw-thinking-stream"
+            onScroll={updateLiveThinkingFollowState}
+          >
             <pre className="cw-live-text">{raw}</pre>
           </div>
         ) : (
