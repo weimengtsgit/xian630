@@ -103,3 +103,34 @@ func TestWriteVersionRejectsOversizedArtifacts(t *testing.T) {
 		t.Fatalf("WriteVersion should reject oversized json")
 	}
 }
+
+// TestResultToleratesModelShapeVariance is the regression guard for the
+// job_d175be2b… output_invalid_json failure: models emit dataAccessResult with
+// codegenConstraints as an OBJECT (not []string), sourceInputs as a LIST (not a
+// single object), and summary as a plain STRING (not the {confirmed,…} struct).
+// The tolerant fields (json.RawMessage / Summary custom marshal) must decode
+// without error and preserve the agent's values — the string summary round-trips
+// verbatim — so a shape drift never hard-fails data_integration.
+func TestResultToleratesModelShapeVariance(t *testing.T) {
+	raw := `{
+		"schemaVersion":1,"stage":"data_access","version":"v1","status":"pending_confirmation","canFinalize":true,
+		"codegenConstraints":{"mockDataMode":"static_json","dataServicePattern":"environment_based_routing"},
+		"sourceInputs":[{"sourceId":"user_prompt","type":"user_selection"}],
+		"summary":"物资仓储数据接入方案：采用 mock 演示数据。"
+	}`
+	var r Result
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		t.Fatalf("shape variance must not fail the decode: %v", err)
+	}
+	if r.Status != StatusPendingConfirmation || !r.CanFinalize {
+		t.Fatalf("typed fields not decoded: status=%s canFinalize=%v", r.Status, r.CanFinalize)
+	}
+	// The agent's string summary must round-trip verbatim (not collapsed to {} ).
+	sb, err := json.Marshal(r.Summary)
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	if !strings.Contains(string(sb), "mock 演示数据") {
+		t.Fatalf("string summary not round-tripped verbatim: %s", string(sb))
+	}
+}
