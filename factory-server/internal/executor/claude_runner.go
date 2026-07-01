@@ -226,6 +226,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	if block := collaborationSnapshotPromptBlock(collaborationSnapshot); block != "" {
 		prompt += block
 	}
+	if block := c.prototypeContextPromptBlock(ctx, job.ID, step.Kind); block != "" {
+		prompt += block
+	}
 	// step.UserPrompt carries the user's answer when a step is re-run after
 	// pausing for clarification (waiting_user → answerJob → SetStepUserPrompt),
 	// OR a repair-from-failure instruction. For generative steps we surface it
@@ -1438,6 +1441,39 @@ func (c *ClaudeStepRunner) createInterfacePreviewSnapshot(ctx context.Context, j
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
+}
+
+func (c *ClaudeStepRunner) prototypeContextPromptBlock(ctx context.Context, jobID string, kind model.StepKind) string {
+	if c.Store == nil || (kind != model.StepSolutionDesign && kind != model.StepCodeGeneration && kind != model.StepProductAcceptance) {
+		return ""
+	}
+	refs, err := c.Store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return ""
+	}
+	var ref *model.WorkbenchArtifactRef
+	for i := range refs {
+		if refs[i].Kind == model.WorkbenchArtifactInterfacePreview && refs[i].CardKey == "interface_parsing" {
+			if ref == nil || refs[i].UpdatedAt.After(ref.UpdatedAt) {
+				ref = &refs[i]
+			}
+		}
+	}
+	if ref == nil {
+		return ""
+	}
+	level := "reference"
+	if ref.Status == "confirmed" {
+		level = "hard_constraint"
+	}
+	contractPath := strings.TrimSuffix(ref.Path, "/preview-manifest.json") + "/prototype-contract.json"
+	return "\n\n[prototype 原型设计约束]\n" +
+		"本任务已有界面解析/原型设计产物，必须读取并遵循：\n" +
+		"- preview-manifest: " + ref.Path + "\n" +
+		"- prototype-contract: " + contractPath + "\n" +
+		"- prototypeStatus: " + ref.Status + "\n" +
+		"- downstreamConstraintLevel: " + level + "\n" +
+		"当 downstreamConstraintLevel=hard_constraint 时，不得自由改变首页结构、核心组件、主要交互和响应式约束；当为 reference 时，只能作为参考，不能声称用户已确认原型。"
 }
 
 func (c *ClaudeStepRunner) createPrototypePreviewArtifact(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput, bundle prototypeBundle) (model.WorkbenchArtifactRef, error) {
