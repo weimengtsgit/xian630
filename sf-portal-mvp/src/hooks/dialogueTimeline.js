@@ -529,22 +529,42 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   }
 
   // 1. Parent thread: user messages + analysis work logs, in persisted order.
+  //    The INITIAL prompt (first non-task-clarification user message) renders in
+  //    place so it leads the thread. In the application-generation flow (which
+  //    carries a child clarification session) the first round's agent content
+  //    lives in the child, so the parent's later user messages + agent
+  //    thinking/analysis/reply are ITERATION turns: collect them into
+  //    postConfirmationItems and append AFTER the first-round clarification +
+  //    requirement-confirmation surface, so they never interleave with the first
+  //    round (they used to render right after the initial prompt, wedged before
+  //    the first-round clarification). Flows WITHOUT a child (routing, business)
+  //    keep parent agent content inline in persisted order.
   const refsByMessage = attachmentRefsByMessage(view)
+  const hasChildClarification = !!(view.child && Array.isArray(view.child.messages) && view.child.messages.length)
+  const postConfirmationItems = []
+  const iterationTarget = hasChildClarification ? postConfirmationItems : items
+  let initialPromptRendered = false
+  const pushUserMessage = (target, msg) => target.push({
+    id: msg.id,
+    type: 'user_message',
+    content: safeString(msg.content),
+    attachments: refsByMessage[msg.id] || [],
+  })
   for (const msg of parentMessages) {
-    if (!msg || msg.role === 'user') {
-      if (msg && msg.role === 'user' && msg.kind !== 'task_clarification_answer') {
-        items.push({
-          id: msg.id,
-          type: 'user_message',
-          content: safeString(msg.content),
-          attachments: refsByMessage[msg.id] || [],
-        })
+    if (!msg) continue
+    if (msg.role === 'user') {
+      if (msg.kind === 'task_clarification_answer') continue
+      if (!initialPromptRendered) {
+        pushUserMessage(items, msg)
+        initialPromptRendered = true
+      } else {
+        pushUserMessage(iterationTarget, msg)
       }
       continue
     }
     if (msg.role === 'agent' && msg.kind === 'thinking') {
       routeThinkingRendered = true
-      items.push({
+      iterationTarget.push({
         id: msg.id,
         type: 'thinking_summary',
         content: safeString(msg.content),
@@ -558,7 +578,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       // renders as a collapsible block above the conclusion (`folded`), default
       // EXPANDED so the reasoning is visible without an extra click; the user
       // can collapse it via the toggle.
-      items.push({
+      iterationTarget.push({
         id: msg.id,
         type: 'analysis_stream',
         content: safeString(msg.content),
@@ -568,7 +588,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       continue
     }
     if (msg.role === 'agent' && (msg.kind === 'reply' || msg.kind === 'message')) {
-      items.push({
+      iterationTarget.push({
         id: msg.id,
         type: 'agent_message',
         content: safeString(msg.content),
@@ -646,6 +666,13 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       preview: collaborationPreview,
       graph: buildCollaborationExecutionGraphView(collaborationPreview, jobStepBlocks),
     })
+  }
+  // Iteration turns (after the initial prompt) append here — below the first
+  // round (clarification + requirement confirmation + collaboration plan) so
+  // they read as a continuation of the conversation, not interleaved with the
+  // first round.
+  if (hasChildClarification && postConfirmationItems.length > 0) {
+    items.push(...postConfirmationItems)
   }
   const suppressTaskBlocksInConversation = !!collaborationPreview
 

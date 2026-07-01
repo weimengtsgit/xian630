@@ -1,4 +1,4 @@
-﻿import { ChevronDown, ChevronRight, FileText, MonitorCheck } from 'lucide-react'
+﻿import { CheckCircle2, ChevronDown, ChevronRight, FileText, MonitorCheck } from 'lucide-react'
 import { useState } from 'react'
 import { WorkbenchTrack } from './WorkbenchTracks'
 import { isPreviewableArtifact } from '../utils/workbenchArtifact'
@@ -17,10 +17,6 @@ const BLOCK_TITLE = {
 
 export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [], onConfirm, onOpenArtifact, onSubmitCredential }) {
   const [open, setOpen] = useState(!isFolded(card))
-  // TEMP DEBUG: log card data to diagnose empty blocks
-  if (typeof window !== 'undefined') {
-    console.log('[WorkbenchAgentBlock]', card.key, { state: card.state, steps: (card.steps || []).length, summary: card.summary, artifacts: (card.artifacts || []).length, thinking: (thinking || '').length })
-  }
   // credentialDrafts holds the in-progress plaintext credential the user is
   // typing for each credential question, keyed by question id. The draft lives
   // ONLY in component state; it is never rendered as text (the input is
@@ -46,7 +42,21 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}
           {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
           {previewableArtifacts.length ? <ArtifactList artifacts={previewableArtifacts} onOpenArtifact={onOpenArtifact} /> : null}
-          {canConfirm ? <button type="button" className="cw-agent-confirm" onClick={() => onConfirm && onConfirm(card)}>{CONFIRM_LABEL[card.key]}</button> : null}
+          {canConfirm ? (
+            <div className="cw-requirement-confirm cw-stage-confirm">
+              <div className="cw-requirement-confirm-head">
+                <CheckCircle2 size={16} />
+                <strong>{BLOCK_TITLE[card.key]}已完成，请确认后继续</strong>
+              </div>
+              <button
+                type="button"
+                className="cw-requirement-confirm-btn"
+                onClick={() => onConfirm && onConfirm(card)}
+              >
+                {CONFIRM_LABEL[card.key]}
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="cw-agent-folded">
@@ -55,7 +65,7 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
       )}
     </section>
   )
-  if (card.key === 'interface_parsing' || card.key === 'data_capture') {
+  if (card.key === 'interface_parsing' || card.key === 'data_capture' || card.key === 'production_delivery') {
     return (
       <>
         <div className="cw-agent-block-divider" aria-hidden="true" />

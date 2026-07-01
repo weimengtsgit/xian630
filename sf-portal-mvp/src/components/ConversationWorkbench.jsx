@@ -385,6 +385,16 @@ export function ConversationWorkbench({
       .filter(Boolean)
       .join('\n')
   }
+  // analysisLogForCard surfaces each step's safe analysis work-log (执行过程)
+  // for the agent block's "模型分析过程" section, paralleling thinkingForCard
+  // (which is the raw 思考过程). Without it the section rendered empty for every
+  // stage including interface/data.
+  function analysisLogForCard(card) {
+    return timelineBlocksForCard(card)
+      .map(item => String(item.safeExecution || '').trim())
+      .filter(Boolean)
+      .join('\n')
+  }
 
   function questionsForCard(card) {
     const parsed = []
@@ -582,13 +592,13 @@ export function ConversationWorkbench({
         ))}
 
         {aggregateGraph.cards
-          .filter(card => card.key !== 'user_input' && card.state !== 'not_started' && card.state !== 'waiting_upstream')
+          .filter(card => card.key !== 'user_input' && card.state !== 'not_started' && !(card.state === 'waiting_upstream' && card.key === 'production_delivery'))
           .map(card => (
             <WorkbenchAgentBlock
               key={card.key}
               card={card}
               thinking={thinkingForCard(card)}
-              analysisLog=""
+              analysisLog={analysisLogForCard(card)}
               questions={questionsForCard(card)}
               prototype={card.key === 'interface_parsing' ? prototypeFromCard(card) : null}
               onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
