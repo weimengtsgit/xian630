@@ -312,6 +312,11 @@ export const factoryApi = {
       method: 'POST',
       body: JSON.stringify({ ...(attempt ? { attempt } : {}) }),
     }),
+  confirmJobDataAccess: (jobId, stepId, { version = '', attempt = 0 } = {}) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/data-access/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ version, ...(attempt ? { attempt } : {}) }),
+    }),
   abandonDialogueClarification: id =>
     request(`/api/dialogues/${id}/clarification/abandon`, { method: 'POST' }),
   confirmDialogueBusinessAgent: id =>

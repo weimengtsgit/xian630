@@ -876,6 +876,89 @@ func (e *Executor) ConfirmManualStep(ctx context.Context, jobID, stepID string, 
 	return *updated, nil
 }
 
+// ConfirmDataAccessStep releases a data_integration step paused on the final
+// data-access summary confirmation. The data-access artifact version is
+// finalized by the server before this method runs; this method only validates
+// that the waiting step is the data-access summary gate and advances the job.
+func (e *Executor) ConfirmDataAccessStep(ctx context.Context, jobID, stepID string, attempt int) (model.Job, error) {
+	if err := e.ValidateDataAccessStepConfirmation(ctx, jobID, stepID, attempt); err != nil {
+		return model.Job{}, err
+	}
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("list steps: %w", err)
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return model.Job{}, errors.New("step not found")
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, step.Kind); err != nil {
+		return model.Job{}, fmt.Errorf("point job to data access step: %w", err)
+	}
+	if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
+		return model.Job{}, fmt.Errorf("mark step succeeded: %w", err)
+	}
+	if err := e.advanceOrComplete(ctx, jobID); err != nil {
+		return model.Job{}, err
+	}
+	e.notify(ctx, jobID, stepID)
+	e.Signal()
+	updated, err := e.store.GetJob(ctx, jobID)
+	if err != nil || updated == nil {
+		if err == nil {
+			err = fmt.Errorf("job %s vanished after data access confirmation", jobID)
+		}
+		return model.Job{}, err
+	}
+	return *updated, nil
+}
+
+func (e *Executor) ValidateDataAccessStepConfirmation(ctx context.Context, jobID, stepID string, attempt int) error {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("get job: %w", err)
+	}
+	if job == nil {
+		return errors.New("job not found")
+	}
+	if job.Status != model.JobStatusWaitingUser {
+		return fmt.Errorf("job is %s, only waiting_user jobs can confirm data access", job.Status)
+	}
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("list steps: %w", err)
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return errors.New("step not found")
+	}
+	if step.Kind != model.StepDataIntegration {
+		return fmt.Errorf("step kind is %s, want data_integration", step.Kind)
+	}
+	if step.Status != model.StepStatusWaitingUser || !step.NeedsUserInput {
+		return fmt.Errorf("step is %s, only waiting_user steps can confirm data access", step.Status)
+	}
+	if attempt > 0 && step.Attempt != attempt {
+		return errors.New("stale step attempt")
+	}
+	if !isDataAccessSummaryConfirmationPayload(step.PendingQuestions) {
+		return errors.New("step is not waiting for data access summary confirmation")
+	}
+	return nil
+}
+
 func isManualStepConfirmationPayload(raw string) bool {
 	if strings.TrimSpace(raw) == "" {
 		return false
@@ -889,6 +972,36 @@ func isManualStepConfirmationPayload(raw string) bool {
 	}
 	for _, item := range items {
 		if item.Type == "manual_step_confirmation" && item.Confirm {
+			return true
+		}
+	}
+	return false
+}
+
+func isDataAccessSummaryConfirmationPayload(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var items []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err == nil {
+		for _, item := range items {
+			if item.ID == "data_access_summary_confirmation" {
+				return true
+			}
+		}
+	}
+	var wrapped struct {
+		Questions []struct {
+			ID string `json:"id"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err != nil {
+		return false
+	}
+	for _, item := range wrapped.Questions {
+		if item.ID == "data_access_summary_confirmation" {
 			return true
 		}
 	}

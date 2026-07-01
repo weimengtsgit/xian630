@@ -278,10 +278,10 @@ export function useJobs() {
   )
 
   const answerJob = useCallback(
-    async (id, answer) => {
+    async (id, answer, scope = {}) => {
       setError(null)
       try {
-        await factoryApi.answerJob(id, answer)
+        await factoryApi.answerJob(id, answer, scope)
         await refresh()
       } catch (err) {
         setError(err.message || String(err))
@@ -296,6 +296,20 @@ export function useJobs() {
       setError(null)
       try {
         await factoryApi.confirmJobStep(jobId, stepId, attempt)
+        await refresh()
+      } catch (err) {
+        setError(err.message || String(err))
+        throw err
+      }
+    },
+    [refresh],
+  )
+
+  const confirmDataAccess = useCallback(
+    async (jobId, stepId, options = {}) => {
+      setError(null)
+      try {
+        await factoryApi.confirmJobDataAccess(jobId, stepId, options)
         await refresh()
       } catch (err) {
         setError(err.message || String(err))
@@ -411,6 +425,7 @@ export function useJobs() {
     cancelJob,
     answerJob,
     confirmStep,
+    confirmDataAccess,
     retryCurrentStep,
     repairFromFailure,
     // New (Task 5):

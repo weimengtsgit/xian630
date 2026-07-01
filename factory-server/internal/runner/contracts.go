@@ -33,6 +33,9 @@ type StepOutput struct {
 	NeedsUserInput        bool       `json:"needsUserInput"`
 	Questions             []Question `json:"questions"`
 	FrozenRequirementJSON string     `json:"-"`
+	// Warnings 承载被降级的非阻塞问题；例如非白名单阶段试图提问时，
+	// executor 会把它作为 assumption trace 展示，但不会暂停任务。
+	Warnings []string `json:"-"`
 }
 
 // Question is a single clarification the agent wants the user to answer before
@@ -46,9 +49,9 @@ type StepOutput struct {
 // normalizes both shapes so a clarification never silently loses its question
 // text or option values.
 type Question struct {
-	ID            string           `json:"id"`
-	Question      string           `json:"question"`
-	DefaultAnswer string           `json:"defaultAnswer"`
+	ID            string `json:"id"`
+	Question      string `json:"question"`
+	DefaultAnswer string `json:"defaultAnswer"`
 	// InputType marks a question whose answer must be supplied through a
 	// controlled input rather than free text. The data_integration step sets it
 	// to "credential" for credential-bearing questions so the conversation UI
@@ -317,16 +320,14 @@ func quoteTerminatesString(s string, quote int) bool {
 }
 
 // requirementAnalysisOutput mirrors the FROZEN requirement shape the
-// requirement_analysis step now produces (design §5.1, Task 5). The step no
-// longer clarifies — clarification happens pre-job in the clarification
-// session. The step AUDITS the already-confirmed requirement: it validates field
-// completeness, capability boundaries (blueprint refs), and the
-// generationProfile, then emits validation.complete/supported. The Go-side
-// validator only enforces the structural rules (the blueprint-catalog audit is
-// Claude-side, see executor freeze prompt); incomplete or unsupported
-// requirements hard-fail with ErrSchemaValidationFailed rather than pausing the
-// job for clarification.
+// requirement_analysis step produces (design §5.1, Task 5). The step primarily
+// audits the already-confirmed requirement: field completeness, capability
+// boundaries (blueprint refs), and generationProfile. It is still in the user
+// clarification allowlist, so high-impact gaps may return structured questions;
+// ordinary incomplete/unsupported audit results remain schema failures.
 type requirementAnalysisOutput struct {
+	NeedsUserInput         bool                `json:"needsUserInput"`
+	Questions              []Question          `json:"questions"`
 	ConfirmedRequirementID string              `json:"confirmedRequirementId"`
 	Summary                string              `json:"summary"`
 	AppType                string              `json:"appType"`
@@ -362,11 +363,10 @@ type requirementValidation struct {
 
 // ValidateRequirementAnalysis decodes and validates the output.json the
 // requirement_analysis (freeze/audit) step produced. The step must either
-// SUCCEED (validation.complete && validation.supported → the requirement is
-// frozen, the pipeline proceeds to solution_design) or FAIL (return
-// ErrSchemaValidationFailed). It must NEVER return waiting_user — clarification
-// is pre-job now, so a frozen requirement that the agent finds incomplete or
-// unsupported is a hard failure, not a pause.
+// WAIT for a structured high-impact clarification, SUCCEED
+// (validation.complete && validation.supported → the requirement is frozen), or
+// FAIL with ErrSchemaValidationFailed for unsupported/incomplete audit results
+// that were not expressed as an allowed clarification.
 func ValidateRequirementAnalysis(path string) (StepOutput, error) {
 	out, _, err := validateRequirementAnalysisDecoded(path)
 	return out, err
@@ -387,6 +387,9 @@ func ValidateRequirementAnalysisWithConfirmedSummary(path, confirmedRequirementJ
 	if err != nil {
 		return StepOutput{}, err
 	}
+	if out.NeedsUserInput {
+		return out, nil
+	}
 	want := requirementSummaryChecksum(requirementFieldsFromConfirmed(confirmedRequirementJSON))
 	got := requirementSummaryChecksum(requirementFieldsFromOutput(raw))
 	if want != got {
@@ -406,6 +409,12 @@ func validateRequirementAnalysisDecoded(path string) (StepOutput, requirementAna
 	var raw requirementAnalysisOutput
 	if err := ReadAndDecode(path, &raw); err != nil {
 		return StepOutput{}, raw, err
+	}
+	if raw.NeedsUserInput || len(raw.Questions) > 0 {
+		if len(raw.Questions) == 0 {
+			return StepOutput{}, raw, fmt.Errorf("questions required when requirement_analysis needs input: %w", ErrSchemaValidationFailed)
+		}
+		return StepOutput{NeedsUserInput: true, Questions: raw.Questions}, raw, nil
 	}
 	if !raw.Validation.Complete || !raw.Validation.Supported {
 		return StepOutput{}, raw, fmt.Errorf("confirmed requirement rejected: %w%s",
@@ -540,7 +549,7 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 	if len(raw.UsedSkills) == 0 {
 		return StepOutput{}, fmt.Errorf("usedSkills required: %w", ErrSchemaValidationFailed)
 	}
-	return StepOutput{NeedsUserInput: raw.NeedsUserInput, Questions: raw.Questions}, nil
+	return StepOutput{Warnings: disallowedUserInputWarnings("solution_design", raw.NeedsUserInput, raw.Questions)}, nil
 }
 
 // designContractOutput mirrors the design_contract step's output.json (Task 8).
@@ -559,14 +568,14 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 // assumedDataFields (field names the preview depends on but data capture has
 // not yet confirmed), and the shared workLog/warnings.
 type DesignContractOutput struct {
-	Status            string        `json:"status"`
-	Summary           string        `json:"summary"`
-	NeedsUserInput    bool          `json:"needsUserInput"`
-	Questions         []Question    `json:"questions"`
-	DesignDocument    any           `json:"designDocument"`
-	AssumedDataFields []string      `json:"assumedDataFields"`
+	Status            string         `json:"status"`
+	Summary           string         `json:"summary"`
+	NeedsUserInput    bool           `json:"needsUserInput"`
+	Questions         []Question     `json:"questions"`
+	DesignDocument    any            `json:"designDocument"`
+	AssumedDataFields []string       `json:"assumedDataFields"`
 	WorkLog           []workLogEntry `json:"workLog"`
-	Warnings          []string      `json:"warnings"`
+	Warnings          []string       `json:"warnings"`
 }
 
 // ValidateDesignContract decodes a design_contract attempt's output.json and
@@ -756,10 +765,7 @@ func ValidateCodeGeneration(path string, projectDir string) (StepOutput, error) 
 	if len(raw.UsedSkills) == 0 {
 		return StepOutput{}, fmt.Errorf("usedSkills required: %w", ErrSchemaValidationFailed)
 	}
-	out := StepOutput{NeedsUserInput: raw.NeedsUserInput, Questions: raw.Questions}
-	if out.NeedsUserInput {
-		return out, nil
-	}
+	out := StepOutput{Warnings: disallowedUserInputWarnings("code_generation", raw.NeedsUserInput, raw.Questions)}
 	manifest := filepath.Join(projectDir, codeGenManifestRel)
 	manifestRaw, err := os.ReadFile(manifest)
 	if err != nil {
@@ -777,4 +783,11 @@ func ValidateCodeGeneration(path string, projectDir string) (StepOutput, error) 
 		return out, fmt.Errorf("%w: %v", ErrSchemaValidationFailed, err)
 	}
 	return out, nil
+}
+
+func disallowedUserInputWarnings(stage string, needsUserInput bool, questions []Question) []string {
+	if !needsUserInput && len(questions) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s 阶段不允许向用户提问，已忽略 %d 个澄清问题；后续只能基于已确认需求推断，仍缺失的数据或字段必须在应用中降级展示。", stage, len(questions))}
 }

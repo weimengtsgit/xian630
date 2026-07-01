@@ -280,8 +280,9 @@ type Job struct {
 	// non-legacy jobs always carry a session id).
 	ClarificationSessionID string `json:"clarification_session_id,omitempty"`
 	// ConfirmedRequirementJSON is the frozen, server-finalized requirement the
-	// requirement_analysis step audits (it no longer clarifies). Empty for legacy
-	// jobs; the requirement_analysis step guards the empty case by substituting {}.
+	// requirement_analysis step audits. The step may still ask high-impact
+	// structured questions, but ordinary downstream stages must degrade instead.
+	// Empty for legacy jobs; requirement_analysis guards the empty case with {}.
 	ConfirmedRequirementJSON string `json:"confirmed_requirement_json,omitempty"`
 	// DialogueID links the job to the dialogue whose work-trace its safe agent
 	// activity is surfaced under (Task 4). It is the sequence-partition key for

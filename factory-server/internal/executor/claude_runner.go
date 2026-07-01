@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/dataaccess"
 	"github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/projectdocs"
@@ -77,6 +78,16 @@ type collaborationSkillDoc struct {
 	Scope   string `json:"scope"`
 }
 
+type finalDataAccessInput struct {
+	Status               string             `json:"status"`
+	Version              string             `json:"version"`
+	ResultPath           string             `json:"resultPath"`
+	MarkdownPath         string             `json:"markdownPath"`
+	RedactedResultPath   string             `json:"redactedResultPath"`
+	RedactedMarkdownPath string             `json:"redactedMarkdownPath"`
+	Summary              dataaccess.Summary `json:"summary"`
+}
+
 func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.JobStep, emit runner.StepRecordEmitter) (StepResult, error) {
 	if emit == nil {
 		emit = runner.NopEmitter{}
@@ -123,6 +134,10 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	skillPaths := selectedSkillPaths(c.workspace(), profile)
 	blueprintPaths := blueprintRefPaths(c.workspace(), blueprintRefs)
 	collaborationSnapshot := parseCollaborationStepSnapshot(step.SnapshotJSON)
+	dataAccessInput := c.finalDataAccessInput(job.ID)
+	if dataAccessInput == nil && c.stepRequiresFinalDataAccess(ctx, job.ID, step.Kind) {
+		return c.failureFromError(fmt.Errorf("finalized data access required before %s: %w", step.Kind, runner.ErrSchemaValidationFailed)), nil
+	}
 
 	// Task 12: collect LIVE, REDACTED credential refs for the data_integration
 	// step. Each ref exposes ONLY opaque metadata — id/label/scope/handle/expiry
@@ -161,6 +176,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		"repairContext":            step.UserPrompt,
 		"collaborationSnapshot":    collaborationSnapshot,
 		"controlledCredentialRefs": credentialRefs,
+		"dataAccess":               dataAccessInput,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -174,6 +190,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	// code_generation's audit.
 	baseline := c.Claude.BaselineStatus(ctx, c.AuditRunner)
 	prompt := c.prompt(job, step, ws, skillPaths, blueprintPaths, dataPolicy)
+	if block := finalDataAccessPromptBlock(dataAccessInput, step.Kind); block != "" {
+		prompt += block
+	}
 	if block := collaborationSnapshotPromptBlock(collaborationSnapshot); block != "" {
 		prompt += block
 	}
@@ -243,6 +262,11 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		}
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepDataIntegration:
+		if dataIntegrationUsesFinalDataAccessContract(ws.OutputPath()) {
+			res := c.finishDataIntegration(ctx, trace, job, step, ws.OutputPath())
+			c.emitWorkLog(ctx, emit, ws.OutputPath())
+			return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+		}
 		// Task 9: the data_integration step is the data-capture producer. It
 		// enforces the ontology → internet → demo fallback order with explicit
 		// user confirmation at each boundary (no silent degradation). On success
@@ -278,20 +302,18 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		}
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	default:
-		// The remaining admitted producer kinds (collaboration_orchestration,
-		// domain_analysis, data_integration) are analysis/contract producers.
-		// They share the normal needsUserInput/questions contract so domain-level
-		// uncertainty can pause for user clarification instead of leaking prose
-		// into output.json and failing as invalid JSON. design_contract has its
-		// own case above (it derives an interface-preview snapshot).
-		out, err := validateCollaborationProducer(ws.OutputPath())
+		// The remaining admitted gate kinds (collaboration_orchestration,
+		// domain_analysis) are analysis/
+		// contract producers. Only a small allowlist may pause for user input;
+		// other producers must degrade uncertainty into warnings and continue.
+		out, err := validateCollaborationProducer(step.Kind, ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	}
 }
 
-func validateCollaborationProducer(outputPath string) (runner.StepOutput, error) {
+func validateCollaborationProducer(kind model.StepKind, outputPath string) (runner.StepOutput, error) {
 	var raw struct {
 		Status         string            `json:"status"`
 		NeedsUserInput bool              `json:"needsUserInput"`
@@ -301,10 +323,95 @@ func validateCollaborationProducer(outputPath string) (runner.StepOutput, error)
 		return runner.StepOutput{}, err
 	}
 	needsUserInput := raw.NeedsUserInput || strings.EqualFold(strings.TrimSpace(raw.Status), "needs_input")
+	if (needsUserInput || len(raw.Questions) > 0) && !canAskUserInStep(kind) {
+		return runner.StepOutput{Warnings: disallowedStepQuestionWarnings(kind, len(raw.Questions))}, nil
+	}
 	if needsUserInput && len(raw.Questions) == 0 {
 		return runner.StepOutput{}, fmt.Errorf("questions required when collaboration step needs input: %w", runner.ErrSchemaValidationFailed)
 	}
 	return runner.StepOutput{NeedsUserInput: needsUserInput, Questions: raw.Questions}, nil
+}
+
+type dataIntegrationStepOutput struct {
+	Status             string             `json:"status"`
+	NeedsUserInput     bool               `json:"needsUserInput"`
+	Questions          []runner.Question  `json:"questions"`
+	SourceBoundary     string             `json:"sourceBoundary"`
+	DataAccessResult   *dataaccess.Result `json:"dataAccessResult"`
+	DataAccessMarkdown string             `json:"dataAccessMarkdown"`
+}
+
+func dataIntegrationUsesFinalDataAccessContract(outputPath string) bool {
+	var raw dataIntegrationStepOutput
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return true
+	}
+	return raw.DataAccessResult != nil || strings.TrimSpace(raw.SourceBoundary) == ""
+}
+
+func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runner.TraceEmitter, job model.Job, step model.JobStep, outputPath string) StepResult {
+	var raw dataIntegrationStepOutput
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return c.failureFromError(err)
+	}
+	if raw.DataAccessResult == nil {
+		out, err := validateCollaborationProducer(step.Kind, outputPath)
+		return c.resultFromValidatedOutput(ctx, trace, out, err)
+	}
+	if raw.NeedsUserInput || strings.EqualFold(strings.TrimSpace(raw.Status), "needs_input") {
+		if len(raw.Questions) == 0 {
+			return c.failureFromError(fmt.Errorf("questions required when data integration needs input: %w", runner.ErrSchemaValidationFailed))
+		}
+		emitClarificationTrace(ctx, trace, raw.Questions, nil)
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: raw.Questions}
+	}
+	result := *raw.DataAccessResult
+	if strings.TrimSpace(result.Stage) == "" {
+		result.Stage = "data_access"
+	}
+	if result.Status == dataaccess.StatusPendingConfirmation {
+		if !result.CanFinalize || len(result.BlockingIssues) > 0 {
+			return c.failureFromError(fmt.Errorf("data access pending confirmation cannot finalize: %w", runner.ErrSchemaValidationFailed))
+		}
+		if result.SchemaVersion <= 0 || strings.TrimSpace(result.Version) == "" {
+			return c.failureFromError(fmt.Errorf("data access result missing schemaVersion or version: %w", runner.ErrSchemaValidationFailed))
+		}
+		if strings.TrimSpace(raw.DataAccessMarkdown) == "" {
+			return c.failureFromError(fmt.Errorf("dataAccessMarkdown required for pending confirmation: %w", runner.ErrSchemaValidationFailed))
+		}
+		if _, err := dataaccess.WriteVersion(c.artifactRoot(), job.ID, result, raw.DataAccessMarkdown); err != nil {
+			return c.failureFromError(fmt.Errorf("write data access version: %w", runner.ErrSchemaValidationFailed))
+		}
+		questions := []runner.Question{dataAccessSummaryConfirmationQuestion(result)}
+		emitClarificationTrace(ctx, trace, questions, nil)
+		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: questions}
+	}
+	return c.failureFromError(fmt.Errorf("dataAccessResult.status must be pending_confirmation when no user input is needed: %w", runner.ErrSchemaValidationFailed))
+}
+
+func dataAccessSummaryConfirmationQuestion(result dataaccess.Result) runner.Question {
+	return runner.Question{
+		ID:            "data_access_summary_confirmation",
+		Question:      "请确认是否采用本版数据获取方案继续后续生成。",
+		DefaultAnswer: result.Version,
+		Options: []runner.QuestionOption{
+			{Value: "confirm", Label: "确认采用", Recommended: true},
+			{Value: "revise", Label: "补充修改"},
+		},
+	}
+}
+
+func canAskUserInStep(kind model.StepKind) bool {
+	switch kind {
+	case model.StepRequirementAnalysis, model.StepDesignContract, model.StepDataIntegration:
+		return true
+	default:
+		return false
+	}
+}
+
+func disallowedStepQuestionWarnings(kind model.StepKind, questionCount int) []string {
+	return []string{fmt.Sprintf("%s 阶段不允许向用户提问，已忽略 %d 个澄清问题；本阶段只能基于已确认需求、历史对话和上游契约推断，仍缺失的信息必须降级处理。", kind, questionCount)}
 }
 
 func parseCollaborationStepSnapshot(raw string) collaborationStepSnapshot {
@@ -314,6 +421,45 @@ func parseCollaborationStepSnapshot(raw string) collaborationStepSnapshot {
 	}
 	_ = json.Unmarshal([]byte(raw), &snapshot)
 	return snapshot
+}
+
+func (c *ClaudeStepRunner) finalDataAccessInput(jobID string) *finalDataAccessInput {
+	if strings.TrimSpace(jobID) == "" {
+		return nil
+	}
+	result, _, err := dataaccess.ReadFinal(c.artifactRoot(), jobID)
+	if err != nil || result.Status != dataaccess.StatusFinalized {
+		return nil
+	}
+	base := filepath.Join(c.artifactRoot(), "jobs", jobID, "data-access", "final")
+	return &finalDataAccessInput{
+		Status:               result.Status,
+		Version:              result.Version,
+		ResultPath:           filepath.ToSlash(filepath.Join(base, "dataAccessResult.internal.json")),
+		MarkdownPath:         filepath.ToSlash(filepath.Join(base, "data-access.internal.md")),
+		RedactedResultPath:   filepath.ToSlash(filepath.Join(base, "dataAccessResult.redacted.json")),
+		RedactedMarkdownPath: filepath.ToSlash(filepath.Join(base, "data-access.redacted.md")),
+		Summary:              result.Summary,
+	}
+}
+
+func (c *ClaudeStepRunner) stepRequiresFinalDataAccess(ctx context.Context, jobID string, kind model.StepKind) bool {
+	if kind != model.StepSolutionDesign && kind != model.StepCodeGeneration {
+		return false
+	}
+	if c.Store == nil {
+		return false
+	}
+	steps, err := c.Store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return false
+	}
+	for _, step := range steps {
+		if step.Kind == model.StepDataIntegration {
+			return true
+		}
+	}
+	return false
 }
 
 func collaborationSnapshotPromptBlock(snapshot collaborationStepSnapshot) string {
@@ -561,6 +707,9 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 	if err != nil {
 		return c.failureFromError(err)
 	}
+	if len(out.Warnings) > 0 {
+		emitClarificationTrace(ctx, trace, nil, out.Warnings)
+	}
 	if out.NeedsUserInput {
 		// Step 3 (high-impact uncertainty): the agent flagged it cannot proceed
 		// without user input. Emit a clarification.required trace BEFORE the
@@ -647,6 +796,9 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 		// the waiting transition. See finishCodeGeneration for the rationale.
 		emitClarificationTrace(ctx, trace, out.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
+	}
+	if len(out.Warnings) > 0 {
+		emitClarificationTrace(ctx, trace, nil, out.Warnings)
 	}
 	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
 }
@@ -774,15 +926,15 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
 			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
 			"All human-readable string values must be Simplified Chinese. This includes summary, scenario text, view descriptions, entity names, constraints, risks, and unsupported-request explanations. Only identifiers, slugs, enum keys, file paths, and code symbols may remain non-Chinese.\n" +
-			"Do not ask clarifying questions. Do not output needsUserInput or questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
+			"Only when a high-impact requirement decision cannot be inferred from prior dialogue or confirmedRequirement may you output needsUserInput=true with structured questions. Otherwise do not ask clarifying questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
 			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not attempt to write files or modify the workspace.\n" +
 			"If the requirement is incomplete, set validation.complete=false. If the request exceeds supported capability, set validation.supported=false.\n" +
 			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
 	}
 	if step.Kind == model.StepSolutionDesign {
 		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。" +
-			"需要用户澄清时，questions 中每个问题必须用结构化字段：question 为问题文本（只描述要决策什么，不要把选项塞进 question），options 为选项数组，每个选项含 value（机器可读的选项值，如 mock_data、real_api）和 label（中文可读选项描述），可在最推荐选项上加 recommended:true。禁止把 (A)/(B)/(C) 等选项写进 question 文本；选项必须放在 options 数组里，否则前端无法渲染成可点击选项。示例：{\"id\":\"data-source\",\"question\":\"请确认数据获取方式\",\"options\":[{\"value\":\"mock_data\",\"label\":\"使用演示数据\",\"recommended\":true},{\"value\":\"real_api\",\"label\":\"提供真实后端API\"}]}。" +
-			"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案（例如用户选择演示数据则 dataPolicy 按 mock_data 处理），不要再重复提出已回答过的澄清问题；只有在出现全新且未决的决策点时才再次 needsUserInput=true。" +
+			"方案设计阶段不允许向用户提问：必须固定输出 needsUserInput=false 且 questions=[]。如果信息不足，只能基于已确认需求、历史对话、generationProfile、skills 和 blueprintDocs 做保守推断；仍缺失的数据字段、外部来源或能力必须写入 warnings，并在方案中设计降级态，不得把任务暂停给用户澄清。" +
+			"如果 prompt 末尾出现 [user_input] 段落，那是历史回答或修复上下文，只能用于推进方案，不得继续追问。" +
 			"用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	}
@@ -791,6 +943,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
 			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
 			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			"代码生成阶段不允许向用户提问：必须固定输出 needsUserInput=false 且 questions=[]。如果仍缺少数据字段、接口字段、坐标、时间范围或外部来源，只能基于已确认需求和上游数据接入结论生成降级态；不得失败结束，也不得等待用户澄清。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
@@ -806,15 +959,16 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
 			"AUDIT blueprintRefs（确认引用的 skill 存在于 .claude/skills/requirement-clarification/blueprints.json 且为 reference-only），将任何超出现有 skill 目录支持的请求记入 validation.unsupportedRequests。" +
 			"输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。" +
-			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
+			"只有当高影响需求决策无法从历史对话和 confirmedRequirement 推断时，才允许输出 needsUserInput=true 和结构化 questions；否则不要提问。不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
 	case model.StepSolutionDesign:
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案，不要重复提出已回答过的澄清问题。\n用户需求：" + job.UserPrompt +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；方案设计阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]。缺失信息只能基于上游契约推断或设计降级态。\n用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
 			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
 			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
 			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			"代码生成阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]；缺失字段或数据只能生成降级态，不得等待用户澄清。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
 			"nginx.conf 必须可直接启动：不要在 conf.d/*.conf 中写 ${ENV_VAR}、$ENV_VAR 或未定义 nginx 变量；如需代理鉴权，前端应以缺失凭据的诚实错误态处理，不要让 nginx 因 unknown variable 启动失败。" +
@@ -853,13 +1007,18 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 	if step.Kind == model.StepDataIntegration {
 		return dataIntegrationPrompt(job, ws)
 	}
+	questionPolicy := "本阶段不允许向用户提问：必须输出 needsUserInput=false 且 questions=[]；如果信息不足，只能基于已确认需求、历史对话和上游契约推断，仍缺失的信息写入 warnings 并降级处理。"
+	if canAskUserInStep(step.Kind) {
+		questionPolicy = "本阶段允许在高影响事项无法从已确认需求、历史对话和上游契约推断时提问；需要用户确认时输出 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组。"
+	}
 	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
 		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
 		"output.json 路径：" + absolutePath(ws.OutputPath()) + "。" +
 		"JSON 必须包含：status、summary、needsUserInput、questions、workLog、warnings。" +
 		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
-		"如果发现必须由用户确认才能避免错误实现，则 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		questionPolicy +
+		"若本阶段允许提问，questions 每项必须包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
 		"如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮协作澄清的回答，必须据此推进，不要重复提出已回答过的问题。" +
 		"workLog 必须是面向用户的简短过程摘要数组，每项包含 title 和 summary；warnings 用于记录非阻塞风险。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。" +
@@ -894,14 +1053,29 @@ func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
 // field is not injected into input.json yet, because the agent tolerates a
 // missing optional input key.
 func dataIntegrationPrompt(job model.Job, ws runner.AttemptWorkspace) string {
-	return "你是软件工厂的数据抓取智能体。读取 input.json 中的 confirmedRequirement、controlledCredentialRefs、附件摘要和 [user_input] 回答，按本体接口优先、互联网抓取其次、演示数据最后的顺序做数据验证。" +
-		"不要静默降级：本体接口不可用时必须 needsUserInput=true 并询问是否降级为互联网抓取；互联网抓取不可用时必须 needsUserInput=true 并询问是否降级为演示数据。用户已在 [user_input] 明确选择边界时，从该边界开始。" +
-		"凭证类澄清问题必须设置 inputType:\"credential\"；普通选择问题使用 options，options 每项包含 value、label，可包含 recommended:true。" +
-		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
-		"JSON 必须包含：status、summary、sourceBoundary、verification、dataContract、fallbackHistory、needsUserInput、questions、workLog、warnings、compatibility。" +
-		"sourceBoundary 只能是 ontology、internet、demo；status 只能是 passed 或 needs_input。verification 必须包含 ontology/internet/demo 节点，每个节点包含 status 和 reason。" +
-		"dataContract.fields 是字段数组；成功通过数据契约时 fields 不得为空。compatibility.status 只能是 passed、failed、pending；failed 时必须 needsUserInput=true 并给出兼容性确认问题。" +
-		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
+	return "你是软件工厂的数据接入协作智能体。读取 input.json，必须基于 confirmedRequirement；interfaceDesign/blueprintDocs 如存在只作为数据槽位补充，不存在也可以完成数据接入；controlledCredentialRefs 如存在只能按 handle 引用，不能要求或输出明文密钥。" +
+		"目标是判断本次需求需要哪些数据、从哪里获取、是否真实可用、字段是否满足、失败时如何降级，并产出数据获取方案草案和用户确认摘要。" +
+		"真实数据判断必须基于小样本真实探测或实际联网访问证据，不能只靠模型记忆；探测边界：单源最多 3 次请求、单次超时 30 秒、总请求不超过 20 次、单响应样例最多 20KB、爬取最多 1-2 个页面样本，禁止绕过登录/验证码/反爬。" +
+		"数据源优先级：用户提供接口/鉴权、本体数据、公网官方 API/开放数据接口、公开网页爬取/搜索整理、不填/本次不接入、mock。mock 只能在用户明确选择时使用，不能自动从真实数据失败降级到 mock。" +
+		"当业务口径、鉴权、核心字段、是否 mock、是否不填等阻断事项无法判断时，输出 needsUserInput=true、status=\"needs_input\" 并只提出具体阻断问题；凭证类澄清问题必须设置 inputType:\"credential\"。" +
+		"当可以闭环时，输出 needsUserInput=false、status=\"passed\"，并必须包含 dataAccessResult 和 dataAccessMarkdown。dataAccessResult.status 必须是 pending_confirmation，canFinalize=true，blockingIssues=[]。" +
+		"dataAccessResult 必须包含 schemaVersion、stage=data_access、version、status、canFinalize、blockingIssues、sourceInputs、dataAccessMode、dataNeeds、sourceCandidates、probeResults、fieldMappings、degradationPolicy、runtimeArchitecture、credentialRefs、securityReviewRequired、securityReviewReasons、codegenConstraints、summary。" +
+		"dataAccessMarkdown 必须使用固定章节：# 数据获取方案、1 输入依据、2 数据需求、3 数据源候选、4 探测记录、5 字段映射、6 满足度结论、7 降级与空态策略、8 代码生成输入、9 待用户确认摘要。" +
+		"内部 dataAccessResult 可包含用户提供的完整鉴权值或 handle 供后续代码生成使用；但 summary、workLog、warnings、用户可见文本中不得泄漏 token/cookie/password 等敏感值。" +
+		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。output.json 路径：" + absolutePath(ws.OutputPath()) + "。用户需求：" + job.UserPrompt
+}
+
+func finalDataAccessPromptBlock(input *finalDataAccessInput, kind model.StepKind) string {
+	if input == nil || (kind != model.StepSolutionDesign && kind != model.StepCodeGeneration) {
+		return ""
+	}
+	return "\n\n[dataAccess 最终数据接入结果]\n" +
+		"本任务已有用户确认的数据接入结果，必须先读取并遵循以下文件：\n" +
+		"- 内部 JSON（可供代码生成读取，可能含鉴权）： " + input.ResultPath + "\n" +
+		"- 内部 Markdown： " + input.MarkdownPath + "\n" +
+		"- 脱敏 JSON（用户可见/审计）： " + input.RedactedResultPath + "\n" +
+		"- 脱敏 Markdown（用户可见/审计）： " + input.RedactedMarkdownPath + "\n" +
+		"硬约束：PENDING_AUTH/PENDING_PROBE/PENDING_INTEGRATION/UNSUPPORTED 不能当作已打通；未选择 mock 不能生成 mock；长期密钥不得写入前端源码、静态 bundle、README、用户可见文档或日志；需要鉴权的外部接口默认走代理/env/server-side config；mock_then_api 不能解释为失败后 mock。"
 }
 
 func collaborationProducerName(kind model.StepKind) string {
