@@ -9,6 +9,15 @@ Use this skill when Factory asks you to run a clarification round for a software
 factory user request. Clarification is now **application-only** and follows an
 **adaptive, one-decision-at-a-time, 6-round** flow.
 
+> **SCOPE — 业务逻辑 only.** This clarification settles the BUSINESS LOGIC of the
+> requirement: 业务目标 (coreScenario), 角色/用户 (targetUsers), 业务规则, 主要业务
+> 对象 (mainEntities), 应用类型/名称, 验收重点 (acceptanceFocus). **Do NOT ask the
+> user about INTERFACE design** (`primaryView`, 视图/布局/组件) or **DATA sources**
+> (`dataPolicy`, 数据来源/数据字段) — those are clarified in later stages (界面解析 /
+> 数据抓取). Leave `primaryView` and `dataPolicy` empty if the user hasn't already
+> provided them; the later stages will fill them. Never block `ready_to_confirm` on
+> missing interface/data fields.
+
 ## Adaptive Method (6 rounds)
 
 1. **Rounds 1–4 — one decision at a time.** Each round you may emit ZERO
