@@ -280,6 +280,47 @@ function isManualStepConfirmation(raw) {
   }
 }
 
+// isRequirementConfirmPending decides whether the conversation workbench should
+// surface the 需求确认 card. After the requirement_analysis step finishes,
+// shouldAwaitManualStepConfirmation parks the job at waiting_user with a single
+// manual_step_confirmation (confirm:true, NO options) in pending_questions. The
+// pre-existing 「需求确认」button on the business_logic card relies on the
+// jobs.steps/focusTask/hydrate chain pushing card.state to
+// waiting_user_clarification, which does not reliably happen across the
+// clarification→job transition — so this card instead reads the seededJob the
+// dialogue view already carries (composeDialogueView always fills view.seededJob),
+// bypassing that chain. Returns null when the card should NOT render; otherwise
+// {jobId, stepId, requirement} so the caller can render the summary AND fire
+// confirmStep(jobId, stepId, 0) on click (ConfirmManualStep skips the attempt
+// check when attempt is 0, locating the step by stepId).
+export function isRequirementConfirmPending(view) {
+  const sj = view && view.seededJob
+  if (!sj) return null
+  if (sj.status !== 'waiting_user') return null
+  const stepKind = sj.current_step_kind || sj.currentStepKind
+  if (stepKind !== 'requirement_analysis') return null
+  const pq = Array.isArray(sj.pending_questions)
+    ? sj.pending_questions
+    : Array.isArray(sj.pendingQuestions) ? sj.pendingQuestions : null
+  // pending_questions is OPTIONAL: the job-detail endpoint aggregates it onto
+  // the job, but the dialogue view's seededJob (findJobForDialogue → GetJob)
+  // does not carry it. When present it MUST be a manual_step_confirmation (so a
+  // task clarification is never mistaken for the requirement gate); when absent
+  // stepId is null and the caller resolves it from jobs.steps. requirement is
+  // always surfaced when available so the card can render a summary regardless.
+  let stepId = null
+  if (pq) {
+    const ms = pq.find(q => q && q.type === 'manual_step_confirmation' && q.confirm)
+    if (!ms) return null
+    stepId = ms.stepId || null
+  }
+  return {
+    jobId: sj.id,
+    stepId,
+    requirement: (view.child && view.child.requirement) || null,
+  }
+}
+
 // stepSeq looks up a step's seq by id (dependency/execution order). Returns
 // Number.MAX_SAFE_INTEGER for unknown ids so they sort last.
 function stepSeq(stepId, stepList) {

@@ -35,7 +35,7 @@ import { InterfacePreviewModal } from './InterfacePreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { normalizePrototypeSummary } from '../hooks/prototypeState'
-import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText, describeSessionError, isRequirementConfirmPending } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy, formatAppType, translateAnalysisText } from '../utils/formatLabels'
 import { factoryApi } from '../api/client'
@@ -227,6 +227,21 @@ export function ConversationWorkbench({
     workTraceItems: traceItems,
     jobStepBlocks: traceSteps,
   }), [view, traceItems, traceSteps])
+  // 需求确认闸：requirement_analysis 步完成后被 shouldAwaitManualStepConfirmation
+  // 拉成 waiting_user + 无选项的 manual_step_confirmation。既有的 business_logic 卡
+  // 「需求确认」按钮依赖 jobs.steps 链路把 card.state 推到 waiting_user_clarification，
+  // 该链路在 clarification→job 过渡时不可靠，故这里直接读 view.seededJob 判定。
+  // dialogue view 的 seededJob 不带 pending_questions，stepId 从已 hydrate 的
+  // jobs.steps (traceSteps) 兜底。返回 null → 不渲染；否则 {jobId, stepId, requirement}。
+  const requirementConfirm = useMemo(() => {
+    const r = isRequirementConfirmPending(view)
+    if (!r) return null
+    if (r.stepId) return r
+    const step = (Array.isArray(traceSteps) ? traceSteps : [])
+      .find(s => s && s.kind === 'requirement_analysis' && s.status === 'waiting_user')
+    const stepId = step && (step.id || step.stepId)
+    return stepId ? { ...r, stepId } : null
+  }, [view, traceSteps])
   const hasSubmittedRequirement = aggregateGraph.cardsByKey &&
     aggregateGraph.cardsByKey.user_input &&
     aggregateGraph.cardsByKey.user_input.state === 'confirmed'
@@ -516,6 +531,14 @@ export function ConversationWorkbench({
         onOpenArtifact={openArtifact}
         onOpenTaskStep={onOpenTaskStep}
       />
+
+      {requirementConfirm ? (
+        <RequirementConfirmCard
+          requirementConfirm={requirementConfirm}
+          submitting={submitting}
+          onConfirm={onConfirmTaskStep}
+        />
+      ) : null}
 
       <div ref={cwBodyScrollRef} className="cw-body" onScroll={updateWorkbenchBodyFollowState}>
         {timeline.map(item => (
@@ -1514,6 +1537,48 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAcc
           </small>
         </>
       ) : null}
+    </div>
+  )
+}
+
+// RequirementConfirmCard surfaces the requirement_analysis manual-confirmation
+// gate (a no-option confirm) as an explicit, summary-bearing card so the user is
+// never stuck staring at a bare "等待用户澄清" state. onConfirm is jobs.confirmStep
+// (passed in as onConfirmTaskStep); attempt=0 lets ConfirmManualStep skip the
+// attempt check and locate the step by stepId.
+function RequirementConfirmCard({ requirementConfirm, submitting, onConfirm }) {
+  const { jobId, stepId, requirement } = requirementConfirm || {}
+  if (!jobId || !stepId) return null
+  const appName = requirement && requirement.appName
+  const appType = requirement && requirement.appType
+  const coreScenario = requirement && requirement.coreScenario
+  const targetUsers = requirement && Array.isArray(requirement.targetUsers) ? requirement.targetUsers : []
+  const mainEntities = requirement && Array.isArray(requirement.mainEntities) ? requirement.mainEntities : []
+  const hasSummary = !!(appName || appType || coreScenario || targetUsers.length || mainEntities.length)
+  return (
+    <div className="cw-requirement-confirm">
+      <div className="cw-requirement-confirm-head">
+        <CheckCircle2 size={16} />
+        <strong>需求分析已完成，请确认后开始生成</strong>
+      </div>
+      {hasSummary ? (
+        <dl className="cw-requirement-confirm-summary">
+          {appName ? <div><dt>应用名称</dt><dd>{appName}</dd></div> : null}
+          {appType ? <div><dt>应用类型</dt><dd>{formatAppType(appType)}</dd></div> : null}
+          {coreScenario ? <div><dt>核心场景</dt><dd>{coreScenario}</dd></div> : null}
+          {targetUsers.length ? <div><dt>目标用户</dt><dd>{targetUsers.join('、')}</dd></div> : null}
+          {mainEntities.length ? <div><dt>主要对象</dt><dd>{mainEntities.join('、')}</dd></div> : null}
+        </dl>
+      ) : null}
+      <p className="cw-requirement-confirm-hint">确认后将自动进入方案设计与生成阶段。</p>
+      <button
+        type="button"
+        className="cw-requirement-confirm-btn primary"
+        disabled={submitting}
+        onClick={() => onConfirm && onConfirm(jobId, stepId, 0)}
+      >
+        {submitting ? '处理中…' : '确认并开始生成'}
+      </button>
     </div>
   )
 }

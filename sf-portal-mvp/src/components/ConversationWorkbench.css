@@ -628,3 +628,64 @@
   border: 0;
   background: #fff;
 }
+
+/* 需求确认闸卡片：requirement_analysis 步完成后的无选项人工确认。 */
+.cw-requirement-confirm {
+  margin: 8px 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(104, 221, 255, 0.34);
+  border-radius: 10px;
+  background: rgba(20, 64, 50, 0.42);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+.cw-requirement-confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b6f0cf;
+}
+.cw-requirement-confirm-head strong { font-size: 13px; }
+.cw-requirement-confirm-summary {
+  margin: 10px 0 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px 12px;
+}
+.cw-requirement-confirm-summary > div {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cw-requirement-confirm-summary dt {
+  flex: 0 0 64px;
+  color: rgba(215, 238, 248, 0.62);
+}
+.cw-requirement-confirm-summary dd {
+  margin: 0;
+  color: #e6f6ff;
+  word-break: break-word;
+}
+.cw-requirement-confirm-hint {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: rgba(215, 238, 248, 0.6);
+}
+.cw-requirement-confirm-btn {
+  margin-top: 12px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid rgba(104, 221, 255, 0.56);
+  border-radius: 7px;
+  background: rgba(104, 221, 255, 0.22);
+  color: #edfaff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cw-requirement-confirm-btn:hover:not(:disabled) {
+  border-color: rgba(104, 221, 255, 0.8);
+  background: rgba(104, 221, 255, 0.34);
+}
+.cw-requirement-confirm-btn:disabled { opacity: 0.6; cursor: default; }
+
