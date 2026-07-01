@@ -13,10 +13,10 @@ assert.deepEqual(
   empty.cards.map(card => [card.key, card.label, card.state]),
   [
     ['user_input', '用户输入', 'not_started'],
-    ['business_logic', '业务逻辑', 'not_started'],
-    ['interface_parsing', '界面解析', 'not_started'],
-    ['data_capture', '数据抓取', 'not_started'],
-    ['production_delivery', '生产交付', 'not_started'],
+    ['business_logic', '业务逻辑智能体', 'not_started'],
+    ['interface_parsing', '界面解析智能体', 'not_started'],
+    ['data_capture', '数据抓取智能体', 'not_started'],
+    ['production_delivery', '生产交付智能体', 'not_started'],
   ],
 )
 assert.deepEqual(empty.edges, [
@@ -26,10 +26,10 @@ assert.deepEqual(empty.edges, [
   { from: 'interface_parsing', to: 'production_delivery', state: 'inactive' },
   { from: 'data_capture', to: 'production_delivery', state: 'inactive' },
 ])
-assert.equal(aggregateCardLabel('requirement-analyst'), '业务逻辑')
-assert.equal(aggregateCardLabel('designer'), '界面解析')
-assert.equal(aggregateCardLabel('data-integration'), '数据抓取')
-assert.equal(aggregateCardLabel('code-generator'), '生产交付')
+assert.equal(aggregateCardLabel('requirement-analyst'), '业务逻辑智能体')
+assert.equal(aggregateCardLabel('designer'), '界面解析智能体')
+assert.equal(aggregateCardLabel('data-integration'), '数据抓取智能体')
+assert.equal(aggregateCardLabel('code-generator'), '生产交付智能体')
 
 const running = buildWorkbenchOrchestrationView({
   view: {
@@ -59,6 +59,14 @@ assert.equal(running.cardsByKey.data_capture.state, 'waiting_upstream')
 assert.equal(running.cardsByKey.production_delivery.state, 'waiting_upstream')
 assert.equal(running.activeCardKey, 'interface_parsing')
 assert.equal(running.focusQueue.join('>'), 'business_logic>interface_parsing>data_capture>production_delivery')
+assert.equal(running.cardsByKey.business_logic.interactionRole, '交互智能体', '业务逻辑 must carry a separate interaction identity')
+assert.match(running.cardsByKey.business_logic.interactionDescription, /理解指挥员意图、分析业务逻辑/, '业务逻辑 hover text must explain its responsibility')
+assert.equal(running.cardsByKey.interface_parsing.interactionRole, '交互智能体', '界面解析 must carry a separate interaction identity')
+assert.match(running.cardsByKey.interface_parsing.interactionDescription, /回应指挥员关切，按要求调整配置界面/, '界面解析 hover text must explain its responsibility')
+assert.equal(running.cardsByKey.data_capture.interactionRole, '交互智能体', '数据抓取 must carry a separate interaction identity')
+assert.match(running.cardsByKey.data_capture.interactionDescription, /深入动态数据对象进行数据抓取、接口对接/, '数据抓取 hover text must explain its responsibility')
+assert.equal(running.cardsByKey.data_capture.interactionDescription.endsWith('。'), false, '数据抓取 responsibility text should remove the trailing Chinese period to fit the card')
+assert.equal(running.cardsByKey.production_delivery.interactionRole, '', '生产交付 must not be marked as a persistent interaction agent')
 
 const freshInput = buildWorkbenchOrchestrationView({
   view: {
@@ -318,7 +326,7 @@ assert.equal(aggregateGraphSrc.includes('正在执行'), true, 'running card tex
 assert.equal(aggregateGraphSrc.includes('步骤已完成'), true, 'completed card text must be a short status label')
 assert.equal(aggregateGraphSrc.includes('执行失败，查看详情'), true, 'failed card text must be a short status label')
 assert.equal(aggregateGraphSrc.includes('读取生成文件失败'), true, 'file-read failures must be shortened on the card')
-assert.equal(aggregateGraphSrc.includes('getCardTooltip'), true, 'aggregate graph must keep full card descriptions in the tooltip')
+assert.equal(aggregateGraphSrc.includes('getCardHoverRecord'), true, 'aggregate graph must keep full execution records in the external hover tooltip')
 assert.equal(aggregateGraphSrc.includes('onOpenTaskStep'), true, 'failed cards must expose a task detail entry')
 assert.equal(aggregateGraphSrc.includes('step.step_id'), true, 'task detail entry must support backend step_id fields')
 assert.equal(aggregateGraphSrc.includes('function WaveConnector'), true, 'aggregate graph must restore the old WaveConnector renderer')
@@ -330,6 +338,27 @@ assert.equal(aggregateGraphSrc.includes('aog-card-actions'), false, 'aggregate c
 assert.equal(aggregateGraphSrc.includes('aog-connector-merge'), false, 'aggregate graph should use the old connector model instead of a manual merge class')
 assert.equal(css.includes('.aog-connector'), false, 'aggregate CSS should not override the old connector geometry')
 assert.equal(css.includes('.aog-action-link'), false, 'aggregate CSS should not add non-legacy card action buttons')
+assert.equal(aggregateGraphSrc.includes('ceg-card-interaction-role'), true, 'persistent interaction identity must render separately from the state badge')
+assert.equal(aggregateGraphSrc.includes('interactionDescription'), true, 'aggregate cards must use role-specific hover descriptions')
+assert.equal(aggregateGraphSrc.includes('aog-card-hover-detail'), true, 'responsibility content must render inside the card on hover')
+assert.equal(aggregateGraphSrc.includes('card.executionRecord'), true, 'external hover tooltip must include the prior execution record when present')
+assert.equal(aggregateGraphSrc.includes('ceg-card-tooltip'), true, 'aggregate graph must restore the external floating tooltip for execution records')
+assert.equal(aggregateGraphSrc.includes('aria-describedby'), true, 'aggregate graph must describe cards through the execution-record tooltip')
+assert.equal(css.includes('.aog .ceg-card.is-active .aog-card-hover-detail'), false, 'active cards must not show in-card responsibility detail unless hovered/focused')
+assert.equal(css.includes('.aog .ceg-card.is-active .aog-record-tooltip'), true, 'active cards must explicitly keep the execution-record tooltip closed until hovered')
+assert.equal(css.includes('[data-agent-key="interface_parsing"] .aog-record-tooltip'), true, 'interface parsing execution-record hover must be placed below the card')
+assert.equal(css.includes('.aog .aog-record-tooltip {\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  border-color: rgba(104, 221, 255, 0.56);\n  background: rgba(2, 13, 22, 0.98);'), true, 'execution-record hover must use the shared opaque dark style')
+assert.equal(css.includes('background: rgba(2, 13, 22, 0.98)'), true, 'interface parsing lower hover must use a darker near-opaque background')
+assert.equal(css.includes('border-color: rgba(104, 221, 255, 0.56)'), true, 'interface parsing lower hover must use a stronger border contrast')
+assert.equal(css.includes('.aog-hover-record'), false, 'execution record must not render in the in-card responsibility detail')
+assert.equal(css.includes('.aog-tooltip-record'), true, 'execution record in the external hover tooltip must have truncation styling')
+assert.equal(aggregateGraphSrc.includes('aog-summary-chip'), true, 'summary chips must have dedicated readable classes')
+assert.equal(css.includes('.aog-summary-chip'), true, 'aggregate CSS must visibly tune the header summary chips')
+assert.equal(css.includes('.aog-summary-current'), true, 'aggregate CSS must distinguish the current-status chip')
+assert.equal(workbenchSrc.includes('aggregateGraphCompactOverride'), true, 'ConversationWorkbench must track manual aggregate graph collapse state')
+assert.equal(workbenchSrc.includes('hasSubmittedRequirement'), true, 'aggregate graph default expansion must key off submitted user input')
+assert.equal(workbenchSrc.includes('compact={aggregateGraphCompact}'), true, 'ConversationWorkbench must pass compact state into AggregateOrchestrationGraph')
+assert.equal(workbenchSrc.includes('onToggleCompact'), true, 'ConversationWorkbench must wire the aggregate graph collapse toggle')
 
 // describeSessionError turns a raw session failure into plain-Chinese
 // {title, detail, hint} and MUST NOT leak the operator-grade raw blob.

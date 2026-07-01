@@ -85,7 +85,9 @@ export function ConversationWorkbench({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
   const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
+  const [aggregateGraphCompactOverride, setAggregateGraphCompactOverride] = useState(null)
   const textareaRef = useRef(null)
+  const previousHasSubmittedRequirementRef = useRef(false)
   const requestAbandonRequirement = () => {
     if (!onAbandon || submitting) return
     setMoreMenuOpen(false)
@@ -117,6 +119,8 @@ export function ConversationWorkbench({
   }, [moreMenuOpen, abandonConfirmOpen])
   useEffect(() => {
     setManualStepConfirmation(false)
+    setAggregateGraphCompactOverride(null)
+    previousHasSubmittedRequirementRef.current = false
   }, [session && session.id])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
@@ -188,6 +192,22 @@ export function ConversationWorkbench({
     workTraceItems: traceItems,
     jobStepBlocks: traceSteps,
   }), [view, traceItems, traceSteps])
+  const hasSubmittedRequirement = aggregateGraph.cardsByKey &&
+    aggregateGraph.cardsByKey.user_input &&
+    aggregateGraph.cardsByKey.user_input.state === 'confirmed'
+  useEffect(() => {
+    if (hasSubmittedRequirement && !previousHasSubmittedRequirementRef.current) {
+      setAggregateGraphCompactOverride(false)
+    }
+    previousHasSubmittedRequirementRef.current = hasSubmittedRequirement
+  }, [hasSubmittedRequirement])
+  const aggregateGraphCompact = aggregateGraphCompactOverride == null ? !hasSubmittedRequirement : aggregateGraphCompactOverride
+  const toggleAggregateGraphCompact = () => {
+    setAggregateGraphCompactOverride(current => {
+      const compactNow = current == null ? !hasSubmittedRequirement : current
+      return !compactNow
+    })
+  }
 
   // Session attachments (Task 4): pending composer attachments for the current
   // message. focusKey mirrors the aggregate graph's active card so uploaded
@@ -371,7 +391,13 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
-      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openArtifact} onOpenTaskStep={onOpenTaskStep} />
+      <AggregateOrchestrationGraph
+        graph={aggregateGraph}
+        compact={aggregateGraphCompact}
+        onToggleCompact={toggleAggregateGraphCompact}
+        onOpenArtifact={openArtifact}
+        onOpenTaskStep={onOpenTaskStep}
+      />
 
       <div className="cw-body">
         {timeline.map(item => (

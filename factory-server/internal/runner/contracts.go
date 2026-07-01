@@ -390,8 +390,9 @@ func ValidateRequirementAnalysisWithConfirmedSummary(path, confirmedRequirementJ
 	if out.NeedsUserInput {
 		return out, nil
 	}
-	want := requirementSummaryChecksum(requirementFieldsFromConfirmed(confirmedRequirementJSON))
-	got := requirementSummaryChecksum(requirementFieldsFromOutput(raw))
+		wantFields := requirementFieldsFromConfirmed(confirmedRequirementJSON)
+		want := requirementSummaryChecksum(wantFields)
+		got := requirementSummaryChecksum(requirementFieldsFromOutputForConfirmed(raw, wantFields))
 	if want != got {
 		return StepOutput{}, fmt.Errorf("confirmed requirement consistency mismatch: %w", ErrSchemaValidationFailed)
 	}
@@ -458,6 +459,18 @@ func requirementFieldsFromOutput(raw requirementAnalysisOutput) map[string]any {
 		"dataPolicy":      raw.DataPolicy,
 		"acceptanceFocus": raw.AcceptanceFocus,
 	})
+}
+
+func requirementFieldsFromOutputForConfirmed(raw requirementAnalysisOutput, confirmedFields map[string]any) map[string]any {
+	out := requirementFieldsFromOutput(raw)
+	// 只校验用户确认 JSON 里真实存在的关键字段。历史/当前澄清结果并不总是
+	// 持久化 summary；此时 agent 生成的审计摘要不能反向构成漂移。
+	for key := range out {
+		if _, ok := confirmedFields[key]; !ok {
+			delete(out, key)
+		}
+	}
+	return out
 }
 
 // pickRequirementFields keeps only the summary-critical keys that define

@@ -177,6 +177,60 @@ func TestOpenMigratesJobsCollaborationPlan(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesJobStepsSnapshotJSON(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	now := time.Now()
+
+	seed, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open seed db: %v", err)
+	}
+	if err := seed.CreateJob(ctx, model.Job{
+		ID: "job_snap", UserPrompt: "生成应用", NormalizedPrompt: "生成应用",
+		Status: model.JobStatusQueued, CurrentStepKind: model.StepRequirementAnalysis,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		seed.Close()
+		t.Fatalf("seed job: %v", err)
+	}
+	if err := seed.CreateJobStep(ctx, model.JobStep{
+		ID: "step_old", JobID: "job_snap", Kind: model.StepRequirementAnalysis,
+		Seq: 1, Status: model.StepStatusPending,
+	}); err != nil {
+		seed.Close()
+		t.Fatalf("seed step: %v", err)
+	}
+	// 模拟旧版本磁盘库：job_steps 表存在，但还没有后续代码写入的快照列。
+	if _, err := seed.db.Exec(`ALTER TABLE job_steps DROP COLUMN snapshot_json`); err != nil {
+		seed.Close()
+		t.Fatalf("degrade drop snapshot_json: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed db: %v", err)
+	}
+
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open upgraded db: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	if err := st.CreateJobStep(ctx, model.JobStep{
+		ID: "step_new", JobID: "job_snap", Kind: model.StepSolutionDesign,
+		Seq: 2, Status: model.StepStatusPending, SnapshotJSON: `{"agent":"solution"}`,
+	}); err != nil {
+		t.Fatalf("CreateJobStep after migrate: %v", err)
+	}
+	steps, err := st.ListJobSteps(ctx, "job_snap")
+	if err != nil {
+		t.Fatalf("ListJobSteps after migrate: %v", err)
+	}
+	if len(steps) != 2 || steps[1].SnapshotJSON != `{"agent":"solution"}` {
+		t.Fatalf("migrated steps = %+v", steps)
+	}
+}
+
 // To produce a realistic "prior" database without guessing the exact historical
 // column set, the test opens the current schema once, then strips it back to the
 // pre-Workbench shape (drops the four jobs columns and the three new tables)

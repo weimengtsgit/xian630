@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, Clock3, CircleDot, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronUp, Clock3, CircleDot, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 import './AggregateOrchestrationGraph.css'
 
@@ -64,12 +64,25 @@ export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCo
         <div>
           <h3>编排执行总览</h3>
         </div>
-        <div className="ceg-summary aog-summary">
-          <span>{graph.cards.length} 个阶段</span>
-          {active ? <span>{active.label} · {STATE_LABELS[active.state] || active.state}</span> : <span>等待用户输入</span>}
-          {summary.running ? <span>{summary.running} 执行中</span> : null}
-          {summary.waiting ? <span>{summary.waiting} 等待用户</span> : null}
-          {summary.failed ? <span>{summary.failed} 失败</span> : null}
+        <div className="aog-head-actions">
+          <div className="ceg-summary aog-summary">
+            <span className="aog-summary-chip aog-summary-total">{graph.cards.length} 个阶段</span>
+            {active ? (
+              <span className={`aog-summary-chip aog-summary-current aog-summary-state-${active.state}`}>
+                当前：{active.label} · {STATE_LABELS[active.state] || active.state}
+              </span>
+            ) : (
+              <span className="aog-summary-chip aog-summary-current">当前：等待用户输入</span>
+            )}
+            {summary.running ? <span className="aog-summary-chip aog-summary-running">{summary.running} 执行中</span> : null}
+            {summary.waiting ? <span className="aog-summary-chip aog-summary-waiting">{summary.waiting} 等待用户</span> : null}
+            {summary.failed ? <span className="aog-summary-chip aog-summary-failed">{summary.failed} 失败</span> : null}
+          </div>
+          {onToggleCompact ? (
+            <button type="button" className="aog-collapse-btn" onClick={onToggleCompact} aria-label="收起编排执行总览" title="收起">
+              <ChevronUp size={14} />
+            </button>
+          ) : null}
         </div>
       </header>
       <div className="ceg-canvas aog-canvas">
@@ -126,7 +139,9 @@ function cardView(card) {
     stateLabel: STATE_LABELS[card.state] || card.state,
     summary: getCardDescription(card),
     description: card.currentAction || card.summary || card.subStage || '',
-    tooltip: getCardTooltip(card),
+    interactionRole: card.interactionRole || '',
+    interactionDescription: card.interactionDescription || '',
+    executionRecord: getCardHoverRecord(card),
     wave: TOPOLOGY_WAVES.find(wave => wave.cards.includes(card.key))?.index || 0,
     active: !!card.active,
     step,
@@ -137,8 +152,7 @@ function cardView(card) {
 function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
   const Icon = card.agentKey === 'user_input' ? User : STATE_ICON[card.state] || CircleDot
   const canOpenTask = !!card.stepId && !!onOpenTask
-  const tooltipText = card.tooltip || card.description || '暂无描述'
-  const tooltipId = `aog-card-tooltip-${card.id}`
+  const tooltipId = `aog-card-record-${card.id}`
   const openTask = () => {
     if (!canOpenTask) return
     onOpenTask({
@@ -176,8 +190,20 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
         <strong>{card.title}</strong>
       </span>
       <span className="ceg-card-desc">{card.summary || card.description || '等待编排流转'}</span>
+      {card.interactionRole ? <span className="ceg-card-interaction-role">{card.interactionRole}</span> : null}
       <span className="ceg-card-state">{card.stateLabel}</span>
-      <span id={tooltipId} className="ceg-card-tooltip" role="tooltip">{tooltipText}</span>
+      {card.interactionDescription ? (
+        <span className="aog-card-hover-detail" aria-hidden="true">
+          <span className="aog-hover-label">职责说明</span>
+          <span>{card.interactionDescription}</span>
+        </span>
+      ) : null}
+      <span id={tooltipId} className="ceg-card-tooltip aog-record-tooltip" role="tooltip">
+        {card.interactionDescription ? (
+          <span className="aog-tooltip-label">执行记录</span>
+        ) : null}
+        <span className="aog-tooltip-record">{card.executionRecord || '暂无执行记录'}</span>
+      </span>
     </div>
   )
 }
@@ -364,7 +390,7 @@ function getCardDescription(card) {
   return '等待编排流转'
 }
 
-function getCardTooltip(card) {
+function getCardHoverRecord(card) {
   const text = card.currentAction || card.summary || card.subStage || ''
   if (card.state === 'failed') return shortFailureDescription(text, card.label)
   return text || `${card.label}：${STATE_LABELS[card.state] || card.state}`

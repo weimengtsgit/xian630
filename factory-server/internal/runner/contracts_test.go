@@ -578,6 +578,63 @@ func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T)
 	}
 }
 
+func TestValidateRequirementAnalysisAcceptsConfirmedRequirementWithoutSummary(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	confirmed := `{"appType":"situation_replay","appName":"航母编队月度航迹复盘","coreScenario":"东海地图复盘","primaryView":"地图时间轴","mainEntities":["航母编队"],"dataPolicy":"mock_data","acceptanceFocus":["visual_replay"]}`
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"为指挥决策人员生成航母编队月度航迹复盘。",
+	  "appType":"situation_replay",
+	  "appName":"航母编队月度航迹复盘",
+	  "targetUsers":["commander"],
+	  "coreScenario":"东海地图复盘",
+	  "primaryView":"地图时间轴",
+	  "mainEntities":["航母编队"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["visual_replay"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if _, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed); err != nil {
+		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v", err)
+	}
+}
+
+func TestValidateRequirementAnalysisRejectsConfirmedFieldMismatchWithoutSummary(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	confirmed := `{"appType":"situation_replay","appName":"航母编队月度航迹复盘","coreScenario":"东海地图复盘"}`
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"为指挥决策人员生成航母编队月度航迹复盘。",
+	  "appType":"situation_replay",
+	  "appName":"航母编队月度航迹复盘",
+	  "targetUsers":["commander"],
+	  "coreScenario":"南海地图复盘",
+	  "primaryView":"地图时间轴",
+	  "mainEntities":["航母编队"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["visual_replay"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed)
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	}
+}
+
 // TestValidateDataIntegrationRequiresStepwiseFallbackQuestion is the Task-9
 // data-capture fallback contract: when the ontology boundary is unavailable
 // (verification.ontology.status="failed"), the step MUST surface a structured
