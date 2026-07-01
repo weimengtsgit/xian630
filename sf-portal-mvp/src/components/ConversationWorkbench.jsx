@@ -26,7 +26,6 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
-import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
 import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
 import { WorkbenchAgentBlock } from './WorkbenchAgentBlock'
 import { AttachmentComposer } from './AttachmentComposer'
@@ -743,18 +742,11 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   if (item.type === 'live_thinking' || item.type === 'thinking_summary') {
     return <ThinkingSummary item={item} />
   }
+  // The detailed 协作编排执行图 is hidden from the conversation flow: the pinned
+  // 编排执行总览 (AggregateOrchestrationGraph) is now the primary orchestration
+  // view. Per-agent execution detail still lives in the task drawer.
   if (item.type === 'collaboration_plan_preview') {
-    return (
-      <CollaborationExecutionGraph
-        graph={item.graph}
-        onOpenTask={card => {
-          if (card && card.stepId && onOpenTaskStep) onOpenTaskStep(card)
-        }}
-        onConfirmStep={onConfirmTaskStep}
-        manualStepConfirmation={manualStepConfirmation}
-        onToggleManualStepConfirmation={onToggleManualStepConfirmation}
-      />
-    )
+    return null
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
