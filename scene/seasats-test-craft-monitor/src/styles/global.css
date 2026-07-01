@@ -298,3 +298,6 @@ html, body { overflow: auto; }
 @media (max-width: 820px) {
   .chart-grid { grid-template-columns: 1fr; }
 }
+
+/* === 研判结论段落 === */
+.narrative { font-size: 12px; line-height: 1.7; color: #cbd5e1; padding: 6px 8px; margin: 0; }

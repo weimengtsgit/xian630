@@ -213,13 +213,7 @@ export function AnalysisPanel({ analysis, selectedTarget, coast }) {
             {summary ? (
               <div className="summary-detail">
                 <div className={`threat-line ${summary.threatLevel}`}>威胁等级 <strong>{summary.threatLabel}</strong></div>
-                <ul className="finding-list">
-                  {summary.findings.map((f, i) => (<li key={i}><span>{f.label}</span><strong>{f.value}</strong></li>))}
-                </ul>
-                <ul className="advice-list">
-                  {summary.advice.length === 0 && <li className="empty-li">暂无建议</li>}
-                  {summary.advice.map((a, i) => (<li key={i} className={a.level}>{a.text}</li>))}
-                </ul>
+                <p className="narrative">{summary.narrative}</p>
               </div>
             ) : <EmptyChart label="无研判" />}
           </div>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUp, Clock3, Database, Filter, Navigation, Search, ShieldAlert, Ship, Target, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Clock3, Database, Filter, Navigation, Search, Ship, Target, X } from "lucide-react";
 import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
 import { MapPanel } from "./MapPanel.jsx";
@@ -136,11 +136,6 @@ function Dashboard({ payload }) {
     <main className="stm-shell">
       <header className="topbar">
         <div className="brand"><Ship size={22} /><div><h1>无人艇跟监告警智能体</h1></div></div>
-        {summary && (
-          <div className={`threat-badge inline ${summary.threatLevel}`}>
-            <ShieldAlert size={15} /><span>研判</span><strong>{summary.threatLabel}</strong>
-          </div>
-        )}
         <div className="top-metrics">
           <span><Database size={14} />目标 {analysis.metadata.targetCount}</span>
           <span><AlertTriangle size={14} />告警 {analysis.alerts.length}</span>
