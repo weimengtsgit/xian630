@@ -678,10 +678,23 @@ func fieldsFromDescriptors(v any) []string {
 }
 
 func stringFromAny(v any) string {
-	if s, ok := v.(string); ok {
-		return strings.TrimSpace(s)
+	switch n := v.(type) {
+	case string:
+		return strings.TrimSpace(n)
+	case int:
+		return strconv.Itoa(n)
+	case int64:
+		return strconv.FormatInt(n, 10)
+	case float64:
+		if n == float64(int64(n)) {
+			return strconv.FormatInt(int64(n), 10)
+		}
+		return strconv.FormatFloat(n, 'f', -1, 64)
+	case json.Number:
+		return n.String()
+	default:
+		return ""
 	}
-	return ""
 }
 
 func boolFromAny(v any) bool {
@@ -695,6 +708,24 @@ func intFromAny(v any) int {
 		return n
 	case float64:
 		return int(n)
+	case json.Number:
+		i, _ := strconv.Atoi(n.String())
+		return i
+	case string:
+		s := strings.TrimSpace(n)
+		if s == "" {
+			return 0
+		}
+		if i, err := strconv.Atoi(s); err == nil {
+			return i
+		}
+		// 模型偶尔把 schemaVersion 输出成 "1.0.0"；只取首段主版本，避免说明性格式漂移阻断流程。
+		if dot := strings.IndexByte(s, '.'); dot > 0 {
+			if i, err := strconv.Atoi(s[:dot]); err == nil {
+				return i
+			}
+		}
+		return 0
 	default:
 		return 0
 	}
@@ -1436,6 +1467,7 @@ func dataIntegrationPrompt(job model.Job, ws runner.AttemptWorkspace) string {
 		"当业务口径、鉴权、核心字段、是否 mock、是否不填等阻断事项无法判断时，输出 needsUserInput=true、status=\"needs_input\" 并只提出具体阻断问题；凭证类澄清问题必须设置 inputType:\"credential\"。" +
 		"当可以闭环时，输出 needsUserInput=false、status=\"passed\"，并必须包含 dataAccessResult 和 dataAccessMarkdown。dataAccessResult.status 必须是 pending_confirmation，canFinalize=true，blockingIssues=[]。" +
 		"dataAccessResult 必须包含 schemaVersion、stage=data_access、version、status、canFinalize、blockingIssues、sourceInputs、dataAccessMode、dataNeeds、sourceCandidates、probeResults、fieldMappings、degradationPolicy、runtimeArchitecture、credentialRefs、securityReviewRequired、securityReviewReasons、codegenConstraints、summary。" +
+		"强契约类型：schemaVersion 必须是数字 1，version 必须是字符串版本号（例如 \"1.0.0\"），不能把 schemaVersion 写成 \"1.0.0\"，不能把 version 写成数字。" +
 		"dataAccessMarkdown 必须使用固定章节：# 数据获取方案、1 输入依据、2 数据需求、3 数据源候选、4 探测记录、5 字段映射、6 满足度结论、7 降级与空态策略、8 代码生成输入、9 待用户确认摘要。" +
 		"内部 dataAccessResult 可包含用户提供的完整鉴权值或 handle 供后续代码生成使用；但 summary、workLog、warnings、用户可见文本中不得泄漏 token/cookie/password 等敏感值。" +
 		"必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块，不要隐藏推理链；最终 assistant 消息可以只给简短确认。用户需求：" + job.UserPrompt

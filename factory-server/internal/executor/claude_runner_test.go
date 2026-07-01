@@ -394,6 +394,69 @@ func TestClaudeStepRunnerAcceptsNarrativeDataAccessFields(t *testing.T) {
 	}
 }
 
+func TestClaudeStepRunnerAcceptsConvertibleDataAccessVersionFields(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion":  "1.0.0",
+				"stage":          "data_access",
+				"version":        1,
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []any{},
+				"dataAccessMode": "mock_only",
+				"dataNeeds": []any{
+					map[string]any{"entity": "TaskItem", "fields": []any{"id", "content"}},
+				},
+				"sourceCandidates": []any{
+					map[string]any{"id": "mock_client_state", "type": "mock", "label": "客户端 Mock", "priority": 1},
+				},
+				"summary": "mock 数据方案已闭环。",
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n\n## 1 输入依据\n需求文档与原型预览\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("result = %+v, want waiting_user summary confirmation", res)
+	}
+	versionDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "data-access", "versions", "1")
+	if _, err := os.Stat(filepath.Join(versionDir, "data-access.redacted.md")); err != nil {
+		t.Fatalf("data access version markdown not written: %v", err)
+	}
+	internalRaw, err := os.ReadFile(filepath.Join(versionDir, "dataAccessResult.internal.json"))
+	if err != nil {
+		t.Fatalf("read internal result: %v", err)
+	}
+	if !bytes.Contains(internalRaw, []byte(`"schemaVersion": 1`)) || !bytes.Contains(internalRaw, []byte(`"version": "1"`)) {
+		t.Fatalf("converted schemaVersion/version not persisted as strong contract fields: %s", internalRaw)
+	}
+}
+
 func TestClaudeStepRunnerRejectsIncompleteDataAccessResult(t *testing.T) {
 	cases := []struct {
 		name   string

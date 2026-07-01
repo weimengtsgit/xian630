@@ -64,6 +64,19 @@ for (const card of appItem.cards) {
   assert.equal(card.blueprint, undefined, 'card must not leak blueprint field')
 }
 
+const artifactTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_artifacts', status: 'active', intent: 'application_generation', route_locked: true },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '生成一个 todo list 服务' }],
+  route: {},
+  workbenchArtifacts: [
+    { id: 'warf_req', kind: 'project_document', label: '需求文档', path: 'docs/01-requirements.md', updatedAt: '2026-07-01T10:00:00Z' },
+    { id: 'warf_proto', kind: 'interface_preview', label: '原型预览', path: 'jobs/job_1/design_contract/attempt-1/prototype/preview-manifest.json', updatedAt: '2026-07-01T10:01:00Z' },
+    { id: 'warf_data', kind: 'data_access_plan', label: '数据方案', path: 'jobs/job_1/data-access/versions/1.0.0/data-access.redacted.md', updatedAt: '2026-07-01T10:02:00Z' },
+  ],
+})
+const artifactLabels = artifactTimeline.filter(item => item.type === 'artifact_link').map(item => item.label)
+assert.deepEqual(artifactLabels, ['需求文档', '原型预览', '数据方案'], 'timeline must surface the generated data access plan chip')
+
 // Continuing-session inquiry replies are persisted as ordinary agent replies and
 // must remain visible in the dialogue thread, not be dropped as unknown metadata.
 const inquiryTimeline = buildDialogueTimeline({

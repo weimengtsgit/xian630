@@ -364,14 +364,14 @@ function attachmentRefsByMessage(view) {
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
 // appendArtifactLinks surfaces each produced analysis-stage workbench artifact
-// (需求文档 / 界面预览 / 数据契约) as an `artifact_link` timeline item — a
+// (需求文档 / 界面预览 / 数据方案 / 数据契约) as an `artifact_link` timeline item — a
 // clickable chip opening the same preview the graph card uses (openArtifact →
 // ProjectDocumentPreviewModal / InterfacePreviewModal). One per kind (latest by
 // updatedAt); only previewable artifacts are included, via the shared
 // isPreviewableArtifact predicate (the same one the graph card uses) so the
 // conversation chip and the card cannot diverge.
-const ARTIFACT_LINK_KINDS = ['project_document', 'interface_preview', 'data_contract']
-const ARTIFACT_LINK_LABEL = { project_document: '需求文档', interface_preview: '界面预览', data_contract: '数据契约' }
+const ARTIFACT_LINK_KINDS = ['project_document', 'interface_preview', 'data_access_plan', 'data_contract']
+const ARTIFACT_LINK_LABEL = { project_document: '需求文档', interface_preview: '界面预览', data_access_plan: '数据方案', data_contract: '数据契约' }
 
 function appendArtifactLinks(items, view) {
   const artifacts = view && Array.isArray(view.workbenchArtifacts) ? view.workbenchArtifacts : []
@@ -811,7 +811,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   }
 
   // 6. Workbench artifact links: surface each produced analysis-stage artifact
-  // (需求文档 / 界面预览 / 数据契约) as a clickable chip that opens the same
+  // (需求文档 / 界面预览 / 数据方案 / 数据契约) as a clickable chip that opens the same
   // preview the graph card uses (openArtifact). One per kind (latest); only
   // previewable artifacts, matching the card's isPreviewableArtifact filter so
   // the conversation chip and the card stay consistent.
