@@ -19,6 +19,10 @@ const mapStyle = {
 const collectionForSource = {
   "monitored-areas": "monitoredAreas",
   "track-segments": "trackSegments",
+  "speed-segments": "speedSegments",
+  "coast-line": "coastLine",
+  "nearest-point": "nearestPoint",
+  "max-speed-segment": "maxSpeedSegment",
   "ais-gaps": "aisGaps",
   "vessel-points": "vesselPoints",
   "alert-points": "alertPoints",
@@ -90,6 +94,11 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
       map.addLayer({ id: "ais-gaps", type: "circle", source: "ais-gaps", paint: { "circle-radius": 6, "circle-color": ["match", ["get", "severity"], "critical", "#ef4444", "warning", "#f59e0b", "#9ca3af"], "circle-stroke-color": "#fff7ed", "circle-stroke-width": 1, "circle-opacity": 0.95 } });
       map.addLayer({ id: "vessel-points", type: "circle", source: "vessel-points", paint: { "circle-radius": selectedTargetRadius(selectedMmsi), "circle-color": ["match", ["get", "status"], "异常行为目标", "#ef4444", "高可信目标", "#22c55e", "待核验目标", "#eab308", "#94a3b8"], "circle-stroke-color": "#f8fafc", "circle-stroke-width": selectedTargetStroke(selectedMmsi), "circle-opacity": 0.92 } });
       map.addLayer({ id: "alert-points", type: "circle", source: "alert-points", paint: { "circle-radius": selectedAlertRadius(selectedAlertId), "circle-color": ["match", ["get", "severity"], "critical", "#dc2626", "warning", "#f97316", "#38bdf8"], "circle-stroke-color": "#fef2f2", "circle-stroke-width": selectedAlertStroke(selectedAlertId), "circle-opacity": 0.86 } });
+      map.addLayer({ id: "coast-line", type: "line", source: "coast-line", paint: { "line-color": "#22d3ee", "line-width": 1.6, "line-opacity": 0.9 } });
+      map.addLayer({ id: "coast-buffer", type: "line", source: "coast-line", paint: { "line-color": "#ef4444", "line-width": ["interpolate", ["linear"], ["zoom"], 2, 6, 8, 26], "line-opacity": 0.10 } });
+      map.addLayer({ id: "max-speed-segment", type: "line", source: "max-speed-segment", paint: { "line-color": "#ef4444", "line-width": 3.4, "line-opacity": 0.95 } });
+      map.addLayer({ id: "speed-segments", type: "line", source: "speed-segments", paint: { "line-color": ["interpolate", ["linear"], ["get", "speedKn"], 0, "#3b82f6", 5, "#eab308", 10, "#ef4444"], "line-width": 2.2, "line-opacity": 0.9 } });
+      map.addLayer({ id: "nearest-point", type: "circle", source: "nearest-point", paint: { "circle-radius": 7, "circle-color": "#22d3ee", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 } });
       const clickableLayers = ["alert-points", "vessel-points", "ais-gaps", "track-segments", "monitored-area-fill", "monitored-area-outline"];
       map.on("click", (event) => {
         const action = resolveMapClickAction(map.queryRenderedFeatures(event.point, { layers: clickableLayers }));
@@ -99,11 +108,19 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
         map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
       });
+      const pulseTimer = setInterval(() => {
+        if (!mapRef.current || !map.getLayer("alert-points")) return;
+        const phase = (Date.now() % 1200) / 1200;
+        const op = 0.35 + 0.5 * Math.abs(Math.sin(phase * Math.PI));
+        map.setPaintProperty("alert-points", "circle-stroke-opacity", op);
+      }, 120);
+      mapRef.current._pulseTimer = pulseTimer;
       setLoaded(true);
     });
     const observer = new ResizeObserver(() => map.resize());
     observer.observe(containerRef.current);
     return () => {
+      if (mapRef.current?._pulseTimer) clearInterval(mapRef.current._pulseTimer);
       observer.disconnect();
       map.remove();
       mapRef.current = null;
@@ -134,6 +151,11 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
     visible("ais-gaps", showAlerts);
     visible("alert-points", showAlerts);
     visible("vessel-points", showTargets);
+    visible("coast-line", showAreas);
+    visible("coast-buffer", showAreas);
+    visible("speed-segments", showTracks);
+    visible("max-speed-segment", showTracks);
+    visible("nearest-point", showTargets);
     if (map.getLayer("vessel-points")) {
       map.setPaintProperty("vessel-points", "circle-radius", selectedTargetRadius(selectedMmsi));
       map.setPaintProperty("vessel-points", "circle-stroke-width", selectedTargetStroke(selectedMmsi));

@@ -1,6 +1,13 @@
-# SEASATS测试艇活动监测
+# 无人艇跟监告警智能体
 
-Preset scene app for monitoring SEASATS test-craft candidates from customer-provided Excel data.
+Preset scene app for monitoring SEASATS test-craft candidates from customer-provided Excel data, 升级为无人艇跟监告警智能体。
+
+## 国土告警
+
+- 以内置 `src/data/chinaCoast.json`（中国海岸简化折线）为基准，计算每个目标轨迹到国土最近距离。
+- 进入 200 海里警戒区即告警，三级：高 <80 / 中 80–140 / 低 140–200 海里（阈值在 `parameters` 可调）。
+- 告警点地图上有脉冲动效；点击 AIS 开闭异常告警弹出图形化卡片。
+- 当前 SEASATS 样例数据位于波斯湾/北美，不触发国土告警（逻辑正确，数据可替换）。
 
 ## Data Boundary
 
