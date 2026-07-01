@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUp, Clock3, Database, Filter, Gauge, Radio, Search, Ship, Target } from "lucide-react";
-import { analyzePayload, STATUS_PRIORITY } from "../logic/domain.js";
+import { AlertTriangle, ArrowUp, Clock3, Database, Filter, Navigation, Search, ShieldAlert, Ship, Target, X } from "lucide-react";
+import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
 import { MapPanel } from "./MapPanel.jsx";
 import { AlertCard } from "./AlertCard.jsx";
-import { SummaryPanel } from "./SummaryPanel.jsx";
 import coastData from "../data/chinaCoast.json";
 
 const payloadUrl = new URL("../data/seasatsPayload.json", import.meta.url).href;
@@ -41,8 +40,10 @@ function TargetRow({ target, selected, onSelect }) {
     <button className={`target-row ${selected ? "selected" : ""}`} onClick={() => onSelect(target.mmsi)}>
       <span className={`status-dot ${target.status}`} />
       <span className="target-main"><strong>{target.name}</strong><small>{target.mmsi}</small></span>
+      {target.hasObservedTrack
+        ? <span className="track-mark has" title="有轨迹"><Navigation size={12} />轨迹</span>
+        : <span className="track-mark" title="仅最新位置">仅位置</span>}
       <span className="target-score">{target.score}</span>
-      <span className="target-meta">{target.dimension.label}<br />{target.speedKn ?? "--"} kt</span>
     </button>
   );
 }
@@ -91,6 +92,7 @@ function Dashboard({ payload }) {
   const [replayFrac, setReplayFrac] = useState(1);
   const [mapFocus, setMapFocus] = useState(null);
   const [cardAlert, setCardAlert] = useState(null);
+  const [showAlertDrawer, setShowAlertDrawer] = useState(false);
   const minTime = Date.parse(analysis.metadata.dataWindow.start);
   const maxTime = Date.parse(analysis.metadata.dataWindow.end);
   const replayEnd = Number.isFinite(minTime) && Number.isFinite(maxTime) ? minTime + (maxTime - minTime) * replayFrac : Infinity;
@@ -112,16 +114,12 @@ function Dashboard({ payload }) {
   const selectedTarget = analysis.targets.find((target) => target.mmsi === selectedMmsi) || visibleTargets[0] || analysis.targets[0];
   const selectedAlert = analysis.alerts.find((alert) => alert.id === selectedAlertId) || selectedTarget?.alerts?.[0] || visibleAlerts[0] || null;
   const mapData = useMemo(() => buildMapData({ targets: visibleTargets, areas: analysis.monitoredAreas, segments: visibleSegments, aisGaps: visibleGaps, alerts: visibleAlerts, replayEnd, coast: coastData, selectedTarget }), [analysis.monitoredAreas, replayEnd, visibleAlerts, visibleGaps, visibleSegments, visibleTargets, selectedTarget]);
-  const counts = useMemo(() => {
-    const byStatus = Object.fromEntries(Object.keys(STATUS_PRIORITY).map((status) => [status, 0]));
-    for (const target of analysis.targets) byStatus[target.status] = (byStatus[target.status] || 0) + 1;
-    return byStatus;
-  }, [analysis.targets]);
+  const summary = analysis.summary;
   const handleTargetSelect = (mmsi) => {
     const target = analysis.targets.find((item) => item.mmsi === mmsi);
     setSelectedMmsi(mmsi);
     setSelectedAlertId(target?.alerts?.[0]?.id || null);
-    setMapFocus(pointFocus("target", target, target?.hasObservedTrack ? 9 : 11));
+    if (!target?.hasObservedTrack) setMapFocus(pointFocus("target", target, 11));
   };
   const handleAlertSelect = (alert) => {
     setSelectedAlertId(alert.id);
@@ -141,79 +139,73 @@ function Dashboard({ payload }) {
   return (
     <main className="stm-shell">
       <header className="topbar">
-        <div className="brand"><Ship size={24} /><div><h1>无人艇跟监告警智能体</h1><p>国土 200 海里三级告警 · AIS 异常跟监 · 轨迹速度研判</p></div></div>
+        <div className="brand"><Ship size={22} /><div><h1>无人艇跟监告警智能体</h1></div></div>
+        {summary && (
+          <div className={`threat-badge inline ${summary.threatLevel}`}>
+            <ShieldAlert size={15} /><span>研判</span><strong>{summary.threatLabel}</strong>
+          </div>
+        )}
         <div className="top-metrics">
-          <span><Database size={15} />目标 {analysis.metadata.targetCount}</span>
-          <span><Radio size={15} />轨迹点 {analysis.metadata.trackPointCount.toLocaleString("zh-CN")}</span>
-          <span><AlertTriangle size={15} />告警 {analysis.alerts.length}</span>
-          <span><Clock3 size={15} />{fmtDateTime(replayEndIso)}</span>
+          <span><Database size={14} />目标 {analysis.metadata.targetCount}</span>
+          <span><AlertTriangle size={14} />告警 {analysis.alerts.length}</span>
+          <span><Clock3 size={14} />{fmtDateTime(replayEndIso)}</span>
         </div>
       </header>
-      <SummaryPanel summary={analysis.summary} />
-      <section className="summary-strip">
-        <article className="summary-card critical"><span>异常行为目标</span><strong>{counts["异常行为目标"] || 0}</strong></article>
-        <article className="summary-card good"><span>高可信目标</span><strong>{counts["高可信目标"] || 0}</strong></article>
-        <article className="summary-card warn"><span>待核验目标</span><strong>{counts["待核验目标"] || 0}</strong></article>
-        <article className="summary-card neutral"><span>仅最新位置</span><strong>{counts["仅最新位置"] || 0}</strong></article>
-      </section>
+
       <section className="workspace">
         <aside className="target-panel">
-          <div className="panel-head"><h2><Target size={16} />目标清单</h2><span>{visibleTargets.length} / {analysis.targets.length}</span></div>
+          <div className="panel-head"><h2><Target size={15} />目标</h2><span>{visibleTargets.length}/{analysis.targets.length}</span></div>
           <div className="filters">
-            <label className="searchbox"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="船名 / MMSI" /></label>
-            <label><Filter size={14} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statusOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label><Gauge size={14} /><select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>{sourceOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <label><Target size={14} /><select value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}><option>全部区域</option>{analysis.monitoredAreas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>
+            <label className="searchbox"><Search size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="船名 / MMSI" /></label>
+            <label><Filter size={13} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statusOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
           <div className="target-list">{visibleTargets.map((target) => <TargetRow key={target.mmsi} target={target} selected={target.mmsi === selectedTarget?.mmsi} onSelect={handleTargetSelect} />)}</div>
         </aside>
-        <MapPanel mapData={mapData} selectedMmsi={selectedTarget?.mmsi} selectedAlertId={selectedAlert?.id} focusRequest={mapFocus} onAction={handleMapAction} />
-        <aside className="detail-panel">
-          <div className="panel-head"><h2><AlertTriangle size={16} />告警与详情</h2><span>{visibleAlerts.length}</span></div>
-          <section className="selected-target-card">
-            <div className="target-title-row"><div><h3>{selectedTarget?.name}</h3><span>{selectedTarget?.mmsi}</span></div><strong>{selectedTarget?.score}</strong></div>
-            <div className="target-dashboard">
-              <div className="dash-row">
-                <div className="dash-cell">
-                  <small>离国土</small>
-                  <strong>{selectedTarget?.minCoastDistanceNm != null ? selectedTarget.minCoastDistanceNm.toFixed(0) : "—"}</strong>
-                  <small>海里</small>
-                  <div className="bar"><span style={{ width: `${Math.min(100, ((selectedTarget?.minCoastDistanceNm ?? 200) / 200) * 100)}%` }} /></div>
-                </div>
-                <div className="dash-cell">
-                  <small>最快</small>
-                  <strong>{selectedTarget?.maxSpeedSegment ? selectedTarget.maxSpeedSegment.speedKn.toFixed(1) : "—"}</strong>
-                  <small>kt</small>
-                </div>
-                <div className="dash-cell">
-                  <small>活动天数</small>
-                  <strong>{selectedTarget?.activeDays ?? "—"}</strong>
-                </div>
-                <div className="dash-cell">
-                  <small>航向</small>
-                  <span className="compass" style={{ transform: `rotate(${selectedTarget?.courseDeg ?? 0}deg)` }}><ArrowUp size={22} /></span>
-                </div>
+
+        <div className="map-stack">
+          <MapPanel mapData={mapData} selectedMmsi={selectedTarget?.mmsi} selectedAlertId={selectedAlert?.id} focusRequest={mapFocus} onAction={handleMapAction} />
+          <section className="dashstrip">
+            <div className="dashstrip-title">
+              <h3>{selectedTarget?.name}</h3><span>{selectedTarget?.mmsi}</span>
+              <strong className="score-pill">评分 {selectedTarget?.score}</strong>
+            </div>
+            <div className="dash-cells">
+              <div className="dash-cell">
+                <small>离国土</small>
+                <strong>{selectedTarget?.minCoastDistanceNm != null ? selectedTarget.minCoastDistanceNm.toFixed(0) : "—"}</strong>
+                <small>海里</small>
+                <div className="bar"><span style={{ width: `${Math.min(100, ((selectedTarget?.minCoastDistanceNm ?? 200) / 200) * 100)}%` }} /></div>
               </div>
+              <div className="dash-cell"><small>最快</small><strong>{selectedTarget?.maxSpeedSegment ? selectedTarget.maxSpeedSegment.speedKn.toFixed(1) : "—"}</strong><small>kt</small></div>
+              <div className="dash-cell"><small>活动天数</small><strong>{selectedTarget?.activeDays ?? "—"}</strong></div>
+              <div className="dash-cell compass-cell"><small>航向</small><span className="compass" style={{ transform: `rotate(${selectedTarget?.courseDeg ?? 0}deg)` }}><ArrowUp size={20} /></span></div>
             </div>
-            <div className="target-meta-row">
-              <span>{selectedTarget?.status}</span>
-              <span>{selectedTarget?.dimension.label}</span>
-              <span>{selectedTarget?.trackSource}</span>
-            </div>
+            {summary?.advice?.length > 0 && (
+              <div className={`advice-strip advice-${summary.advice[0].level || "low"}`}>{summary.advice[0].text}</div>
+            )}
           </section>
-          {selectedAlert && (
-            <section className={`selected-alert-card ${selectedAlert.severity}`}>
-              <header><span>{severityLabel(selectedAlert.severity)}</span><strong>{selectedAlert.title}</strong></header>
-              <p>{selectedAlert.summary}</p>
-              <div className="evidence-tags">{(selectedAlert.evidence || []).slice(0, 3).map((item) => <span key={item}>{item}</span>)}</div>
-            </section>
-          )}
-          <div className="alert-list">{visibleAlerts.map((alert) => <AlertRow key={alert.id} alert={alert} selected={alert.id === selectedAlert?.id} onSelect={handleAlertSelect} />)}</div>
-        </aside>
+        </div>
+
+        <button className={`alert-fab ${visibleAlerts.length ? "has" : ""}`} onClick={() => setShowAlertDrawer((v) => !v)} aria-label="告警列表">
+          <AlertTriangle size={18} /><span>{visibleAlerts.length}</span>
+        </button>
+        {showAlertDrawer && (
+          <aside className="alert-drawer">
+            <div className="panel-head"><h2><AlertTriangle size={15} />告警</h2><button className="card-close" onClick={() => setShowAlertDrawer(false)}><X size={14} /></button></div>
+            {selectedAlert && (
+              <section className={`selected-alert-card ${selectedAlert.severity}`}>
+                <header><span>{severityLabel(selectedAlert.severity)}</span><strong>{selectedAlert.title}</strong></header>
+                <p>{selectedAlert.summary}</p>
+              </section>
+            )}
+            <div className="alert-list">{visibleAlerts.map((alert) => <AlertRow key={alert.id} alert={alert} selected={alert.id === selectedAlert?.id} onSelect={handleAlertSelect} />)}</div>
+          </aside>
+        )}
       </section>
+
       <AlertCard alert={cardAlert} onClose={() => setCardAlert(null)} />
       <footer className="timeline">
-        <div><strong>轨迹回放</strong><span>{fmtDateTime(analysis.metadata.dataWindow.start)} → {fmtDateTime(analysis.metadata.dataWindow.end)}</span></div>
+        <div><strong>回放</strong><span>{fmtDateTime(analysis.metadata.dataWindow.start)} → {fmtDateTime(analysis.metadata.dataWindow.end)}</span></div>
         <input type="range" min="0" max="100" value={Math.round(replayFrac * 100)} onChange={(e) => setReplayFrac(Number(e.target.value) / 100)} />
         <time>{fmtDateTime(replayEndIso)}</time>
       </footer>

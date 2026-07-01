@@ -43,6 +43,7 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const fitDoneRef = useRef(false);
+  const lastFitMmsi = useRef(null);
   const onActionRef = useRef(onAction);
   onActionRef.current = onAction;
   const [loaded, setLoaded] = useState(false);
@@ -90,14 +91,15 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
       }
       map.addLayer({ id: "monitored-area-fill", type: "fill", source: "monitored-areas", paint: { "fill-color": "#13b8a6", "fill-opacity": 0.13 } });
       map.addLayer({ id: "monitored-area-outline", type: "line", source: "monitored-areas", paint: { "line-color": "#43f5d6", "line-width": 1.2, "line-opacity": 0.8 } });
-      map.addLayer({ id: "track-segments", type: "line", source: "track-segments", paint: { "line-color": "#60a5fa", "line-width": selectedTrackWidth(selectedMmsi), "line-opacity": selectedTrackOpacity(selectedMmsi) } });
+      map.addLayer({ id: "track-segments", type: "line", source: "track-segments", filter: ["!=", ["get", "targetMmsi"], selectedMmsi ?? null], paint: { "line-color": "#64748b", "line-width": 1.4, "line-opacity": 0.4 } });
       map.addLayer({ id: "ais-gaps", type: "circle", source: "ais-gaps", paint: { "circle-radius": 6, "circle-color": ["match", ["get", "severity"], "critical", "#ef4444", "warning", "#f59e0b", "#9ca3af"], "circle-stroke-color": "#fff7ed", "circle-stroke-width": 1, "circle-opacity": 0.95 } });
       map.addLayer({ id: "vessel-points", type: "circle", source: "vessel-points", paint: { "circle-radius": selectedTargetRadius(selectedMmsi), "circle-color": ["match", ["get", "status"], "异常行为目标", "#ef4444", "高可信目标", "#22c55e", "待核验目标", "#eab308", "#94a3b8"], "circle-stroke-color": "#f8fafc", "circle-stroke-width": selectedTargetStroke(selectedMmsi), "circle-opacity": 0.92 } });
       map.addLayer({ id: "alert-points", type: "circle", source: "alert-points", paint: { "circle-radius": selectedAlertRadius(selectedAlertId), "circle-color": ["match", ["get", "severity"], "critical", "#dc2626", "warning", "#f97316", "#38bdf8"], "circle-stroke-color": "#fef2f2", "circle-stroke-width": selectedAlertStroke(selectedAlertId), "circle-opacity": 0.86 } });
       map.addLayer({ id: "coast-line", type: "line", source: "coast-line", paint: { "line-color": "#22d3ee", "line-width": 1.6, "line-opacity": 0.9 } });
       map.addLayer({ id: "coast-buffer", type: "line", source: "coast-line", paint: { "line-color": "#ef4444", "line-width": ["interpolate", ["linear"], ["zoom"], 2, 6, 8, 26], "line-opacity": 0.10 } });
       map.addLayer({ id: "max-speed-segment", type: "line", source: "max-speed-segment", paint: { "line-color": "#ef4444", "line-width": 3.4, "line-opacity": 0.95 } });
-      map.addLayer({ id: "speed-segments", type: "line", source: "speed-segments", paint: { "line-color": ["interpolate", ["linear"], ["get", "speedKn"], 0, "#3b82f6", 5, "#eab308", 10, "#ef4444"], "line-width": 2.2, "line-opacity": 0.9 } });
+      map.addLayer({ id: "speed-segments-halo", type: "line", source: "speed-segments", paint: { "line-color": "#fbbf24", "line-width": 7, "line-opacity": 0.4, "line-blur": 1.4 } });
+      map.addLayer({ id: "speed-segments", type: "line", source: "speed-segments", paint: { "line-color": ["interpolate", ["linear"], ["get", "speedKn"], 0, "#3b82f6", 5, "#eab308", 10, "#ef4444"], "line-width": 3.5, "line-opacity": 0.95 } });
       map.addLayer({ id: "nearest-point", type: "circle", source: "nearest-point", paint: { "circle-radius": 7, "circle-color": "#22d3ee", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 } });
       const clickableLayers = ["alert-points", "vessel-points", "ais-gaps", "track-segments", "monitored-area-fill", "monitored-area-outline"];
       map.on("click", (event) => {
@@ -153,6 +155,7 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
     visible("vessel-points", showTargets);
     visible("coast-line", showAreas);
     visible("coast-buffer", showAreas);
+    visible("speed-segments-halo", showTracks);
     visible("speed-segments", showTracks);
     visible("max-speed-segment", showTracks);
     visible("nearest-point", showTargets);
@@ -161,8 +164,7 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
       map.setPaintProperty("vessel-points", "circle-stroke-width", selectedTargetStroke(selectedMmsi));
     }
     if (map.getLayer("track-segments")) {
-      map.setPaintProperty("track-segments", "line-width", selectedTrackWidth(selectedMmsi));
-      map.setPaintProperty("track-segments", "line-opacity", selectedTrackOpacity(selectedMmsi));
+      map.setFilter("track-segments", ["!=", ["get", "targetMmsi"], selectedMmsi ?? null]);
     }
     if (map.getLayer("alert-points")) {
       map.setPaintProperty("alert-points", "circle-radius", selectedAlertRadius(selectedAlertId));
@@ -180,6 +182,15 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
       essential: true,
     });
   }, [focusRequest, loaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loaded || !selectedMmsi) return;
+    if (lastFitMmsi.current === selectedMmsi) return;
+    lastFitMmsi.current = selectedMmsi;
+    const b = boundsForMapData({ trackSegments: mapData.speedSegments });
+    if (b) map.fitBounds(b, { padding: 60, maxZoom: 11, duration: 700 });
+  }, [selectedMmsi, loaded, mapData]);
 
   return (
     <section className="map-panel">
