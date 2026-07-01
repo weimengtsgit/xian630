@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,7 +76,7 @@ func (s *Server) latestPrototypeRef(r *http.Request, readDetails bool) (*model.W
 		if ref.StepID != stepID || ref.Kind != model.WorkbenchArtifactInterfacePreview || ref.CardKey != "interface_parsing" {
 			continue
 		}
-		if match == nil || ref.UpdatedAt.After(match.UpdatedAt) {
+		if newerPrototypeRef(ref, match) {
 			match = ref
 		}
 	}
@@ -85,17 +87,37 @@ func (s *Server) latestPrototypeRef(r *http.Request, readDetails bool) (*model.W
 		return match, nil, nil, true
 	}
 	var manifest map[string]any
-	if !readArtifactJSON(s.cfg.ArtifactRoot, match.Path, &manifest) {
-		return nil, nil, nil, false
-	}
+	readArtifactJSON(s.cfg.ArtifactRoot, match.Path, &manifest)
 	contractPath := strings.TrimSuffix(match.Path, "/preview-manifest.json") + "/prototype-contract.json"
 	var contract map[string]any
-	if !readArtifactJSON(s.cfg.ArtifactRoot, contractPath, &contract) {
-		return nil, nil, nil, false
-	}
+	readArtifactJSON(s.cfg.ArtifactRoot, contractPath, &contract)
 	return match, manifest, contract, true
 }
 
+func newerPrototypeRef(candidate, current *model.WorkbenchArtifactRef) bool {
+	if current == nil {
+		return true
+	}
+	candidateAttempt := prototypeAttemptFromPath(candidate.Path)
+	currentAttempt := prototypeAttemptFromPath(current.Path)
+	if candidateAttempt != currentAttempt {
+		return candidateAttempt > currentAttempt
+	}
+	return candidate.UpdatedAt.After(current.UpdatedAt)
+}
+
+func prototypeAttemptFromPath(path string) int {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if !strings.HasPrefix(part, "attempt-") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(part, "attempt-"))
+		if err == nil {
+			return n
+		}
+	}
+	return 0
+}
 func readArtifactJSON(root, rel string, out any) bool {
 	full, ok := resolveAttachmentPath(root, rel)
 	if !ok {
@@ -270,4 +292,100 @@ func (s *Server) jobPrototypeFeedback(w http.ResponseWriter, r *http.Request) {
 		s.exec.Signal()
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted", "stepId": targetStep.ID})
+}
+
+// jobPrototypePreviewPath returns the absolute on-disk path of the prototype
+// index.html for the given job's design_contract step at the highest attempt.
+//
+//	GET /api/jobs/:id/prototype/preview
+//	→ { "path": "/abs/.../jobs/<jobID>/design_contract/attempt-<max>/prototype/index.html" }
+func (s *Server) jobPrototypePreviewPath(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+
+	// Build the design_contract directory under ArtifactRoot.
+	dcDir := filepath.Join(s.cfg.ArtifactRoot, "jobs", jobID, "design_contract")
+	absDCDir, err := filepath.Abs(dcDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "resolve path")
+		return
+	}
+
+	// Scan attempt-N subdirectories and pick the highest N.
+	entries, err := os.ReadDir(absDCDir)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "prototype not found")
+		return
+	}
+	maxAttempt := -1
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "attempt-") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(e.Name(), "attempt-"))
+		if err != nil || n < 0 {
+			continue
+		}
+		if n > maxAttempt {
+			maxAttempt = n
+		}
+	}
+	if maxAttempt < 0 {
+		writeError(w, http.StatusNotFound, "prototype not found")
+		return
+	}
+
+	indexPath := filepath.Join(absDCDir, "attempt-"+strconv.Itoa(maxAttempt), "prototype", "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		writeError(w, http.StatusNotFound, "prototype index.html not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path": filepath.ToSlash(indexPath),
+	})
+}
+
+// jobPrototypeStatic serves individual files (CSS, JS, images, etc.) from the
+// prototype directory. The wildcard *path param captures everything after
+// /prototype/static/. Path traversal is blocked by resolveAttachmentPath.
+func (s *Server) jobPrototypeStatic(w http.ResponseWriter, r *http.Request) {
+	ref, _, _, ok := s.latestPrototypeRef(r, false)
+	if !ok {
+		writeError(w, http.StatusNotFound, "prototype not found")
+		return
+	}
+	subPath := Param(r, "path")
+	if subPath == "" {
+		writeError(w, http.StatusNotFound, "missing resource path")
+		return
+	}
+	// Build the file path relative to the prototype directory. The ref.Path
+	// points to preview-manifest.json; the prototype dir is its parent.
+	protoDir := filepath.ToSlash(filepath.Dir(ref.Path))
+	relPath := protoDir + "/" + subPath
+	full, ok := resolveAttachmentPath(s.cfg.ArtifactRoot, relPath)
+	if !ok {
+		writeError(w, http.StatusNotFound, "resource not found")
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		writeError(w, http.StatusNotFound, "resource not found")
+		return
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read resource")
+		return
+	}
+	// Derive Content-Type from file extension. Falls back to
+	// application/octet-stream for unknown types.
+	ext := filepath.Ext(full)
+	ct := mime.TypeByExtension(ext)
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", ct)
+	_, _ = w.Write(data)
 }

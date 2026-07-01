@@ -84,18 +84,51 @@ func TestJobPrototypePreviewServesIndexWithNoStore(t *testing.T) {
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", cc)
 	}
-	if !strings.Contains(rec.Body.String(), "原型") {
-		t.Fatalf("preview body missing prototype content: %s", rec.Body.String())
+	want := "<!doctype html><title>首页</title><p>原型</p>"
+	if rec.Body.String() != want {
+		t.Fatalf("preview body = %q, want raw index html %q", rec.Body.String(), want)
 	}
 }
 
+func TestJobPrototypePreviewServesLatestAttemptIndex(t *testing.T) {
+	srv, router, _, job, step := setupPrototypeFixture(t)
+	ctx := testCtx()
+	protoDir := filepath.Join(srv.cfg.ArtifactRoot, "jobs", job.ID, "design_contract", "attempt-2", "prototype")
+	if err := os.MkdirAll(protoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, filepath.Join(protoDir, "index.html"), "<!doctype html><title>最新版</title><p>attempt-2</p>")
+	writeFixture(t, filepath.Join(protoDir, "preview-manifest.json"), `{"mode":"static","defaultPage":"home","fidelity":"static","pages":[{"id":"home","title":"最新版","file":"prototype/index.html","generated":true,"visibleByDefault":true}]}`)
+	writeFixture(t, filepath.Join(protoDir, "prototype-contract.json"), `{"prototypeStatus":"unconfirmed","downstreamConstraintLevel":"reference","immutable":false,"prototype":{"style":"ued_review","targetAudience":"ued","targetPlatform":"responsive","fidelity":"static","defaultPage":"home","confirmationPolicy":"unconfirmed_reference","pages":[{"id":"home","title":"最新版","generated":true,"visibleByDefault":true}]}}`)
+	ref := model.WorkbenchArtifactRef{
+		ID: "warf_proto_2", JobID: job.ID, StepID: step.ID, CardKey: "interface_parsing",
+		Kind: model.WorkbenchArtifactInterfacePreview, Label: "原型预览",
+		Path:         "jobs/job_proto/design_contract/attempt-2/prototype/preview-manifest.json",
+		PreviewURL:   "/api/jobs/job_proto/steps/step_design/prototype/preview",
+		SnapshotHash: "sha256:def", Status: "unconfirmed",
+		CreatedAt: testNow().Add(time.Second), UpdatedAt: testNow().Add(time.Second),
+	}
+	if err := srv.store.UpsertWorkbenchArtifactRef(ctx, ref); err != nil {
+		t.Fatalf("UpsertWorkbenchArtifactRef: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/preview", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "<!doctype html><title>最新版</title><p>attempt-2</p>"; got != want {
+		t.Fatalf("preview body = %q, want latest attempt index %q", got, want)
+	}
+}
 func TestJobPrototypePreviewRejectsTraversalPage(t *testing.T) {
 	srv, router, _, job, step := setupPrototypeFixture(t)
 	ctx := testCtx()
 	evilRef := model.WorkbenchArtifactRef{
 		ID: "warf_evil", JobID: job.ID, StepID: step.ID, CardKey: "interface_parsing",
 		Kind: model.WorkbenchArtifactInterfacePreview, Label: "原型预览",
-		Path: "../../../etc/passwd", Status: "unconfirmed",
+		Path: "jobs/job_proto/design_contract/attempt-2/prototype/../../../../../../etc/passwd", Status: "unconfirmed",
 		CreatedAt: testNow(), UpdatedAt: testNow().Add(time.Second),
 	}
 	if err := srv.store.UpsertWorkbenchArtifactRef(ctx, evilRef); err != nil {
@@ -223,5 +256,70 @@ func TestContinuePrototypeMarksReference(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "continued_without_confirmation") {
 		t.Fatalf("continue body missing status: %s", rec.Body.String())
+	}
+}
+
+func TestJobPrototypePreviewDoesNotInjectBaseTag(t *testing.T) {
+	_, router, _, _, step := setupPrototypeFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/preview", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "<base ") {
+		t.Fatalf("preview body should be raw index html without injected <base>. got:\n%s", body)
+	}
+}
+func TestJobPrototypeStaticServesCSS(t *testing.T) {
+	_, router, _, _, step := setupPrototypeFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/static/styles.css", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "css") {
+		t.Fatalf("content-type = %q, want css", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "body{margin:0}") {
+		t.Fatalf("static body missing css content: %s", rec.Body.String())
+	}
+}
+func TestJobPrototypeRelativeStylesheetServesCSS(t *testing.T) {
+	_, router, _, _, step := setupPrototypeFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/styles.css", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "css") {
+		t.Fatalf("content-type = %q, want css", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "body{margin:0}") {
+		t.Fatalf("relative stylesheet body missing css content: %s", rec.Body.String())
+	}
+}
+
+func TestJobPrototypeStaticRejectsTraversal(t *testing.T) {
+	_, router, _, _, step := setupPrototypeFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/static/../../etc/passwd", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	// resolveAttachmentPath blocks paths that escape the artifact root.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for traversal", rec.Code)
+	}
+}
+
+func TestJobPrototypeStaticRejectsMissingFile(t *testing.T) {
+	_, router, _, _, step := setupPrototypeFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/static/nonexistent.js", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for missing file", rec.Code)
 	}
 }

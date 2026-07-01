@@ -770,6 +770,17 @@ export function useDialogueSessions() {
   // task panel shows its empty placeholder instead of the cross-session fallback
   // (which would otherwise surface the previous session's task in a workbench
   // whose conversation has already been cleared).
+  // Prototype dock reactivity: the dock reads view.workbenchArtifacts, which is
+  // populated by the server on getDialogue. When useJobs receives step.updated /
+  // artifact.created SSE it refreshes jobs.artifacts but NOT the dialogue view —
+  // so an interface_preview artifact projected by a waiting_user step is invisible
+  // until the next dialogue.* event or page reload. This stable callback lets
+  // App.jsx bridge the gap by re-fetching the view after jobs.artifacts changes.
+  const refreshSelectedView = useCallback(() => {
+    const id = selectedDialogueIdRef.current
+    if (id) loadView(id)
+  }, [loadView])
+
   const focusTask = state.view ? selectFocusTask(jobsForFocus, state.selectedDialogueId) : null
 
   return {
@@ -805,5 +816,6 @@ export function useDialogueSessions() {
     rollback,
     confirmChange,
     archive,
+    refreshSelectedView,
   }
 }

@@ -257,7 +257,11 @@ export function ConversationWorkbench({
   const [previewAttachment, setPreviewAttachment] = useState(null)
   const [previewDocument, setPreviewDocument] = useState(null)
   const [previewInterface, setPreviewInterface] = useState(null)
-  const [previewPrototype, setPreviewPrototype] = useState(null)
+  async function handleOpenPrototype(proto) {
+    if (!proto || !proto.jobId || !proto.stepId) return
+    const previewUrl = factoryApi.getJobPrototypePreviewUrl(proto.jobId, proto.stepId)
+    window.open(previewUrl, '_blank', 'noopener')
+  }
   // openProjectDocument fetches a task-owned docs/*.md file for read-only rich
   // preview. Early in the pipeline (before code generation registers an
   // application) the job already carries an AppSlug, so the backend can resolve
@@ -328,10 +332,6 @@ export function ConversationWorkbench({
       manifest: artifact.metadata && artifact.metadata.manifest ? artifact.metadata.manifest : {},
       contract: artifact.metadata && artifact.metadata.contract ? artifact.metadata.contract : {},
     })
-  }
-
-  async function handleOpenPrototype(proto) {
-    if (proto && proto.previewUrl) setPreviewPrototype(proto)
   }
 
   async function handlePrototypeFeedback(proto, feedback) {
@@ -724,8 +724,6 @@ export function ConversationWorkbench({
         onClose={() => setPreviewInterface(null)}
       />
 
-      <PrototypePreviewModal prototype={previewPrototype} onClose={() => setPreviewPrototype(null)} />
-
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>
           <section
@@ -933,6 +931,14 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   }
   if (item.type === 'artifact_link') {
     const art = item.artifact
+    // 原型设计 step: render the generated HTML inline via iframe.
+    if (art && art.kind === 'interface_preview' && art.previewUrl) {
+      return (
+        <div className="cw-timeline-prototype-embed">
+          <iframe className="cw-prototype-inline-frame" src={art.previewUrl} title="原型设计预览" />
+        </div>
+      )
+    }
     return (
       <div className="cw-timeline-artifact-link">
         <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)}>
@@ -1617,6 +1623,19 @@ function PrototypeConfirmationDock({ prototype, onOpen, onConfirm, onFeedback })
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedbackText, setFeedbackText] = useState('')
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+
+  const submitConfirm = async () => {
+    if (confirming) return
+    setConfirming(true)
+    try {
+      await onConfirm(prototype)
+    } catch {
+      // ignore — SSE will eventually sync state
+    } finally {
+      setConfirming(false)
+    }
+  }
 
   const submitFeedback = async () => {
     const trimmed = feedbackText.trim()
@@ -1639,7 +1658,7 @@ function PrototypeConfirmationDock({ prototype, onOpen, onConfirm, onFeedback })
       <div className="cw-prototype-dock-actions">
         <button type="button" onClick={() => onOpen && onOpen(prototype)}>预览原型</button>
         {prototype && prototype.canConfirm ? (
-          <button type="button" className="cw-prototype-confirm" onClick={() => onConfirm && onConfirm(prototype)}>确定原型并继续</button>
+          <button type="button" className="cw-prototype-confirm" onClick={submitConfirm} disabled={confirming}>{confirming ? '确认中…' : '确定原型并继续'}</button>
         ) : null}
         <button type="button" onClick={() => setFeedbackOpen(v => !v)}>提出修改意见</button>
       </div>
@@ -1944,28 +1963,3 @@ function formatAcceptedAt(value) {
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
-
-
-function PrototypePreviewModal({ prototype, onClose }) {
-  if (!prototype) return null
-  return (
-    <div className="cw-doc-modal-layer" role="presentation" onMouseDown={onClose}>
-      <section
-        className="cw-doc-modal cw-prototype-preview-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="预览首页"
-        onMouseDown={event => event.stopPropagation()}
-      >
-        <header>
-          <strong>预览首页</strong>
-          <button type="button" onClick={onClose} aria-label="关闭预览">
-            <X size={16} />
-          </button>
-        </header>
-        <iframe className="cw-prototype-preview-frame" src={prototype.previewUrl} title="原型首页预览" />
-      </section>
-    </div>
-  )
-}
-
