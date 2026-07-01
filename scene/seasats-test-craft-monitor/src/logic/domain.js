@@ -9,6 +9,9 @@ export const DEFAULT_PARAMETERS = {
   aisGapCriticalMinutes: 360,
   segmentGapMinutes: 360,
   segmentJumpNm: 50,
+  coastAlertRangeNm: 200,
+  coastAlertHighNm: 80,
+  coastAlertMediumNm: 140,
 };
 
 export const STATUS_PRIORITY = {
