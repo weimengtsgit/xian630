@@ -37,7 +37,9 @@
 .ceg-card-state-running { border-color: rgba(104, 221, 255, 0.68); }
 .ceg-card-state-running::before { content: ''; position: absolute; inset: -1px; border-radius: 8px; border: 1px solid rgba(104, 221, 255, 0.58); animation: cegPulse 1.6s ease-in-out infinite; pointer-events: none; }
 .ceg-card-state-completed .ceg-card-state { color: #9df3a6; background: rgba(20, 64, 50, 0.5); }
-.ceg-card-state-failed .ceg-card-state, .ceg-card-state-waiting_user .ceg-card-state { color: #ffd98a; background: rgba(92, 58, 8, 0.5); }
+.ceg-card-state-failed { border-color: rgba(255, 102, 94, 0.62); background: linear-gradient(180deg, rgba(80, 22, 28, 0.86), rgba(45, 12, 16, 0.9)); }
+.ceg-card-state-failed .ceg-card-state { color: #ff9b9b; background: rgba(96, 26, 36, 0.55); }
+.ceg-card-state-waiting_user .ceg-card-state { color: #ffd98a; background: rgba(92, 58, 8, 0.5); }
 .ceg-card-state-skipped .ceg-card-state { color: #a5bdca; }
 .ceg-connector { position: relative; width: 78px; min-height: 116px; align-self: stretch; flex: 0 0 78px; }
 .ceg-edge-seg { position: absolute; overflow: hidden; border-radius: 2px; opacity: 0.86; background: rgba(143, 176, 191, 0.24); box-shadow: 0 0 0 1px rgba(6, 18, 29, 0.16); }
