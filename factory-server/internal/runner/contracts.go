@@ -459,9 +459,13 @@ func requirementFieldsFromOutput(raw requirementAnalysisOutput) map[string]any {
 // the stable identity/scenario fields. Audit color (generationProfile,
 // constraints, risks, workLog, validation) is excluded on purpose — it is not
 // part of what the user confirmed and must not gate the consistency check.
+// NOTE: `summary` is EXCLUDED — the confirmed requirement (from clarification)
+// carries NO free-text summary; only the analysis agent produces one, so
+// including it made the checksum always mismatch. The contract is the
+// structured fields the two sides share.
 func pickRequirementFields(doc map[string]any) map[string]any {
 	out := map[string]any{}
-	for _, key := range []string{"summary", "appType", "appName", "coreScenario", "primaryView", "mainEntities", "dataPolicy", "acceptanceFocus"} {
+	for _, key := range []string{"appType", "appName", "coreScenario", "primaryView", "mainEntities", "dataPolicy", "acceptanceFocus"} {
 		if v, ok := doc[key]; ok {
 			out[key] = v
 		}
