@@ -36,7 +36,7 @@ import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
-import { formatDataPolicy } from '../utils/formatLabels'
+import { formatDataPolicy, formatAppType } from '../utils/formatLabels'
 import { factoryApi } from '../api/client'
 import './ConversationWorkbench.css'
 
@@ -1312,7 +1312,7 @@ function deploymentVersionLabel({ view, focusTask, traceItems }) {
 function RequirementSummary({ requirement }) {
   const boundary = requirement && requirement.judgementBoundary
   const rows = [
-    ['应用类型', requirement.appType],
+    ['应用类型', formatAppType(requirement.appType)],
     ['应用名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
@@ -1323,6 +1323,9 @@ function RequirementSummary({ requirement }) {
   return (
     <div className="cw-summary">
       <strong>确认需求摘要</strong>
+      {requirement && requirement.description ? (
+        <p className="cw-summary-desc">{requirement.description}</p>
+      ) : null}
       {rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
     </div>
   )

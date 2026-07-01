@@ -771,8 +771,9 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "You are the software-factory requirement_analysis agent.\n" +
 			"Read confirmedRequirement from input.json and freeze it into a single final JSON object.\n" +
 			"Validate field completeness, capability boundaries, generationProfile, and blueprintRefs used only as reference scene docs. Record unsupported or out-of-scope asks in validation.unsupportedRequests.\n" +
-			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
+			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, description, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
 			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
+			"Populate `description` with a concise Simplified-Chinese paragraph detailing the confirmed requirement (目标、范围、关键能力); mirror it from the confirmedRequirement when present, otherwise synthesize it from the requirement fields. Do not omit it.\n" +
 			"All human-readable string values must be Simplified Chinese. This includes summary, scenario text, view descriptions, entity names, constraints, risks, and unsupported-request explanations. Only identifiers, slugs, enum keys, file paths, and code symbols may remain non-Chinese.\n" +
 			"Do not ask clarifying questions. Do not output needsUserInput or questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
 			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not attempt to write files or modify the workspace.\n" +
@@ -805,7 +806,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 	case model.StepRequirementAnalysis:
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
 			"AUDIT blueprintRefs（确认引用的 skill 存在于 .claude/skills/requirement-clarification/blueprints.json 且为 reference-only），将任何超出现有 skill 目录支持的请求记入 validation.unsupportedRequests。" +
-			"输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。" +
+			"输出 output.json，包含 confirmedRequirementId、summary、description、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。description 用简体中文写一段概括确认需求的详细说明（覆盖目标、范围、关键能力），confirmedRequirement 已带 description 时原样保留，否则据需求字段综合生成，不要省略。" +
 			"不要进行多轮澄清（澄清已在 Job 创建前完成），不要输出 needsUserInput/questions，不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
 	case model.StepSolutionDesign:
 		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。\n如果 prompt 末尾出现 [user_input] 段落，那是用户对上一轮澄清问题的回答，必须据此推进方案，不要重复提出已回答过的澄清问题。\n用户需求：" + job.UserPrompt +

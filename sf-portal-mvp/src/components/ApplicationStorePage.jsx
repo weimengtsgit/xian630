@@ -17,6 +17,7 @@ import {
     X,
 } from 'lucide-react'
 import {isGeneratedApplication, orderApplicationsForStore,} from '../hooks/applicationOrdering'
+import {formatAppType} from '../utils/formatLabels'
 import './ApplicationStorePage.css'
 
 export const STATUS_TEXT = {
@@ -35,18 +36,9 @@ const ACTION_TEXT = {
     delete: '删除中',
 }
 
-const TYPE_LABELS = {
-    command_dashboard: '指挥看板',
-    'command-dashboard': '指挥看板',
-    situation_replay: '态势复盘',
-    'timeline-replay': '态势复盘',
-    operations_management: '业务管理',
-    'map-dashboard': '地图态势',
-    'affiliation-inference-dashboard': '归属研判',
-}
-
 export function formatApplicationType(type) {
-    return TYPE_LABELS[type] || '其他应用'
+    const label = formatAppType(type)
+    return !label || label === '-' || label === type ? '其他应用' : label
 }
 
 export function filterStoreApplications(apps) {

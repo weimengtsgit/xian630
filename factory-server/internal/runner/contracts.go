@@ -337,6 +337,9 @@ type requirementAnalysisOutput struct {
 	MainEntities           []string            `json:"mainEntities"`
 	DataPolicy             string              `json:"dataPolicy"`
 	AcceptanceFocus        []string            `json:"acceptanceFocus"`
+	// Description carries the optional detailed Chinese paragraph surfaced in
+	// the 确认需求摘要. omitempty: existing requirement JSON still validates.
+	Description            string              `json:"description,omitempty"`
 	GenerationProfile      map[string][]string `json:"generationProfile"`
 	Constraints            json.RawMessage     `json:"constraints"`
 	Risks                  json.RawMessage     `json:"risks"`

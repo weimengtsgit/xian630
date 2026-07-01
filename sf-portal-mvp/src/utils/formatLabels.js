@@ -12,16 +12,24 @@ export function formatDataPolicy(policy) {
   return map[policy] || policy || '-'
 }
 
+// The SINGLE source of truth for app-type → Chinese display labels. Canonical
+// names follow CONTEXT.md (指挥看板类 / 业务管理类 / 归属研判类 / 态势复盘类应用).
+// Every surface (requirement summary, applications panel, store page) MUST go
+// through this — never hardcode a duplicate map or show the raw English type.
+// Internal English type values remain as backend keys (generation-profile etc.);
+// only DISPLAY is translated here.
 export function formatAppType(type) {
   const map = {
-    command_dashboard: '指挥仪表盘',
+    command_dashboard: '指挥看板',
+    operations_management: '业务管理',
     situation_replay: '态势复盘',
-    operations_management: '运营管理',
+    affiliation_inference_dashboard: '归属研判',
     managed_agent: '纳管智能体',
-    'command-dashboard': '指挥仪表盘',
-    'affiliation-inference-dashboard': '归属推断仪表盘',
+    // kebab-case variants (legacy/preset slugs)
+    'command-dashboard': '指挥看板',
     'timeline-replay': '态势复盘',
     'map-dashboard': '地图态势',
+    'affiliation-inference-dashboard': '归属研判',
   }
   return map[type] || type || '-'
 }

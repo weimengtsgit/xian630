@@ -411,6 +411,7 @@ func requirementWithoutBlueprintRefs(r Requirement) requirementView {
 		MainEntities:      r.MainEntities,
 		DataPolicy:        r.DataPolicy,
 		AcceptanceFocus:   r.AcceptanceFocus,
+		Description:       r.Description,
 		JudgementBoundary: r.JudgementBoundary,
 		GenerationProfile: r.GenerationProfile,
 	}
