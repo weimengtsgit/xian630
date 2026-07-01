@@ -37,6 +37,8 @@ type createClarificationBody struct {
 	AbandonActive bool   `json:"abandonActive"`
 }
 
+const maxClarificationInvalidJSONAttempts = 3
+
 type addClarificationMessageBody struct {
 	Content string `json:"content"`
 }
@@ -947,7 +949,7 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 
 	cfg := s.loadSceneCatalog(ctx)
 	roundThinking := ""
-	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
+	out, err := s.runClarificationRoundWithInvalidJSONRetry(ctx, input, func(ev clarification.StreamEvent) {
 		filtered := s.filterClarificationEvent(cfg, ev)
 		s.publishClarificationEvent(filtered)
 		// D2: in the dialogue flow, mirror the live analysis delta AND the raw
@@ -985,6 +987,13 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 		_ = s.store.UpdateClarificationRound(ctx, sessID, round)
 		errorCode := clarificationFailureCode(err)
 		_ = s.store.SetClarificationStatus(ctx, sessID, model.ClarificationStatusFailed, string(errorCode), err.Error())
+		if dialogueID != "" {
+			// 子澄清失败必须同步父会话，否则工作台会继续显示“需求澄清中”。
+			_ = s.store.UpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusFailed, string(errorCode), err.Error())
+			s.publishDialogueSimple("dialogue.failed", dialogueID, map[string]any{
+				"code": string(errorCode), "message": err.Error(),
+			})
+		}
 		s.publishClarificationEvent(clarification.StreamEvent{
 			Type:      "clarification.failed",
 			SessionID: sessID,
@@ -1139,6 +1148,22 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 		return sess, roundN, true
 	}
 	return refreshed, roundN, true
+}
+
+func (s *Server) runClarificationRoundWithInvalidJSONRetry(ctx context.Context, input clarification.RoundInput, emit func(clarification.StreamEvent)) (clarification.RoundOutput, error) {
+	var out clarification.RoundOutput
+	var err error
+	for attempt := 1; attempt <= maxClarificationInvalidJSONAttempts; attempt++ {
+		out, err = s.clarifier.RunRound(ctx, input, emit)
+		if !errors.Is(err, runner.ErrOutputInvalidJSON) {
+			return out, err
+		}
+		if attempt < maxClarificationInvalidJSONAttempts {
+			// 无效 JSON 多数来自模型额外输出说明文字，直接重试同一轮比让用户手动恢复更合适。
+			continue
+		}
+	}
+	return out, err
 }
 
 func clarificationFailureCode(err error) model.ErrorCode {

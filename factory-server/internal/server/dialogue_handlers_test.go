@@ -43,6 +43,9 @@ func (f *fakeDialogueRunner) Run(ctx context.Context, dir, name string, args ...
 	// .../route, draft uses .../draft-round-N). We sniff the prompt instead which
 	// carries "dialogue-intent-routing" vs "business-agent-drafting".
 	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "requirement-clarification") {
+		return runner.CommandResult{ExitCode: 0, Stdout: waitingUserOutput}, nil
+	}
 	if strings.Contains(joined, "business-agent-drafting") {
 		f.draftCalls++
 		if f.draftErr {
@@ -195,6 +198,9 @@ type businessDraftSequenceRunner struct {
 
 func (r *businessDraftSequenceRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
 	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "requirement-clarification") {
+		return runner.CommandResult{ExitCode: 0, Stdout: waitingUserOutput}, nil
+	}
 	if strings.Contains(joined, "business-agent-drafting") {
 		idx := r.draftCalls
 		r.draftCalls++
@@ -848,6 +854,49 @@ func TestRouteSelectApplicationGenerationCreatesChildClarification(t *testing.T)
 	}
 	if child.Round < 1 {
 		t.Fatalf("child round = %d, want >=1", child.Round)
+	}
+}
+
+func TestDialogueClarificationFailureMarksParentDialogueFailed(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	badClarifier := &clarSequenceRunner{outputs: []string{"Let me explain first, then maybe JSON."}}
+	srv.clarifier = clarification.Runner{
+		Cmd:           badClarifier,
+		WorkspaceRoot: srv.cfg.WorkspaceRoot,
+		ArtifactRoot:  t.TempDir(),
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "生成一个todo"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", create.Code, create.Body.String())
+	}
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{
+		"intent": "application_generation",
+	})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var view dialogueView
+	json.NewDecoder(routeRec.Body).Decode(&view)
+	if view.Child == nil || view.Child.Status != model.ClarificationStatusFailed {
+		t.Fatalf("child status = %+v, want failed", view.Child)
+	}
+	if view.Session.Status != model.DialogueStatusFailed {
+		t.Fatalf("dialogue status = %q, want failed", view.Session.Status)
+	}
+	if view.Session.ErrorCode == "" {
+		t.Fatalf("dialogue error_code is empty, want propagated child failure")
+	}
+
+	persisted, err := st.GetDialogueSession(context.Background(), created.Session.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("get dialogue: %v", err)
+	}
+	if persisted.Status != model.DialogueStatusFailed {
+		t.Fatalf("persisted dialogue status = %q, want failed", persisted.Status)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,12 +40,24 @@ var ErrRouteSlugNotCandidate = fmt.Errorf("route returned a slug that is not a s
 // than one question.
 var ErrDraftTooManyQuestions = fmt.Errorf("business draft contract allows at most one question per round")
 
+const maxDialogueInvalidJSONAttempts = 3
+
 // RouteIntent runs one intent-routing model turn. It writes the bounded input,
 // invokes claude in plan mode with Read/Grep/Glob only, parses + validates the
 // RouteOutput, and emits redacted stream events. The returned RouteOutput keeps
 // the internalBlueprintSlug for server-side use; it is stripped from every
 // emitted StreamEvent.
 func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(StreamEvent)) (RouteOutput, error) {
+	for attempt := 1; attempt <= maxDialogueInvalidJSONAttempts; attempt++ {
+		out, err := r.routeIntentOnce(ctx, input, emit)
+		if !shouldRetryDialogueInvalidJSON(err, attempt) {
+			return out, err
+		}
+	}
+	return RouteOutput{}, nil
+}
+
+func (r Runner) routeIntentOnce(ctx context.Context, input RouteInput, emit func(StreamEvent)) (RouteOutput, error) {
 	dir := filepath.Join(r.artifactRoot(), "dialogues", input.DialogueID, "route")
 	out, err := r.runModel(ctx, dir, input.DialogueID, "route", input, r.routePrompt, emit, "dialogue.route")
 	if err != nil {
@@ -88,6 +101,16 @@ func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(Str
 // the same one-decision / consolidation / 6-round rules as clarification. It
 // validates the draft and rejects rounds emitting more than one question.
 func (r Runner) RunBusinessDraftRound(ctx context.Context, input BusinessDraftInput, emit func(StreamEvent)) (BusinessDraftOutput, error) {
+	for attempt := 1; attempt <= maxDialogueInvalidJSONAttempts; attempt++ {
+		out, err := r.runBusinessDraftRoundOnce(ctx, input, emit)
+		if !shouldRetryDialogueInvalidJSON(err, attempt) {
+			return out, err
+		}
+	}
+	return BusinessDraftOutput{}, nil
+}
+
+func (r Runner) runBusinessDraftRoundOnce(ctx context.Context, input BusinessDraftInput, emit func(StreamEvent)) (BusinessDraftOutput, error) {
 	op := fmt.Sprintf("draft-round-%d", input.Round)
 	dir := filepath.Join(r.artifactRoot(), "dialogues", input.DialogueID, op)
 	out, err := r.runModel(ctx, dir, input.DialogueID, op, input, r.draftPrompt, emit, "dialogue.draft")
@@ -115,6 +138,14 @@ func (r Runner) RunBusinessDraftRound(ctx context.Context, input BusinessDraftIn
 		emit(ev)
 	}
 	return draftOut, nil
+}
+
+func shouldRetryDialogueInvalidJSON(err error, attempt int) bool {
+	if err == nil || !errors.Is(err, runner.ErrOutputInvalidJSON) {
+		return false
+	}
+	// 只重试模型输出 JSON 不合法的情况；字段校验失败通常代表语义错误，继续暴露给调用方处理。
+	return attempt < maxDialogueInvalidJSONAttempts
 }
 
 // runModel is the shared artifact+stream+validate shell for both contracts.
