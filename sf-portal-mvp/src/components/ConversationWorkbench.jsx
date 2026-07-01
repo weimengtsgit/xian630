@@ -933,6 +933,14 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   }
   if (item.type === 'artifact_link') {
     const art = item.artifact
+    // 原型设计 step: render the generated HTML inline via iframe.
+    if (art && art.kind === 'interface_preview' && art.previewUrl) {
+      return (
+        <div className="cw-timeline-prototype-embed">
+          <iframe className="cw-prototype-inline-frame" src={art.previewUrl} title="原型设计预览" />
+        </div>
+      )
+    }
     return (
       <div className="cw-timeline-artifact-link">
         <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)}>
