@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -689,4 +690,82 @@ func writeTempFileForContractTest(t *testing.T, path, raw string) string {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path
+}
+
+func writeTempJSON(t *testing.T, v any) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "output.json")
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestValidateDesignContractRequiresPrototypeHomePage(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":            "passed",
+		"summary":           "首页静态原型已生成",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{"name"},
+		"prototype": map[string]any{
+			"style":          "ued_review",
+			"targetAudience": "ued",
+			"targetPlatform": "responsive",
+			"fidelity":       "static",
+			"defaultPage":    "home",
+			"pages": []any{
+				map[string]any{"id": "home", "title": "首页", "generated": true, "visibleByDefault": true},
+			},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	out, detail, err := ValidateDesignContract(path)
+	if err != nil {
+		t.Fatalf("ValidateDesignContract err = %v", err)
+	}
+	if out.NeedsUserInput {
+		t.Fatalf("NeedsUserInput = true, want false")
+	}
+	if detail.Prototype.DefaultPage != "home" || len(detail.Prototype.Pages) != 1 {
+		t.Fatalf("prototype not decoded: %+v", detail.Prototype)
+	}
+}
+
+func TestValidateDesignContractRejectsPrototypeWithoutHome(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":            "passed",
+		"summary":           "bad prototype",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{},
+		"prototype": map[string]any{
+			"style":              "business_demo",
+			"targetAudience":     "business_reviewer",
+			"targetPlatform":     "web",
+			"fidelity":           "static",
+			"defaultPage":        "home",
+			"pages":              []any{},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	_, _, err := ValidateDesignContract(path)
+	if err == nil {
+		t.Fatalf("expected schema error for missing homepage")
+	}
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	}
 }

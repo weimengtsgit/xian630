@@ -390,9 +390,9 @@ func ValidateRequirementAnalysisWithConfirmedSummary(path, confirmedRequirementJ
 	if out.NeedsUserInput {
 		return out, nil
 	}
-		wantFields := requirementFieldsFromConfirmed(confirmedRequirementJSON)
-		want := requirementSummaryChecksum(wantFields)
-		got := requirementSummaryChecksum(requirementFieldsFromOutputForConfirmed(raw, wantFields))
+	wantFields := requirementFieldsFromConfirmed(confirmedRequirementJSON)
+	want := requirementSummaryChecksum(wantFields)
+	got := requirementSummaryChecksum(requirementFieldsFromOutputForConfirmed(raw, wantFields))
 	if want != got {
 		return StepOutput{}, fmt.Errorf("confirmed requirement consistency mismatch: %w", ErrSchemaValidationFailed)
 	}
@@ -581,14 +581,15 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 // assumedDataFields (field names the preview depends on but data capture has
 // not yet confirmed), and the shared workLog/warnings.
 type DesignContractOutput struct {
-	Status            string         `json:"status"`
-	Summary           string         `json:"summary"`
-	NeedsUserInput    bool           `json:"needsUserInput"`
-	Questions         []Question     `json:"questions"`
-	DesignDocument    any            `json:"designDocument"`
-	AssumedDataFields []string       `json:"assumedDataFields"`
-	WorkLog           []workLogEntry `json:"workLog"`
-	Warnings          []string       `json:"warnings"`
+	Status            string              `json:"status"`
+	Summary           string              `json:"summary"`
+	NeedsUserInput    bool                `json:"needsUserInput"`
+	Questions         []Question          `json:"questions"`
+	DesignDocument    any                 `json:"designDocument"`
+	AssumedDataFields []string            `json:"assumedDataFields"`
+	Prototype         model.PrototypeSpec `json:"prototype"`
+	WorkLog           []workLogEntry      `json:"workLog"`
+	Warnings          []string            `json:"warnings"`
 }
 
 // ValidateDesignContract decodes a design_contract attempt's output.json and
@@ -611,7 +612,29 @@ func ValidateDesignContract(path string) (StepOutput, DesignContractOutput, erro
 	if strings.TrimSpace(raw.Summary) == "" || raw.DesignDocument == nil {
 		return StepOutput{}, raw, fmt.Errorf("design summary and designDocument required: %w", ErrSchemaValidationFailed)
 	}
+	if err := validatePrototypeSpec(raw.Prototype); err != nil {
+		return StepOutput{}, raw, err
+	}
 	return StepOutput{}, raw, nil
+}
+
+func validatePrototypeSpec(p model.PrototypeSpec) error {
+	if strings.TrimSpace(p.Style) == "" ||
+		strings.TrimSpace(p.TargetAudience) == "" ||
+		strings.TrimSpace(p.TargetPlatform) == "" ||
+		strings.TrimSpace(p.Fidelity) == "" ||
+		strings.TrimSpace(p.DefaultPage) == "" ||
+		strings.TrimSpace(p.ConfirmationPolicy) == "" {
+		return fmt.Errorf("prototype style, targetAudience, targetPlatform, fidelity, defaultPage and confirmationPolicy required: %w", ErrSchemaValidationFailed)
+	}
+	if len(p.Pages) == 0 {
+		return fmt.Errorf("prototype homepage required: %w", ErrSchemaValidationFailed)
+	}
+	home := p.Pages[0]
+	if home.ID != p.DefaultPage || home.ID != "home" || !home.Generated || !home.VisibleByDefault {
+		return fmt.Errorf("prototype first page must be generated visible home page: %w", ErrSchemaValidationFailed)
+	}
+	return nil
 }
 
 // DataIntegrationOutput mirrors the data_integration step's output.json (Task 9).
