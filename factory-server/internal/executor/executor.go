@@ -337,7 +337,30 @@ func NewExecutor(st *store.Store, runner StepRunner, maxConcurrent int) *Executo
 // all idle workers so a queued batch can fan out across apps. A watcher goroutine
 // Broadcasts on ctx cancellation so idle workers exit promptly at shutdown.
 // Start returns immediately; workers exit when ctx is cancelled.
+// recoverRunningJobs re-queues every job left "running" by a previous process.
+// A running job is orphaned on restart (its worker goroutine is gone), and the
+// drain loop only claims QUEUED jobs — so without this recovery those jobs hang
+// forever. runJobStep does not check step status, so reclaiming a job reruns
+// its current step (IncrementStepAttempt + MarkStepRunning). This closes the
+// startup-recovery gap: restarting the factory-server mid-job no longer strands
+// every running job.
+func (e *Executor) recoverRunningJobs(ctx context.Context) {
+	running, err := e.store.ListJobs(ctx, string(model.JobStatusRunning))
+	if err != nil {
+		log.Printf("executor: recover running jobs: %v", err)
+		return
+	}
+	for _, job := range running {
+		if err := e.store.MarkJobQueued(ctx, job.ID); err != nil {
+			log.Printf("executor: requeue orphaned job %s: %v", job.ID, err)
+			continue
+		}
+		log.Printf("executor: recovered orphaned running job %s (step %s)", job.ID, job.CurrentStepKind)
+	}
+}
+
 func (e *Executor) Start(ctx context.Context) {
+	e.recoverRunningJobs(ctx)
 	// Watcher: Broadcast on ctx cancel so idle workers stuck in Wait wake and
 	// observe ctx.Err(). This is the standard sync.Cond + cancellation pattern.
 	go func() {
