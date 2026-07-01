@@ -89,7 +89,7 @@ func TestClaudeRunReadOnlyArgv(t *testing.T) {
 	// tool_use events into activity records. Read-only stages now avoid plan
 	// mode because some Claude-compatible providers turn it into an approval
 	// loop and emit prose instead of the required JSON contract.
-	wantRo := "--print --permission-mode acceptEdits --allowedTools Read,Grep,Glob --disallowedTools Bash,Edit,Write --output-format stream-json --include-partial-messages --verbose"
+	wantRo := "--print --permission-mode acceptEdits --allowedTools Read,Grep,Glob,Write --disallowedTools Bash,Edit --output-format stream-json --include-partial-messages --verbose"
 	if got != wantRo {
 		t.Errorf("read-only argv =\n got: %q\nwant: %q", got, wantRo)
 	}
@@ -309,7 +309,7 @@ func TestClaudeRunAttemptWriteArgv(t *testing.T) {
 	}
 }
 
-func TestClaudeRunReadOnlyStillDisallowsWrite(t *testing.T) {
+func TestClaudeRunReadOnlyAllowsOnlyOutputFileWrite(t *testing.T) {
 	clearClaudeModelEnv(t)
 	fr := &fakeRunner{stdout: "ok"}
 	r := ClaudeRunner{Runner: fr, Binary: "claude"}
@@ -320,7 +320,7 @@ func TestClaudeRunReadOnlyStillDisallowsWrite(t *testing.T) {
 	}
 
 	got := joinArgs(fr.argv)
-	if !strings.Contains(got, "--allowedTools Read,Grep,Glob") || !strings.Contains(got, "--disallowedTools Bash,Edit,Write") {
+	if !strings.Contains(got, "--allowedTools Read,Grep,Glob,Write") || !strings.Contains(got, "--disallowedTools Bash,Edit") {
 		t.Fatalf("read-only permissions changed unexpectedly: %q", got)
 	}
 }

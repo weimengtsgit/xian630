@@ -968,13 +968,13 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
 			"Populate `description` with a concise Simplified-Chinese paragraph detailing the confirmed requirement (目标、范围、关键能力); mirror it from the confirmedRequirement when present, otherwise synthesize it from the requirement fields. Do not omit it.\n" +
 			"All human-readable string values must be Simplified Chinese. This includes summary, scenario text, view descriptions, entity names, constraints, risks, and unsupported-request explanations. Only identifiers, slugs, enum keys, file paths, and code symbols may remain non-Chinese.\n" +
-			"Only when a high-impact requirement decision cannot be inferred from prior dialogue or confirmedRequirement may you output needsUserInput=true with structured questions. Otherwise do not ask clarifying questions. Do not output markdown. Do not use code fences. Do not add any prose before or after the JSON.\n" +
-			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not attempt to write files or modify the workspace.\n" +
+			"Only when a high-impact requirement decision cannot be inferred from prior dialogue or confirmedRequirement may you output needsUserInput=true with structured questions. Otherwise do not ask clarifying questions. Do not output markdown. Do not use code fences.\n" +
+			"Do not call ExitPlanMode. Do not describe what you plan to do. Do not modify workspace files; only write the final JSON object to output.json at: " + absolutePath(ws.OutputPath()) + ".\n" +
 			"If the requirement is incomplete, set validation.complete=false. If the request exceeds supported capability, set validation.supported=false.\n" +
-			"Your final assistant message must be the raw JSON payload only. Factory saves stdout as output.json."
+			"The output.json file must contain raw JSON only. The final assistant message may be a short confirmation."
 	}
 	if step.Kind == model.StepSolutionDesign {
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要输出隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。" +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。output.json 不要 Markdown，不要代码块，不要输出隐藏推理链。最终 assistant 消息可以只给简短确认。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app、artifactPlan、warnings；不需要用户补充信息时 needsUserInput=false 且 questions=[]。所有供人阅读的输出字段必须使用简体中文，包括 questions、app 摘要、artifactPlan 描述、warnings、说明文案；只有标识符、slug、路径、枚举值、代码符号可保留非中文。" +
 			"方案设计阶段不允许向用户提问：必须固定输出 needsUserInput=false 且 questions=[]。如果信息不足，只能基于已确认需求、历史对话、generationProfile、skills 和 blueprintDocs 做保守推断；仍缺失的数据字段、外部来源或能力必须写入 warnings，并在方案中设计降级态，不得把任务暂停给用户澄清。" +
 			"如果 prompt 末尾出现 [user_input] 段落，那是历史回答或修复上下文，只能用于推进方案，不得继续追问。" +
 			"用户需求：" + job.UserPrompt +
@@ -1001,9 +1001,9 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
 			"AUDIT blueprintRefs（确认引用的 skill 存在于 .claude/skills/requirement-clarification/blueprints.json 且为 reference-only），将任何超出现有 skill 目录支持的请求记入 validation.unsupportedRequests。" +
 			"输出 output.json，包含 confirmedRequirementId、summary、description、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。description 用简体中文写一段概括确认需求的详细说明（覆盖目标、范围、关键能力），confirmedRequirement 已带 description 时原样保留，否则据需求字段综合生成，不要省略。" +
-			"只有当高影响需求决策无法从历史对话和 confirmedRequirement 推断时，才允许输出 needsUserInput=true 和结构化 questions；否则不要提问。不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json。"
+			"只有当高影响需求决策无法从历史对话和 confirmedRequirement 推断时，才允许输出 needsUserInput=true 和结构化 questions；否则不要提问。不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块；最终 assistant 消息可以只给简短确认。"
 	case model.StepSolutionDesign:
-		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；方案设计阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]。缺失信息只能基于上游契约推断或设计降级态。\n用户需求：" + job.UserPrompt +
+		return "你是软件工厂的方案设计 agent。读取 input.json，基于用户需求输出方案设计。必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块，不要隐藏推理链；最终 assistant 消息可以只给简短确认。JSON 格式必须包含 needsUserInput、questions、usedSkills，可包含 app 和 artifactPlan、warnings；方案设计阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]。缺失信息只能基于上游契约推断或设计降级态。\n用户需求：" + job.UserPrompt +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	case model.StepCodeGeneration:
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
@@ -1054,8 +1054,8 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 		questionPolicy = "本阶段允许在高影响事项无法从已确认需求、历史对话和上游契约推断时提问；需要用户确认时输出 needsUserInput=true、status=\"needs_input\"，questions 必须是结构化数组。"
 	}
 	return "你是软件工厂的" + collaborationProducerName(step.Kind) + "协作智能体。读取 input.json，基于 confirmedRequirement、generationProfile、skills、blueprintDocs、collaborationSnapshot 产出本阶段的结构化结论。" +
-		"不要修改文件，不要调用 ExitPlanMode，不要输出隐藏推理链。" +
-		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字。Factory 会把 stdout 保存为 output.json。" +
+		"不要修改仓库文件，除当前 output.json 外不要写其他文件；不要调用 ExitPlanMode，不要输出隐藏推理链。" +
+		"必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块，不要在 JSON 前后添加解释文字；最终 assistant 消息可以只给简短确认。" +
 		"output.json 路径：" + absolutePath(ws.OutputPath()) + "。" +
 		"JSON 必须包含：status、summary、needsUserInput、questions、workLog、warnings。" +
 		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
@@ -1078,7 +1078,7 @@ func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
 		"需要在原型风格、目标用户、目标平台或保真度缺失、冲突、影响验收时，输出 status=\"needs_input\"、needsUserInput=true 和结构化 questions。" +
 		"默认 fidelity=static，targetPlatform=responsive，prototype 必须描述静态原型页面方案，默认首页为 home。" +
 		"允许在当前 attempt 目录下写入 prototype/index.html、prototype/styles.css、prototype/preview-manifest.json、prototype/prototype-contract.json；禁止写入仓库工作目录或最终应用目录，禁止调用 Bash。" +
-		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
+		"必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块；最终 assistant 消息可以只给简短确认。" +
 		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、prototype、workLog、warnings。" +
 		"designDocument 与 prototype 必须描述同一套页面设计；如用户后续确认原型，预览将成为后续验收基线。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
@@ -1103,7 +1103,7 @@ func dataIntegrationPrompt(job model.Job, ws runner.AttemptWorkspace) string {
 		"dataAccessResult 必须包含 schemaVersion、stage=data_access、version、status、canFinalize、blockingIssues、sourceInputs、dataAccessMode、dataNeeds、sourceCandidates、probeResults、fieldMappings、degradationPolicy、runtimeArchitecture、credentialRefs、securityReviewRequired、securityReviewReasons、codegenConstraints、summary。" +
 		"dataAccessMarkdown 必须使用固定章节：# 数据获取方案、1 输入依据、2 数据需求、3 数据源候选、4 探测记录、5 字段映射、6 满足度结论、7 降级与空态策略、8 代码生成输入、9 待用户确认摘要。" +
 		"内部 dataAccessResult 可包含用户提供的完整鉴权值或 handle 供后续代码生成使用；但 summary、workLog、warnings、用户可见文本中不得泄漏 token/cookie/password 等敏感值。" +
-		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块，不要隐藏推理链。Factory 会把 stdout 保存为 output.json。output.json 路径：" + absolutePath(ws.OutputPath()) + "。用户需求：" + job.UserPrompt
+		"必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块，不要隐藏推理链；最终 assistant 消息可以只给简短确认。用户需求：" + job.UserPrompt
 }
 
 func finalDataAccessPromptBlock(input *finalDataAccessInput, kind model.StepKind) string {

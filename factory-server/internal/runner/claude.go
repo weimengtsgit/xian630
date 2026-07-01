@@ -67,10 +67,11 @@ func (r *ClaudeRunner) binary() string {
 // other hidden provider field — only tool_use + the public workLog in the final
 // result become records.
 // ClaudeRunMode controls the tool-permission profile and working directory for
-// one claude invocation. ReadOnly grants Read/Grep/Glob only (the analysis
-// stages); WorkspaceWrite additionally grants Edit/Write and runs in the
-// configured WorkDir (code_generation); AttemptWrite grants Edit/Write but runs
-// inside the attempt artifact directory (prototype design under design_contract).
+// one claude invocation. ReadOnly grants Read/Grep/Glob plus Write for the
+// attempt-owned output.json only by prompt contract; WorkspaceWrite additionally
+// grants Edit/Write and runs in the configured WorkDir (code_generation);
+// AttemptWrite grants Edit/Write but runs inside the attempt artifact directory
+// (prototype design under design_contract).
 type ClaudeRunMode string
 
 const (
@@ -100,7 +101,7 @@ func claudeArgvForMode(mode ClaudeRunMode) []string {
 	case ClaudeRunAttemptWrite:
 		return append(append(append(base, "--allowedTools", "Read,Grep,Glob,Edit,Write", "--disallowedTools", "Bash"), modelArgs...), stream...)
 	default:
-		return append(append(append(base, "--allowedTools", "Read,Grep,Glob", "--disallowedTools", "Bash,Edit,Write"), modelArgs...), stream...)
+		return append(append(append(base, "--allowedTools", "Read,Grep,Glob,Write", "--disallowedTools", "Bash,Edit"), modelArgs...), stream...)
 	}
 }
 
@@ -137,7 +138,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, ws AttemptWorkspace, prompt stri
 
 // RunWithMode writes the attempt input.json and prompt.md, then invokes the
 // claude binary with stage-tightened tool permissions determined by mode.
-// ClaudeRunReadOnly runs with Read/Grep/Glob only in the attempt directory.
+// ClaudeRunReadOnly runs with Read/Grep/Glob/Write in the attempt directory.
 // ClaudeRunWorkspaceWrite runs with Edit/Write in the configured WorkDir (code
 // generation). ClaudeRunAttemptWrite runs with Edit/Write in the attempt
 // artifact directory (prototype design).

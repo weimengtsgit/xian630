@@ -764,8 +764,8 @@ func TestRequirementAnalysisPromptForcesRawJSONOnly(t *testing.T) {
 		"Simplified Chinese",
 		"Do not call ExitPlanMode",
 		"Do not use code fences",
-		"Do not add any prose before or after the JSON",
-		"Factory saves stdout as output.json",
+		"only write the final JSON object to output.json",
+		"The output.json file must contain raw JSON only",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("requirement_analysis prompt missing %q:\n%s", want, prompt)

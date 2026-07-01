@@ -36,6 +36,10 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if err != nil {
 		return RoundOutput{}, fmt.Errorf("resolve input path: %w", err)
 	}
+	absOutput, err := filepath.Abs(filepath.Join(dir, "output.json"))
+	if err != nil {
+		return RoundOutput{}, fmt.Errorf("resolve output path: %w", err)
+	}
 	in, err := json.MarshalIndent(input, "", "  ")
 	if err != nil {
 		return RoundOutput{}, fmt.Errorf("encode clarification input: %w", err)
@@ -43,7 +47,9 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if err := os.WriteFile(absInput, in, 0o644); err != nil {
 		return RoundOutput{}, err
 	}
-	prompt := r.promptText(absInput)
+	// 同一轮自动重试会复用 round 目录；运行前清掉旧 output.json，避免误读上一轮坏结果。
+	_ = os.Remove(absOutput)
+	prompt := r.promptText(absInput, absOutput)
 	if err := os.WriteFile(filepath.Join(dir, "prompt.md"), []byte(prompt), 0o644); err != nil {
 		return RoundOutput{}, err
 	}
@@ -62,7 +68,23 @@ func (r Runner) RunRound(ctx context.Context, input RoundInput, emit func(Stream
 	if res.ExitCode != 0 {
 		return RoundOutput{}, fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
 	}
-	out, err := decodeRoundOutput(assistantText, res.Stdout)
+	rawCandidates := []string{assistantText, res.Stdout}
+	rawForRepair := strings.TrimSpace(assistantText + "\n" + res.Stdout)
+	if raw, ok, rerr := readModelOutputFile(absOutput); rerr != nil {
+		return RoundOutput{}, rerr
+	} else if ok {
+		// 文件契约比 stdout 更稳定；一旦文件存在，就只信文件内容，避免 stdout 说明文字污染解析。
+		rawCandidates = []string{raw}
+		rawForRepair = raw
+	}
+	out, err := decodeRoundOutput(rawCandidates...)
+	if err != nil {
+		if errors.Is(err, runner.ErrOutputInvalidJSON) {
+			if repaired, ok := r.repairOutputJSON(ctx, input, absOutput, rawForRepair, err); ok {
+				out, err = decodeRoundOutput(repaired)
+			}
+		}
+	}
 	if err != nil {
 		return RoundOutput{}, err
 	}
@@ -93,9 +115,9 @@ func (r Runner) runClaude(ctx context.Context, input RoundInput, prompt string, 
 	}
 	args := append([]string{
 		"--print", prompt,
-		"--permission-mode", "plan",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write",
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Grep,Glob,Write",
+		"--disallowedTools", "Bash,Edit",
 	}, claudeModelArgs()...)
 	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(), args...)
@@ -126,9 +148,9 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, inp
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
-		"--permission-mode", "plan",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write",
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Grep,Glob,Write",
+		"--disallowedTools", "Bash,Edit",
 	}, claudeModelArgs()...)
 	runner.LLMConsoleRequest(fmt.Sprintf("clarification round %d", input.Round), r.binary(), args, prompt)
 	res, err := sr.RunStream(ctx, r.workspaceRoot(), r.binary(), func(line string) {
@@ -886,13 +908,67 @@ func requirementIsZero(req Requirement) bool {
 		len(req.GenerationProfile) == 0
 }
 
-func (r Runner) promptText(inputPath string) string {
+func readModelOutputFile(path string) (string, bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read output file: %w", err)
+	}
+	return string(raw), true, nil
+}
+
+func (r Runner) repairOutputJSON(ctx context.Context, input RoundInput, outputPath, badOutput string, decodeErr error) (string, bool) {
+	if strings.TrimSpace(badOutput) == "" {
+		return "", false
+	}
+	// 修复轮只修 JSON 语法，不重新分析需求，避免完整重跑导致业务内容漂移。
+	prompt := "Repair malformed JSON for the requirement clarification contract. " +
+		fmt.Sprintf("Write the repaired JSON object to the absolute path %s using the Write tool. ", outputPath) +
+		"Preserve the original content and decisions; only fix JSON syntax, escaping, truncation, or markdown/prose wrapping. " +
+		"Do not add new requirements, questions, reasoning, markdown, or explanatory prose. " +
+		fmt.Sprintf("Decode error: %v\n\nMalformed output:\n%s", decodeErr, limitRepairPayload(badOutput, 24000))
+	dir := filepath.Dir(outputPath)
+	_ = os.WriteFile(filepath.Join(dir, "repair-prompt.md"), []byte(prompt), 0o644)
+	_ = os.Remove(outputPath)
+	args := append([]string{
+		"--print", prompt,
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Grep,Glob,Write",
+		"--disallowedTools", "Bash,Edit",
+	}, claudeModelArgs()...)
+	runner.LLMConsoleRequest(fmt.Sprintf("clarification JSON repair round %d", input.Round), r.binary(), args, prompt)
+	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(), args...)
+	_ = os.WriteFile(filepath.Join(dir, "repair-stdout.log"), []byte(res.Stdout), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "repair-stderr.log"), []byte(res.Stderr), 0o644)
+	if err != nil || res.ExitCode != 0 {
+		return "", false
+	}
+	if raw, ok, rerr := readModelOutputFile(outputPath); rerr == nil && ok {
+		return raw, true
+	}
+	if strings.TrimSpace(res.Stdout) != "" {
+		return res.Stdout, true
+	}
+	return "", false
+}
+
+func limitRepairPayload(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n...[truncated]"
+}
+
+func (r Runner) promptText(inputPath, outputPath string) string {
 	return "Use .claude/skills/requirement-clarification/SKILL.md as a reference for the clarification contract only. " +
 		fmt.Sprintf("The round input is at the absolute path %s and must be read with the Read tool. ", inputPath) +
-		"Do not call Write, Edit, Bash, or any file-modifying tool. Do not write output.json. Do not create a plan file. " +
+		fmt.Sprintf("Write the final clarification payload to the absolute path %s using the Write tool. ", outputPath) +
+		"Do not call Edit, Bash, or any other file-modifying tool. Do not create a plan file. " +
 		"All human-readable output fields must use Simplified Chinese, including workLog content, question text, option labels, option descriptions, requirement summaries, and recommendation copy; only identifiers, slugs, file paths, enum keys, and code symbols may remain non-Chinese. " +
-		"Return the final clarification payload directly as raw JSON in the final assistant message only, with no markdown fences and no extra prose. " +
-		"Output ONLY valid JSON matching the requirement clarification contract. " +
+		"The output.json file must contain ONLY valid JSON matching the requirement clarification contract, with no markdown fences and no extra prose. " +
+		"After writing the file, the final assistant message may be a short confirmation; Factory will parse output.json first and stdout only as fallback. " +
 		"Consult .claude/skills/requirement-clarification/blueprints.json for the internal scene blueprint catalog; when the user's intent matches a blueprint, populate requirement.blueprintRefs with the matching slug(s). If no blueprint matches, use an empty blueprintRefs array. Blueprints are hidden style/structure references only: never emit user-facing blueprint recommendations, never call them templates, and never copy scene source."
 }
 
