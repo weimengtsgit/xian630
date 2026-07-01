@@ -78,6 +78,28 @@ type collaborationSkillDoc struct {
 	Scope   string `json:"scope"`
 }
 
+type businessDesignHandoff struct {
+	Content      json.RawMessage `json:"content,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	ArtifactPath string          `json:"artifactPath,omitempty"`
+}
+
+func (c *ClaudeStepRunner) businessDesignHandoff(job model.Job, step model.JobStep) (businessDesignHandoff, error) {
+	if step.Kind != model.StepDesignContract {
+		return businessDesignHandoff{}, nil
+	}
+	path := filepath.ToSlash(filepath.Join("jobs", job.ID, string(model.StepRequirementAnalysis), "attempt-1", "output.json"))
+	full := filepath.Join(c.artifactRoot(), filepath.FromSlash(path))
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return businessDesignHandoff{Summary: "未找到需求分析产物，使用 confirmedRequirement 作为兼容输入。", ArtifactPath: path}, nil
+		}
+		return businessDesignHandoff{}, err
+	}
+	return businessDesignHandoff{Content: json.RawMessage(raw), ArtifactPath: path}, nil
+}
+
 type finalDataAccessInput struct {
 	Status               string             `json:"status"`
 	Version              string             `json:"version"`
@@ -165,6 +187,11 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		}
 	}
 
+	businessDesign, err := c.businessDesignHandoff(job, step)
+	if err != nil {
+		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
+	}
+
 	input, err := json.MarshalIndent(map[string]any{
 		"job":                      job,
 		"step":                     step,
@@ -177,6 +204,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		"collaborationSnapshot":    collaborationSnapshot,
 		"controlledCredentialRefs": credentialRefs,
 		"dataAccess":               dataAccessInput,
+		"businessDesign":           businessDesign.Content,
+		"businessDesignSummary":    businessDesign.Summary,
+		"businessDesignArtifact":   businessDesign.ArtifactPath,
 	}, "", "  ")
 	if err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: err.Error()}, nil
@@ -1026,20 +1056,19 @@ func collaborationProducerPrompt(job model.Job, step model.JobStep, ws runner.At
 }
 
 // designContractPrompt is the specialized prompt for the design_contract
-// (interface-parsing) collaboration producer. Unlike the generic collaboration
-// prompt, it mandates the designDocument + assumedDataFields contract the
-// executor's interface-preview snapshot is derived from, and it forbids the
-// agent from writing any preview file — the preview is a Factory-owned,
-// deterministic artifact built from the design contract, so the agent must only
-// describe the design, never render it.
+// (prototype design) collaboration producer. It routes the agent to the
+// prototype-design skill, feeds businessDesign as the primary input, and
+// constrains the agent to writing files only inside the attempt directory.
 func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
-	return "你是软件工厂的界面解析智能体。读取 input.json 中的 confirmedRequirement、附件摘要和已有字段假设，输出界面解析设计契约。" +
-		"不要修改文件，不要生成界面预览文件；界面预览由 Factory 执行器根据 designDocument 生成 task-owned 产物。" +
+	return "你是软件工厂的原型设计协作智能体，运行在用户可见的界面解析阶段。先 Read 并严格遵循项目本地 skill：.claude/skills/prototype-design/SKILL.md。" +
+		"读取 input.json，其中 businessDesign 是原型设计的主输入，来自业务智能体完整设计方案；confirmedRequirement 只作为边界与一致性校验，不能替代完整设计方案。" +
+		"如果 businessDesign 缺失，只能使用 confirmedRequirement 兼容推进，并在 warnings 记录降级原因。" +
+		"需要在原型风格、目标用户、目标平台或保真度缺失、冲突、影响验收时，输出 status=\"needs_input\"、needsUserInput=true 和结构化 questions。" +
+		"默认 fidelity=static，targetPlatform=responsive，prototype 必须描述静态原型页面方案，默认首页为 home。" +
+		"允许在当前 attempt 目录下写入 prototype/index.html、prototype/styles.css、prototype/preview-manifest.json、prototype/prototype-contract.json；禁止写入仓库工作目录或最终应用目录，禁止调用 Bash。" +
 		"最终回答必须只包含一个 JSON 对象，不要 Markdown，不要代码块。Factory 会把 stdout 保存为 output.json，路径：" + absolutePath(ws.OutputPath()) + "。" +
-		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、workLog、warnings。" +
-		"status 只能是 passed 或 needs_input；不需要用户补充时 needsUserInput=false 且 questions=[]。" +
-		"designDocument 必须描述视图识别、布局分区、组件映射、交互状态、响应式约束、关键文案和字段呈现。assumedDataFields 是预览依赖但数据抓取尚未确认的字段名数组。" +
-		"需要用户澄清时，questions 必须是结构化数组，每项包含 id、question、options；options 每项包含 value、label，可包含 recommended:true。" +
+		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、prototype、workLog、warnings。" +
+		"designDocument 与 prototype 必须描述同一套页面设计；如用户后续确认原型，预览将成为后续验收基线。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
 }
 
@@ -1086,7 +1115,6 @@ func collaborationProducerName(kind model.StepKind) string {
 		return "领域分析"
 	case model.StepDesignContract:
 		return "界面设计"
-		return "原型设计"
 	case model.StepDataIntegration:
 		return "数据接入"
 	default:
