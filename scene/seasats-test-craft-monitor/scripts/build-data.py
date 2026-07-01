@@ -11,12 +11,9 @@ from typing import Any
 from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TARGETS_XLSX = Path(
-    "/Users/mengwei/ww/cec/10. 软件工厂/02.项目/05 西安国防科技大学/应用需求/01/副本1a8083ce4a7ced5847024a560e3ed22b.xlsx"
-)
-DEFAULT_TRACKS_XLSX = Path(
-    "/Users/mengwei/ww/cec/10. 软件工厂/02.项目/05 西安国防科技大学/应用需求/01/副本0cb4b68fa1a67179a0368da8eb82dff6.xlsx"
-)
+RAW_DATA_DIR = ROOT / "data" / "raw"
+DEFAULT_TARGETS_XLSX = RAW_DATA_DIR / "副本1a8083ce4a7ced5847024a560e3ed22b.xlsx"
+DEFAULT_TRACKS_XLSX = RAW_DATA_DIR / "副本0cb4b68fa1a67179a0368da8eb82dff6.xlsx"
 OUTPUT = ROOT / "src" / "data" / "seasatsPayload.json"
 
 MONITORED_AREAS = [
@@ -151,9 +148,23 @@ def build_track_points(path: Path) -> tuple[str, list[dict[str, Any]]]:
     return sheet, points
 
 
+def resolve_input_path(value: str | None, default: Path) -> Path:
+    if not value:
+        return default
+    path = Path(value)
+    return path if path.is_absolute() else ROOT / path
+
+
+def project_relative_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def main() -> None:
-    targets_path = Path(os.environ.get("SEASATS_TARGETS_XLSX", DEFAULT_TARGETS_XLSX))
-    tracks_path = Path(os.environ.get("SEASATS_TRACKS_XLSX", DEFAULT_TRACKS_XLSX))
+    targets_path = resolve_input_path(os.environ.get("SEASATS_TARGETS_XLSX"), DEFAULT_TARGETS_XLSX)
+    tracks_path = resolve_input_path(os.environ.get("SEASATS_TRACKS_XLSX"), DEFAULT_TRACKS_XLSX)
     target_sheet, targets = build_targets(targets_path)
     track_sheet, track_points = build_track_points(tracks_path)
     times = [p["time"] for p in track_points if p.get("time")]
@@ -161,8 +172,8 @@ def main() -> None:
     payload = {
         "metadata": {
             "generatedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "targetWorkbook": {"fileName": targets_path.name, "path": str(targets_path), "sheet": target_sheet},
-            "trackWorkbook": {"fileName": tracks_path.name, "path": str(tracks_path), "sheet": track_sheet},
+            "targetWorkbook": {"fileName": targets_path.name, "path": project_relative_path(targets_path), "sheet": target_sheet},
+            "trackWorkbook": {"fileName": tracks_path.name, "path": project_relative_path(tracks_path), "sheet": track_sheet},
             "targetCount": len(targets),
             "trackPointCount": len(track_points),
             "trackMmsiCount": len({p["mmsi"] for p in track_points if p.get("mmsi")}),
