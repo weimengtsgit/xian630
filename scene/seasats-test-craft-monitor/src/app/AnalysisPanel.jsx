@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Activity, AlertTriangle, Clock3, Gauge, MapPin, Navigation, Radio, ShieldAlert, Ship } from "lucide-react";
 import { fmtDuration } from "../logic/domain.js";
-import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop, scoreBreakup, classifyPattern, signalQuality } from "../logic/analytics.js";
+import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop, scoreBreakup, classifyPattern, signalQuality, perTargetAlertBreakdown } from "../logic/analytics.js";
 
 const W = 360, H = 170, PL = 38, PR = 12, PT = 14, PB = 24;
 const IW = W - PL - PR, IH = H - PT - PB;
@@ -237,6 +237,41 @@ function DaysTopBars({ targets }) {
   );
 }
 
+function StackedAlerts({ targets }) {
+  const { rows, types } = useMemo(() => perTargetAlertBreakdown(targets), [targets]);
+  if (rows.length === 0) return <EmptyChart label="无告警目标" />;
+  const slot = IW / rows.length;
+  const bw = Math.min(slot - 6, 26);
+  const max = Math.max(...rows.map((r) => r.total), 1);
+  const present = types.filter((ty) => rows.some((r) => r.counts[ty.key]));
+  return (
+    <div className="stacked-wrap">
+      <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+        <Grid maxV={max} />
+        {rows.map((r, i) => {
+          const x = PL + i * slot + (slot - bw) / 2;
+          let yBase = PT + IH;
+          return (
+            <g key={r.mmsi}>
+              {types.map((ty) => {
+                const c = r.counts[ty.key] || 0;
+                if (!c) return null;
+                const h = (c / max) * IH;
+                yBase -= h;
+                return <rect key={ty.key} x={x} y={yBase} width={bw} height={h} fill={ty.color}><title>{r.name} · {ty.label} {c}</title></rect>;
+              })}
+              <text x={x + bw / 2} y={H - 6} fill="#64748b" fontSize="7" textAnchor="middle">{String(r.name).slice(0, 6)}</text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="stacked-legend">
+        {present.map((ty) => <span key={ty.key}><i style={{ background: ty.color }} />{ty.label}</span>)}
+      </div>
+    </div>
+  );
+}
+
 function PatternCard({ target }) {
   const p = useMemo(() => classifyPattern(target), [target]);
   const icon = { loiter: "🔄", linger: "⏸", transit: "➡️", none: "—" }[p.key] || "—";
@@ -309,6 +344,7 @@ export function AnalysisPanel({ analysis, selectedTarget, coast }) {
               </ul>
             </div>
           </div>
+          <div className="chart-card"><header><AlertTriangle size={12} />各目标告警堆叠</header><StackedAlerts targets={analysis.targets} /></div>
           <div className="chart-card summary-detail-card">
             <header><ShieldAlert size={12} />智能体研判</header>
             {summary ? (

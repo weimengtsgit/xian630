@@ -143,3 +143,20 @@ export function signalQuality(target) {
   const gapMinutes = gaps.reduce((s, g) => s + (g.gapMinutes || 0), 0);
   return { reportCount, gapCount: gaps.length, gapMinutes };
 }
+
+// 各目标告警类型堆叠数据（Top N 有告警目标）
+const ALERT_TYPE_META = [
+  { key: "sustained-low-speed", label: "持续低速", color: "#f59e0b" },
+  { key: "repeated-activity", label: "往返盘旋", color: "#a855f7" },
+  { key: "ais-gap", label: "AIS 异常", color: "#ef4444" },
+  { key: "coast-proximity", label: "接近国土", color: "#ec4899" },
+  { key: "dimension-review", label: "尺寸核验", color: "#64748b" },
+];
+export function perTargetAlertBreakdown(targets, n = 8) {
+  const rows = targets.map((t) => {
+    const counts = {};
+    for (const a of t.alerts || []) counts[a.type] = (counts[a.type] || 0) + 1;
+    return { mmsi: t.mmsi, name: t.name, counts, total: (t.alerts || []).length };
+  }).filter((r) => r.total > 0).sort((a, b) => b.total - a.total).slice(0, n);
+  return { rows, types: ALERT_TYPE_META };
+}

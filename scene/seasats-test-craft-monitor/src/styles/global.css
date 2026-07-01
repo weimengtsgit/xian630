@@ -318,3 +318,9 @@ html, body { overflow: auto; }
 .breakup-bar { flex: 1; height: 9px; background: rgba(30,41,59,0.6); border-radius: 4px; overflow: hidden; }
 .breakup-bar span { display: block; height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); }
 .breakup-row strong { color: #fbbf24; min-width: 30px; text-align: right; }
+
+/* === 堆叠图 === */
+.stacked-wrap { display: flex; flex-direction: column; gap: 6px; }
+.stacked-legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 2px; }
+.stacked-legend span { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: #cbd5e1; }
+.stacked-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
