@@ -1040,6 +1040,20 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 		}
 		analysisAt = now.Add(time.Millisecond)
 	}
+	// Item 1 — surface low-impact auto-defaulted clarifications. The model may
+	// fill low-impact requirement fields directly (without surfacing them as
+	// high-impact questions). Those decisions are implicit assumptions; surface
+	// them as a concise Chinese work-log entry so the user can perceive the
+	// auto-applied defaults in the 分析过程 and adjust before confirming. Only
+	// fields that were empty before this round AND were not asked as an
+	// open-high-impact question count as auto-defaults — high-impact items stay
+	// in the user-facing question flow unchanged.
+	if entry := summarizeLowImpactAutoDefaults(input.CurrentRequirement, out); entry != "" {
+		out.WorkLog = append(out.WorkLog, clarification.WorkLog{
+			Type:    "analysis_work_log",
+			Content: entry,
+		})
+	}
 	for _, wl := range out.WorkLog {
 		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
 			ID:        "cmsg_" + idpkg.New(),
@@ -1371,6 +1385,146 @@ func cloneStringListMap(in map[string][]string) map[string][]string {
 		out[key] = append([]string(nil), values...)
 	}
 	return out
+}
+
+// lowImpactFieldLabel maps a requirement JSON field name to a concise Chinese
+// label + the chosen value for the Item-1 auto-default work-log entry. Returns
+// ("", false) for fields we deliberately do not surface (e.g. internal
+// blueprintRefs / generationProfile / collaborationAdjustments, which are
+// Factory-derived, not user decisions). Order mirrors the Requirement struct so
+// the rendered list is stable.
+func lowImpactFieldDisplay(field string, req clarification.Requirement) (string, bool) {
+	switch field {
+	case "appType":
+		if req.AppType == "" {
+			return "", false
+		}
+		return "应用类型 = " + req.AppType, true
+	case "appName":
+		if req.AppName == "" {
+			return "", false
+		}
+		return "应用名称 = " + req.AppName, true
+	case "targetUsers":
+		if len(req.TargetUsers) == 0 {
+			return "", false
+		}
+		return "主要使用角色 = " + strings.Join(req.TargetUsers, "、"), true
+	case "coreScenario":
+		if req.CoreScenario == "" {
+			return "", false
+		}
+		return "核心场景 = " + req.CoreScenario, true
+	case "primaryView":
+		if req.PrimaryView == "" {
+			return "", false
+		}
+		return "主视图 = " + req.PrimaryView, true
+	case "mainEntities":
+		if len(req.MainEntities) == 0 {
+			return "", false
+		}
+		return "主要对象 = " + strings.Join(req.MainEntities, "、"), true
+	case "dataPolicy":
+		if req.DataPolicy == "" {
+			return "", false
+		}
+		return "数据策略 = " + req.DataPolicy, true
+	case "acceptanceFocus":
+		if len(req.AcceptanceFocus) == 0 {
+			return "", false
+		}
+		return "验收重点 = " + strings.Join(req.AcceptanceFocus, "、"), true
+	case "judgementBoundary":
+		summary := strings.TrimSpace(req.JudgementBoundary.Summary)
+		if summary == "" {
+			return "", false
+		}
+		return "研判边界 = " + summary, true
+	}
+	return "", false
+}
+
+// openHighImpactFieldNames returns the set of requirement fields the round's
+// open-high-impact questions are confirming, so summarizeLowImpactAutoDefaults
+// can exclude them from the auto-default list (those are user decisions, not
+// auto-applied). The high-impact item carries a plain-language `id`/`label`,
+// not a JSON field name, so this is a best-effort keyword match. Unknown ids
+// simply do not exclude anything, which keeps the surfacing conservative.
+func openHighImpactFieldNames(items []clarification.HighImpactItem) map[string]bool {
+	out := make(map[string]bool)
+	for _, it := range items {
+		text := strings.ToLower(it.ID + " " + it.Label)
+		switch {
+		case strings.Contains(text, "数据策略") || strings.Contains(text, "datapolicy"):
+			out["dataPolicy"] = true
+		case strings.Contains(text, "应用类型") || strings.Contains(text, "apptype"):
+			out["appType"] = true
+		case strings.Contains(text, "应用名称") || strings.Contains(text, "appname"):
+			out["appName"] = true
+		case strings.Contains(text, "核心场景") || strings.Contains(text, "corescenario"):
+			out["coreScenario"] = true
+		case strings.Contains(text, "主视图") || strings.Contains(text, "primaryview"):
+			out["primaryView"] = true
+		case strings.Contains(text, "主要对象") || strings.Contains(text, "mainentities"):
+			out["mainEntities"] = true
+		case strings.Contains(text, "角色") || strings.Contains(text, "targetusers"):
+			out["targetUsers"] = true
+		case strings.Contains(text, "验收") || strings.Contains(text, "acceptancefocus"):
+			out["acceptanceFocus"] = true
+		case strings.Contains(text, "研判") || strings.Contains(text, "judgementboundary"):
+			out["judgementBoundary"] = true
+		}
+	}
+	return out
+}
+
+// summarizeLowImpactAutoDefaults builds a concise Chinese work-log entry naming
+// the low-impact requirement fields the model auto-decided this round (filled
+// directly, not asked as a high-impact question), so the assumptions surface in
+// the 分析过程. Returns "" when nothing was auto-defaulted this round.
+//
+// A field counts as auto-defaulted when it was empty in `prev` and is now
+// populated in `out.Requirement`, AND it is not one of this round's open
+// high-impact items. Internal Factory-derived fields (blueprintRefs /
+// generationProfile / collaborationAdjustments / description) are deliberately
+// not surfaced: they are not user decisions. Only the first round that fills a
+// field reports it (subsequent rounds carry the prior value via
+// mergeRequirementDefaults, so prev is non-empty and the field is skipped).
+func summarizeLowImpactAutoDefaults(prev clarification.Requirement, out clarification.RoundOutput) string {
+	type delta struct{ empty, filled bool }
+	states := map[string]delta{
+		"appType":           {prev.AppType == "", out.Requirement.AppType != ""},
+		"appName":           {prev.AppName == "", out.Requirement.AppName != ""},
+		"targetUsers":       {len(prev.TargetUsers) == 0, len(out.Requirement.TargetUsers) > 0},
+		"coreScenario":      {prev.CoreScenario == "", out.Requirement.CoreScenario != ""},
+		"primaryView":       {prev.PrimaryView == "", out.Requirement.PrimaryView != ""},
+		"mainEntities":      {len(prev.MainEntities) == 0, len(out.Requirement.MainEntities) > 0},
+		"dataPolicy":        {prev.DataPolicy == "", out.Requirement.DataPolicy != ""},
+		"acceptanceFocus":   {len(prev.AcceptanceFocus) == 0, len(out.Requirement.AcceptanceFocus) > 0},
+		"judgementBoundary": {strings.TrimSpace(prev.JudgementBoundary.Summary) == "", strings.TrimSpace(out.Requirement.JudgementBoundary.Summary) != ""},
+	}
+	excluded := openHighImpactFieldNames(out.OpenHighImpact)
+	order := []string{
+		"appType", "appName", "targetUsers", "coreScenario", "primaryView",
+		"mainEntities", "dataPolicy", "acceptanceFocus", "judgementBoundary",
+	}
+	var parts []string
+	for _, field := range order {
+		d := states[field]
+		if !d.empty || !d.filled || excluded[field] {
+			continue
+		}
+		label, ok := lowImpactFieldDisplay(field, out.Requirement)
+		if !ok {
+			continue
+		}
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "已按默认设定（低影响，可在确认前调整）：" + strings.Join(parts, "；") + "。"
 }
 
 func cloneJudgementBoundary(in clarification.JudgementBoundary) clarification.JudgementBoundary {

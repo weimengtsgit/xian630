@@ -594,4 +594,35 @@ const retryBody = retryFnMatch[0]
 assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
 assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
 
+// ---- requirement term mapping (Item 2) --------------------------------------
+// The shared term map + text translator live in utils/formatLabels.js so the
+// internal English keys (statuses, requirement fields, skill slugs) that leak
+// into the 分析过程 / requirement summary render as Chinese. Assert the map
+// exists, covers a sample slug, and the text helper swaps whole tokens only.
+import { formatRequirementTerm, translateAnalysisText } from '../src/utils/formatLabels.js'
+assert.equal(formatRequirementTerm('software-factory-app'), '软件工厂应用', 'skill slug must map to Chinese')
+assert.equal(formatRequirementTerm('operations-management-console'), '运维管理控制台', 'operations slug must map')
+assert.equal(formatRequirementTerm('ready_to_confirm'), '待确认', 'status key must map')
+assert.equal(formatRequirementTerm('openHighImpact'), '待确认的高影响决策', 'field key must map')
+assert.equal(formatRequirementTerm('未知字段'), '未知字段', 'unknown keys pass through unchanged')
+// translateAnalysisText replaces whole known tokens but never partial matches.
+assert.equal(
+  translateAnalysisText('本次选用 generationProfile.data 与 software-factory-app 蓝本'),
+  '本次选用 生成画像.data 与 软件工厂应用 蓝本',
+  'translateAnalysisText must swap whole known tokens in free text',
+)
+// The boundary class [^\w-] treats `-` as part of an identifier, so a longer
+// hyphenated slug (software-factory-app-v2) is NOT a whole-token match and must
+// be left intact — only the exact catalog keys translate.
+assert.equal(
+  translateAnalysisText('software-factory-app-v2 仍保留后缀'),
+  'software-factory-app-v2 仍保留后缀',
+  'translateAnalysisText must NOT match a known token embedded in a longer hyphenated slug',
+)
+assert.equal(
+  translateAnalysisText('依据 blueprintRefs 与 defense-operations-ui'),
+  '依据 蓝本引用 与 防务运营界面',
+  'translateAnalysisText must handle dotted/hyphenated tokens with boundary chars',
+)
+
 console.log('check-dialogue-workbench: OK')

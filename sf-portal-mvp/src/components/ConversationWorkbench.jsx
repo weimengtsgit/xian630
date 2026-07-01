@@ -37,7 +37,7 @@ import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestration
 import { normalizePrototypeSummary } from '../hooks/prototypeState'
 import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
-import { formatDataPolicy, formatAppType } from '../utils/formatLabels'
+import { formatDataPolicy, formatAppType, translateAnalysisText } from '../utils/formatLabels'
 import { factoryApi } from '../api/client'
 import './ConversationWorkbench.css'
 
@@ -801,7 +801,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
             {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
             {item.kind === 'step' ? '生成过程' : '分析过程'}
           </span>
-          <pre className="cw-live-text">{item.content}</pre>
+          <pre className="cw-live-text">{translateAnalysisText(item.content)}</pre>
         </div>
       </CopyableBlock>
     )
@@ -879,6 +879,11 @@ function ThinkingSummary({ item }) {
   const summary = String(item.summary || '').trim()
   const raw = String(item.content || '').trim()
   const copyValue = summary || raw
+  // Translate known internal English tokens (status keys, requirement field
+  // names, skill slugs, …) that leak into the streamed thinking / analysis text
+  // so the 思考过程 surface reads in Chinese. Conservative whole-token replace.
+  const displaySummary = translateAnalysisText(summary)
+  const displayRaw = translateAnalysisText(raw)
   const live = item.pending || item.type === 'live_thinking'
   return (
     <CopyableBlock text={copyValue} className="cw-agent-wrap" copyLabel="复制思考摘要">
@@ -887,21 +892,21 @@ function ThinkingSummary({ item }) {
           {live ? <Loader2 size={12} className="cw-spin" /> : null}
           {live ? '正在思考…' : '思考摘要'}
         </span>
-        {live && raw ? (
+        {live && displayRaw ? (
           <div className="cw-raw-thinking-stream">
-            <pre className="cw-live-text">{raw}</pre>
+            <pre className="cw-live-text">{displayRaw}</pre>
           </div>
         ) : (
           <>
-            {summary ? (
-              <pre className="cw-live-text cw-thinking-summary-text">{summary}</pre>
+            {displaySummary ? (
+              <pre className="cw-live-text cw-thinking-summary-text">{displaySummary}</pre>
             ) : (
               <p className="cw-thinking-summary-empty">中文摘要将在分析过程生成后显示。</p>
             )}
-            {raw ? (
+            {displayRaw ? (
               <details className="cw-raw-thinking">
                 <summary>原始思考过程</summary>
-                <pre className="cw-live-text">{raw}</pre>
+                <pre className="cw-live-text">{displayRaw}</pre>
               </details>
             ) : null}
           </>
@@ -918,7 +923,7 @@ function ThinkingSummary({ item }) {
 // Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
 function FoldedAnalysis({ content, label, expanded: initialExpanded, rawThinking }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
-  const text = String(content || '')
+  const text = translateAnalysisText(String(content || ''))
   const raw = String(rawThinking || '')
   return (
     <CopyableBlock text={text} className="cw-agent-wrap" copyLabel="复制分析">
