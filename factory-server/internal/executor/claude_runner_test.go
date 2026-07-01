@@ -101,6 +101,51 @@ func (f fakeClaudeCommand) run(dir string, name string, args ...string) (runner.
 	return runner.CommandResult{ExitCode: 0, Stdout: "ok"}, nil
 }
 
+type prototypeClaudeCommand struct {
+	t      *testing.T
+	output map[string]any
+}
+
+func (f prototypeClaudeCommand) Run(_ context.Context, dir string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f prototypeClaudeCommand) RunWithInput(_ context.Context, dir string, _ string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f prototypeClaudeCommand) run(dir string, name string, args ...string) (runner.CommandResult, error) {
+	if name == "git" {
+		return runner.CommandResult{ExitCode: 0}, nil
+	}
+	raw, err := json.MarshalIndent(f.output, "", "  ")
+	if err != nil {
+		f.t.Fatalf("marshal output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "output.json"), raw, 0o644); err != nil {
+		f.t.Fatalf("write output.json: %v", err)
+	}
+	protoDir := filepath.Join(dir, "prototype")
+	if err := os.MkdirAll(protoDir, 0o755); err != nil {
+		f.t.Fatalf("mkdir prototype: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(protoDir, "index.html"), []byte("<!doctype html><title>原型</title><main>首页原型</main>"), 0o644); err != nil {
+		f.t.Fatalf("write index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(protoDir, "styles.css"), []byte("body{margin:0}"), 0o644); err != nil {
+		f.t.Fatalf("write css: %v", err)
+	}
+	manifest := `{"mode":"static_prototype","defaultPage":"home","fidelity":"static","pages":[{"id":"home","title":"首页","file":"prototype/index.html","generated":true,"visibleByDefault":true}]}`
+	if err := os.WriteFile(filepath.Join(protoDir, "preview-manifest.json"), []byte(manifest), 0o644); err != nil {
+		f.t.Fatalf("write manifest: %v", err)
+	}
+	contract := `{"prototypeStatus":"unconfirmed_reference","downstreamConstraintLevel":"reference","immutable":false,"prototype":{"style":"ued_review","targetAudience":"ued","targetPlatform":"responsive","fidelity":"static","defaultPage":"home","confirmationPolicy":"unconfirmed_reference","pages":[{"id":"home","title":"首页","generated":true,"visibleByDefault":true}]}}`
+	if err := os.WriteFile(filepath.Join(protoDir, "prototype-contract.json"), []byte(contract), 0o644); err != nil {
+		f.t.Fatalf("write contract: %v", err)
+	}
+	return runner.CommandResult{ExitCode: 0, Stdout: "ok"}, nil
+}
+
 func newClaudeRunnerTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(":memory:")
@@ -547,6 +592,54 @@ func TestClaudeStepRunnerPassesRepairContextToCodeGeneration(t *testing.T) {
 	}
 }
 
+func TestDesignContractWaitsForPrototypeConfirmation(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := prototypeClaudeCommand{t: t, output: map[string]any{
+		"status":            "passed",
+		"summary":           "首页静态原型已生成，等待用户确认。",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{"name"},
+		"prototype": map[string]any{
+			"style":              "ued_review",
+			"targetAudience":     "ued",
+			"targetPlatform":     "responsive",
+			"fidelity":           "static",
+			"defaultPage":        "home",
+			"confirmationPolicy": "unconfirmed_reference",
+			"pages": []any{map[string]any{
+				"id": "home", "title": "首页", "generated": true, "visibleByDefault": true,
+			}},
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	}}
+	r := &ClaudeStepRunner{Store: st, Workspace: ws, ArtifactRoot: filepath.Join(ws, ".factory-runs"), Claude: &runner.ClaudeRunner{Runner: cmd}, AuditRunner: cmd}
+	job, step := claudeJobStep(model.StepDesignContract)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("status = %s needsInput=%v, want waiting_user true", res.Status, res.NeedsUserInput)
+	}
+	if len(res.Questions) == 0 || !strings.Contains(res.Questions[0].Question, "确认原型") {
+		t.Fatalf("questions = %+v, want prototype confirmation", res.Questions)
+	}
+	refs, err := st.ListWorkbenchArtifactRefsByJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Status != "unconfirmed" {
+		t.Fatalf("prototype refs = %+v, want one unconfirmed ref", refs)
+	}
+}
 func TestDesignContractPromptUsesPrototypeDesignSkill(t *testing.T) {
 	ws := runner.AttemptWorkspace{
 		Root:     t.TempDir(),

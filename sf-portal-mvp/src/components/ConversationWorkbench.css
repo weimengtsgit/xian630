@@ -1,4 +1,4 @@
-.conversation-workbench {
+﻿.conversation-workbench {
   position: relative;
   flex: 1 1 0;
   min-height: 0;
@@ -509,4 +509,36 @@
   color: #d7eef8;
   padding: 0 10px;
   font-size: 12px;
+}
+
+.cw-agent-question {
+  display: grid;
+  gap: 8px;
+}
+
+.cw-agent-question p {
+  margin: 0;
+}
+
+.cw-agent-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cw-agent-question-options button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid rgba(35, 46, 72, 0.16);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2937;
+  padding: 0 10px;
+}
+
+.cw-agent-question-options em {
+  font-style: normal;
+  color: #2563eb;
 }

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, FileText, MonitorCheck } from 'lucide-react'
+﻿import { ChevronDown, ChevronRight, FileText, MonitorCheck } from 'lucide-react'
 import { useState } from 'react'
 import { WorkbenchTrack } from './WorkbenchTracks'
 
@@ -19,6 +19,7 @@ export function WorkbenchAgentBlock({
   onSubmitCredential,
   onOpenPrototype,
   onPrototypeFeedback,
+  onPickQuestion,
   onConfirmPrototype,
   onContinuePrototype,
 }) {
@@ -46,7 +47,7 @@ export function WorkbenchAgentBlock({
           {thinking ? <section className="cw-agent-section"><h4>思考过程</h4><pre>{thinking}</pre></section> : null}
           {card.summary ? <section className="cw-agent-section"><h4>思考摘要</h4><p>{card.summary}</p></section> : null}
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}
-          {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
+          {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} onPickQuestion={onPickQuestion} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
           {previewableArtifacts.length ? <ArtifactList artifacts={previewableArtifacts} onOpenArtifact={onOpenArtifact} /> : null}
           {prototype ? (
             <section className="cw-agent-section cw-prototype-card">
@@ -81,7 +82,7 @@ function isFolded(card) {
   return card.state === 'confirmed' || card.state === 'delivered'
 }
 
-function QuestionList({ questions, onSubmitCredential, credentialDrafts, setCredentialDrafts }) {
+function QuestionList({ questions, onSubmitCredential, onPickQuestion, credentialDrafts, setCredentialDrafts }) {
   return (
     <section className="cw-agent-section">
       <h4>澄清项</h4>
@@ -99,13 +100,27 @@ function QuestionList({ questions, onSubmitCredential, credentialDrafts, setCred
             <button type="button" onClick={() => onSubmitCredential && onSubmitCredential(q, credentialDrafts[q.id] || '')}>提交凭证</button>
           </label>
         ) : (
-          <p key={q.id || q.question}>{q.question}</p>
+          <div key={q.id || q.question} className="cw-agent-question">
+            <p>{q.question}</p>
+            {Array.isArray(q.options) && q.options.length ? (
+              <div className="cw-agent-question-options">
+                {q.options.map(opt => {
+                  const label = opt.label || opt.value || ''
+                  return (
+                    <button key={opt.value || opt.label} type="button" onClick={() => onPickQuestion && onPickQuestion(label)}>
+                      <span>{label}</span>
+                      {opt.recommended ? <em>推荐</em> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
         ),
       )}
     </section>
   )
 }
-
 function ArtifactList({ artifacts, onOpenArtifact }) {
   return (
     <section className="cw-agent-section cw-artifact-list">
@@ -119,3 +134,5 @@ function ArtifactList({ artifacts, onOpenArtifact }) {
     </section>
   )
 }
+
+

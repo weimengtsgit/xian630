@@ -22,5 +22,15 @@ assert.match(block, /原型预览/, 'agent block missing prototype preview copy'
 assert.match(block, /确认原型并继续/, 'agent block missing confirm prototype action')
 assert.match(block, /直接进入方案设计/, 'agent block missing continue action')
 assert.match(workbench, /handlePrototypeFeedback/, 'workbench missing prototype feedback wiring')
+assert.match(workbench, /cw-prototype-dock/, 'workbench missing bottom-right prototype dock')
+assert.match(workbench, /PrototypePreviewModal/, 'workbench missing prototype preview modal')
+assert.match(workbench, /<iframe/, 'prototype preview modal must render iframe')
+assert.match(workbench, /确定原型并继续/, 'bottom-right dock missing confirm action')
+assert.match(workbench, /预览原型/, 'bottom-right dock missing preview action')
+assert.doesNotMatch(workbench, /thinking=\"\"/, 'workbench must not pass empty thinking into agent cards')
+assert.match(workbench, /questionsForCard/, 'workbench must derive card questions from job step pendingQuestions')
+assert.match(workbench, /thinkingForCard/, 'workbench must derive card thinking from task execution timeline')
+assert.match(block, /onPickQuestion/, 'agent block must let users pick structured step questions')
 
 console.log('prototype handoff checks passed')
+

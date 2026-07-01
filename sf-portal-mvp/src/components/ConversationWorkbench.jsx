@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Archive,
@@ -309,6 +309,37 @@ export function ConversationWorkbench({
     await factoryApi.continuePrototypeWithoutConfirmation(proto.jobId, proto.stepId)
   }
 
+  function timelineBlocksForCard(card) {
+    const ids = new Set((card.steps || []).map(step => step && (step.id || step.stepId)).filter(Boolean))
+    if (!ids.size) return []
+    return (Array.isArray(timeline) ? timeline : []).filter(item =>
+      item && item.type === 'task_execution_block' && ids.has(item.stepId),
+    )
+  }
+
+  function thinkingForCard(card) {
+    return timelineBlocksForCard(card)
+      .map(item => String(item.taskThinking || '').trim())
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  function questionsForCard(card) {
+    const parsed = []
+    for (const step of card.steps || []) {
+      parsed.push(...parseStepPendingQuestions(step && (step.pending_questions || step.pendingQuestions)))
+    }
+    if (parsed.length) return parsed
+    return card.key === aggregateGraph.activeCardKey ? activeQuestions : []
+  }
+
+  function handlePickCardQuestion(value) {
+    if (!value) return
+    setInput(prev => {
+      const trimmed = String(prev).trim()
+      return trimmed ? `${trimmed}；${value}` : value
+    })
+  }
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -474,15 +505,16 @@ export function ConversationWorkbench({
             <WorkbenchAgentBlock
               key={card.key}
               card={card}
-              thinking=""
+              thinking={thinkingForCard(card)}
               analysisLog=""
-              questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
+              questions={questionsForCard(card)}
               prototype={card.key === 'interface_parsing' ? prototypeFromCard(card) : null}
               onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
               onOpenArtifact={openArtifact}
               onSubmitCredential={submitCredential}
               onOpenPrototype={handleOpenPrototype}
               onPrototypeFeedback={handlePrototypeFeedback}
+              onPickQuestion={handlePickCardQuestion}
               onConfirmPrototype={handleConfirmPrototype}
               onContinuePrototype={handleContinuePrototype}
             />
@@ -1399,6 +1431,31 @@ function deploymentVersionLabel({ view, focusTask, traceItems }) {
   return `V${nextNumber}`
 }
 
+function parseStepPendingQuestions(raw) {
+  if (!raw) return []
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const list = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.questions) ? parsed.questions : []
+    return list.map(normalizeStepQuestion).filter(Boolean)
+  } catch (_) {
+    return []
+  }
+}
+
+function normalizeStepQuestion(q) {
+  if (!q || typeof q !== 'object') return null
+  const question = q.question || q.title || q.label || ''
+  if (!question) return null
+  const options = Array.isArray(q.options)
+    ? q.options.map(option => typeof option === 'string' ? { label: option, value: option } : option).filter(Boolean)
+    : []
+  return {
+    ...q,
+    id: q.id || q.questionId || question,
+    question,
+    options,
+  }
+}
 function RequirementSummary({ requirement }) {
   const boundary = requirement && requirement.judgementBoundary
   const rows = [
@@ -1691,3 +1748,4 @@ function formatAcceptedAt(value) {
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
+
