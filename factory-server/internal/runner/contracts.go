@@ -99,9 +99,21 @@ type QuestionOption struct {
 	Recommended bool   `json:"recommended,omitempty"`
 }
 
-// UnmarshalJSON accepts {value,label} (contract) and {id,label} (alternate).
-// Value falls back to id, then label, so the option is always pickable.
+// UnmarshalJSON accepts {value,label} (contract), {id,label} (alternate), and a
+// plain string ("mock_data" — some models emit options as a bare-value array
+// instead of objects). Value falls back to id, then label; a plain string is
+// used as BOTH value and label so the option is always pickable. This tolerance
+// matches the codebase's other model-variance decoders (SkillPaths/Question/
+// FallbackHistory): a shape drift in a non-critical field never hard-fails the
+// step (it was previously surfaced as a misleading output_invalid_json).
 func (o *QuestionOption) UnmarshalJSON(data []byte) error {
+	// Shape C: a plain string — use as both value and label.
+	var bare string
+	if err := json.Unmarshal(data, &bare); err == nil {
+		o.Value = bare
+		o.Label = bare
+		return nil
+	}
 	type raw struct {
 		Value       string `json:"value"`
 		ID          string `json:"id"`
