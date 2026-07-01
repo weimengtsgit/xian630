@@ -74,9 +74,27 @@
   background: linear-gradient(180deg, rgba(20, 70, 96, 0.96), rgba(10, 40, 58, 0.94));
   box-shadow: inset 0 0 18px rgba(104, 221, 255, 0.14);
 }
+/* Active + running card breathes like the execution graph's orchestrator card. The shared
+   .ceg-card-state-running::before draws a cyan cegPulse ring; for the ACTIVE
+   running card we override that single ::before to the purple cegOrchestratePulse
+   breathing (cegOrchestratePulse is defined in CollaborationExecutionGraph.css,
+   which this graph already loads). */
+.aog .ceg-card.ceg-card-state-running.is-active::before {
+  border-color: rgba(167, 139, 250, 0.7);
+  animation: cegOrchestratePulse 1.6s ease-in-out infinite;
+}
+/* 正在… phase hint must fit the narrow pinned card without forcing it wider. */
+.aog .ceg-card .ceg-orchestration-phase {
+  max-width: calc(100% - 4px);
+  font-size: 10px;
+  padding: 1px 6px;
+}
 @media (prefers-reduced-motion: reduce) {
   .aog .ceg-card,
   .aog .ceg-card-state {
     transition: none;
+  }
+  .aog .ceg-card.ceg-card-state-running.is-active::before {
+    animation: none !important;
   }
 }

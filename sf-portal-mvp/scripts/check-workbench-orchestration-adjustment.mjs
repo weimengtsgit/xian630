@@ -371,4 +371,33 @@ assert.equal(!!(mergedAnalysis.rawThinking && mergedAnalysis.rawThinking.include
 assert.equal(workbenchSrc.includes('describeSessionError'), true, 'ConversationWorkbench must render the session error via describeSessionError')
 assert.equal(workbenchSrc.includes('cw-session-error'), true, 'ConversationWorkbench must render a session-error block')
 
+// ---- Item 3: aggregate card polish (breathing, 正在… phase, function tooltip) ----
+// The pinned overview must match the execution graph's polish: the active
+// running card breathes via cegOrchestratePulse, a 正在… phase hint shows the
+// live action, the tooltip describes what the card DOES (not the live action),
+// and a running production card surfaces its current sub-agent name + action +
+// sub-agent function description.
+assert.equal(aggregateGraphSrc.includes('CARD_DESCRIPTIONS'), true, 'aggregate graph must carry a CARD_DESCRIPTIONS function-description map')
+assert.equal(aggregateGraphSrc.includes('SUBAGENT_DESCRIPTIONS'), true, 'aggregate graph must carry a SUBAGENT_DESCRIPTIONS map for running production sub-agents')
+assert.equal(aggregateGraphSrc.includes('ceg-orchestration-phase'), true, 'aggregate graph must render the 正在… phase via the shared .ceg-orchestration-phase span')
+assert.equal(css.includes('cegOrchestratePulse'), true, 'aggregate CSS must wire the purple cegOrchestratePulse breathing on the active running card')
+assert.equal(css.includes('.aog .ceg-card.ceg-card-state-running.is-active::before'), true, 'aggregate CSS must override the active running card ::before to the breathing pulse')
+assert.equal(css.includes('prefers-reduced-motion'), true, 'aggregate CSS breathing must be reduced-motion-guarded')
+// The tooltip for a running production card is the CURRENT sub-agent function
+// description; for other cards it is the card function description (NOT the live
+// action). Drive a running production step end-to-end through the view builder.
+const item3Production = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_i3', status: 'task_running', intent: 'application_generation' }, messages: [{ id: 'u', role: 'user', kind: 'prompt', content: '生成系统' }] },
+  jobStepBlocks: [
+    { stepId: 'r', kind: 'requirement_analysis', agentKey: 'requirement-analyst', status: 'succeeded', summary: '需求完成' },
+    { stepId: 'd', kind: 'design_contract', agentKey: 'designer', status: 'succeeded', summary: '界面完成' },
+    { stepId: 'x', kind: 'data_integration', agentKey: 'data-integration', status: 'succeeded', summary: '数据契约完成' },
+    { stepId: 'c', kind: 'code_generation', agentKey: 'code-generator', status: 'running', name: '代码生成', summary: '正在生成代码' },
+  ],
+})
+const item3Card = item3Production.cardsByKey.production_delivery
+assert.equal(item3Card.state, 'running')
+assert.equal(item3Card.subStage, '代码生成', 'running production card must surface the sub-agent name as subStage')
+assert.equal(item3Card.currentAction.includes('生成'), true, 'running production card currentAction must mention the sub-agent verb (生成)')
+
 console.log('check-workbench-orchestration-adjustment: ok')
