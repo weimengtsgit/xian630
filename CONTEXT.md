@@ -435,6 +435,50 @@ _Avoid_: 交叉部署飞机离舰, 任意航母附近未活动, 普通不活跃
 A command dashboard subtype focused on maritime monitoring, thresholds, refresh cadence, sea-area or port objects, map/grid overlays, and alert state.
 _Avoid_: 普通指挥看板, 态势复盘类应用, 业务管理类应用
 
+**测试艇目标清单**:
+A maritime monitoring input that lists suspected SEASATS test craft by identifier, name, latest known position, speed, and dimensions for screening and map placement.
+_Avoid_: 完整轨迹数据集, 船舶资产台账, 生成假轨迹
+
+**SEASATS 命名命中**:
+A vessel-name match for suspected test craft where the name starts with SEASAT or SEASATS, case-insensitively, followed by TEST or a numeric suffix.
+_Avoid_: 只接受单数 SEASAT, 任意包含 SEASAT, 忽略后缀
+
+**测试艇尺寸命中**:
+A vessel-dimension match where 4 by 2 is the strong customer feature and nearby 3 by 2 entries remain candidates marked for dimension review rather than being excluded.
+_Avoid_: 直接丢弃 3x2, 任意尺寸通过, 只看尺寸不看行为
+
+**单艇轨迹回放**:
+A situation replay scope where one selected vessel has time-series AIS positions and other matched vessels may only have latest-position screening evidence until track data is supplied.
+_Avoid_: 多艇完整轨迹, 伪造全量历史, 目标清单展示
+
+**轨迹来源标记**:
+The internal provenance label that distinguishes observed AIS track points, customer-provided latest positions, and generated extension tracks even when the customer-facing interface uses neutral wording.
+_Avoid_: mock 伪装真实数据, 无来源轨迹, 对外误称真实 AIS
+
+**重点监控区域**:
+A configurable maritime area, expressed as a center-radius or polygon, used to judge port-adjacent stops, low-speed testing, repeated movement, and alert relevance.
+_Avoid_: 仅 sea_name, 写死军港列表, 无边界区域描述
+
+**低速活动**:
+A vessel activity state where speed in knots is within the inclusive 0-3 kt threshold after applying the source-specific speed normalization.
+_Avoid_: 原始未换算速度, 小于 3 不含边界, 任意短瞬时点
+
+**持续低速告警**:
+An alert raised when low-speed activity for the same vessel remains inside the same monitored area for at least the configured duration; the first-version default duration is 10 minutes.
+_Avoid_: 单点低速告警, 全局慢速告警, 不可配置阈值
+
+**疑似往返活动**:
+A vessel movement pattern inside one monitored area where the traveled path is materially longer than the start-to-end displacement for a configured duration, indicating repeated or circling test movement.
+_Avoid_: 单次掉头, 单纯航向变化, 跨区域长航线
+
+**疑似 AIS 中断告警**:
+An alert inferred from a time gap between consecutive AIS track points for the same MMSI, with severity raised when the gap is long or occurs near a monitored area.
+_Avoid_: 已确认 AIS 关闭, 数据源缺失静默忽略, 任意缺口等同高危
+
+**测试艇综合研判评分**:
+A candidate scoring approach that combines name, dimensions, low-speed activity, monitored-area presence, repeated movement, and suspected AIS interruption to classify SEASATS test-craft evidence without requiring every signal to be present.
+_Avoid_: 单条件硬筛选, 缺轨迹即排除, 所有规则必须同时满足
+
 **生成能力包**:
 A project-local set of Claude Code skill instructions that guides application generation for a supported structure, visual language, or application pattern.
 _Avoid_: 全局个人技能, 普通模板文件
