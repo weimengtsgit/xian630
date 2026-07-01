@@ -8,7 +8,7 @@
 .ceg-manual-toggle.is-readonly { cursor: default; opacity: 0.82; }
 .ceg-manual-toggle input { width: 13px; height: 13px; margin: 0; accent-color: #f3c761; cursor: pointer; }
 .ceg-manual-toggle input:disabled { cursor: not-allowed; opacity: 0.55; }
-.ceg-canvas { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 34px 2px 10px; scrollbar-width: thin; scrollbar-color: rgba(104, 221, 255, 0.42) rgba(6, 18, 29, 0.28); }
+.ceg-canvas { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 2px 6px; scrollbar-width: thin; scrollbar-color: rgba(104, 221, 255, 0.42) rgba(6, 18, 29, 0.28); }
 .ceg-wave-group { display: flex; align-items: stretch; flex: 0 0 auto; }
 .ceg-wave { min-width: 154px; display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
 .ceg-wave-label { color: #75bfd2; font-size: 10px; text-align: center; }
@@ -30,12 +30,17 @@
 .ceg-card-wait { grid-column: 1 / -1; color: #83cddd; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
 .ceg-card-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 12; width: max-content; max-width: 220px; padding: 7px 9px; border: 1px solid rgba(104, 221, 255, 0.34); border-radius: 6px; background: rgba(3, 17, 29, 0.96); color: #d7eef8; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.36); font-size: 11px; line-height: 1.42; text-align: left; white-space: normal; overflow-wrap: anywhere; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 4px); transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease; }
 .ceg-card-tooltip::after { content: ''; position: absolute; left: 50%; top: 100%; width: 8px; height: 8px; border-right: 1px solid rgba(104, 221, 255, 0.34); border-bottom: 1px solid rgba(104, 221, 255, 0.34); background: rgba(3, 17, 29, 0.96); transform: translate(-50%, -4px) rotate(45deg); }
+.ceg-card-tooltip-below { bottom: auto; top: calc(100% + 8px); transform: translate(-50%, -4px); }
+.ceg-card-tooltip-below::after { top: auto; bottom: 100%; border-right: none; border-bottom: none; border-left: 1px solid rgba(104, 221, 255, 0.34); border-top: 1px solid rgba(104, 221, 255, 0.34); transform: translate(-50%, 4px) rotate(45deg); }
 .ceg-card:hover .ceg-card-tooltip, .ceg-card:focus-visible .ceg-card-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.ceg-card:hover .ceg-card-tooltip-below, .ceg-card:focus-visible .ceg-card-tooltip-below { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
 .ceg-gate { position: absolute; top: 6px; right: 7px; padding: 1px 5px; border: 1px solid rgba(252, 211, 77, 0.38); border-radius: 999px; background: rgba(92, 58, 8, 0.42); color: #fde68a; font-size: 9px; font-style: normal; }
 .ceg-origin { border-color: rgba(252, 211, 77, 0.34); }
 .ceg-orchestrator { border-color: rgba(167, 139, 250, 0.55); box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.16), 0 10px 24px rgba(23, 15, 50, 0.24); }
 .ceg-card-state-running { border-color: rgba(104, 221, 255, 0.68); }
 .ceg-card-state-running::before { content: ''; position: absolute; inset: -1px; border-radius: 8px; border: 1px solid rgba(104, 221, 255, 0.58); animation: cegPulse 1.6s ease-in-out infinite; pointer-events: none; }
+.ceg-card-flash { position: absolute; inset: -1px; border-radius: 8px; border: 1px solid rgba(104, 221, 255, 0.85); box-shadow: 0 0 16px 2px rgba(104, 221, 255, 0.6); pointer-events: none; opacity: 0; animation: cegUserInputFlash 0.6s ease-out forwards; }
+@keyframes cegUserInputFlash { 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: 0; } }
 .ceg-card-state-completed .ceg-card-state { color: #9df3a6; background: rgba(20, 64, 50, 0.5); }
 .ceg-card-state-failed { border-color: rgba(255, 102, 94, 0.62); background: linear-gradient(180deg, rgba(80, 22, 28, 0.86), rgba(45, 12, 16, 0.9)); }
 .ceg-card-state-failed .ceg-card-state { color: #ff9b9b; background: rgba(96, 26, 36, 0.55); }
