@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import { Activity, AlertTriangle, Clock3, Gauge, MapPin, Navigation, Radio, ShieldAlert, Ship } from "lucide-react";
 import { fmtDuration } from "../logic/domain.js";
-import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop, scoreBreakup, classifyPattern, signalQuality, perTargetAlertBreakdown } from "../logic/analytics.js";
+import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop, scoreBreakup, classifyPattern, signalQuality, perTargetAlertBreakdown, combinedSpeedDistanceSeries } from "../logic/analytics.js";
 
-const W = 360, H = 170, PL = 38, PR = 12, PT = 14, PB = 24;
+const W = 360, H = 170, PL = 38, PR = 22, PT = 14, PB = 24;
 const IW = W - PL - PR, IH = H - PT - PB;
 
 function fmtDay(t) {
@@ -237,6 +237,49 @@ function DaysTopBars({ targets }) {
   );
 }
 
+function SpeedDistanceChart({ target, coast }) {
+  const data = useMemo(() => combinedSpeedDistanceSeries(target, coast), [target, coast]);
+  if (data.length < 2) return <EmptyChart label="数据不足" />;
+  const xs = data.map((_, i) => PL + (i / (data.length - 1)) * IW);
+  const speeds = data.map((d) => d.speed).filter((v) => v != null);
+  const maxSp = speeds.length ? Math.max(...speeds, 3) : 3;
+  const dists = data.map((d) => d.dist).filter((v) => v != null);
+  const maxDist = dists.length ? Math.max(...dists, 250) : 250;
+  const ySp = (v) => PT + IH - (v / maxSp) * IH;
+  const yDi = (v) => PT + IH - (v / maxDist) * IH;
+  const spPts = data.map((d, i) => ({ x: xs[i], y: d.speed != null ? ySp(d.speed) : null })).filter((p) => p.y !== null);
+  const diPts = data.map((d, i) => ({ x: xs[i], y: d.dist != null ? yDi(d.dist) : null })).filter((p) => p.y !== null);
+  const spPath = spPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const spArea = spPts.length ? `${spPath} L${spPts[spPts.length - 1].x.toFixed(1)},${(PT + IH).toFixed(1)} L${spPts[0].x.toFixed(1)},${(PT + IH).toFixed(1)} Z` : "";
+  const diPath = diPts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  let mv = -1, maxIdx = -1;
+  data.forEach((d, i) => { if (d.speed != null && d.speed > mv) { mv = d.speed; maxIdx = i; } });
+  return (
+    <div className="stacked-wrap">
+      <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+        <defs><linearGradient id="gSD" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#fbbf24" stopOpacity="0.4" /><stop offset="100%" stopColor="#fbbf24" stopOpacity="0" /></linearGradient></defs>
+        {[0, 0.5, 1].map((g) => { const y = PT + IH - g * IH; return <line key={g} x1={PL} y1={y} x2={W - PR} y2={y} stroke="#1e293b" strokeWidth="0.6" strokeDasharray="2 3" />; })}
+        {[0, 0.5, 1].map((g) => { const y = PT + IH - g * IH; return <text key={"s" + g} x={PL - 4} y={y + 3} fill="#fbbf24" fontSize="8" textAnchor="end">{Math.round(g * maxSp)}</text>; })}
+        {[0, 0.5, 1].map((g) => { const y = PT + IH - g * IH; return <text key={"d" + g} x={W - PR + 4} y={y + 3} fill="#38bdf8" fontSize="8">{Math.round(g * maxDist)}</text>; })}
+        {[80, 140, 200].filter((nm) => maxDist > nm).map((nm) => <line key={nm} x1={PL} y1={yDi(nm)} x2={W - PR} y2={yDi(nm)} stroke={nm === 80 ? "#ef4444" : nm === 140 ? "#f59e0b" : "#eab308"} strokeDasharray="3 3" strokeWidth="0.7" opacity="0.6" />)}
+        {diPath && <path d={diPath} fill="none" stroke="#38bdf8" strokeWidth="1.8" />}
+        {spArea && <path d={spArea} fill="url(#gSD)" />}
+        {spPath && <path d={spPath} fill="none" stroke="#fbbf24" strokeWidth="2" />}
+        {maxIdx >= 0 && <circle cx={xs[maxIdx]} cy={ySp(data[maxIdx].speed)} r="4" fill="#ef4444" stroke="#fff" strokeWidth="1.2"><title>最快 {data[maxIdx].speed.toFixed(1)}kt · 距海岸 {data[maxIdx].dist != null ? data[maxIdx].dist.toFixed(0) : "?"}海里</title></circle>}
+        <text x={PL} y={H - 6} fill="#64748b" fontSize="9">{fmtDay(data[0].t)}</text>
+        <text x={W - PR} y={H - 6} fill="#64748b" fontSize="9" textAnchor="end">{fmtDay(data[data.length - 1].t)}</text>
+        <text x={4} y={12} fill="#fbbf24" fontSize="9">kt</text>
+        <text x={W - 4} y={12} fill="#38bdf8" fontSize="9" textAnchor="end">海里</text>
+      </svg>
+      <div className="stacked-legend">
+        <span><i style={{ background: "#fbbf24" }} />速度 kt</span>
+        <span><i style={{ background: "#38bdf8" }} />离国土距离 海里</span>
+        {maxIdx >= 0 && <span><i style={{ background: "#ef4444" }} />最快点(悬停看位置)</span>}
+      </div>
+    </div>
+  );
+}
+
 function StackedAlerts({ targets }) {
   const { rows, types } = useMemo(() => perTargetAlertBreakdown(targets), [targets]);
   if (rows.length === 0) return <EmptyChart label="无告警目标" />;
@@ -319,8 +362,7 @@ export function AnalysisPanel({ analysis, selectedTarget, coast }) {
       <div className="analysis-group">
         <h3><Gauge size={14} />{selectedTarget?.name || "—"} 轨迹分析</h3>
         <div className="chart-grid">
-          <div className="chart-card"><header><Gauge size={12} />速度时序</header><SpeedChart target={selectedTarget} /></div>
-          <div className="chart-card"><header><MapPin size={12} />离国土距离</header><DistanceChart target={selectedTarget} coast={coast} /></div>
+          <div className="chart-card"><header><Gauge size={12} />速度 vs 国土距离</header><SpeedDistanceChart target={selectedTarget} coast={coast} /></div>
           <div className="chart-card"><header><Radio size={12} />AIS 信号</header><AisTimeline target={selectedTarget} /></div>
           <div className="chart-card"><header><Clock3 size={12} />活动时段</header><HourBars target={selectedTarget} /></div>
           <div className="chart-card"><header><Navigation size={12} />航向分布</header><HeadingRose target={selectedTarget} /></div>

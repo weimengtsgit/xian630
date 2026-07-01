@@ -160,3 +160,15 @@ export function perTargetAlertBreakdown(targets, n = 8) {
   }).filter((r) => r.total > 0).sort((a, b) => b.total - a.total).slice(0, n);
   return { rows, types: ALERT_TYPE_META };
 }
+
+// 速度 + 离国土距离 统一时序（按轨迹点合并）
+export function combinedSpeedDistanceSeries(target, coast, maxPoints = 80) {
+  const pts = decimateByCount(targetPoints(target), maxPoints);
+  const out = [];
+  for (const p of pts) {
+    const speed = toNumber(p.speedKn);
+    const np = coast ? nearestPointOnCoastNm(p, coast) : null;
+    out.push({ t: p.time, speed, dist: np ? np.distanceNm : null });
+  }
+  return out;
+}
