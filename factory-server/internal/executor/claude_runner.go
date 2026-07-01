@@ -260,7 +260,16 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		out, err := runner.ValidateRequirementAnalysisWithConfirmedSummary(ws.OutputPath(), string(confirmedReq))
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
 		res := c.resultFromValidatedOutput(ctx, trace, out, err)
-		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
+		res = c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res)
+		// Surface the projected 需求文档 (docs/01-requirements.md) as a
+		// project_document workbench artifact on the business_logic card so the
+		// user can open it right after the requirement step. projectDocsAfterStep
+		// writes the file under generated-apps/<AppSlug>/docs/, so this is gated
+		// on AppSlug (the dialogue confirmation flow reserves it up front).
+		if res.Status == model.StepStatusSucceeded && job.AppSlug != "" {
+			c.upsertWorkbenchArtifact(ctx, requirementDocumentRef(job, step))
+		}
+		return res, nil
 	case model.StepSolutionDesign:
 		out, err := runner.ValidateSolutionDesign(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
@@ -1508,6 +1517,29 @@ func (c *ClaudeStepRunner) createPrototypePreviewArtifact(ctx context.Context, j
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
+}
+
+// requirementDocumentRef builds the workbench artifact ref for the 需求文档
+// that projectDocsAfterStep projects (docs/01-requirements.md) after a
+// successful requirement_analysis step. Path is app-relative so the frontend's
+// openProjectDocument can fetch it via GET /api/jobs/:id/project-docs/file.
+// CardKey=business_logic places it on the 业务逻辑 card; Kind=project_document
+// routes the open click to the markdown preview.
+func requirementDocumentRef(job model.Job, step model.JobStep) model.WorkbenchArtifactRef {
+	now := time.Now()
+	return model.WorkbenchArtifactRef{
+		ID:         "warf_" + id.New(),
+		DialogueID: job.DialogueID,
+		JobID:      job.ID,
+		StepID:     step.ID,
+		CardKey:    "business_logic",
+		Kind:       model.WorkbenchArtifactProjectDocument,
+		Label:      "需求文档",
+		Path:       "docs/01-requirements.md",
+		Status:     "active",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
 }
 
 // upsertWorkbenchArtifact persists a WorkbenchArtifactRef so the orchestration
