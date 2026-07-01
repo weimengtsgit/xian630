@@ -1,4 +1,5 @@
 import { ArrowUp, Clock3, Gauge, MapPin, X } from "lucide-react";
+import { fmtDuration } from "../logic/domain.js";
 
 function speedTier(min) {
   if (min == null) return "info";
@@ -40,7 +41,7 @@ export function AlertCard({ alert, onClose }) {
         </div>
         <div className="card-cell">
           <span className="cell-label"><Clock3 size={12} /> 中断时长</span>
-          <span className={`cell-big tier-${tier}`}>{Math.round(alert.gapMinutes || 0)}<small>min</small></span>
+          <span className={`cell-big tier-${tier}`}>{fmtDuration(alert.gapMinutes)}</span>
           <small className="cell-sub">{tier === "high" ? ">6h 紧急" : tier === "medium" ? ">30min 关注" : "短时"}</small>
         </div>
         <div className="card-cell">

@@ -470,3 +470,16 @@ export function sortAnalyses(targets = []) {
     return Date.parse(b.latestTime || 0) - Date.parse(a.latestTime || 0);
   });
 }
+
+// 时长格式化：分钟 → "X天Y小时Z分钟"（智能省略0）
+export function fmtDuration(totalMin) {
+  const m = Math.max(0, Math.round(totalMin || 0));
+  const d = Math.floor(m / 1440);
+  const h = Math.floor((m % 1440) / 60);
+  const min = m % 60;
+  const parts = [];
+  if (d) parts.push(`${d}天`);
+  if (h) parts.push(`${h}小时`);
+  if (min || parts.length === 0) parts.push(`${min}分钟`);
+  return parts.join("");
+}

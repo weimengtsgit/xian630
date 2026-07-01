@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowUp, Clock3, Database, Filter, Navigation, Search, Ship, Target, X } from "lucide-react";
-import { analyzePayload } from "../logic/domain.js";
+import { analyzePayload, fmtDuration } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
 import { MapPanel } from "./MapPanel.jsx";
 import { AlertCard } from "./AlertCard.jsx";
@@ -158,7 +158,7 @@ function Dashboard({ payload }) {
           <section className="dashstrip">
             <div className="dashstrip-title">
               <h3>{selectedTarget?.name}</h3><span>{selectedTarget?.mmsi}</span>
-              <strong className="score-pill">评分 {selectedTarget?.score}</strong>
+              <strong className="score-pill">威胁分 {selectedTarget?.score}</strong>
             </div>
             <div className="dash-cells">
               <div className="dash-cell">

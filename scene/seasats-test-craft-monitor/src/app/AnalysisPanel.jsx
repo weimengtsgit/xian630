@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { AlertTriangle, Clock3, Gauge, MapPin, Navigation, Radio, ShieldAlert, Ship } from "lucide-react";
-import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop } from "../logic/analytics.js";
+import { Activity, AlertTriangle, Clock3, Gauge, MapPin, Navigation, Radio, ShieldAlert, Ship } from "lucide-react";
+import { fmtDuration } from "../logic/domain.js";
+import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop, scoreBreakup, classifyPattern, signalQuality } from "../logic/analytics.js";
 
 const W = 320, H = 130, PAD = 12;
 
@@ -177,6 +178,44 @@ function DaysTopBars({ targets }) {
   );
 }
 
+function PatternCard({ target }) {
+  const p = useMemo(() => classifyPattern(target), [target]);
+  const icon = { loiter: "🔄", linger: "⏸", transit: "➡️", none: "—" }[p.key] || "—";
+  return (
+    <div className="info-card">
+      <div className="info-icon">{icon}</div>
+      <div className="info-body"><strong>{p.label}</strong><small>{p.detail || "—"}</small></div>
+    </div>
+  );
+}
+
+function SignalCard({ target }) {
+  const q = useMemo(() => signalQuality(target), [target]);
+  return (
+    <div className="signal-card">
+      <div className="signal-cell"><small>报点</small><strong>{q.reportCount.toLocaleString()}</strong></div>
+      <div className="signal-cell"><small>中断</small><strong>{q.gapCount}</strong></div>
+      <div className="signal-cell"><small>中断总时长</small><strong>{fmtDuration(q.gapMinutes)}</strong></div>
+    </div>
+  );
+}
+
+function ScoreBreakupCard({ target }) {
+  const b = useMemo(() => scoreBreakup(target), [target]);
+  if (b.items.length === 0) return <EmptyChart label="无威胁构成" />;
+  return (
+    <div className="breakup-card">
+      {b.items.map((it) => (
+        <div className="breakup-row" key={it.key}>
+          <span className="breakup-label">{it.label}</span>
+          <div className="breakup-bar"><span style={{ width: `${Math.min(100, (it.value / 30) * 100)}%` }} /></div>
+          <strong>+{it.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function AnalysisPanel({ analysis, selectedTarget, coast }) {
   const summary = analysis.summary;
   const statusDist = useMemo(() => statusDistribution(analysis.targets), [analysis.targets]);
@@ -191,6 +230,9 @@ export function AnalysisPanel({ analysis, selectedTarget, coast }) {
           <div className="chart-card"><header><Radio size={12} />AIS 信号</header><AisTimeline target={selectedTarget} /></div>
           <div className="chart-card"><header><Clock3 size={12} />活动时段</header><HourBars target={selectedTarget} /></div>
           <div className="chart-card"><header><Navigation size={12} />航向分布</header><HeadingRose target={selectedTarget} /></div>
+          <div className="chart-card"><header><Activity size={12} />轨迹模式</header><PatternCard target={selectedTarget} /></div>
+          <div className="chart-card"><header><Radio size={12} />信号质量</header><SignalCard target={selectedTarget} /></div>
+          <div className="chart-card"><header><ShieldAlert size={12} />威胁构成</header><ScoreBreakupCard target={selectedTarget} /></div>
         </div>
       </div>
       <div className="analysis-group">

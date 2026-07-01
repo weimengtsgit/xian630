@@ -104,3 +104,42 @@ export function activityDaysTop(targets, n = 6) {
     .sort((a, b) => b.days - a.days)
     .slice(0, n);
 }
+
+// 威胁分构成（复刻 scoreTarget 分项，用于可视化）
+export function scoreBreakup(target) {
+  const b = { nameHit: 0, dimension: 0, area: 0, track: 0, lowSpeed: 0, repeated: 0, aisGap: 0, coast: 0 };
+  if (target?.nameHit) b.nameHit = 30;
+  b.dimension = target?.dimension?.score || 0;
+  if ((target?.latestAreaIds || []).length > 0) b.area = 10;
+  if (target?.hasObservedTrack) b.track = 8;
+  const alerts = target?.alerts || [];
+  if (alerts.some((a) => a.type === "sustained-low-speed")) b.lowSpeed = 20;
+  if (alerts.some((a) => a.type === "repeated-activity")) b.repeated = 15;
+  if (alerts.some((a) => a.type === "ais-gap")) b.aisGap = 10;
+  const co = alerts.find((a) => a.type === "coast-proximity");
+  if (co) b.coast = co.level === "high" ? 25 : co.level === "medium" ? 15 : 8;
+  const total = Math.min(100, Object.values(b).reduce((s, v) => s + v, 0));
+  const labels = { nameHit: "名称命中", dimension: "尺寸", area: "区域", track: "轨迹", lowSpeed: "持续低速", repeated: "往返盘旋", aisGap: "AIS中断", coast: "接近国土" };
+  const items = Object.entries(b).filter(([, v]) => v > 0).map(([k, v]) => ({ key: k, label: labels[k], value: v }));
+  return { total, items };
+}
+
+// 轨迹活动模式判定
+export function classifyPattern(target) {
+  const segs = target?.segments || [];
+  if (segs.length === 0) return { key: "none", label: "无轨迹", detail: "" };
+  const total = segs.reduce((s, seg) => s + (seg.durationMinutes || 0), 0);
+  const lowSpeed = segs.reduce((s, seg) => s + (seg.lowSpeedMinutes || 0), 0);
+  const maxRatio = Math.max(...segs.map((s) => s.pathDisplacementRatio || 0));
+  if (maxRatio >= 3) return { key: "loiter", label: "盘旋/往返测试", detail: `路径位移比 ${maxRatio.toFixed(1)}` };
+  if (total > 0 && lowSpeed / total > 0.5) return { key: "linger", label: "低速停留", detail: `低速 ${Math.round(lowSpeed)}分钟` };
+  return { key: "transit", label: "直线航行", detail: `${segs.length}段轨迹` };
+}
+
+// AIS 信号质量
+export function signalQuality(target) {
+  const reportCount = target?.reportCount || 0;
+  const gaps = target?.aisGaps || [];
+  const gapMinutes = gaps.reduce((s, g) => s + (g.gapMinutes || 0), 0);
+  return { reportCount, gapCount: gaps.length, gapMinutes };
+}

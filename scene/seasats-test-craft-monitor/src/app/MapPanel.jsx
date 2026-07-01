@@ -214,10 +214,10 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
         )}
         {basemapLimited && <div className="map-warning">底图加载受限</div>}
         <div className="map-toggles" aria-label="图层">
-          <button className={showTargets ? "on" : ""} onClick={() => setShowTargets((v) => !v)}>目标</button>
-          <button className={showTracks ? "on" : ""} onClick={() => setShowTracks((v) => !v)}>轨迹</button>
-          <button className={showAreas ? "on" : ""} onClick={() => setShowAreas((v) => !v)}>区域</button>
-          <button className={showAlerts ? "on" : ""} onClick={() => setShowAlerts((v) => !v)}>告警</button>
+          <button className={showTargets ? "on" : ""} onClick={() => setShowTargets((v) => !v)} title="船只最新位置">目标</button>
+          <button className={showTracks ? "on" : ""} onClick={() => setShowTracks((v) => !v)} title="船只航线（选中船高亮）">轨迹</button>
+          <button className={showAreas ? "on" : ""} onClick={() => setShowAreas((v) => !v)} title="监测区 + 海岸警戒带">区域</button>
+          <button className={showAlerts ? "on" : ""} onClick={() => setShowAlerts((v) => !v)} title="异常事件：低速/往返/AIS中断/接近国土">告警</button>
         </div>
         <div className="map-legend">
           <span><i className="dot critical" />异常</span>

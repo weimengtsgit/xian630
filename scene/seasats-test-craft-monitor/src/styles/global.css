@@ -301,3 +301,20 @@ html, body { overflow: auto; }
 
 /* === 研判结论段落 === */
 .narrative { font-size: 12px; line-height: 1.7; color: #cbd5e1; padding: 6px 8px; margin: 0; }
+
+/* === 轨迹模式/信号质量/威胁构成 === */
+.info-card { display: flex; align-items: center; gap: 12px; padding: 8px 4px; }
+.info-icon { font-size: 30px; line-height: 1; }
+.info-body { display: flex; flex-direction: column; gap: 3px; }
+.info-body strong { font-size: 15px; color: #f8fafc; }
+.info-body small { font-size: 11px; color: #94a3b8; }
+.signal-card { display: flex; gap: 8px; padding: 4px 2px; }
+.signal-cell { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 10px 4px; background: rgba(30,41,59,0.5); border-radius: 8px; }
+.signal-cell small { font-size: 10px; color: #94a3b8; }
+.signal-cell strong { font-size: 15px; color: #f8fafc; text-align: center; }
+.breakup-card { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px; }
+.breakup-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.breakup-label { width: 64px; color: #94a3b8; flex-shrink: 0; }
+.breakup-bar { flex: 1; height: 9px; background: rgba(30,41,59,0.6); border-radius: 4px; overflow: hidden; }
+.breakup-bar span { display: block; height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); }
+.breakup-row strong { color: #fbbf24; min-width: 30px; text-align: right; }
