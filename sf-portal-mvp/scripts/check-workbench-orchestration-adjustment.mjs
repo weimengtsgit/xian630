@@ -149,7 +149,7 @@ assert.equal(css.includes('position: sticky'), true, 'graph must support fixed-i
 assert.equal(css.includes('max-height'), false, 'aggregate graph should not cap the old collaboration-graph visual canvas')
 assert.equal(css.includes('justify-content: center'), true, 'aggregate graph cards should be centered in the overview canvas')
 assert.equal(css.includes('.aog .ceg-canvas'), true, 'aggregate graph must tune the canvas without changing shared ceg styles')
-assert.equal(css.includes('padding: 12px 2px 10px'), true, 'aggregate graph should reduce top padding after removing wave labels')
+assert.equal(css.includes('padding: 10px 2px 10px'), true, 'aggregate graph canvas padding is symmetric 10px so the top and bottom cards sit the same distance from the edges')
 assert.equal(css.includes('.aog .ceg-card-state-running'), true, 'aggregate 执行中 card carries a scoped running tint')
 assert.equal(/\.aog \.ceg-card\b[\s\S]*?transition:/.test(css), true, 'aggregate card state changes animate (transition) instead of snapping')
 

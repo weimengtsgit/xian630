@@ -11,6 +11,10 @@ const CONFIRM_LABEL = {
 
 export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [], onConfirm, onOpenArtifact, onSubmitCredential }) {
   const [open, setOpen] = useState(!isFolded(card))
+  // TEMP DEBUG: log card data to diagnose empty blocks
+  if (typeof window !== 'undefined') {
+    console.log('[WorkbenchAgentBlock]', card.key, { state: card.state, steps: (card.steps || []).length, summary: card.summary, artifacts: (card.artifacts || []).length, thinking: (thinking || '').length })
+  }
   // credentialDrafts holds the in-progress plaintext credential the user is
   // typing for each credential question, keyed by question id. The draft lives
   // ONLY in component state; it is never rendered as text (the input is
@@ -48,7 +52,11 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
 }
 
 function isFolded(card) {
-  return card.state === 'confirmed' || card.state === 'delivered'
+  // Never auto-fold: the user expects each agent block (业务逻辑 / 界面解析 /
+  // 数据抓取 / 生产交付) to show its content (思考过程, 思考摘要, 产物) inline in
+  // the conversation, not collapse to a bare header line once the stage is done.
+  // The head button still toggles open/close manually.
+  return false
 }
 
 function QuestionList({ questions, onSubmitCredential, credentialDrafts, setCredentialDrafts }) {
