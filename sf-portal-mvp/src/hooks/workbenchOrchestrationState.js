@@ -92,7 +92,7 @@ export function buildWorkbenchOrchestrationView({ view, workTraceItems = [], job
 
   for (const key of ['business_logic', 'interface_parsing', 'data_capture']) {
     const card = cardsByKey[key]
-    const state = aggregateAnalysisState(card.steps)
+    const state = card.steps.length ? aggregateAnalysisState(card.steps) : card.state
     card.state = state
     card.currentAction = latestStepSummary(card.steps, workTraceItems)
     card.summary = latestTerminalSummary(card.steps)

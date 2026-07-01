@@ -59,6 +59,17 @@ assert.equal(running.cardsByKey.production_delivery.state, 'waiting_upstream')
 assert.equal(running.activeCardKey, 'interface_parsing')
 assert.equal(running.focusQueue.join('>'), 'business_logic>interface_parsing>data_capture>production_delivery')
 
+const freshInput = buildWorkbenchOrchestrationView({
+  view: {
+    session: { id: 'dlg_fresh', status: 'active', intent: 'application_generation' },
+    messages: [{ id: 'u-fresh', role: 'user', kind: 'prompt', content: '请做一个后勤管理应用' }],
+  },
+  jobStepBlocks: [],
+})
+assert.equal(freshInput.cardsByKey.user_input.state, 'confirmed')
+assert.equal(freshInput.cardsByKey.business_logic.state, 'ready', 'fresh input should enter the business-logic stage before task steps exist')
+assert.equal(freshInput.activeCardKey, 'business_logic', 'fresh input should make business_logic the active card')
+
 const production = buildWorkbenchOrchestrationView({
   view: { session: { id: 'dlg_2', status: 'task_running', intent: 'application_generation' }, messages: [{ id: 'u2', role: 'user', kind: 'prompt', content: '生成系统' }] },
   jobStepBlocks: [
@@ -246,6 +257,9 @@ const appSrc = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 assert.equal(appSrc.includes('onConfirmCard'), true, 'App must define an onConfirmCard callback for card confirms')
 assert.equal(appSrc.includes('jobs.answerJob'), true, 'onConfirmCard must advance the task-phase waiting step via jobs.answerJob')
 assert.equal(/onConfirmCard/.test(appSrc) && appSrc.indexOf('onConfirmCard') < appSrc.indexOf('dialogue.confirm', appSrc.indexOf('onConfirmCard')), true, 'onConfirmCard must fall back to dialogue.confirm only in the pre-task branch')
+assert.equal(appSrc.includes('scopedTraceSteps'), true, 'App must derive dialogue-scoped task steps for the workbench')
+assert.equal(appSrc.includes('traceSteps={scopedTraceSteps}'), true, 'ConversationWorkbench must not receive global jobs.steps')
+assert.equal(appSrc.includes('buildTaskBlocks(scopedTraceSteps'), true, 'dialogue task blocks must be built from scoped task steps')
 const workbenchSrc = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
 assert.equal(workbenchSrc.includes('onConfirmCard'), true, 'ConversationWorkbench must accept the onConfirmCard prop')
 assert.equal(workbenchSrc.includes('onConfirmCard ? onConfirmCard(key)'), true, 'WorkbenchAgentBlock confirm must prefer onConfirmCard over onConfirm')
