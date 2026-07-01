@@ -54,6 +54,22 @@ describe('config loading', () => {
 
     expect(config.publicBaseUrl).toBe('http://192.168.1.109:3100');
   });
+
+  it('loads file-server paths for pending input and confirmed output', () => {
+    const config = loadConfig({
+      BLADE_OS_BASE_URL: 'http://115.190.152.1/',
+      BLADE_OS_PAT: 'sk-test',
+      PENDING_INPUT_PATH: '共享/interface-agent/pending.md',
+      CONFIRMED_OUTPUT_PATH: '共享/interface-agent/prototype.html',
+      PENDING_POLL_INTERVAL_MS: '5000',
+    });
+
+    expect(config.bladeOsBaseUrl).toBe('http://115.190.152.1');
+    expect(config.bladeOsPat).toBe('sk-test');
+    expect(config.pendingInputPath).toBe('共享/interface-agent/pending.md');
+    expect(config.confirmedOutputPath).toBe('共享/interface-agent/prototype.html');
+    expect(config.pendingPollIntervalMs).toBe(5000);
+  });
 });
 
 describe('generate request validation', () => {
@@ -217,6 +233,119 @@ describe('preview-only sharing', () => {
     expect(previewResponse.status).toBe(200);
     expect(previewResponse.text).toContain('Shared Preview');
     expect(previewResponse.text).not.toContain('chat-panel');
+  });
+
+  it('uploads confirmed HTML to the configured shared output path when sharing', async () => {
+    const fileClient = {
+      uploadText: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const app = createApp({
+      config: {
+        deepseekApiKey: 'test-key',
+        deepseekBaseUrl: 'https://example.test',
+        deepseekModel: 'deepseek-chat',
+        publicBaseUrl: 'http://192.168.1.109:3100',
+        confirmedOutputPath: '共享/interface-agent/prototype.html',
+        port: 3000,
+      },
+      deepseekClient: { generateHtml: vi.fn() },
+      fileClient,
+    });
+
+    const response = await request(app)
+      .post('/api/previews')
+      .send({ html: '<main><h1>Confirmed</h1></main>' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.confirmedOutputPath).toBe('共享/interface-agent/prototype.html');
+    expect(fileClient.uploadText).toHaveBeenCalledWith(
+      '共享/interface-agent/prototype.html',
+      '<main><h1>Confirmed</h1></main>',
+    );
+  });
+
+  it('does not report share success when confirmed output upload fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const fileClient = {
+        uploadText: vi.fn().mockRejectedValue(new Error('upload failed')),
+      };
+      const app = createApp({
+        config: {
+          deepseekApiKey: 'test-key',
+          deepseekBaseUrl: 'https://example.test',
+          deepseekModel: 'deepseek-chat',
+          publicBaseUrl: 'http://192.168.1.109:3100',
+          confirmedOutputPath: '共享/interface-agent/prototype.html',
+          port: 3000,
+        },
+        deepseekClient: { generateHtml: vi.fn() },
+        fileClient,
+      });
+
+      const response = await request(app)
+        .post('/api/previews')
+        .send({ html: '<main><h1>Confirmed</h1></main>' });
+
+      expect(response.status).toBe(502);
+      expect(response.body.error).toBe('共享文件写入失败，请稍后重试。');
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});
+
+describe('pending input polling', () => {
+  it('returns pending text from the configured shared input file', async () => {
+    const fileClient = {
+      readText: vi.fn().mockResolvedValue('# 生成态势页面\n请使用深色风格'),
+    };
+    const app = createApp({
+      config: {
+        deepseekApiKey: 'test-key',
+        deepseekBaseUrl: 'https://example.test',
+        deepseekModel: 'deepseek-chat',
+        pendingInputPath: '共享/interface-agent/pending.md',
+        port: 3000,
+      },
+      deepseekClient: { generateHtml: vi.fn() },
+      fileClient,
+    });
+
+    const response = await request(app).get('/api/pending-input');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      available: true,
+      content: '# 生成态势页面\n请使用深色风格',
+      path: '共享/interface-agent/pending.md',
+      pollIntervalMs: 3000,
+    });
+    expect(fileClient.readText).toHaveBeenCalledWith('共享/interface-agent/pending.md');
+  });
+
+  it('returns unavailable when the pending input file is not found', async () => {
+    const notFound = new Error('not found');
+    notFound.status = 404;
+    const fileClient = {
+      readText: vi.fn().mockRejectedValue(notFound),
+    };
+    const app = createApp({
+      config: {
+        deepseekApiKey: 'test-key',
+        deepseekBaseUrl: 'https://example.test',
+        deepseekModel: 'deepseek-chat',
+        pendingInputPath: '共享/interface-agent/pending.md',
+        port: 3000,
+      },
+      deepseekClient: { generateHtml: vi.fn() },
+      fileClient,
+    });
+
+    const response = await request(app).get('/api/pending-input');
+
+    expect(response.status).toBe(200);
+    expect(response.body.available).toBe(false);
   });
 });
 
