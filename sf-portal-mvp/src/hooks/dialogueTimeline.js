@@ -15,6 +15,7 @@
 
 import { buildThinkingByStepAttempt, thinkingKey } from './taskThinkingState.js';
 import { buildCollaborationExecutionGraphView } from './collaborationExecutionGraphState.js';
+import { isPreviewableArtifact } from '../utils/workbenchArtifact.js';
 
 export const initialDialogueState = () => ({
   selectedDialogueId: null,
@@ -362,6 +363,37 @@ function attachmentRefsByMessage(view) {
 // the optimistic/persisted user message. It is SUPPRESSED when the persisted view
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
+// appendArtifactLinks surfaces each produced analysis-stage workbench artifact
+// (需求文档 / 界面预览 / 数据契约) as an `artifact_link` timeline item — a
+// clickable chip opening the same preview the graph card uses (openArtifact →
+// ProjectDocumentPreviewModal / InterfacePreviewModal). One per kind (latest by
+// updatedAt); only previewable artifacts are included, via the shared
+// isPreviewableArtifact predicate (the same one the graph card uses) so the
+// conversation chip and the card cannot diverge.
+const ARTIFACT_LINK_KINDS = ['project_document', 'interface_preview', 'data_contract']
+const ARTIFACT_LINK_LABEL = { project_document: '需求文档', interface_preview: '界面预览', data_contract: '数据契约' }
+
+function appendArtifactLinks(items, view) {
+  const artifacts = view && Array.isArray(view.workbenchArtifacts) ? view.workbenchArtifacts : []
+  const latest = {}
+  for (const art of artifacts) {
+    if (!art || !ARTIFACT_LINK_KINDS.includes(art.kind)) continue
+    if (!isPreviewableArtifact(art)) continue
+    const prev = latest[art.kind]
+    if (!prev || String(art.updatedAt || art.updated_at || '') > String(prev.updatedAt || prev.updated_at || '')) latest[art.kind] = art
+  }
+  for (const kind of ARTIFACT_LINK_KINDS) {
+    const art = latest[kind]
+    if (!art) continue
+    items.push({
+      id: `artifact_link_${kind}_${art.id || kind}`,
+      type: 'artifact_link',
+      artifact: art,
+      label: art.label || ARTIFACT_LINK_LABEL[kind] || kind,
+    })
+  }
+}
+
 export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = [], pendingTurn = null, jobStepBlocks = [], taskThinkingItems = []) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
@@ -778,7 +810,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     })
   }
 
-  // 6. Resolved outcome (application / agent / seeded job).
+  // 6. Workbench artifact links: surface each produced analysis-stage artifact
+  // (需求文档 / 界面预览 / 数据契约) as a clickable chip that opens the same
+  // preview the graph card uses (openArtifact). One per kind (latest); only
+  // previewable artifacts, matching the card's isPreviewableArtifact filter so
+  // the conversation chip and the card stay consistent.
+  appendArtifactLinks(items, view)
+
+  // 7. Resolved outcome (application / agent / seeded job).
   appendResolvedOutcome(items, view)
 
   // 7. System status for terminal non-resolved states.

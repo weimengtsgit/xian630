@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, FileText, MonitorCheck } from 'lucide-react'
 import { useState } from 'react'
 import { WorkbenchTrack } from './WorkbenchTracks'
+import { isPreviewableArtifact } from '../utils/workbenchArtifact'
 
 const CONFIRM_LABEL = {
   business_logic: '确认业务逻辑并继续',
@@ -70,11 +71,6 @@ export function WorkbenchAgentBlock({
       )}
     </section>
   )
-}
-
-function isPreviewableArtifact(item) {
-  if (!item) return false
-  return item.kind === 'interface_preview' || !!item.path || !!item.previewUrl
 }
 
 function isFolded(card) {

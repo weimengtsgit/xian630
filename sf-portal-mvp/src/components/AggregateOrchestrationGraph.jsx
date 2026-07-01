@@ -72,7 +72,7 @@ const TOPOLOGY_WAVES = [
   { id: 'delivery', index: 4, label: '生产交付', cards: ['production_delivery'] },
 ]
 
-export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCompact, onOpenTaskStep }) {
+export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCompact, onOpenTaskStep, userInputFlashSeq = 0 }) {
   const [activeKey, setActiveKey] = useState('')
   if (!graph || !Array.isArray(graph.cards)) return null
   const active = graph.cardsByKey && graph.activeCardKey ? graph.cardsByKey[graph.activeCardKey] : null
@@ -133,10 +133,12 @@ export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCo
             <div className="ceg-wave-group" key={wave.id}>
               <div className="ceg-wave" data-wave={wave.index}>
                 <div className="ceg-wave-cards">
-                  {wave.cards.map(card => (
+                  {wave.cards.map((card, cardIndex) => (
                     <GraphCard
                       key={card.id}
                       card={card}
+                      flashSeq={card.agentKey === 'user_input' ? userInputFlashSeq : 0}
+                      tooltipBelow={cardIndex === 0}
                       active={activeKey === card.agentKey || card.active}
                       dimmed={!!activeKey && !relatedKeys.has(card.agentKey)}
                       onEnter={() => setActiveKey(card.agentKey)}
@@ -209,7 +211,7 @@ function runningPhase(card) {
   return '正在执行'
 }
 
-function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
+function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask, flashSeq = 0, tooltipBelow = false }) {
   const Icon = card.agentKey === 'user_input' ? User : STATE_ICON[card.state] || CircleDot
   const canOpenTask = !!card.stepId && !!onOpenTask
   const tooltipId = `aog-card-record-${card.id}`
@@ -243,6 +245,7 @@ function GraphCard({ card, active, dimmed, onEnter, onLeave, onOpenTask }) {
       aria-describedby={tooltipId}
       data-agent-key={card.agentKey}
     >
+      {flashSeq > 0 ? <span key={flashSeq} className="ceg-card-flash" aria-hidden="true" /> : null}
       <span className="ceg-card-icon">
         <Icon size={18} className={card.state === 'running' ? 'ceg-spin' : ''} />
       </span>

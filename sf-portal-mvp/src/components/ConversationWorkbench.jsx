@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Archive,
@@ -85,6 +85,10 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  // userInputFlashSeq bumps on each composer submit so the 用户输入 card in the
+  // orchestration graph replays a one-shot activation flash (keyed overlay span
+  // → the CSS animation restarts on every send). Pure UI signal; no semantic state.
+  const [userInputFlashSeq, bumpUserInputFlash] = useReducer(n => n + 1, 0)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
   const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
@@ -259,7 +263,7 @@ export function ConversationWorkbench({
   // the project root and serve the projected document.
   const openProjectDocument = async artifact => {
     if (!artifact || !artifact.path) return
-    const jobId = artifact.jobId || (focusTask && focusTask.id)
+    const jobId = artifact.jobId || artifact.job_id || (focusTask && focusTask.id)
     if (!jobId) return
     try {
       const doc = await factoryApi.getJobProjectDocument(jobId, artifact.path)
@@ -351,6 +355,7 @@ export function ConversationWorkbench({
   const submitText = async () => {
     const value = input.trim()
     if (!value || submitting || (locked && !composerActive)) return
+    bumpUserInputFlash()
     setInput('')
     await onSend(value, { attachmentIds: attachmentState.attachmentIds, pendingAttachments: attachmentState.pending })
     attachmentState.clearPending()
@@ -462,6 +467,7 @@ export function ConversationWorkbench({
         graph={aggregateGraph}
         compact={aggregateGraphCompact}
         onToggleCompact={toggleAggregateGraphCompact}
+        userInputFlashSeq={userInputFlashSeq}
         onOpenArtifact={openArtifact}
         onOpenTaskStep={onOpenTaskStep}
       />
@@ -478,6 +484,7 @@ export function ConversationWorkbench({
             dialogueId={session && session.id}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
+            onOpenArtifact={openArtifact}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
@@ -766,7 +773,7 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onOpenArtifact, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation }) {
   if (item.type === 'user_message') {
     // Submitted attachment refs (Task 11 / spec decision #22): after send, the
     // persisted user_message carries `attachments` [{ id, active, name,
@@ -868,6 +875,17 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
   if (item.type === 'requirement_summary') return <RequirementSummary requirement={focusRequirement || item.requirement} />
+  if (item.type === 'artifact_link') {
+    const art = item.artifact
+    return (
+      <div className="cw-timeline-artifact-link">
+        <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)}>
+          <FileText size={14} />
+          <span>{art.label || item.label}</span>
+        </button>
+      </div>
+    )
+  }
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }

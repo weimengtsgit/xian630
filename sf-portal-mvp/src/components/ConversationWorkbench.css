@@ -464,6 +464,9 @@
 .cw-artifact-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .cw-artifact-list h4 { flex-basis: 100%; }
 .cw-artifact-list button, .cw-agent-folded button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; cursor: pointer; font-size: 11px; }
+.cw-timeline-artifact-link { display: flex; justify-content: flex-start; margin: 6px 0; }
+.cw-artifact-chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 6px; background: rgba(3, 17, 29, 0.66); color: #d7eef8; cursor: pointer; font-size: 12px; }
+.cw-artifact-chip:hover { border-color: rgba(111, 218, 255, 0.5); background: rgba(6, 34, 58, 0.8); }
 .cw-agent-confirm { align-self: flex-end; padding: 6px 10px; border: 1px solid rgba(126, 231, 135, 0.46); border-radius: 6px; background: rgba(20, 64, 50, 0.58); color: #bff6c4; cursor: pointer; }
 .cw-agent-folded { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px 34px; }
 
