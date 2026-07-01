@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { AlertTriangle, Gauge, MapPin, Radio, ShieldAlert, Ship } from "lucide-react";
-import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution } from "../logic/analytics.js";
+import { AlertTriangle, Clock3, Gauge, MapPin, Navigation, Radio, ShieldAlert, Ship } from "lucide-react";
+import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop } from "../logic/analytics.js";
 
 const W = 300, H = 84, PAD = 8;
 
@@ -94,6 +94,89 @@ function StatusBars({ dist }) {
   );
 }
 
+function HourBars({ target }) {
+  const data = useMemo(() => hourDistribution(target), [target]);
+  const total = data.reduce((s, d) => s + d.count, 0);
+  if (total === 0) return <EmptyChart label="无时间数据" />;
+  const slot = (W - 2 * PAD) / 24;
+  const max = Math.max(...data.map((d) => d.count), 1);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+      {data.map((d, i) => {
+        const x = PAD + i * slot;
+        const h = (d.count / max) * (H - 2 * PAD - 14);
+        return <rect key={i} x={x} y={H - PAD - 12 - h} width={slot - 1} height={h} fill={d.h >= 6 && d.h <= 18 ? "#fbbf24" : "#475569"} rx="1" />;
+      })}
+      <text x={PAD} y={13} fill="#94a3b8" fontSize="9">昼(黄)/夜(灰) UTC 报点</text>
+    </svg>
+  );
+}
+
+function HeadingRose({ target }) {
+  const data = useMemo(() => headingDistribution(target), [target]);
+  const total = data.reduce((s, d) => s + d.count, 0);
+  if (total === 0) return <EmptyChart label="无航向数据" />;
+  const slot = (W - 2 * PAD) / 8;
+  const max = Math.max(...data.map((d) => d.count), 1);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+      {data.map((d, i) => {
+        const x = PAD + i * slot;
+        const h = (d.count / max) * (H - 2 * PAD - 14);
+        return (
+          <g key={i}>
+            <rect x={x} y={H - PAD - 12 - h} width={slot - 1} height={h} fill="#38bdf8" rx="1" />
+            <text x={x + slot / 2} y={H - 3} fill="#94a3b8" fontSize="7" textAnchor="middle">{d.dir}</text>
+          </g>
+        );
+      })}
+      <text x={PAD} y={13} fill="#94a3b8" fontSize="9">航向 8 方向</text>
+    </svg>
+  );
+}
+
+function DistanceScatter({ targets }) {
+  const data = targetDistanceDistribution(targets);
+  if (data.length === 0) return <EmptyChart label="无距离数据" />;
+  const maxV = Math.max(...data.map((d) => d.dist), 250);
+  const slot = (W - 2 * PAD) / Math.max(data.length, 1);
+  const lineY = (nm) => H - PAD - (nm / maxV) * (H - 2 * PAD);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+      <line x1={PAD} y1={lineY(200)} x2={W - PAD} y2={lineY(200)} stroke="#eab308" strokeDasharray="3 3" strokeWidth="0.8" />
+      <line x1={PAD} y1={lineY(80)} x2={W - PAD} y2={lineY(80)} stroke="#ef4444" strokeDasharray="3 3" strokeWidth="0.8" />
+      {data.map((d, i) => {
+        const x = PAD + i * slot + slot / 2;
+        const near = d.dist < 200;
+        return <circle key={d.mmsi} cx={x} cy={lineY(d.dist)} r={near ? 3.5 : 2.5} fill={near ? "#ef4444" : "#38bdf8"} opacity={near ? 1 : 0.5} />;
+      })}
+      <text x={PAD} y={13} fill="#94a3b8" fontSize="9">{data.length} 目标 · 红&lt;200海里</text>
+    </svg>
+  );
+}
+
+function DaysTopBars({ targets }) {
+  const data = activityDaysTop(targets, 6);
+  if (data.length === 0) return <EmptyChart label="无活动天数" />;
+  const max = Math.max(...data.map((d) => d.days), 1);
+  const rowH = (H - 2 * PAD) / data.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg">
+      {data.map((d, i) => {
+        const y = PAD + i * rowH;
+        const w = (d.days / max) * (W - 2 * PAD - 44);
+        return (
+          <g key={d.name}>
+            <text x={PAD} y={y + rowH / 2 + 3} fill="#94a3b8" fontSize="8">{String(d.name).slice(0, 8)}</text>
+            <rect x={PAD + 38} y={y + 2} width={Math.max(2, w)} height={rowH - 5} fill="#fbbf24" rx="2" />
+            <text x={PAD + 38 + w + 2} y={y + rowH / 2 + 3} fill="#f8fafc" fontSize="8">{d.days}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export function AnalysisPanel({ analysis, selectedTarget, coast }) {
   const summary = analysis.summary;
   const statusDist = useMemo(() => statusDistribution(analysis.targets), [analysis.targets]);
@@ -106,6 +189,8 @@ export function AnalysisPanel({ analysis, selectedTarget, coast }) {
           <div className="chart-card"><header><Gauge size={12} />速度时序</header><SpeedChart target={selectedTarget} /></div>
           <div className="chart-card"><header><MapPin size={12} />离国土距离</header><DistanceChart target={selectedTarget} coast={coast} /></div>
           <div className="chart-card"><header><Radio size={12} />AIS 信号</header><AisTimeline target={selectedTarget} /></div>
+          <div className="chart-card"><header><Clock3 size={12} />活动时段</header><HourBars target={selectedTarget} /></div>
+          <div className="chart-card"><header><Navigation size={12} />航向分布</header><HeadingRose target={selectedTarget} /></div>
         </div>
       </div>
       <div className="analysis-group">
@@ -138,6 +223,8 @@ export function AnalysisPanel({ analysis, selectedTarget, coast }) {
               </div>
             ) : <EmptyChart label="无研判" />}
           </div>
+          <div className="chart-card"><header><MapPin size={12} />目标离国土距离</header><DistanceScatter targets={analysis.targets} /></div>
+          <div className="chart-card"><header><Ship size={12} />活动天数 Top</header><DaysTopBars targets={analysis.targets} /></div>
         </div>
       </div>
     </section>

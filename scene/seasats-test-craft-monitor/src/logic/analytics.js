@@ -65,3 +65,42 @@ export function alertDistribution(alerts) {
     .sort((a, b) => b.count - a.count);
   return { bySeverity, byType };
 }
+
+// 选中船报点的 UTC 小时分布（0-23）
+export function hourDistribution(target) {
+  const counts = new Array(24).fill(0);
+  for (const p of targetPoints(target)) {
+    const ms = Date.parse(p.time);
+    if (Number.isFinite(ms)) counts[new Date(ms).getUTCHours()] += 1;
+  }
+  return counts.map((count, h) => ({ h, count }));
+}
+
+const DIRS = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
+// 选中船航向（orientation）8 方向分布
+export function headingDistribution(target) {
+  const counts = new Array(8).fill(0);
+  for (const p of targetPoints(target)) {
+    const o = toNumber(p.orientation) ?? toNumber(p.courseDeg);
+    if (o === null || !Number.isFinite(o)) continue;
+    counts[Math.round(o / 45) % 8] += 1;
+  }
+  return DIRS.map((dir, i) => ({ dir, count: counts[i] }));
+}
+
+// 全部目标离国土距离分布（升序）
+export function targetDistanceDistribution(targets) {
+  return targets
+    .filter((t) => t.minCoastDistanceNm != null)
+    .map((t) => ({ name: t.name, mmsi: t.mmsi, dist: t.minCoastDistanceNm, status: t.status }))
+    .sort((a, b) => a.dist - b.dist);
+}
+
+// 活动天数 Top N
+export function activityDaysTop(targets, n = 6) {
+  return targets
+    .filter((t) => t.activeDays != null)
+    .map((t) => ({ name: t.name, days: t.activeDays }))
+    .sort((a, b) => b.days - a.days)
+    .slice(0, n);
+}
