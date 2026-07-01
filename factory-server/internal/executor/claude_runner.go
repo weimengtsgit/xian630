@@ -270,6 +270,9 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	if block := c.prototypeContextPromptBlock(ctx, job.ID, step.Kind); block != "" {
 		prompt += block
 	}
+	if block := c.dataIntegrationUpstreamPromptBlock(ctx, job, step.Kind); block != "" {
+		prompt += block
+	}
 	// step.UserPrompt carries the user's answer when a step is re-run after
 	// pausing for clarification (waiting_user → answerJob → SetStepUserPrompt),
 	// OR a repair-from-failure instruction. For generative steps we surface it
@@ -428,12 +431,17 @@ func validateCollaborationProducer(kind model.StepKind, outputPath string) (runn
 }
 
 type dataIntegrationStepOutput struct {
-	Status             string             `json:"status"`
-	NeedsUserInput     bool               `json:"needsUserInput"`
-	Questions          []runner.Question  `json:"questions"`
-	SourceBoundary     string             `json:"sourceBoundary"`
-	DataAccessResult   *dataaccess.Result `json:"dataAccessResult"`
-	DataAccessMarkdown string             `json:"dataAccessMarkdown"`
+	Status             string            `json:"status"`
+	NeedsUserInput     bool              `json:"needsUserInput"`
+	Questions          []runner.Question `json:"questions"`
+	SourceBoundary     string            `json:"sourceBoundary"`
+	DataAccessResult   json.RawMessage   `json:"dataAccessResult"`
+	DataAccessMarkdown string            `json:"dataAccessMarkdown"`
+}
+
+func (o dataIntegrationStepOutput) hasDataAccessResult() bool {
+	raw := strings.TrimSpace(string(o.DataAccessResult))
+	return raw != "" && raw != "null"
 }
 
 func dataIntegrationUsesFinalDataAccessContract(outputPath string) bool {
@@ -441,7 +449,7 @@ func dataIntegrationUsesFinalDataAccessContract(outputPath string) bool {
 	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
 		return true
 	}
-	return raw.DataAccessResult != nil || strings.TrimSpace(raw.SourceBoundary) == ""
+	return raw.hasDataAccessResult() || strings.TrimSpace(raw.SourceBoundary) == ""
 }
 
 func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runner.TraceEmitter, job model.Job, step model.JobStep, outputPath string) StepResult {
@@ -449,7 +457,7 @@ func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runn
 	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
 		return c.failureFromError(err)
 	}
-	if raw.DataAccessResult == nil {
+	if !raw.hasDataAccessResult() {
 		out, err := validateCollaborationProducer(step.Kind, outputPath)
 		return c.resultFromValidatedOutput(ctx, trace, out, err)
 	}
@@ -460,7 +468,10 @@ func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runn
 		emitClarificationTrace(ctx, trace, raw.Questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: raw.Questions}
 	}
-	result := *raw.DataAccessResult
+	result, err := normalizeDataAccessResult(raw.DataAccessResult)
+	if err != nil {
+		return c.failureFromError(err)
+	}
 	if strings.TrimSpace(result.Stage) == "" {
 		result.Stage = "data_access"
 	}
@@ -471,17 +482,285 @@ func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runn
 		if result.SchemaVersion <= 0 || strings.TrimSpace(result.Version) == "" {
 			return c.failureFromError(fmt.Errorf("data access result missing schemaVersion or version: %w", runner.ErrSchemaValidationFailed))
 		}
+		if !SafeName(result.Version) {
+			return c.failureFromError(fmt.Errorf("data access result version must be one safe path segment: %w", runner.ErrSchemaValidationFailed))
+		}
 		if strings.TrimSpace(raw.DataAccessMarkdown) == "" {
 			return c.failureFromError(fmt.Errorf("dataAccessMarkdown required for pending confirmation: %w", runner.ErrSchemaValidationFailed))
 		}
 		if _, err := dataaccess.WriteVersion(c.artifactRoot(), job.ID, result, raw.DataAccessMarkdown); err != nil {
 			return c.failureFromError(fmt.Errorf("write data access version: %w", runner.ErrSchemaValidationFailed))
 		}
+		c.upsertWorkbenchArtifact(ctx, dataAccessPlanRef(job, step, result))
 		questions := []runner.Question{dataAccessSummaryConfirmationQuestion(result)}
 		emitClarificationTrace(ctx, trace, questions, nil)
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: questions}
 	}
 	return c.failureFromError(fmt.Errorf("dataAccessResult.status must be pending_confirmation when no user input is needed: %w", runner.ErrSchemaValidationFailed))
+}
+
+func normalizeDataAccessResult(raw json.RawMessage) (dataaccess.Result, error) {
+	var result dataaccess.Result
+	if err := json.Unmarshal(raw, &result); err == nil {
+		return result, nil
+	}
+	// dataAccessResult 里有些字段只用于说明和审计，模型可能输出数组、对象或字符串。
+	// 这里仅把代码生成依赖的核心字段规范化为强类型，避免说明性字段形状差异阻断流程。
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return dataaccess.Result{}, fmt.Errorf("dataAccessResult is not a JSON object: %w", runner.ErrOutputInvalidJSON)
+	}
+	result.SchemaVersion = intFromAny(doc["schemaVersion"])
+	result.Stage = stringFromAny(doc["stage"])
+	result.Version = stringFromAny(doc["version"])
+	result.Status = stringFromAny(doc["status"])
+	result.CanFinalize = boolFromAny(doc["canFinalize"])
+	result.BlockingIssues = stringSliceFromAny(doc["blockingIssues"])
+	result.DataAccessMode = stringFromAny(doc["dataAccessMode"])
+	result.DataNeeds = normalizeDataNeeds(doc["dataNeeds"])
+	result.SourceCandidates = normalizeDataSources(doc["sourceCandidates"])
+	result.ProbeResults = normalizeProbeResults(doc["probeResults"])
+	result.FieldMappings = normalizeFieldMappings(doc["fieldMappings"])
+	result.DegradationPolicy = mapFromAny(doc["degradationPolicy"])
+	result.RuntimeArchitecture = mapFromAny(doc["runtimeArchitecture"])
+	result.CredentialRefs = normalizeCredentialRefs(doc["credentialRefs"])
+	result.SecurityReviewRequired = boolFromAny(doc["securityReviewRequired"])
+	result.SecurityReviewReasons = stringSliceFromAny(doc["securityReviewReasons"])
+	result.CodegenConstraints = stringSliceFromAny(doc["codegenConstraints"])
+	result.Summary = normalizeDataAccessSummary(doc["summary"])
+	return result, nil
+}
+
+func normalizeDataNeeds(v any) []dataaccess.DataNeed {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]dataaccess.DataNeed, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := firstString(m, "id", "entity", "name", "label")
+		name := firstString(m, "name", "label", "entity", "id")
+		fields := stringSliceFromAny(m["fields"])
+		fields = appendUniqueStrings(fields, fieldsFromDescriptors(m["requiredFields"])...)
+		fields = appendUniqueStrings(fields, fieldsFromDescriptors(m["optionalFields"])...)
+		out = append(out, dataaccess.DataNeed{
+			ID:       id,
+			Name:     name,
+			Required: boolFromAny(m["required"]),
+			Fields:   fields,
+			Status:   firstNonEmptyString(stringFromAny(m["status"]), "available"),
+		})
+	}
+	return out
+}
+
+func normalizeDataSources(v any) []dataaccess.Source {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]dataaccess.Source, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, dataaccess.Source{
+			ID:           firstString(m, "id", "sourceId"),
+			Type:         firstString(m, "type", "sourceType"),
+			Label:        stringFromAny(m["label"]),
+			Priority:     intFromAny(m["priority"]),
+			Verified:     boolFromAny(m["verified"]) || stringFromAny(m["dataPolicy"]) == "mock_data",
+			Status:       firstNonEmptyString(stringFromAny(m["status"]), "available"),
+			AuthRequired: boolFromAny(m["authRequired"]),
+			Coverage:     firstString(m, "coverage", "freshness"),
+			Risks:        stringSliceFromAny(m["risks"]),
+		})
+	}
+	return out
+}
+
+func normalizeProbeResults(v any) []dataaccess.ProbeResult {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out []dataaccess.ProbeResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func normalizeFieldMappings(v any) []dataaccess.FieldMapping {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := []dataaccess.FieldMapping{}
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		dataNeedID := firstString(m, "dataNeedId", "entity")
+		sourceID := firstString(m, "sourceId", "source")
+		if nested, ok := m["mappings"].([]any); ok {
+			for _, n := range nested {
+				nm, ok := n.(map[string]any)
+				if !ok {
+					continue
+				}
+				out = append(out, dataaccess.FieldMapping{
+					DataNeedID: dataNeedID,
+					UIField:    firstString(nm, "uiField", "targetField", "field"),
+					SourceID:   sourceID,
+					SourcePath: firstString(nm, "sourcePath", "sourceExpression", "path"),
+					Transform:  stringFromAny(nm["transform"]),
+				})
+			}
+			continue
+		}
+		out = append(out, dataaccess.FieldMapping{
+			DataNeedID: dataNeedID,
+			UIField:    firstString(m, "uiField", "targetField", "field"),
+			SourceID:   sourceID,
+			SourcePath: firstString(m, "sourcePath", "sourceExpression", "path"),
+			Transform:  stringFromAny(m["transform"]),
+		})
+	}
+	return out
+}
+
+func normalizeCredentialRefs(v any) []dataaccess.CredentialRef {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var out []dataaccess.CredentialRef
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func normalizeDataAccessSummary(v any) dataaccess.Summary {
+	if s := stringFromAny(v); s != "" {
+		return dataaccess.Summary{Confirmed: []string{s}}
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return dataaccess.Summary{}
+	}
+	var out dataaccess.Summary
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func fieldsFromDescriptors(v any) []string {
+	items, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			if field := firstString(m, "field", "name", "id"); field != "" {
+				out = append(out, field)
+			}
+		}
+	}
+	return out
+}
+
+func stringFromAny(v any) string {
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func boolFromAny(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+func intFromAny(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func mapFromAny(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func stringSliceFromAny(v any) []string {
+	items, ok := v.([]any)
+	if !ok {
+		if s := stringFromAny(v); s != "" {
+			return []string{s}
+		}
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s := stringFromAny(item); s != "" {
+			out = append(out, s)
+			continue
+		}
+		if m, ok := item.(map[string]any); ok {
+			if s := firstString(m, "description", "message", "label", "id"); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func firstString(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if s := stringFromAny(m[key]); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func appendUniqueStrings(base []string, values ...string) []string {
+	seen := make(map[string]bool, len(base)+len(values))
+	for _, value := range base {
+		seen[value] = true
+	}
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		base = append(base, value)
+		seen[value] = true
+	}
+	return base
 }
 
 func dataAccessSummaryConfirmationQuestion(result dataaccess.Result) runner.Question {
@@ -1533,6 +1812,58 @@ func (c *ClaudeStepRunner) prototypeContextPromptBlock(ctx context.Context, jobI
 		"当 downstreamConstraintLevel=hard_constraint 时，不得自由改变首页结构、核心组件、主要交互和响应式约束；当为 reference 时，只能作为参考，不能声称用户已确认原型。"
 }
 
+func (c *ClaudeStepRunner) dataIntegrationUpstreamPromptBlock(ctx context.Context, job model.Job, kind model.StepKind) string {
+	if kind != model.StepDataIntegration {
+		return ""
+	}
+	lines := []string{}
+	if strings.TrimSpace(job.AppSlug) != "" {
+		reqPath := absolutePath(filepath.Join(c.workspace(), "generated-apps", filepath.FromSlash(job.AppSlug), "docs", "01-requirements.md"))
+		lines = append(lines, "- 需求文档: "+reqPath)
+	}
+	if c.Store != nil {
+		if ref := c.latestInterfacePreviewRef(ctx, job.ID); ref != nil {
+			level := "reference"
+			if ref.Status == "confirmed" {
+				level = "hard_constraint"
+			}
+			contractPath := strings.TrimSuffix(ref.Path, "/preview-manifest.json") + "/prototype-contract.json"
+			lines = append(lines,
+				"- 原型预览 preview-manifest: "+absolutePath(filepath.Join(c.artifactRoot(), filepath.FromSlash(ref.Path))),
+				"- 原型预览 prototype-contract: "+absolutePath(filepath.Join(c.artifactRoot(), filepath.FromSlash(contractPath))),
+				"- 原型状态: "+ref.Status,
+				"- 原型下游约束级别: "+level,
+			)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\n[dataAccess 上游输入依据]\n" +
+		"生成数据获取方案时，必须把以下用户可见产物作为数据需求、字段映射和代码生成输入的主要依据；文件存在时先 Read 后再下结论，缺失时在 warnings 中说明降级原因：\n" +
+		strings.Join(lines, "\n") + "\n" +
+		"数据方案的“1 输入依据”章节必须明确列出已参考的需求文档和原型预览/契约。"
+}
+
+func (c *ClaudeStepRunner) latestInterfacePreviewRef(ctx context.Context, jobID string) *model.WorkbenchArtifactRef {
+	if c.Store == nil {
+		return nil
+	}
+	refs, err := c.Store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return nil
+	}
+	var ref *model.WorkbenchArtifactRef
+	for i := range refs {
+		if refs[i].Kind == model.WorkbenchArtifactInterfacePreview && refs[i].CardKey == "interface_parsing" {
+			if ref == nil || refs[i].UpdatedAt.After(ref.UpdatedAt) {
+				ref = &refs[i]
+			}
+		}
+	}
+	return ref
+}
+
 func (c *ClaudeStepRunner) createPrototypePreviewArtifact(ctx context.Context, job model.Job, step model.JobStep, ws runner.AttemptWorkspace, design runner.DesignContractOutput, bundle prototypeBundle) (model.WorkbenchArtifactRef, error) {
 	raw, err := json.Marshal(bundle.Manifest)
 	if err != nil {
@@ -1582,6 +1913,23 @@ func requirementDocumentRef(job model.Job, step model.JobStep) model.WorkbenchAr
 		Label:      "需求文档",
 		Path:       "docs/01-requirements.md",
 		Status:     "active",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+}
+
+func dataAccessPlanRef(job model.Job, step model.JobStep, result dataaccess.Result) model.WorkbenchArtifactRef {
+	now := time.Now()
+	return model.WorkbenchArtifactRef{
+		ID:         "warf_" + id.New(),
+		DialogueID: job.DialogueID,
+		JobID:      job.ID,
+		StepID:     step.ID,
+		CardKey:    "data_capture",
+		Kind:       model.WorkbenchArtifactDataAccessPlan,
+		Label:      "数据方案",
+		Path:       filepath.ToSlash(filepath.Join("jobs", job.ID, "data-access", "versions", result.Version, "data-access.redacted.md")),
+		Status:     dataaccess.StatusPendingConfirmation,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}

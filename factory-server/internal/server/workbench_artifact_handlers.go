@@ -129,14 +129,69 @@ func (s *Server) jobInterfacePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"summary":          manifest["summary"],
-		"designDocument":   manifest["designDocument"],
+		"summary":           manifest["summary"],
+		"designDocument":    manifest["designDocument"],
 		"assumedDataFields": manifest["assumedDataFields"],
-		"snapshotHash":     match.SnapshotHash,
-		"path":             match.Path,
+		"snapshotHash":      match.SnapshotHash,
+		"path":              match.Path,
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) jobWorkbenchArtifactContent(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+	artifactID := strings.TrimSpace(Param(r, "artifactID"))
+	if artifactID == "" {
+		writeError(w, http.StatusNotFound, "workbench artifact not found")
+		return
+	}
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(r.Context(), jobID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list workbench artifacts")
+		return
+	}
+	var match *model.WorkbenchArtifactRef
+	for i := range refs {
+		ref := &refs[i]
+		if ref.ID == artifactID && ref.Kind == model.WorkbenchArtifactDataAccessPlan {
+			match = ref
+			break
+		}
+	}
+	if match == nil {
+		writeError(w, http.StatusNotFound, "workbench artifact not found")
+		return
+	}
+	full, ok := resolveAttachmentPath(s.cfg.ArtifactRoot, match.Path)
+	if !ok || filepath.Ext(match.Path) != ".md" || filepath.Base(match.Path) != "data-access.redacted.md" {
+		// 数据方案页面只允许打开脱敏 Markdown，内部版可能包含鉴权信息。
+		writeError(w, http.StatusNotFound, "workbench artifact unavailable")
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "workbench artifact unavailable")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "stat workbench artifact")
+		return
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read workbench artifact")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":     match.Path,
+		"name":     filepath.Base(match.Path),
+		"kind":     "markdown",
+		"mime":     mime.TypeByExtension(filepath.Ext(match.Path)),
+		"size":     info.Size(),
+		"content":  string(data),
+		"checksum": contentChecksum(data),
+	})
 }
 
 func resolveJobProjectRoot(workspace string, job model.Job) (string, bool) {

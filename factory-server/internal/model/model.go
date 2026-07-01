@@ -753,6 +753,7 @@ type WorkbenchArtifactKind string
 const (
 	WorkbenchArtifactProjectDocument  WorkbenchArtifactKind = "project_document"
 	WorkbenchArtifactInterfacePreview WorkbenchArtifactKind = "interface_preview"
+	WorkbenchArtifactDataAccessPlan   WorkbenchArtifactKind = "data_access_plan"
 	WorkbenchArtifactDataContract     WorkbenchArtifactKind = "data_contract"
 	WorkbenchArtifactSampleData       WorkbenchArtifactKind = "sample_data"
 )
@@ -788,9 +789,9 @@ type WorkbenchArtifactRef struct {
 	// verification verdicts, fallback history, sample/field counts) so the
 	// data-flow track can render real active/failed/succeeded/waiting states
 	// instead of a static label list. Empty for artifact kinds that carry none.
-	Metadata     string                `json:"metadata,omitempty"`
-	CreatedAt    time.Time             `json:"created_at"`
-	UpdatedAt    time.Time             `json:"updated_at"`
+	Metadata  string    `json:"metadata,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // DialogueAttachmentRef links a stored attachment to the dialogue message that

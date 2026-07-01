@@ -274,15 +274,28 @@ export function ConversationWorkbench({
     }
   }
 
-  // openArtifact routes an artifact-open click by kind: project_document loads
-  // the markdown preview via openProjectDocument; interface_preview (Task 8)
-  // opens the InterfacePreviewModal. The interface-preview snapshot is retained
-  // server-side as a manifest with no serving endpoint yet, so the modal
-  // degrades gracefully (label + retention note) until one is wired.
+  const openWorkbenchMarkdownArtifact = async artifact => {
+    if (!artifact || !artifact.id) return
+    const jobId = artifact.jobId || artifact.job_id || (focusTask && focusTask.id)
+    if (!jobId) return
+    try {
+      const doc = await factoryApi.getJobWorkbenchArtifactContent(jobId, artifact.id)
+      setPreviewDocument(doc)
+    } catch {
+      setPreviewDocument(null)
+    }
+  }
+
+  // openArtifact 按产物类型选择读取边界：需求文档来自项目 docs，数据方案来自
+  // artifact-root 脱敏 Markdown，原型预览走专用预览接口。
   const openArtifact = artifact => {
     if (!artifact) return
     if (artifact.kind === 'interface_preview') {
       setPreviewInterface(artifact)
+      return
+    }
+    if (artifact.kind === 'data_access_plan') {
+      openWorkbenchMarkdownArtifact(artifact)
       return
     }
     openProjectDocument(artifact)
@@ -1968,4 +1981,3 @@ function PrototypePreviewModal({ prototype, onClose }) {
     </div>
   )
 }
-

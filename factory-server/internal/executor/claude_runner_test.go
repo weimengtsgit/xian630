@@ -286,6 +286,112 @@ func TestClaudeStepRunnerPersistsDataAccessPendingConfirmation(t *testing.T) {
 	if bytes.Contains(redactedRaw, []byte("secret-token")) {
 		t.Fatalf("redacted result leaked credential: %s", redactedRaw)
 	}
+	refs, err := st.ListWorkbenchArtifactRefsByJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("workbench refs len = %d, want one data access plan ref: %+v", len(refs), refs)
+	}
+	if refs[0].CardKey != "data_capture" || refs[0].Kind != model.WorkbenchArtifactDataAccessPlan || refs[0].Label != "数据方案" {
+		t.Fatalf("data access plan ref = %+v", refs[0])
+	}
+	if refs[0].Path != "jobs/"+job.ID+"/data-access/versions/v1/data-access.redacted.md" {
+		t.Fatalf("data access plan path = %q", refs[0].Path)
+	}
+}
+
+func TestClaudeStepRunnerAcceptsNarrativeDataAccessFields(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion":  1,
+				"stage":          "data_access",
+				"version":        "v1",
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []any{},
+				"sourceInputs": []any{
+					map[string]any{
+						"type": "confirmedRequirement",
+						"ref":  "job_claude_1",
+						"keyFields": map[string]any{
+							"dataPolicy": "mock_data",
+						},
+					},
+				},
+				"dataAccessMode": "mock_data",
+				"dataNeeds": []any{
+					map[string]any{
+						"entity": "TodoTask",
+						"label":  "待办任务",
+						"requiredFields": []any{
+							map[string]any{"field": "id", "type": "string", "required": true},
+							map[string]any{"field": "title", "type": "string", "required": true},
+						},
+					},
+				},
+				"sourceCandidates": []any{
+					map[string]any{
+						"sourceId":   "local_storage",
+						"sourceType": "browser_storage",
+						"label":      "浏览器本地存储",
+						"priority":   1,
+					},
+				},
+				"fieldMappings": []any{
+					map[string]any{
+						"entity":   "TodoTask",
+						"sourceId": "local_storage",
+						"mappings": []any{
+							map[string]any{"targetField": "title", "sourceExpression": "用户输入", "transform": "直接存储"},
+						},
+					},
+				},
+				"codegenConstraints": []any{
+					map[string]any{"id": "mock_label", "description": "界面必须标注演示数据", "severity": "blocking"},
+				},
+				"summary": "本需求使用 mock_data，数据存储在浏览器 localStorage。",
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n\n## 1 输入依据\nmock_data\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("result = %+v, want waiting_user summary confirmation", res)
+	}
+	versionDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "data-access", "versions", "v1")
+	internalRaw, err := os.ReadFile(filepath.Join(versionDir, "dataAccessResult.internal.json"))
+	if err != nil {
+		t.Fatalf("read internal result: %v", err)
+	}
+	if !bytes.Contains(internalRaw, []byte("TodoTask")) || !bytes.Contains(internalRaw, []byte("界面必须标注演示数据")) {
+		t.Fatalf("normalized data access result lost load-bearing fields: %s", internalRaw)
+	}
 }
 
 func TestClaudeStepRunnerRejectsIncompleteDataAccessResult(t *testing.T) {
@@ -640,6 +746,73 @@ func TestDesignContractWaitsForPrototypeConfirmation(t *testing.T) {
 		t.Fatalf("prototype refs = %+v, want one unconfirmed ref", refs)
 	}
 }
+
+func TestDataIntegrationPromptReferencesRequirementDocAndPrototype(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion":  1,
+				"stage":          "data_access",
+				"version":        "v1",
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []any{},
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	job.AppSlug = "demo-app"
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	protoPath := "jobs/" + job.ID + "/design_contract/attempt-1/prototype/preview-manifest.json"
+	if err := st.UpsertWorkbenchArtifactRef(context.Background(), model.WorkbenchArtifactRef{
+		ID: "warf_proto", JobID: job.ID, StepID: "step_design", CardKey: "interface_parsing",
+		Kind: model.WorkbenchArtifactInterfacePreview, Label: "原型预览", Path: protoPath,
+		Status: "confirmed", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("UpsertWorkbenchArtifactRef: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), job, step, runner.NopEmitter{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	promptRaw, err := os.ReadFile(filepath.Join(ws, ".factory-runs", "jobs", job.ID, string(model.StepDataIntegration), "attempt-1", "prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	prompt := string(promptRaw)
+	for _, want := range []string{
+		"需求文档",
+		filepath.Join(ws, "generated-apps", "demo-app", "docs", "01-requirements.md"),
+		"原型预览",
+		filepath.Join(ws, ".factory-runs", filepath.FromSlash(protoPath)),
+		filepath.Join(ws, ".factory-runs", "jobs", job.ID, "design_contract", "attempt-1", "prototype", "prototype-contract.json"),
+		"作为数据需求、字段映射和代码生成输入的主要依据",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestDesignContractPromptUsesPrototypeDesignSkill(t *testing.T) {
 	ws := runner.AttemptWorkspace{
 		Root:     t.TempDir(),

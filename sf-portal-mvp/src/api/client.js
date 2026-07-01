@@ -157,6 +157,8 @@ export const factoryApi = {
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
   getJobProjectDocument: (jobId, path) =>
     request(`/api/jobs/${jobId}/project-docs/file?path=${encodeURIComponent(path)}`),
+  getJobWorkbenchArtifactContent: (jobId, artifactId) =>
+    request(`/api/jobs/${jobId}/workbench-artifacts/${encodeURIComponent(artifactId)}/content`),
   // getJobInterfacePreview fetches the retained interface-preview manifest (F4)
   // the design_contract step wrote. The backend resolves the interface_preview
   // workbench artifact ref by artifactId under ArtifactRoot and returns its
