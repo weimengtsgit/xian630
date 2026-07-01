@@ -30,7 +30,7 @@ type Result struct {
 	Status                 string          `json:"status"`
 	CanFinalize            bool            `json:"canFinalize"`
 	BlockingIssues         []string        `json:"blockingIssues,omitempty"`
-	SourceInputs           SourceInputs    `json:"sourceInputs,omitempty"`
+	SourceInputs           json.RawMessage `json:"sourceInputs,omitempty"`
 	DataAccessMode         string          `json:"dataAccessMode,omitempty"`
 	DataNeeds              []DataNeed      `json:"dataNeeds,omitempty"`
 	SourceCandidates       []Source        `json:"sourceCandidates,omitempty"`
@@ -41,8 +41,8 @@ type Result struct {
 	CredentialRefs         []CredentialRef `json:"credentialRefs,omitempty"`
 	SecurityReviewRequired bool            `json:"securityReviewRequired,omitempty"`
 	SecurityReviewReasons  []string        `json:"securityReviewReasons,omitempty"`
-	CodegenConstraints     []string        `json:"codegenConstraints,omitempty"`
-	Summary                Summary         `json:"summary,omitempty"`
+	CodegenConstraints     json.RawMessage `json:"codegenConstraints,omitempty"`
+	Summary                Summary `json:"summary,omitempty"`
 	Confirmation           Confirmation    `json:"confirmation,omitempty"`
 }
 
@@ -130,6 +130,46 @@ type Summary struct {
 	Partial                  []string `json:"partial,omitempty"`
 	Risks                    []string `json:"risks,omitempty"`
 	RequiresUserConfirmation []string `json:"requiresUserConfirmation,omitempty"`
+	// raw captures a non-object summary shape (some models emit summary as a
+	// plain string paragraph instead of {confirmed,…}). When set, MarshalJSON
+	// re-emits the original value verbatim so the agent's text survives; the list
+	// fields stay empty. Unexported → ignored by the default alias marshal.
+	raw json.RawMessage
+}
+
+// MarshalJSON / UnmarshalJSON make Summary tolerant to model variance. The
+// documented shape is an object {confirmed, partial, risks,
+// requiresUserConfirmation}; some models emit a plain string paragraph. The
+// object shape decodes into the list fields (typed access preserved for callers
+// and tests); any non-object shape is captured verbatim and re-emitted, so the
+// agent's summary survives end-to-end and the data-integration decode never
+// fails on it.
+func (s Summary) MarshalJSON() ([]byte, error) {
+	if len(s.raw) > 0 {
+		return s.raw, nil
+	}
+	type alias Summary
+	return json.Marshal(alias(s))
+}
+
+func (s *Summary) UnmarshalJSON(data []byte) error {
+	var obj struct {
+		Confirmed                []string `json:"confirmed,omitempty"`
+		Partial                  []string `json:"partial,omitempty"`
+		Risks                    []string `json:"risks,omitempty"`
+		RequiresUserConfirmation []string `json:"requiresUserConfirmation,omitempty"`
+	}
+	if err := json.Unmarshal(data, &obj); err == nil {
+		s.Confirmed = obj.Confirmed
+		s.Partial = obj.Partial
+		s.Risks = obj.Risks
+		s.RequiresUserConfirmation = obj.RequiresUserConfirmation
+		return nil
+	}
+	// Non-object (e.g. a plain string paragraph): preserve verbatim so the
+	// agent's summary text is not lost and the step decode never fails.
+	s.raw = append(s.raw, data...)
+	return nil
 }
 
 type Confirmation struct {

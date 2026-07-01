@@ -2,7 +2,7 @@
 // VITE_FACTORY_API_BASE_URL="" so calls go same-origin (/api) through the edge
 // reverse proxy; empty string is not nullish so it is kept. In `npm run dev` the
 // var is unset, so the local factory address is used as before.
-const API_BASE_URL = 'http://127.0.0.1:8787'
+const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL ?? 'http://127.0.0.1:8787'
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -171,6 +171,8 @@ export const factoryApi = {
     request(`/api/jobs/${jobId}/steps/${stepId}/prototype`),
   getJobPrototypePreviewUrl: (jobId, stepId) =>
     `${API_BASE_URL}/api/jobs/${jobId}/steps/${stepId}/prototype/preview`,
+  getJobPrototypePreviewPath: jobId =>
+    request(`/api/jobs/${jobId}/prototype/preview`),
   sendPrototypeFeedback: (jobId, stepId, feedback) =>
     request(`/api/jobs/${jobId}/steps/${stepId}/prototype/feedback`, {
       method: 'POST',

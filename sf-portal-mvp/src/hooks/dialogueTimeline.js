@@ -700,6 +700,9 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   if (Array.isArray(workTraceItems)) {
     const clarifications = workTraceItems
       .filter(it => it && it.type === 'clarification' && it.payload && Array.isArray(it.payload.questions) && it.payload.questions.length > 0)
+      // Skip prototype_confirmation clarifications — the prototype dock in the
+      // conversation workbench handles the design_contract step's confirmation UI.
+      .filter(it => !it.payload.questions.some(q => q && q.id === 'prototype_confirmation'))
       .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
     for (const c of clarifications) {
       const seq = c.sequence || 0

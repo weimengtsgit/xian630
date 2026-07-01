@@ -91,6 +91,30 @@ func TestRequirementAnalysisQuestionNormalizesAlternateFields(t *testing.T) {
 	}
 }
 
+// TestQuestionOptionToleratesBareString is the regression guard for the
+// job_c86df5ec… output_invalid_json failure: some models emit a select
+// question's options as a bare-string array ["mock_demo_data","skip_for_now"]
+// instead of [{value,label}] objects. QuestionOption must accept the plain
+// string (used as both value and label) so a select question never hard-fails
+// data_integration. Previously the type mismatch surfaced as a misleading
+// output_invalid_json (the JSON itself was valid — only the option shape differed).
+func TestQuestionOptionToleratesBareString(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+		"needsUserInput": true, "status": "needs_input",
+		"questions":[{"id":"q3","question":"选择降级策略","inputType":"select","options":["mock_demo_data","skip_for_now"]}]
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("bare-string options must not fail validation: %v", err)
+	}
+	if len(out.Questions) != 1 || len(out.Questions[0].Options) != 2 {
+		t.Fatalf("question/options not decoded: %+v", out)
+	}
+	if out.Questions[0].Options[0].Value != "mock_demo_data" || out.Questions[0].Options[0].Label != "mock_demo_data" {
+		t.Fatalf("bare-string option not used as value+label: %#v", out.Questions[0].Options[0])
+	}
+}
+
 // TestValidateRequirementAnalysisRequiresFrozenRequirement is the new happy
 // path: a fully-frozen, validated requirement output passes and produces no
 // waiting_user signal.
@@ -714,6 +738,80 @@ func TestValidateDataIntegrationAcceptsConfirmedDemoFallback(t *testing.T) {
 	raw := `{"status":"passed","summary":"使用演示数据","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":["ontology_failed","internet_failed"]}`
 	if _, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw)); err != nil {
 		t.Fatalf("confirmed demo fallback must be accepted: %v", err)
+	}
+}
+
+// TestValidateDataIntegrationToleratesModelShapeVariance is the regression guard
+// for job_7a0b3c0ab73a005065e553d9: models (across providers) emit fallbackHistory
+// as an array of OBJECTS [{from,to,reason,userConsented}] and workLog entries as
+// {step,status,detail} — not the []string / {content} the structs naively
+// expected. The tolerant FallbackHistory + workLogEntry unmarshalers must accept
+// both shapes and normalize, so a shape drift never hard-fails the step as
+// output_invalid_json (the JSON itself was valid; only the field shape differed).
+func TestValidateDataIntegrationToleratesModelShapeVariance(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"status":"passed","summary":"演示数据","sourceBoundary":"demo","needsUserInput":false,` +
+		`"dataContract":{"fields":[{"name":"id"}]},` +
+		`"fallbackHistory":[{"from":"ontology","to":"demo","reason":"无本体凭证","userConsented":true}],` +
+		`"workLog":[{"step":"check_ontology","status":"done","detail":"无可用本体数据源"}],` +
+		`"compatibility":{"status":"passed"}}`
+	p := filepath.Join(dir, "output.json")
+	if _, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw)); err != nil {
+		t.Fatalf("object-shape fallbackHistory + {step,status,detail} workLog must not fail validation: %v", err)
+	}
+	// Decode-level checks: fallbackHistory normalized to a readable string; the
+	// workLog detail (previously dropped because the struct only modeled content)
+	// is now captured into Content.
+	var out DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "out2.json"), raw), &out); err != nil {
+		t.Fatalf("ReadAndDecode: %v", err)
+	}
+	if len(out.FallbackHistory) != 1 || !strings.Contains(out.FallbackHistory[0], "ontology") || !strings.Contains(out.FallbackHistory[0], "demo") {
+		t.Fatalf("fallbackHistory not normalized from object to string: %#v", out.FallbackHistory)
+	}
+	if len(out.WorkLog) != 1 || !strings.Contains(out.WorkLog[0].Content, "本体") {
+		t.Fatalf("workLog detail not captured into Content: %#v", out.WorkLog)
+	}
+}
+
+// TestTolerantUnmarshalersNeverFailTheStep covers the adversarial shapes that
+// previously made FallbackHistory / workLogEntry RETURN an error (and thus
+// hard-fail the step as output_invalid_json): a non-object workLog entry
+// (number/bool/array), a single-object (non-array) fallbackHistory, and an empty
+// {from,to} fallback object. All must decode without error and without losing
+// the entry — the whole point of the tolerant decoders.
+func TestTolerantUnmarshalersNeverFailTheStep(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Numeric/bool/array workLog entries must not fail the step.
+	numRaw := `{"status":"passed","summary":"s","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"workLog":[42,true,["x"]]}`
+	var numOut DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "num.json"), numRaw), &numOut); err != nil {
+		t.Fatalf("numeric/bool/array workLog entry must not fail the step: %v", err)
+	}
+	if len(numOut.WorkLog) != 3 {
+		t.Fatalf("workLog entries lost: got %d, want 3 (all stringified, none dropped)", len(numOut.WorkLog))
+	}
+
+	// 2. A single-object (non-array) fallbackHistory must not fail; normalized to one entry.
+	objRaw := `{"status":"passed","summary":"s","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":{"from":"ontology","to":"demo","reason":"r"}}`
+	var objOut DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "obj.json"), objRaw), &objOut); err != nil {
+		t.Fatalf("single-object fallbackHistory must not fail: %v", err)
+	}
+	if len(objOut.FallbackHistory) != 1 || !strings.Contains(objOut.FallbackHistory[0], "ontology") {
+		t.Fatalf("single-object fallbackHistory not normalized to one entry: %#v", objOut.FallbackHistory)
+	}
+
+	// 3. An empty {from,to} fallback object collapses to the "fallback" sentinel,
+	// not a bare "→".
+	emptyRaw := `{"status":"passed","summary":"s","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":[{"from":"","to":"","reason":""}]}`
+	var emptyOut DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "empty.json"), emptyRaw), &emptyOut); err != nil {
+		t.Fatalf("empty from/to fallback must not fail: %v", err)
+	}
+	if len(emptyOut.FallbackHistory) != 1 || emptyOut.FallbackHistory[0] != "fallback" {
+		t.Fatalf("empty from/to fallback should collapse to %q, got %#v", "fallback", emptyOut.FallbackHistory)
 	}
 }
 

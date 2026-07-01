@@ -526,7 +526,9 @@ func normalizeDataAccessResult(raw json.RawMessage) (dataaccess.Result, error) {
 	result.CredentialRefs = normalizeCredentialRefs(doc["credentialRefs"])
 	result.SecurityReviewRequired = boolFromAny(doc["securityReviewRequired"])
 	result.SecurityReviewReasons = stringSliceFromAny(doc["securityReviewReasons"])
-	result.CodegenConstraints = stringSliceFromAny(doc["codegenConstraints"])
+	if cgraw, err := json.Marshal(doc["codegenConstraints"]); err == nil {
+		result.CodegenConstraints = cgraw
+	}
 	result.Summary = normalizeDataAccessSummary(doc["summary"])
 	return result, nil
 }

@@ -99,9 +99,21 @@ type QuestionOption struct {
 	Recommended bool   `json:"recommended,omitempty"`
 }
 
-// UnmarshalJSON accepts {value,label} (contract) and {id,label} (alternate).
-// Value falls back to id, then label, so the option is always pickable.
+// UnmarshalJSON accepts {value,label} (contract), {id,label} (alternate), and a
+// plain string ("mock_data" — some models emit options as a bare-value array
+// instead of objects). Value falls back to id, then label; a plain string is
+// used as BOTH value and label so the option is always pickable. This tolerance
+// matches the codebase's other model-variance decoders (SkillPaths/Question/
+// FallbackHistory): a shape drift in a non-critical field never hard-fails the
+// step (it was previously surfaced as a misleading output_invalid_json).
 func (o *QuestionOption) UnmarshalJSON(data []byte) error {
+	// Shape C: a plain string — use as both value and label.
+	var bare string
+	if err := json.Unmarshal(data, &bare); err == nil {
+		o.Value = bare
+		o.Label = bare
+		return nil
+	}
 	type raw struct {
 		Value       string `json:"value"`
 		ID          string `json:"id"`
@@ -673,6 +685,93 @@ func validatePrototypeSpec(p model.PrototypeSpec) error {
 	return nil
 }
 
+// FallbackHistory is the ordered fallback-boundary crossings the data_integration
+// step records. Models are inconsistent about its shape: some emit an array of
+// strings (["ontology→demo: …"]), others an array of objects
+// ([{"from":"ontology","to":"demo","reason":"…","userConsented":true}]). This
+// tolerant unmarshaler accepts both (and any object array), normalizing objects
+// to a stable "from→to：reason" string so the data-contract artifact metadata
+// and the workbench see one shape regardless of which model produced the output.
+// An unknown element shape is stringified rather than dropped — a crossing is
+// never silently lost. This is the data-side counterpart to SkillPaths/Question:
+// the decoder absorbs model variance so a shape drift never hard-fails the step.
+// fallbackHistoryEntry is the structured shape some models emit for a single
+// fallback-boundary crossing ([{from,to,reason,userConsented}]).
+type fallbackHistoryEntry struct {
+	From          string `json:"from"`
+	To            string `json:"to"`
+	Reason        string `json:"reason"`
+	UserConsented bool   `json:"userConsented"`
+}
+
+// normalizeFallbackEntry renders a structured crossing as a readable string.
+// The from→to segment is included only when at least one side is present, so an
+// empty {"from":"","to":""} collapses to the reason (or the "fallback" sentinel)
+// rather than emitting a bare "→".
+func normalizeFallbackEntry(e fallbackHistoryEntry) string {
+	from := strings.TrimSpace(e.From)
+	to := strings.TrimSpace(e.To)
+	reason := strings.TrimSpace(e.Reason)
+	var s string
+	if from != "" || to != "" {
+		s = from + "→" + to
+	}
+	if reason != "" {
+		if s != "" {
+			s += "："
+		}
+		s += reason
+	}
+	if e.UserConsented {
+		s += "（用户已确认）"
+	}
+	if s == "" {
+		s = "fallback"
+	}
+	return s
+}
+
+type FallbackHistory []string
+
+func (f *FallbackHistory) UnmarshalJSON(data []byte) error {
+	// Shape A: []string — accept verbatim.
+	var strs []string
+	if err := json.Unmarshal(data, &strs); err == nil {
+		*f = strs
+		return nil
+	}
+	// Shape B: []object{from,to,reason,userConsented} — normalize each to a string.
+	var objs []fallbackHistoryEntry
+	if err := json.Unmarshal(data, &objs); err == nil {
+		out := make([]string, 0, len(objs))
+		for _, o := range objs {
+			out = append(out, normalizeFallbackEntry(o))
+		}
+		*f = out
+		return nil
+	}
+	// Shape C: []<anything> (mixed/unknown elements) — keep each element's raw
+	// JSON text so the array stays non-empty and a crossing is never dropped.
+	var raws []json.RawMessage
+	if err := json.Unmarshal(data, &raws); err == nil {
+		out := make([]string, 0, len(raws))
+		for _, r := range raws {
+			out = append(out, strings.TrimSpace(string(r)))
+		}
+		*f = out
+		return nil
+	}
+	// Non-array: a single object {from,to,…} → one entry.
+	var single fallbackHistoryEntry
+	if err := json.Unmarshal(data, &single); err == nil {
+		*f = FallbackHistory{normalizeFallbackEntry(single)}
+		return nil
+	}
+	// Last resort (bare string/number/bool): stringify, never fail the step.
+	*f = FallbackHistory{strings.TrimSpace(string(data))}
+	return nil
+}
+
 // DataIntegrationOutput mirrors the data_integration step's output.json (Task 9).
 // The step is the data-capture producer: it validates data sources in a strict
 // priority order (ontology first, then internet, then demo) and MUST ask the
@@ -694,7 +793,7 @@ type DataIntegrationOutput struct {
 	SourceBoundary  string            `json:"sourceBoundary"`
 	Verification    DataVerification  `json:"verification"`
 	DataContract    DataContract      `json:"dataContract"`
-	FallbackHistory []string          `json:"fallbackHistory"`
+	FallbackHistory FallbackHistory   `json:"fallbackHistory"`
 	Compatibility   DataCompatibility `json:"compatibility"`
 	NeedsUserInput  bool              `json:"needsUserInput"`
 	Questions       []Question        `json:"questions"`
@@ -819,6 +918,47 @@ type codeGenerationOutput struct {
 // never fed thinking/reasoning/hidden-provider data.
 type workLogEntry struct {
 	Content string `json:"content"`
+}
+
+// UnmarshalJSON tolerates the workLog entry shape variance across models:
+// {content}, {detail}, {summary}, {message}, {title, summary},
+// {step, status, detail}, or a bare string. It captures the most informative
+// single text field into Content (the only field the runner models), preferring
+// content > detail > summary > message > title. Anything else is stringified so
+// a progress entry is never silently dropped — the conversation surface keeps a
+// non-empty work log regardless of which model produced the output. This is the
+// workLog counterpart to SkillPaths/Question/FallbackHistory.
+func (w *workLogEntry) UnmarshalJSON(data []byte) error {
+	var bare string
+	if err := json.Unmarshal(data, &bare); err == nil {
+		w.Content = bare
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		// Not a string or object (number/bool/array): stringify the raw token so
+		// the entry is captured, never dropped, and never fails the step.
+		w.Content = strings.TrimSpace(string(data))
+		return nil
+	}
+	text := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := obj[k].(string); ok {
+				if s := strings.TrimSpace(v); s != "" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+	if s := text("content", "detail", "summary", "message", "title", "text", "description"); s != "" {
+		w.Content = s
+		return nil
+	}
+	// Fallback: stringify the object so the entry is not silently lost.
+	b, _ := json.Marshal(obj)
+	w.Content = string(b)
+	return nil
 }
 
 // ValidateCodeGeneration decodes a code_generation attempt's output.json and,
