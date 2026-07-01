@@ -4,6 +4,7 @@ import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
 import { MapPanel } from "./MapPanel.jsx";
 import { AlertCard } from "./AlertCard.jsx";
+import { AnalysisPanel } from "./AnalysisPanel.jsx";
 import coastData from "../data/chinaCoast.json";
 
 const payloadUrl = new URL("../data/seasatsPayload.json", import.meta.url).href;
@@ -203,6 +204,7 @@ function Dashboard({ payload }) {
         )}
       </section>
 
+      <AnalysisPanel analysis={analysis} selectedTarget={selectedTarget} coast={coastData} />
       <AlertCard alert={cardAlert} onClose={() => setCardAlert(null)} />
       <footer className="timeline">
         <div><strong>回放</strong><span>{fmtDateTime(analysis.metadata.dataWindow.start)} → {fmtDateTime(analysis.metadata.dataWindow.end)}</span></div>
