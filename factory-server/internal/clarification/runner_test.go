@@ -769,6 +769,25 @@ func TestApplyConsolidationAdjustment(t *testing.T) {
 	}
 }
 
+func TestApplyConsolidationAdjustmentAllowsDeferredInterfaceAndDataFields(t *testing.T) {
+	base := Requirement{
+		AppType: "operations_tool", AppName: "请假审批",
+		TargetUsers: []string{"员工"}, CoreScenario: "提交和审批请假",
+		GenerationProfile: map[string][]string{"base": {"software-factory-app"}},
+	}
+	consolidation := []ConsolidationEntry{
+		{Field: "mainEntities", RecommendedValue: json.RawMessage(`["请假单"]`), Reason: "业务对象"},
+		{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["可提交审批"]`), Reason: "验收重点"},
+	}
+	merged, err := ApplyConsolidationAdjustment(base, consolidation, "", nil)
+	if err != nil {
+		t.Fatalf("ApplyConsolidationAdjustment should allow deferred primaryView/dataPolicy: %v", err)
+	}
+	if merged.PrimaryView != "" || merged.DataPolicy != "" {
+		t.Fatalf("deferred fields should stay empty, got primaryView=%q dataPolicy=%q", merged.PrimaryView, merged.DataPolicy)
+	}
+}
+
 // TestApplyConsolidationAdjustmentRejectsUnknownField proves only a known field
 // (present in the consolidation list) may be adjusted.
 func TestApplyConsolidationAdjustmentRejectsUnknownField(t *testing.T) {

@@ -282,6 +282,32 @@ func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	}
 }
 
+func TestValidateRequirementAnalysisAcceptsDeferredInterfaceAndDataFields(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+	  "confirmedRequirementId":"clar_deferred",
+	  "summary":"业务需求已确认，界面和数据细节留给后续阶段补齐",
+	  "appType":"operations_tool",
+	  "appName":"请假审批",
+	  "targetUsers":["员工"],
+	  "coreScenario":"提交和审批请假",
+	  "primaryView":"",
+	  "mainEntities":["请假单"],
+	  "dataPolicy":"",
+	  "acceptanceFocus":["可提交审批"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":false,"supported":true,"missingFields":["primaryView","dataPolicy"],"unsupportedRequests":[]}
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("ValidateRequirementAnalysis should accept deferred interface/data fields: %v", err)
+	}
+	if out.FrozenRequirementJSON == "" {
+		t.Fatal("FrozenRequirementJSON is empty")
+	}
+}
+
 func TestValidateSolutionDesignHappy(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 		"needsUserInput": false,

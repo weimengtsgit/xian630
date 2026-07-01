@@ -1144,8 +1144,9 @@ func requirementFieldEmpty(req Requirement, field string) bool {
 	return true
 }
 
-// validateRequirementComplete enforces the required confirmed-requirement
-// fields. It mirrors the SKILL.md "Required Confirmed Requirement Fields" list.
+// validateRequirementComplete enforces the required business-confirmation
+// fields. primaryView/dataPolicy 属于后续界面解析/数据抓取阶段，不能在业务
+// 逻辑确认和 consolidation 合并时阻塞 ready_to_confirm。
 func validateRequirementComplete(req Requirement) error {
 	missing := []string{}
 	if req.AppType == "" {
@@ -1160,14 +1161,8 @@ func validateRequirementComplete(req Requirement) error {
 	if req.CoreScenario == "" {
 		missing = append(missing, "coreScenario")
 	}
-	if req.PrimaryView == "" {
-		missing = append(missing, "primaryView")
-	}
 	if len(req.MainEntities) == 0 {
 		missing = append(missing, "mainEntities")
-	}
-	if req.DataPolicy == "" {
-		missing = append(missing, "dataPolicy")
 	}
 	if len(req.AcceptanceFocus) == 0 {
 		missing = append(missing, "acceptanceFocus")

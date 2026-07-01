@@ -1730,14 +1730,6 @@ func compactAnswerList(values []string) []string {
 	return out
 }
 
-// missingRequiredFields reports the required confirmation fields that are absent
-// on the given Requirement. The required set (per the implementation plan's
-// "Required Confirmed Requirement Fields") is: non-empty strings (appType,
-// appName, coreScenario, primaryView, dataPolicy), non-empty slices
-// (targetUsers, mainEntities, acceptanceFocus), and a non-empty
-// generationProfile map. Returns the list of camelCase field names that are
-// missing (empty slice if all present). This is the verdict confirmClarification
-// uses for its 422 body.
 // missingRequiredFields lists the BUSINESS-LOGIC fields the 业务逻辑 clarification
 // must settle before ready_to_confirm. Interface (primaryView) and data-source
 // (dataPolicy) details are intentionally NOT required here — they are clarified

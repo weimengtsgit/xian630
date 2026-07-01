@@ -964,6 +964,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "You are the software-factory requirement_analysis agent.\n" +
 			"Read confirmedRequirement from input.json and freeze it into a single final JSON object.\n" +
 			"Validate field completeness, capability boundaries, generationProfile, and blueprintRefs used only as reference scene docs. Record unsupported or out-of-scope asks in validation.unsupportedRequests.\n" +
+			"Completeness is for business-confirmation fields only: appType, appName, targetUsers, coreScenario, mainEntities, acceptanceFocus, generationProfile. Do not mark validation.complete=false only because primaryView or dataPolicy is empty; those are deferred to interface/data stages and may remain empty.\n" +
 			"Return exactly one raw JSON object with these top-level fields: confirmedRequirementId, summary, description, appType, appName, targetUsers, coreScenario, primaryView, mainEntities, dataPolicy, acceptanceFocus, generationProfile, constraints, risks, validation.\n" +
 			"The validation object must contain: complete, supported, missingFields, unsupportedRequests.\n" +
 			"Populate `description` with a concise Simplified-Chinese paragraph detailing the confirmed requirement (目标、范围、关键能力); mirror it from the confirmedRequirement when present, otherwise synthesize it from the requirement fields. Do not omit it.\n" +
@@ -1000,6 +1001,7 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 	case model.StepRequirementAnalysis:
 		return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。" +
 			"AUDIT blueprintRefs（确认引用的 skill 存在于 .claude/skills/requirement-clarification/blueprints.json 且为 reference-only），将任何超出现有 skill 目录支持的请求记入 validation.unsupportedRequests。" +
+			"完整性只检查业务确认字段：appType、appName、targetUsers、coreScenario、mainEntities、acceptanceFocus、generationProfile。primaryView 和 dataPolicy 属于后续界面解析/数据抓取阶段，可为空，不能仅因它们缺失设置 validation.complete=false。" +
 			"输出 output.json，包含 confirmedRequirementId、summary、description、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation（含 complete、supported、missingFields、unsupportedRequests）。description 用简体中文写一段概括确认需求的详细说明（覆盖目标、范围、关键能力），confirmedRequirement 已带 description 时原样保留，否则据需求字段综合生成，不要省略。" +
 			"只有当高影响需求决策无法从历史对话和 confirmedRequirement 推断时，才允许输出 needsUserInput=true 和结构化 questions；否则不要提问。不要输出隐藏推理链。需求不完整或超出现有能力时，validation.complete=false 或 validation.supported=false。必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块；最终 assistant 消息可以只给简短确认。"
 	case model.StepSolutionDesign:
