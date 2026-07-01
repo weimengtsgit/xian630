@@ -250,31 +250,42 @@ function App() {
               onAnswerBatch={dialogue.answerBatch}
               onAcceptConsolidation={dialogue.acceptConsolidation}
               onConfirm={dialogue.confirm}
-              // onConfirmCard advances a card's artifact package. A task-phase
-              // card (界面解析/数据抓取/生产交付) backs a waiting job step, NOT a
-              // pre-task clarification child — confirmDialogueClarification
-              // (dialogue.confirm) returns 409 there. So route the task-phase
-              // confirm through jobs.answerJob (the same path onSend uses to
-              // advance a waiting_user step), passing the card's confirm label as
-              // the affirmative answer. Only the pre-task branch (no active
-              // clarification/task) falls back to dialogue.confirm, preserving the
-              // business_logic requirement-summary confirm flow.
-              onConfirmCard={cardKey => {
+              // 卡片确认要按等待类型分流：需求确认是手工步骤确认，数据方案确认走
+              // 数据专用确认接口，普通澄清/原型兼容回复才走 answerJob。
+              onConfirmCard={cardOrKey => {
+                const card = cardOrKey && typeof cardOrKey === 'object' ? cardOrKey : null
+                const cardKey = card ? card.key : cardOrKey
                 const CONFIRM_ANSWER = {
-                  business_logic: '确认业务逻辑并继续',
-                  interface_parsing: '确认界面解析并继续',
-                  data_capture: '确认数据抓取并继续',
+                  business_logic: '需求确认',
+                  interface_parsing: '界面确认',
+                  data_capture: '数据确认',
                   production_delivery: '确认生产交付并继续',
                 }
                 const answer = CONFIRM_ANSWER[cardKey] || '确认并继续'
+                const waitingStep = card && Array.isArray(card.steps)
+                  ? card.steps.find(step => step && step.status === 'waiting_user')
+                  : null
+                const pendingQuestions = parsePendingQuestionsForConfirm(waitingStep)
+                if (waitingStep && pendingQuestions.some(q => q.type === 'manual_step_confirmation' && q.confirm)) {
+                  return jobs.confirmStep(waitingStep.job_id || waitingStep.jobId, waitingStep.id || waitingStep.stepId, waitingStep.attempt)
+                }
+                const dataQuestion = pendingQuestions.find(q => q.id === 'data_access_summary_confirmation')
+                if (waitingStep && dataQuestion) {
+                  return jobs.confirmDataAccess(waitingStep.job_id || waitingStep.jobId, waitingStep.id || waitingStep.stepId, {
+                    version: dataQuestion.defaultAnswer || '',
+                    attempt: waitingStep.attempt,
+                  })
+                }
+                const prototypeQuestion = pendingQuestions.find(q => q.id === 'prototype_confirmation')
+                const reply = prototypeQuestion ? '确定原型并继续' : answer
                 if (activeClarification) {
-                  return jobs.answerJob(activeClarification.taskId, answer, {
+                  return jobs.answerJob(activeClarification.taskId, reply, {
                     stepId: activeClarification.stepId,
                     attempt: activeClarification.attempt,
                   })
                 }
                 if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
-                  return jobs.answerJob(dialogue.focusTask.id, answer, {})
+                  return jobs.answerJob(dialogue.focusTask.id, reply, {})
                 }
                 return dialogue.confirm()
               }}
@@ -355,6 +366,20 @@ function App() {
       ) : null}
     </main>
   )
+}
+
+function parsePendingQuestionsForConfirm(step) {
+  if (!step) return []
+  const raw = step.pending_questions || step.pendingQuestions || ''
+  if (!raw) return []
+  try {
+    const value = JSON.parse(raw)
+    if (Array.isArray(value)) return value
+    if (value && Array.isArray(value.questions)) return value.questions
+  } catch (_) {
+    return []
+  }
+  return []
 }
 
 export default App

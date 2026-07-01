@@ -774,6 +774,91 @@ func (s *Server) findJobForDialogue(ctx context.Context, dlg *model.DialogueSess
 	return job
 }
 
+func (s *Server) ensureDialogueRequirementAnalysisJob(ctx context.Context, dialogueID, childID string) (*model.Job, bool, error) {
+	sess, _ := s.store.GetClarificationSession(ctx, childID)
+	if sess == nil {
+		return nil, false, errors.New("child not found")
+	}
+	if sess.CreatedJobID != "" {
+		job, err := s.store.GetJob(ctx, sess.CreatedJobID)
+		if err != nil {
+			return nil, false, err
+		}
+		return job, false, nil
+	}
+	if sess.Status != model.ClarificationStatusReadyToConfirm {
+		return nil, false, fmt.Errorf("session not ready to seed job: %s", sess.Status)
+	}
+	req := s.parseRequirement(sess.RequirementJSON)
+	if !blueprintRefsAllSafe(req.BlueprintRefs) {
+		return nil, false, errors.New("invalid blueprintRef slug")
+	}
+	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
+	req.GenerationProfile = recomputeGenerationProfile(req)
+	if missing := missingRequiredFields(req); len(missing) > 0 {
+		return nil, false, fmt.Errorf("confirmed requirement missing required fields: %s", strings.Join(missing, ","))
+	}
+	reqBytes, _ := json.Marshal(req)
+	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
+
+	normalizedName := normalizeScenarioName(req.AppName, req.CoreScenario, sess.InitialPrompt)
+	suffix := idpkg.Base36Serial(func(cand string) bool {
+		return s.appSlugTaken(ctx, normalizedName, req.AppType, cand)
+	})
+	factoryName := normalizedName + "-" + suffix
+	factorySlug := factoryAppSlug(normalizedName, req.AppType, suffix)
+
+	now := time.Now()
+	jobID := "job_" + idpkg.New()
+	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: string(reqBytes)})
+	planJSON, err := plan.JSON()
+	if err != nil {
+		return nil, false, err
+	}
+	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
+	if err != nil {
+		return nil, false, err
+	}
+	currentStep := model.StepRequirementAnalysis
+	if len(plan.Agents) > 0 {
+		currentStep = model.StepKind(plan.Agents[0].Role)
+	}
+	job := model.Job{
+		ID:                       jobID,
+		UserPrompt:               sess.InitialPrompt,
+		AppName:                  factoryName,
+		AppSlug:                  factorySlug,
+		Status:                   model.JobStatusQueued,
+		CurrentStepKind:          currentStep,
+		ClarificationSessionID:   childID,
+		ConfirmedRequirementJSON: string(reqBytes),
+		CollaborationPlanJSON:    planJSON,
+		DialogueID:               dialogueID,
+		CreatedAt:                now,
+		UpdatedAt:                now,
+	}
+	if err := s.store.SeedClarificationJobWithEdges(ctx, job, steps, edges, childID); err != nil {
+		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
+		return nil, false, err
+	}
+	if err := s.store.UpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusTaskRunning, "", ""); err != nil {
+		return nil, false, err
+	}
+	s.hub.Publish(Event{Type: "job.created", Data: job})
+	s.logEvent("job_queued", map[string]any{
+		"job_id":                   job.ID,
+		"app_name":                 job.AppName,
+		"clarification_session_id": job.ClarificationSessionID,
+		"source":                   "dialogue_ready_auto_seed",
+	})
+	s.publishDialogueSimple("dialogue.task.running", dialogueID, map[string]any{
+		"seeded_job_id": jobID,
+		"app_name":      factoryName,
+	})
+	s.exec.Signal()
+	return &job, true, nil
+}
+
 var errDialogueNotFound = errors.New("dialogue not found")
 
 // ---- handlers -------------------------------------------------------------
@@ -1850,6 +1935,12 @@ func (s *Server) answerDialogueClarificationBatch(w http.ResponseWriter, r *http
 		}
 		_ = s.store.SetClarificationStatus(ctx, childID, status, "", "")
 		s.publishDialogueChild(ctx, id, childID, adjusted)
+		if status == model.ClarificationStatusReadyToConfirm {
+			if _, _, err := s.ensureDialogueRequirementAnalysisJob(ctx, id, childID); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
+				return
+			}
+		}
 		_ = dlg
 		_ = cv
 		view, err := s.composeDialogueView(ctx, id)
@@ -2059,119 +2150,17 @@ func (s *Server) confirmDialogueClarification(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "session not ready to confirm", "status": sess.Status})
 		return
 	}
-	var body confirmDialogueClarificationBody
 	if r.ContentLength != 0 {
+		var body confirmDialogueClarificationBody
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
 	}
-	req := s.parseRequirement(sess.RequirementJSON)
-	if !blueprintRefsAllSafe(req.BlueprintRefs) {
-		writeError(w, http.StatusBadRequest, "invalid blueprintRef slug")
-		return
-	}
-	req.BlueprintRefs = s.sanitizeBlueprintRefs(req.BlueprintRefs)
-	req.GenerationProfile = recomputeGenerationProfile(req)
-	req.ExecutionPolicy.ManualStepConfirmation = body.ExecutionPolicy.ManualStepConfirmation
-	if missing := missingRequiredFields(req); len(missing) > 0 {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "confirmed requirement missing required fields", "missing": missing})
-		return
-	}
-	// Persist the finalized requirement.
-	reqBytes, _ := json.Marshal(req)
-	_ = s.store.UpdateClarificationRequirement(ctx, childID, string(reqBytes))
-
-	// Allocate the Factory-owned app name: <normalizedScenarioName>-<Base36>.
-	// Never trust client appName/slug/blueprint/serial. The readable name keeps
-	// the UPPERCASE serial (spec example: 航母编队航迹复盘-K7M2); the slug is the
-	// lowercase, filesystem-safe derivation. Collision detection compares the
-	// EXACT candidate slug (case-consistent), not an uppercase-suffix heuristic
-	// that could never match the lowercased slug and so admit duplicates.
-	normalizedName := normalizeScenarioName(req.AppName, req.CoreScenario, sess.InitialPrompt)
-	suffix := idpkg.Base36Serial(func(cand string) bool {
-		return s.appSlugTaken(ctx, normalizedName, req.AppType, cand)
-	})
-	factoryName := normalizedName + "-" + suffix
-	factorySlug := factoryAppSlug(normalizedName, req.AppType, suffix)
-
-	// Seed the collaboration-plan job, mirroring confirmClarification. The job
-	// carries the CONFIRMED requirement + child session id. The job + steps +
-	// edges + child link are committed in a SINGLE transaction: on failure there
-	// is NO orphaned job and the child is moved to a diagnosable failed state.
-	now := time.Now()
-	jobID := "job_" + idpkg.New()
-
-	// Build the default collaboration plan from the confirmed requirement and
-	// materialize it into job_steps + job_step_edges. CurrentStepKind points at
-	// the FIRST plan agent's role so the job is executable from its plan head.
-	plan := collaboration.DefaultPlan(collaboration.RequirementContext{ConfirmedRequirementJSON: string(reqBytes)})
-	planJSON, err := plan.JSON()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build collaboration plan")
-		return
-	}
-	steps, edges, err := collaborationSteps(jobID, plan, s.cfg.WorkspaceRoot)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "build collaboration steps")
-		return
-	}
-	currentStep := model.StepRequirementAnalysis
-	if len(plan.Agents) > 0 {
-		currentStep = model.StepKind(plan.Agents[0].Role)
-	}
-
-	job := model.Job{
-		ID:                       jobID,
-		UserPrompt:               sess.InitialPrompt,
-		AppName:                  factoryName,
-		AppSlug:                  factorySlug,
-		Status:                   model.JobStatusQueued,
-		CurrentStepKind:          currentStep,
-		ClarificationSessionID:   childID,
-		ConfirmedRequirementJSON: string(reqBytes),
-		CollaborationPlanJSON:    planJSON,
-		// DialogueID links the job to the dialogue its safe agent activity is
-		// surfaced under (Task 4). It is the work_trace_events sequence-
-		// partition key: the executor stamps it onto every trace the runner
-		// produces, so the dialogue-scoped SSE stream can filter them.
-		DialogueID: id,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-	if err := s.store.SeedClarificationJobWithEdges(ctx, job, steps, edges, childID); err != nil {
-		// Atomic rollback already discarded any half-seeded job/steps. Move the
-		// child to a diagnosable failed state so the session is never left in
-		// ready_to_confirm with no linked job.
-		_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusFailed, "job_seed_failed", err.Error())
+	if _, _, err := s.ensureDialogueRequirementAnalysisJob(ctx, id, childID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "seed job", "code": "job_seed_failed"})
 		return
 	}
-	_ = s.store.SetClarificationStatus(ctx, childID, model.ClarificationStatusConfirmed, "", "")
-	// Keep the parent interactive while its initial task runs. The application id
-	// is filled atomically by SetJobCreatedApp once code generation registers it.
-	// Marking this as task_running (rather than terminal resolved) makes follow-up
-	// messages use the continuing-turn path immediately.
-	if err := s.store.SetDialogueResolved(ctx, id, "", ""); err != nil {
-		writeError(w, http.StatusInternalServerError, "resolve dialogue")
-		return
-	}
-	if err := s.store.UpdateDialogueStatus(ctx, id, model.DialogueStatusTaskRunning, "", ""); err != nil {
-		writeError(w, http.StatusInternalServerError, "set dialogue task running")
-		return
-	}
-	s.hub.Publish(Event{Type: "job.created", Data: job})
-	s.logEvent("job_queued", map[string]any{
-		"job_id":                   job.ID,
-		"app_name":                 job.AppName,
-		"clarification_session_id": job.ClarificationSessionID,
-		"source":                   "dialogue_confirm",
-	})
-	s.publishDialogueSimple("dialogue.task.running", id, map[string]any{
-		"seeded_job_id": jobID,
-		"app_name":      factoryName,
-	})
-	s.exec.Signal()
 
 	view, err := s.composeDialogueView(ctx, id)
 	if err != nil {

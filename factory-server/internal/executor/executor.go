@@ -627,6 +627,12 @@ func (e *Executor) shouldAwaitManualStepConfirmation(ctx context.Context, jobID 
 	if err != nil || job == nil || strings.TrimSpace(job.CollaborationPlanJSON) == "" {
 		return false
 	}
+	if job.CurrentStepKind == model.StepRequirementAnalysis && strings.TrimSpace(job.ClarificationSessionID) != "" {
+		child, err := e.store.GetClarificationSession(ctx, job.ClarificationSessionID)
+		if err == nil && child != nil && child.Status == model.ClarificationStatusReadyToConfirm {
+			return true
+		}
+	}
 	if !manualStepConfirmationEnabled(job.CollaborationPlanJSON) {
 		return false
 	}

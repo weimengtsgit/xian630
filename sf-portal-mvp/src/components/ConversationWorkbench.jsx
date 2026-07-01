@@ -138,9 +138,6 @@ export function ConversationWorkbench({
   const canSubmitAnswers = activeQuestions.length > 0 && completedAnswers === activeQuestions.length && !submitting
   const intent = session && session.intent
   const isBusiness = intent === 'business_processing_agent'
-  const isClarification = intent === 'application_generation' && view && view.child
-  const childStatus = isClarification ? view.child.status : null
-  const canConfirmClarification = childStatus === 'ready_to_confirm'
   const canConfirmBusiness = isBusiness &&
     view &&
     view.agentDraftStatus === 'ready_to_confirm' &&
@@ -148,7 +145,7 @@ export function ConversationWorkbench({
     view.agentDraft.name &&
     view.agentDraft.description &&
     view.agentDraft.prompt
-  const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
+  const canConfirm = canConfirmBusiness && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
   // Surface WHY a session failed (e.g. 模型服务余额不足), not just "已失败". The
@@ -658,7 +655,7 @@ export function ConversationWorkbench({
             onClick={() => onConfirm && onConfirm({ executionPolicy: { manualStepConfirmation: !isBusiness && manualStepConfirmation } })}
             disabled={submitting}
           >
-            {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
+            {submitting ? '处理中' : '确认创建'}
           </button>
         </div>
       ) : null}

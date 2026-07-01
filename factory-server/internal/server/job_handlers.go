@@ -905,6 +905,19 @@ func (s *Server) confirmJobStep(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var confirmingRequirement bool
+	var clarificationID string
+	if before, err := s.store.GetJob(r.Context(), jobID); err == nil && before != nil {
+		clarificationID = before.ClarificationSessionID
+		if steps, err := s.store.ListJobSteps(r.Context(), jobID); err == nil {
+			for _, step := range steps {
+				if step.ID == stepID && step.Kind == model.StepRequirementAnalysis {
+					confirmingRequirement = true
+					break
+				}
+			}
+		}
+	}
 	job, err := s.exec.ConfirmManualStep(r.Context(), jobID, stepID, body.Attempt)
 	if err != nil {
 		switch {
@@ -914,6 +927,11 @@ func (s *Server) confirmJobStep(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 		}
 		return
+	}
+	if confirmingRequirement && clarificationID != "" {
+		// 需求分析产物已经由用户确认，澄清子会话此时才进入 confirmed；
+		// 这避免澄清结束就被误认为用户已经确认需求。
+		_ = s.store.SetClarificationStatus(r.Context(), clarificationID, model.ClarificationStatusConfirmed, "", "")
 	}
 	s.publishStepUpdated(r.Context(), stepID)
 	s.hub.Publish(Event{Type: "job.updated", Data: job})

@@ -1470,6 +1470,82 @@ func TestApplicationClarificationAcceptConsolidation(t *testing.T) {
 	}
 }
 
+func TestDialogueClarificationReadyAutoSeedsRequirementAnalysisJob(t *testing.T) {
+	seq := &clarSequenceRunner{
+		outputs: []string{
+			roundOutputOneQuestion(1, "appType"),
+			roundOutputOneQuestion(2, "primaryView"),
+			roundOutputOneQuestion(3, "dataPolicy"),
+			roundOutputOneQuestion(4, "targetUsers"),
+			roundOutputConsolidation(5),
+		},
+	}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+	var routed dialogueView
+	_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+	childID := routed.Session.ClarificationSessionID
+	if childID == "" {
+		t.Fatalf("no child clarification linked")
+	}
+
+	answerRound := func(questionID, value string) {
+		rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+			"questionId": questionID, "value": value,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+		}
+	}
+	answerRound("appType", "situation_replay")
+	answerRound("primaryView", "地图 + 时间轴")
+	answerRound("dataPolicy", "mock_data")
+	answerRound("targetUsers", "作战参谋")
+
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	var acceptView dialogueView
+	json.NewDecoder(acceptRec.Body).Decode(&acceptView)
+	if acceptView.Child == nil || acceptView.Child.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("child status = %+v, want ready_to_confirm after accept-all", acceptView.Child)
+	}
+	if acceptView.Session.Status != model.DialogueStatusTaskRunning {
+		t.Fatalf("dialogue status = %q, want task_running after auto seed", acceptView.Session.Status)
+	}
+	if acceptView.SeededJob == nil {
+		t.Fatalf("ready clarification must auto-seed the requirement analysis job before user confirmation")
+	}
+	if acceptView.SeededJob.CurrentStepKind != model.StepRequirementAnalysis {
+		t.Fatalf("current step = %q, want requirement_analysis", acceptView.SeededJob.CurrentStepKind)
+	}
+	child, _ := st.GetClarificationSession(context.Background(), childID)
+	if child == nil || child.CreatedJobID != acceptView.SeededJob.ID {
+		t.Fatalf("child created job = %+v, want %s", child, acceptView.SeededJob.ID)
+	}
+	var plan struct {
+		ExecutionPolicy struct {
+			ManualStepConfirmation bool `json:"manualStepConfirmation"`
+		} `json:"executionPolicy"`
+	}
+	if err := json.Unmarshal([]byte(acceptView.SeededJob.CollaborationPlanJSON), &plan); err != nil {
+		t.Fatalf("decode collaboration plan: %v", err)
+	}
+	if plan.ExecutionPolicy.ManualStepConfirmation {
+		t.Fatalf("auto-seeded job must not enable global manual step confirmation")
+	}
+}
+
 // TestApplicationClarificationConsolidationGateHonorsOpenHighImpact is the D3
 // regression: a round-5 output can carry BOTH a consolidation list AND a
 // non-empty openHighImpact list (independent RoundOutput fields). Accepting the
@@ -1583,11 +1659,11 @@ func TestApplicationClarificationConsolidationGateHonorsOpenHighImpact(t *testin
 	}
 }
 
-// TestDialogueConfirmRollsBackOnMidSeedFailure asserts that when the job-seeding
-// transaction fails part-way through (a step insert errors), the confirm handler
-// leaves NO orphaned job row and moves the child clarification to a diagnosable
-// failed state — never ready_to_confirm with no linked job.
-func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
+// TestDialogueReadyAutoSeedRollsBackOnMidSeedFailure asserts that when the
+// ready-to-confirm auto-seed transaction fails part-way through (a step insert
+// errors), the handler leaves NO orphaned job row and moves the child
+// clarification to a diagnosable failed state.
+func TestDialogueReadyAutoSeedRollsBackOnMidSeedFailure(t *testing.T) {
 	seq := &clarSequenceRunner{
 		outputs: []string{
 			roundOutputOneQuestion(1, "appType"),
@@ -1628,12 +1704,9 @@ func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
 	answerRound("primaryView", "地图 + 时间轴")
 	answerRound("dataPolicy", "mock_data")
 	answerRound("targetUsers", "作战参谋")
-	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
-		"consolidationField": "coreScenario",
-		"consolidationValue": "复盘近 1 个月航迹",
-	})
 
-	// Snapshot the job count before confirm so we can prove no job was added.
+	// Snapshot the job count before the ready transition so we can prove no job
+	// was added when auto-seeding fails.
 	jobsBefore, err := st.ListJobs(context.Background(), "")
 	if err != nil {
 		t.Fatalf("list jobs before: %v", err)
@@ -1648,9 +1721,12 @@ func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
 		return nil
 	})
 
-	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/confirm", nil)
-	if confirmRec.Code != http.StatusInternalServerError {
-		t.Fatalf("confirm status = %d, want 500; body=%s", confirmRec.Code, confirmRec.Body.String())
+	readyRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
+		"consolidationField": "coreScenario",
+		"consolidationValue": "复盘近 1 个月航迹",
+	})
+	if readyRec.Code != http.StatusInternalServerError {
+		t.Fatalf("ready auto-seed status = %d, want 500; body=%s", readyRec.Code, readyRec.Body.String())
 	}
 
 	// NO orphaned job: the job count is unchanged.

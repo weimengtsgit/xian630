@@ -413,6 +413,75 @@ func TestExecutorManualStepConfirmationPausesAndResumesPlan(t *testing.T) {
 	}
 }
 
+func TestExecutorAutoSeededRequirementAnalysisPausesForDemandConfirmationOnly(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepRequirementAnalysis: {Status: model.StepStatusSucceeded},
+		model.StepSolutionDesign:      {Status: model.StepStatusSucceeded},
+	}}
+	e, st := newTestExecutor(t, runner)
+	now := time.Now()
+	const jobID = "job_auto_req_confirm"
+	const childID = "clar_auto_req_confirm"
+	if err := st.CreateClarificationSession(context.Background(), model.ClarificationSession{
+		ID:            childID,
+		Status:        model.ClarificationStatusReadyToConfirm,
+		InitialPrompt: "做一个复盘应用",
+		Round:         5,
+		MaxRounds:     6,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("seed clarification: %v", err)
+	}
+	job := model.Job{
+		ID:                       jobID,
+		UserPrompt:               "做一个复盘应用",
+		Status:                   model.JobStatusQueued,
+		CurrentStepKind:          model.StepRequirementAnalysis,
+		ClarificationSessionID:   childID,
+		CollaborationPlanJSON:    `{"executionPolicy":{"manualStepConfirmation":false}}`,
+		ConfirmedRequirementJSON: `{}`,
+		CreatedAt:                now,
+		UpdatedAt:                now,
+	}
+	steps := []model.JobStep{
+		{ID: "step_auto_req", JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1, AgentKey: "requirement-analyst", Status: model.StepStatusPending},
+		{ID: "step_auto_solution", JobID: jobID, Kind: model.StepSolutionDesign, Seq: 2, AgentKey: "solution-designer", Status: model.StepStatusPending},
+	}
+	if err := st.SeedClarificationJobWithEdges(context.Background(), job, steps, nil, childID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce requirement: %v", err)
+	}
+	paused := mustJob(t, st, jobID)
+	if paused.Status != model.JobStatusWaitingUser {
+		t.Fatalf("job status = %s, want waiting_user", paused.Status)
+	}
+	req := stepByKind(t, mustSteps(t, st, jobID), model.StepRequirementAnalysis)
+	if req.Status != model.StepStatusWaitingUser || !req.NeedsUserInput {
+		t.Fatalf("requirement step = %s input=%v, want waiting_user/true", req.Status, req.NeedsUserInput)
+	}
+	if !strings.Contains(req.PendingQuestions, "manual_step_confirmation") {
+		t.Fatalf("pending questions = %q, want demand confirmation payload", req.PendingQuestions)
+	}
+
+	if _, err := e.ConfirmManualStep(context.Background(), jobID, req.ID, req.Attempt); err != nil {
+		t.Fatalf("confirm demand step: %v", err)
+	}
+	if err := st.SetClarificationStatus(context.Background(), childID, model.ClarificationStatusConfirmed, "", ""); err != nil {
+		t.Fatalf("mark clarification confirmed: %v", err)
+	}
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce solution: %v", err)
+	}
+	done := mustJob(t, st, jobID)
+	if done.Status != model.JobStatusCompleted {
+		t.Fatalf("final job status = %s, want completed without extra manual pauses", done.Status)
+	}
+}
+
 // TestExecutorRetryCurrentStep drives the job to failed on step 2, retries,
 // then re-runs step 2 (now succeeding) and asserts the pipeline advances.
 func TestExecutorRetryCurrentStep(t *testing.T) {

@@ -1161,6 +1161,11 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	if err != nil || refreshed == nil {
 		return sess, roundN, true
 	}
+	if dialogueID != "" && refreshed.Status == model.ClarificationStatusReadyToConfirm {
+		// 对话工作台的新流程不在澄清结束处等待用户确认；需求分析任务自动启动，
+		// 并由 requirement_analysis 完成后的人工确认门承接“需求确认”。
+		_, _, _ = s.ensureDialogueRequirementAnalysisJob(ctx, dialogueID, sessID)
+	}
 	return refreshed, roundN, true
 }
 
@@ -1228,6 +1233,10 @@ func (s *Server) advanceAfterUserTurnForDialogue(ctx context.Context, sessID str
 		updated, err := s.store.GetClarificationSession(ctx, sessID)
 		if err != nil || updated == nil {
 			return sess, false
+		}
+		if dialogueID != "" && updated.Status == model.ClarificationStatusReadyToConfirm {
+			// 达到轮次上限且字段已齐时同样自动进入需求分析，避免回到旧的“确认并生成”。
+			_, _, _ = s.ensureDialogueRequirementAnalysisJob(ctx, dialogueID, sessID)
 		}
 		return updated, true
 	}

@@ -4,9 +4,15 @@ import { WorkbenchTrack } from './WorkbenchTracks'
 import { isPreviewableArtifact } from '../utils/workbenchArtifact'
 
 const CONFIRM_LABEL = {
-  business_logic: '确认业务逻辑并继续',
-  interface_parsing: '确认界面解析并继续',
-  data_capture: '确认数据抓取并继续',
+  business_logic: '需求确认',
+  interface_parsing: '界面确认',
+  data_capture: '数据确认',
+}
+
+const BLOCK_TITLE = {
+  business_logic: '需求理解结果',
+  interface_parsing: '界面确认',
+  data_capture: '数据方案确认',
 }
 
 export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [], onConfirm, onOpenArtifact, onSubmitCredential }) {
@@ -21,11 +27,11 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
   if (!card) return null
   const canConfirm = ['waiting_artifact_confirmation', 'waiting_user_clarification'].includes(card.state) && CONFIRM_LABEL[card.key]
   const previewableArtifacts = (card.artifacts || []).filter(isPreviewableArtifact)
-  return (
+  const block = (
     <section className={`cw-agent-block cw-agent-block-${card.key} ${open ? 'is-open' : 'is-folded'}`}>
       <button type="button" className="cw-agent-block-head" onClick={() => setOpen(v => !v)}>
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <strong>{card.label}</strong>
+        <strong>{BLOCK_TITLE[card.key] || card.label}</strong>
         <span>{card.currentAction || card.summary || card.subStage || '未开始'}</span>
       </button>
       {open ? (
@@ -36,7 +42,7 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}
           {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
           {previewableArtifacts.length ? <ArtifactList artifacts={previewableArtifacts} onOpenArtifact={onOpenArtifact} /> : null}
-          {canConfirm ? <button type="button" className="cw-agent-confirm" onClick={() => onConfirm && onConfirm(card.key)}>{CONFIRM_LABEL[card.key]}</button> : null}
+          {canConfirm ? <button type="button" className="cw-agent-confirm" onClick={() => onConfirm && onConfirm(card)}>{CONFIRM_LABEL[card.key]}</button> : null}
         </div>
       ) : (
         <div className="cw-agent-folded">
@@ -45,6 +51,15 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
       )}
     </section>
   )
+  if (card.key === 'interface_parsing' || card.key === 'data_capture') {
+    return (
+      <>
+        <div className="cw-agent-block-divider" aria-hidden="true" />
+        {block}
+      </>
+    )
+  }
+  return block
 }
 
 function isFolded(card) {

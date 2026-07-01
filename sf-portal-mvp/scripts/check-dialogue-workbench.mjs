@@ -430,6 +430,7 @@ assert.equal(statusText('unknown'), 'unknown')
 
 const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
 const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
+const agentBlockJsx = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const apiClientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const eventsJs = readFileSync(new URL('../src/api/events.js', import.meta.url), 'utf8')
@@ -495,6 +496,16 @@ assert.match(workbenchJsx, /consolidation_table|consolidation/, 'round-5 table m
 // Business recommendation with explicit confirm + re-describe.
 assert.match(workbenchJsx, /确认创建|确认配置/, 'business recommendation must offer an explicit confirm/create action')
 assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation must offer a re-describe action')
+
+// Post-analysis confirmation flow: application generation must not ask the user
+// to "确认并生成" immediately after clarification. It presents three ordered
+// conversation blocks with short confirmation labels instead.
+assert.doesNotMatch(workbenchJsx, /确认并生成/, 'application generation must not expose the old pre-analysis 确认并生成 action')
+assert.match(agentBlockJsx, /需求理解结果/, 'business logic block must title the requirement-analysis result as 需求理解结果')
+assert.match(agentBlockJsx, /界面确认/, 'interface block must expose 界面确认')
+assert.match(agentBlockJsx, /数据方案确认/, 'data block must expose 数据方案确认')
+assert.match(agentBlockJsx, /需求确认/, 'business logic confirmation button must be 需求确认')
+assert.match(agentBlockJsx, /cw-agent-block-divider/, 'interface/data blocks must be separated in the conversation flow')
 
 // Route choices must NOT expose the business_processing_agent option, but must
 // still offer existing-app reuse and app generation.
