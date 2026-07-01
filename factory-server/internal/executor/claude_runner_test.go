@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -572,6 +573,52 @@ func TestDesignContractPromptUsesPrototypeDesignSkill(t *testing.T) {
 	}
 }
 
+func TestDesignContractBusinessDesignHandoffUsesLatestRequirementAttempt(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	job, step := claudeJobStep(model.StepDesignContract)
+	job.ID = "job_business_handoff_latest"
+	step.JobID = job.ID
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := st.CreateJobStep(context.Background(), model.JobStep{
+		ID:      "step_requirement_latest",
+		JobID:   job.ID,
+		Kind:    model.StepRequirementAnalysis,
+		Seq:     1,
+		Status:  model.StepStatusSucceeded,
+		Attempt: 3,
+	}); err != nil {
+		t.Fatalf("create requirement step: %v", err)
+	}
+	artifactRoot := filepath.Join(ws, ".factory-runs")
+	for attempt, summary := range map[int]string{
+		1: "旧业务设计方案",
+		3: "最新业务设计方案",
+	} {
+		dir := filepath.Join(artifactRoot, "jobs", job.ID, string(model.StepRequirementAnalysis), "attempt-"+strconv.Itoa(attempt))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw := []byte(`{"summary":"` + summary + `"}`)
+		if err := os.WriteFile(filepath.Join(dir, "output.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &ClaudeStepRunner{Store: st, ArtifactRoot: artifactRoot}
+
+	handoff, err := r.businessDesignHandoff(job, step)
+	if err != nil {
+		t.Fatalf("businessDesignHandoff: %v", err)
+	}
+	if !strings.Contains(handoff.ArtifactPath, "attempt-3/output.json") {
+		t.Fatalf("artifact path = %q, want latest attempt-3", handoff.ArtifactPath)
+	}
+	if !bytes.Contains(handoff.Content, []byte("最新业务设计方案")) || bytes.Contains(handoff.Content, []byte("旧业务设计方案")) {
+		t.Fatalf("business design content = %s", handoff.Content)
+	}
+}
 func TestGenericCollaborationProducerPromptDoesNotUsePrototypeSkill(t *testing.T) {
 	ws := runner.AttemptWorkspace{Root: t.TempDir(), JobID: "job_domain_prompt", StepKind: model.StepDomainAnalysis, Attempt: 1}
 	job, step := claudeJobStep(model.StepDomainAnalysis)

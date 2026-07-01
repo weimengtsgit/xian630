@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,7 +89,11 @@ func (c *ClaudeStepRunner) businessDesignHandoff(job model.Job, step model.JobSt
 	if step.Kind != model.StepDesignContract {
 		return businessDesignHandoff{}, nil
 	}
-	path := filepath.ToSlash(filepath.Join("jobs", job.ID, string(model.StepRequirementAnalysis), "attempt-1", "output.json"))
+	attempt, err := c.latestRequirementAnalysisAttempt(job.ID)
+	if err != nil {
+		return businessDesignHandoff{}, err
+	}
+	path := filepath.ToSlash(filepath.Join("jobs", job.ID, string(model.StepRequirementAnalysis), fmt.Sprintf("attempt-%d", attempt), "output.json"))
 	full := filepath.Join(c.artifactRoot(), filepath.FromSlash(path))
 	raw, err := os.ReadFile(full)
 	if err != nil {
@@ -98,6 +103,42 @@ func (c *ClaudeStepRunner) businessDesignHandoff(job model.Job, step model.JobSt
 		return businessDesignHandoff{}, err
 	}
 	return businessDesignHandoff{Content: json.RawMessage(raw), ArtifactPath: path}, nil
+}
+
+func (c *ClaudeStepRunner) latestRequirementAnalysisAttempt(jobID string) (int, error) {
+	if c.Store != nil {
+		step, err := c.Store.GetStepByKind(context.Background(), jobID, model.StepRequirementAnalysis)
+		if err != nil {
+			return 0, err
+		}
+		if step != nil && step.Attempt > 0 {
+			return step.Attempt, nil
+		}
+	}
+	latest := 1
+	dir := filepath.Join(c.artifactRoot(), "jobs", jobID, string(model.StepRequirementAnalysis))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return latest, nil
+		}
+		return 0, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "attempt-") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(entry.Name(), "attempt-"))
+		if err != nil || n <= latest {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, entry.Name(), "output.json")); err == nil {
+			latest = n
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, err
+		}
+	}
+	return latest, nil
 }
 
 type finalDataAccessInput struct {
