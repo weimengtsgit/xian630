@@ -16,6 +16,7 @@ import {
   CornerDownRight,
   ArrowLeft,
 } from 'lucide-react'
+import { collaborationAgentName } from '../hooks/collaborationAgentLabels'
 
 // StepExecutionDrawer — right-side overlay drawer with three tabs.
 //
@@ -274,6 +275,7 @@ export function StepExecutionDrawer({
   const snapshotSkillFiles = snapshotPreview && Array.isArray(snapshotPreview.skillOverrides)
     ? snapshotPreview.skillOverrides.filter(item => item && (item.path || item.content))
     : []
+  const snapshotName = snapshotPreview ? collaborationAgentName(snapshotPreview) : ''
 
   // Reset follow state when switching step or attempt (new view = fresh tail).
   useEffect(() => {
@@ -558,7 +560,7 @@ export function StepExecutionDrawer({
                 </p>
                 {snapshotPreview ? (
                   <div className="sed-snapshot-meta">
-                    {snapshotPreview.name ? <strong>{snapshotPreview.name}</strong> : null}
+                    {snapshotName ? <strong>{snapshotName}</strong> : null}
                     {snapshotPreview.description ? <p>{snapshotPreview.description}</p> : null}
                     {Array.isArray(snapshotPreview.selectedSkills) && snapshotPreview.selectedSkills.length > 0 ? (
                       <div className="sed-snapshot-skills">

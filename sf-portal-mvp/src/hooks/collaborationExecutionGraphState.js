@@ -1,3 +1,5 @@
+import { collaborationAgentName } from './collaborationAgentLabels.js'
+
 const USER_INPUT_KEY = '__user_input__'
 const ORCHESTRATOR_KEY = 'collaboration-orchestrator'
 
@@ -92,7 +94,7 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
     const upstreamKeys = incoming[agent.key] || []
     const waitingFor = upstreamKeys
       .filter(key => !isCompleted(cardStateForStep(stepByAgent[key], confirmed, [])))
-      .map(key => agentByKey[key] && (agentByKey[key].name || agentByKey[key].key) || key)
+      .map(key => agentByKey[key] ? collaborationAgentName(agentByKey[key]) : key)
     const state = cardStateForStep(step, confirmed, waitingFor)
     const description = agentDescription(agent)
     const manualConfirmation = isManualConfirmationStep(step)
@@ -100,7 +102,7 @@ export function buildCollaborationExecutionGraphView(preview, jobStepBlocks = []
       id: agent.key,
       kind: agent.key === ORCHESTRATOR_KEY ? 'orchestrator' : 'agent',
       agentKey: agent.key,
-      title: agent.name || agent.key,
+      title: collaborationAgentName(agent),
       subtitle: agent.role || agent.key,
       description,
       tooltip: description,

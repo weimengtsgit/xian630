@@ -122,6 +122,8 @@ sequenceDiagram
 - `factory-server/internal/executor/executor.go`：任务推进、步骤状态、记录发布。
 - `factory-server/internal/executor/claude_runner.go`：Claude 模式步骤提示词、契约校验和能力包注入。
 
+> 本节主流程的逐条 `file:line` 代码核验见 [`data-flow-spine-verified.md`](./data-flow-spine-verified.md)。
+
 ## 4. 多协作智能体参与计划
 
 当前主模型是协作智能体参与计划，不再是用户可见的固定六阶段流水线。固定六阶段仍作为旧任务或没有协作计划任务的兼容回退。
@@ -262,6 +264,8 @@ flowchart TB
 - `factory-server/internal/server/events.go`：SSE 发布、回放和持久化后发布。
 - `sf-portal-mvp/src/api/events.js`：全局事件、对话 work trace、任务思考事件订阅。
 - `sf-portal-mvp/src/hooks/dialogueTimeline.js`：对话流和任务执行块组装。
+
+> 本节事件分层的逐条 `file:line` 代码核验（含三流路由决策点与各表安全约束）见 [`data-flow-spine-verified.md`](./data-flow-spine-verified.md) §4。
 
 ## 7. 三个核心服务的功能与架构
 

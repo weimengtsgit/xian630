@@ -13,6 +13,7 @@ import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
 import { buildCollaborationCardView } from './../hooks/collaborationPlanState'
+import { collaborationAgentName } from '../hooks/collaborationAgentLabels'
 import './JobCenter.css'
 
 // Fixed ordered step kinds (design §4). Same six stages, fixed order.
@@ -188,6 +189,11 @@ export function JobCenter({
   const selectedSummary = selectedStepId ? summaryByStepId[selectedStepId] : null
   const selectedStageLabel = selectedStepId
     ? (() => {
+        for (const group of collaborationLanes) {
+          const collaborationEntry = group.cards.find(v => v.stepId === selectedStepId)
+          if (collaborationEntry && collaborationEntry.label) return collaborationEntry.label
+          if (collaborationEntry && collaborationEntry.agent) return collaborationAgentName(collaborationEntry.agent)
+        }
         const entry = cardView.find(v => v.stepId === selectedStepId)
         if (entry && entry.label) return entry.label
         if (entry && entry.kind) return STAGE_LABELS[entry.kind] || entry.kind

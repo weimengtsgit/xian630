@@ -31,6 +31,11 @@ func TestDefaultPlanIncludesRequiredAgentsAndEdges(t *testing.T) {
 	if !plan.HasEdge("tester", "product-acceptance") {
 		t.Fatalf("missing tester -> product-acceptance edge: %+v", plan.Edges)
 	}
+	for _, agent := range plan.Agents {
+		if agent.Key == "designer" && agent.Name != "界面设计" {
+			t.Fatalf("designer agent name = %q, want 界面设计", agent.Name)
+		}
+	}
 }
 
 func TestDefaultPlanAddsSecurityReviewConditionally(t *testing.T) {
