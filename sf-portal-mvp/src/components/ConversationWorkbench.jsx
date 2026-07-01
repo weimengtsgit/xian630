@@ -253,6 +253,7 @@ export function ConversationWorkbench({
   const [previewAttachment, setPreviewAttachment] = useState(null)
   const [previewDocument, setPreviewDocument] = useState(null)
   const [previewInterface, setPreviewInterface] = useState(null)
+  const [previewPrototype, setPreviewPrototype] = useState(null)
   // openProjectDocument fetches a task-owned docs/*.md file for read-only rich
   // preview. Early in the pipeline (before code generation registers an
   // application) the job already carries an AppSlug, so the backend can resolve
@@ -326,15 +327,13 @@ export function ConversationWorkbench({
   }
 
   async function handleOpenPrototype(proto) {
-    if (proto.previewUrl) window.open(proto.previewUrl, '_blank', 'noopener,noreferrer')
+    if (proto && proto.previewUrl) setPreviewPrototype(proto)
   }
 
-  async function handlePrototypeFeedback(proto) {
-    const feedback = window.prompt('请输入原型修改意见')
-    if (!feedback || !feedback.trim()) return
+  async function handlePrototypeFeedback(proto, feedback) {
+    if (!proto || !feedback || !feedback.trim()) return
     await factoryApi.sendPrototypeFeedback(proto.jobId, proto.stepId, feedback.trim())
   }
-
   async function handleConfirmPrototype(proto) {
     await factoryApi.confirmPrototype(proto.jobId, proto.stepId)
   }
@@ -374,6 +373,11 @@ export function ConversationWorkbench({
       return trimmed ? `${trimmed}；${value}` : value
     })
   }
+  const activePrototype = useMemo(() => {
+    const card = (aggregateGraph.cards || []).find(item => item.key === 'interface_parsing')
+    const proto = card ? prototypeFromCard(card) : null
+    return proto && proto.status !== 'confirmed' ? proto : null
+  }, [aggregateGraph.cards])
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -518,6 +522,10 @@ export function ConversationWorkbench({
             onConfirmDataAccess={onConfirmDataAccess}
             manualStepConfirmation={manualStepConfirmation}
             onToggleManualStepConfirmation={setManualStepConfirmation}
+            activePrototype={activePrototype}
+            onOpenPrototype={handleOpenPrototype}
+            onConfirmPrototype={handleConfirmPrototype}
+            onPrototypeFeedback={handlePrototypeFeedback}
             onPickClarification={(scope, value) => {
               if (!value) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
@@ -709,6 +717,8 @@ export function ConversationWorkbench({
         onClose={() => setPreviewInterface(null)}
       />
 
+      <PrototypePreviewModal prototype={previewPrototype} onClose={() => setPreviewPrototype(null)} />
+
       {abandonConfirmOpen ? (
         <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>
           <section
@@ -798,7 +808,7 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation, activePrototype, onOpenPrototype, onConfirmPrototype, onPrototypeFeedback }) {
   if (item.type === 'user_message') {
     // Submitted attachment refs (Task 11 / spec decision #22): after send, the
     // persisted user_message carries `attachments` [{ id, active, name,
@@ -899,7 +909,21 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={focusRequirement || item.requirement} />
+  if (item.type === 'requirement_summary') {
+    return (
+      <>
+        <RequirementSummary requirement={focusRequirement || item.requirement} />
+        {activePrototype ? (
+          <PrototypeConfirmationDock
+            prototype={activePrototype}
+            onOpen={onOpenPrototype}
+            onConfirm={onConfirmPrototype}
+            onFeedback={onPrototypeFeedback}
+          />
+        ) : null}
+      </>
+    )
+  }
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
@@ -1553,6 +1577,67 @@ function RequirementSummary({ requirement }) {
   )
 }
 
+function PrototypeConfirmationDock({ prototype, onOpen, onConfirm, onFeedback }) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+
+  const submitFeedback = async () => {
+    const trimmed = feedbackText.trim()
+    if (!trimmed || feedbackSubmitting) return
+    setFeedbackSubmitting(true)
+    try {
+      await onFeedback(prototype, trimmed)
+      setFeedbackText('')
+      setFeedbackOpen(false)
+    } catch {
+      // error handled by caller / toast
+    } finally {
+      setFeedbackSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="cw-prototype-dock">
+      <span>原型设计已生成，请确认原型并继续，或预览后提出修改意见。</span>
+      <div className="cw-prototype-dock-actions">
+        <button type="button" onClick={() => onOpen && onOpen(prototype)}>预览原型</button>
+        {prototype && prototype.canConfirm ? (
+          <button type="button" className="cw-prototype-confirm" onClick={() => onConfirm && onConfirm(prototype)}>确定原型并继续</button>
+        ) : null}
+        <button type="button" onClick={() => setFeedbackOpen(v => !v)}>提出修改意见</button>
+      </div>
+      {feedbackOpen ? (
+        <div className="cw-prototype-feedback">
+          <textarea
+            value={feedbackText}
+            onChange={e => setFeedbackText(e.target.value)}
+            placeholder="请描述您的修改意见…"
+            rows={3}
+            disabled={feedbackSubmitting}
+          />
+          <div className="cw-prototype-feedback-actions">
+            <button
+              type="button"
+              onClick={submitFeedback}
+              disabled={!feedbackText.trim() || feedbackSubmitting}
+            >
+              {feedbackSubmitting ? '提交中…' : '提交'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setFeedbackOpen(false); setFeedbackText('') }}
+              disabled={feedbackSubmitting}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function optionIsRecommended(q, opt) {
   if (opt.recommended) return true
   const values = Array.isArray(q.recommendation) ? q.recommendation : q.recommendation ? [q.recommendation] : []
@@ -1823,4 +1908,29 @@ function formatAcceptedAt(value) {
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
+
+
+function PrototypePreviewModal({ prototype, onClose }) {
+  if (!prototype) return null
+  return (
+    <div className="cw-doc-modal-layer" role="presentation" onMouseDown={onClose}>
+      <section
+        className="cw-doc-modal cw-prototype-preview-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="预览首页"
+        onMouseDown={event => event.stopPropagation()}
+      >
+        <header>
+          <strong>预览首页</strong>
+          <button type="button" onClick={onClose} aria-label="关闭预览">
+            <X size={16} />
+          </button>
+        </header>
+        <iframe className="cw-prototype-preview-frame" src={prototype.previewUrl} title="原型首页预览" />
+      </section>
+    </div>
+  )
+}
+
 

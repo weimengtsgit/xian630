@@ -609,7 +609,7 @@ export function StepExecutionDrawer({
               </section>
             ) : null}
 
-            {status === 'waiting_user' ? (
+            {status === 'waiting_user' && step && step.kind !== 'design_contract' ? (
               <ClarificationBlock step={step} />
             ) : null}
 

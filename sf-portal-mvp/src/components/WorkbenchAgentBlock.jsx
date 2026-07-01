@@ -8,21 +8,7 @@ const CONFIRM_LABEL = {
   data_capture: '确认数据抓取并继续',
 }
 
-export function WorkbenchAgentBlock({
-  card,
-  thinking,
-  analysisLog,
-  questions = [],
-  prototype,
-  onConfirm,
-  onOpenArtifact,
-  onSubmitCredential,
-  onOpenPrototype,
-  onPrototypeFeedback,
-  onPickQuestion,
-  onConfirmPrototype,
-  onContinuePrototype,
-}) {
+export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [], onConfirm, onOpenArtifact, onSubmitCredential }) {
   const [open, setOpen] = useState(!isFolded(card))
   // credentialDrafts holds the in-progress plaintext credential the user is
   // typing for each credential question, keyed by question id. The draft lives
@@ -47,21 +33,8 @@ export function WorkbenchAgentBlock({
           {thinking ? <section className="cw-agent-section"><h4>思考过程</h4><pre>{thinking}</pre></section> : null}
           {card.summary ? <section className="cw-agent-section"><h4>思考摘要</h4><p>{card.summary}</p></section> : null}
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}
-          {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} onPickQuestion={onPickQuestion} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
+          {questions.length ? <QuestionList questions={questions} onSubmitCredential={onSubmitCredential} credentialDrafts={credentialDrafts} setCredentialDrafts={setCredentialDrafts} /> : null}
           {previewableArtifacts.length ? <ArtifactList artifacts={previewableArtifacts} onOpenArtifact={onOpenArtifact} /> : null}
-          {prototype ? (
-            <section className="cw-agent-section cw-prototype-card">
-              <h4>原型预览</h4>
-              <p>{prototype.label} · {prototype.fidelity} · 默认页：{prototype.defaultPage}</p>
-              {prototype.pageLabels.length ? <p>页面清单：{prototype.pageLabels.join(' / ')}</p> : null}
-              <div className="cw-prototype-actions">
-                <button type="button" onClick={() => onOpenPrototype && onOpenPrototype(prototype)}>打开预览</button>
-                <button type="button" onClick={() => onPrototypeFeedback && onPrototypeFeedback(prototype)}>提出修改</button>
-                {prototype.canConfirm ? <button type="button" onClick={() => onConfirmPrototype && onConfirmPrototype(prototype)}>确认原型并继续</button> : null}
-                {prototype.canContinue ? <button type="button" onClick={() => onContinuePrototype && onContinuePrototype(prototype)}>直接进入方案设计</button> : null}
-              </div>
-            </section>
-          ) : null}
           {canConfirm ? <button type="button" className="cw-agent-confirm" onClick={() => onConfirm && onConfirm(card.key)}>{CONFIRM_LABEL[card.key]}</button> : null}
         </div>
       ) : (
@@ -82,7 +55,7 @@ function isFolded(card) {
   return card.state === 'confirmed' || card.state === 'delivered'
 }
 
-function QuestionList({ questions, onSubmitCredential, onPickQuestion, credentialDrafts, setCredentialDrafts }) {
+function QuestionList({ questions, onSubmitCredential, credentialDrafts, setCredentialDrafts }) {
   return (
     <section className="cw-agent-section">
       <h4>澄清项</h4>
@@ -100,27 +73,13 @@ function QuestionList({ questions, onSubmitCredential, onPickQuestion, credentia
             <button type="button" onClick={() => onSubmitCredential && onSubmitCredential(q, credentialDrafts[q.id] || '')}>提交凭证</button>
           </label>
         ) : (
-          <div key={q.id || q.question} className="cw-agent-question">
-            <p>{q.question}</p>
-            {Array.isArray(q.options) && q.options.length ? (
-              <div className="cw-agent-question-options">
-                {q.options.map(opt => {
-                  const label = opt.label || opt.value || ''
-                  return (
-                    <button key={opt.value || opt.label} type="button" onClick={() => onPickQuestion && onPickQuestion(label)}>
-                      <span>{label}</span>
-                      {opt.recommended ? <em>推荐</em> : null}
-                    </button>
-                  )
-                })}
-              </div>
-            ) : null}
-          </div>
+          <p key={q.id || q.question}>{q.question}</p>
         ),
       )}
     </section>
   )
 }
+
 function ArtifactList({ artifacts, onOpenArtifact }) {
   return (
     <section className="cw-agent-section cw-artifact-list">
@@ -134,5 +93,3 @@ function ArtifactList({ artifacts, onOpenArtifact }) {
     </section>
   )
 }
-
-

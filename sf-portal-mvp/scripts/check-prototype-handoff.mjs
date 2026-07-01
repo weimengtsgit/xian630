@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
 const client = fs.readFileSync('src/api/client.js', 'utf8')
@@ -31,6 +31,10 @@ assert.doesNotMatch(workbench, /thinking=\"\"/, 'workbench must not pass empty t
 assert.match(workbench, /questionsForCard/, 'workbench must derive card questions from job step pendingQuestions')
 assert.match(workbench, /thinkingForCard/, 'workbench must derive card thinking from task execution timeline')
 assert.match(block, /onPickQuestion/, 'agent block must let users pick structured step questions')
+assert.match(block, /cw-prototype-feedback/, 'prototype feedback must render inline after the user asks to revise')
+assert.match(block, /提交修改意见/, 'prototype feedback form missing submit action')
+assert.doesNotMatch(workbench, /window\.prompt\('请输入原型修改意见'\)/, 'prototype feedback must not use blocking prompt')
 
 console.log('prototype handoff checks passed')
+
 
