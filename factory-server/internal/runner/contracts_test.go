@@ -91,6 +91,30 @@ func TestRequirementAnalysisQuestionNormalizesAlternateFields(t *testing.T) {
 	}
 }
 
+// TestQuestionOptionToleratesBareString is the regression guard for the
+// job_c86df5ec… output_invalid_json failure: some models emit a select
+// question's options as a bare-string array ["mock_demo_data","skip_for_now"]
+// instead of [{value,label}] objects. QuestionOption must accept the plain
+// string (used as both value and label) so a select question never hard-fails
+// data_integration. Previously the type mismatch surfaced as a misleading
+// output_invalid_json (the JSON itself was valid — only the option shape differed).
+func TestQuestionOptionToleratesBareString(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+		"needsUserInput": true, "status": "needs_input",
+		"questions":[{"id":"q3","question":"选择降级策略","inputType":"select","options":["mock_demo_data","skip_for_now"]}]
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("bare-string options must not fail validation: %v", err)
+	}
+	if len(out.Questions) != 1 || len(out.Questions[0].Options) != 2 {
+		t.Fatalf("question/options not decoded: %+v", out)
+	}
+	if out.Questions[0].Options[0].Value != "mock_demo_data" || out.Questions[0].Options[0].Label != "mock_demo_data" {
+		t.Fatalf("bare-string option not used as value+label: %#v", out.Questions[0].Options[0])
+	}
+}
+
 // TestValidateRequirementAnalysisRequiresFrozenRequirement is the new happy
 // path: a fully-frozen, validated requirement output passes and produces no
 // waiting_user signal.
