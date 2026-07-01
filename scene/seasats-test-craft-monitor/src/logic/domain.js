@@ -193,6 +193,7 @@ export function computeTrackMetrics(points = [], coast = null) {
     if (ms !== null) days.add(new Date(ms).toISOString().slice(0, 10));
   }
   const first = sorted[0];
+  const last = sorted[sorted.length - 1];
   return {
     minCoastDistanceNm: minCoast === Infinity ? null : minCoast,
     nearestCoastPoint,
@@ -200,6 +201,7 @@ export function computeTrackMetrics(points = [], coast = null) {
     activeDays: days.size,
     reportCount: sorted.length,
     avgSpeedKn: speedCount > 0 ? Number((speedSum / speedCount).toFixed(2)) : null,
+    orientation: toNumber(last.orientation) ?? toNumber(last.heading) ?? null,
     trackOrigin: { lon: toNumber(first.lon), lat: toNumber(first.lat), time: first.time },
   };
 }
@@ -256,6 +258,7 @@ export function detectAisGaps(points = [], options = {}) {
       preSpeedKn: toNumber(prev.speedKn),
       postSpeedKn: toNumber(point.speedKn),
       courseDeg: toNumber(prev.courseDeg) ?? toNumber(prev.heading) ?? null,
+      orientation: toNumber(prev.orientation) ?? null,
     });
   }
   return gaps;
@@ -334,6 +337,7 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
         ? Number(((gap.preSpeedKn + gap.postSpeedKn) / 2).toFixed(2))
         : null,
       courseDeg: gap.courseDeg ?? null,
+      orientation: gap.orientation ?? null,
       trackOrigin: target?.trackOrigin || null,
     });
   }

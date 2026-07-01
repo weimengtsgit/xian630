@@ -15,6 +15,7 @@ export function AlertCard({ alert, onClose }) {
   const maxBar = Math.max(pre, post, avg, 1);
   const tier = speedTier(alert.gapMinutes);
   const origin = alert.trackOrigin;
+  const heading = alert.orientation ?? alert.courseDeg;
 
   return (
     <div className="alert-card" role="dialog" aria-label="AIS 开闭异常详情">
@@ -34,8 +35,8 @@ export function AlertCard({ alert, onClose }) {
         </div>
         <div className="card-cell">
           <span className="cell-label"><ArrowUp size={12} /> 航向</span>
-          <span className="compass" style={{ transform: `rotate(${alert.courseDeg ?? 0}deg)` }}><ArrowUp size={28} /></span>
-          <small className="cell-sub">{alert.courseDeg != null ? `${alert.courseDeg.toFixed(0)}°` : "--"}</small>
+          <span className="compass" style={{ transform: `rotate(${heading ?? 0}deg)` }}><ArrowUp size={28} /></span>
+          <small className="cell-sub">{heading != null ? `${heading.toFixed(0)}°` : "--"}</small>
         </div>
         <div className="card-cell">
           <span className="cell-label"><Clock3 size={12} /> 中断时长</span>

@@ -178,7 +178,7 @@ function Dashboard({ payload }) {
               </div>
               <div className="dash-cell"><small>最快</small><strong>{selectedTarget?.maxSpeedSegment ? selectedTarget.maxSpeedSegment.speedKn.toFixed(1) : "—"}</strong><small>kt</small></div>
               <div className="dash-cell"><small>活动天数</small><strong>{selectedTarget?.activeDays ?? "—"}</strong></div>
-              <div className="dash-cell compass-cell"><small>航向</small><span className="compass" style={{ transform: `rotate(${selectedTarget?.courseDeg ?? 0}deg)` }}><ArrowUp size={20} /></span></div>
+              <div className="dash-cell compass-cell"><small>航向</small><span className="compass" style={{ transform: `rotate(${selectedTarget?.orientation ?? selectedTarget?.courseDeg ?? 0}deg)` }}><ArrowUp size={20} /></span></div>
             </div>
             {summary?.advice?.length > 0 && (
               <div className={`advice-strip advice-${summary.advice[0].level || "low"}`}>{summary.advice[0].text}</div>
