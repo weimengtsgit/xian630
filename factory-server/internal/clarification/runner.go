@@ -378,7 +378,8 @@ func (r Runner) prompt(inputPath string) string {
 		"Output ONLY valid JSON matching the adaptive requirement clarification contract. " +
 		"Emit ALL open high-impact questions in one round (rounds 1–4), each with 2–3 options, so the user confirms them in a single batch. " +
 		"At round 5 (only if still incomplete) emit a consolidation list recommending a value for every remaining field. " +
-		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs."
+		"Blueprints are an internal Factory reference — do not surface them in any user-facing output; never call a blueprint a template, never invent slugs. " +
+		"When emitting the requirement (especially at the ready_to_confirm round), include a `description` field: a concise plain-Chinese paragraph detailing the confirmed requirement (覆盖目标、范围、关键能力), so the 确认需求摘要 carries a detailed explanation alongside the structured fields."
 }
 
 type normalizeOptions struct {
