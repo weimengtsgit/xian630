@@ -288,6 +288,43 @@ func (a *auditRunner) Run(ctx context.Context, dir, name string, args ...string)
 	return CommandResult{Stdout: a.stdout, ExitCode: a.exitCode}, nil
 }
 
+func TestClaudeRunAttemptWriteArgv(t *testing.T) {
+	clearClaudeModelEnv(t)
+	fr := &fakeRunner{stdout: `{"type":"result","subtype":"success","result":"{\"status\":\"passed\"}"}`}
+	r := ClaudeRunner{Runner: fr, Binary: "claude", WorkDir: t.TempDir()}
+	ws := newWS(t)
+	ws.StepKind = model.StepDesignContract
+
+	if err := r.RunWithMode(context.Background(), ws, "prototype prompt", []byte(`{"x":1}`), ClaudeRunAttemptWrite, nil); err != nil {
+		t.Fatalf("RunWithMode err = %v", err)
+	}
+
+	got := joinArgs(fr.argv)
+	want := "--print --permission-mode acceptEdits --allowedTools Read,Grep,Glob,Edit,Write --disallowedTools Bash --output-format stream-json --include-partial-messages --verbose"
+	if got != want {
+		t.Fatalf("attempt-write argv =\n got: %q\nwant: %q", got, want)
+	}
+	if gotDir := fr.dirs[len(fr.dirs)-1]; gotDir != ws.Dir() {
+		t.Fatalf("attempt-write run dir = %q, want %q", gotDir, ws.Dir())
+	}
+}
+
+func TestClaudeRunReadOnlyStillDisallowsWrite(t *testing.T) {
+	clearClaudeModelEnv(t)
+	fr := &fakeRunner{stdout: "ok"}
+	r := ClaudeRunner{Runner: fr, Binary: "claude"}
+	ws := newWS(t)
+
+	if err := r.Run(context.Background(), ws, "readonly", []byte(`{}`), false, nil); err != nil {
+		t.Fatalf("Run err = %v", err)
+	}
+
+	got := joinArgs(fr.argv)
+	if !strings.Contains(got, "--allowedTools Read,Grep,Glob") || !strings.Contains(got, "--disallowedTools Bash,Edit,Write") {
+		t.Fatalf("read-only permissions changed unexpectedly: %q", got)
+	}
+}
+
 func TestAuditRejectsProtectedPath(t *testing.T) {
 	r := ClaudeRunner{Binary: "claude"}
 	ctx := context.Background()

@@ -34,9 +34,10 @@ import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
 import { InterfacePreviewModal } from './InterfacePreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
+import { normalizePrototypeSummary } from '../hooks/prototypeState'
 import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
-import { formatDataPolicy, formatAppType } from '../utils/formatLabels'
+import { formatDataPolicy, formatAppType, translateAnalysisText } from '../utils/formatLabels'
 import { factoryApi } from '../api/client'
 import './ConversationWorkbench.css'
 
@@ -309,6 +310,39 @@ export function ConversationWorkbench({
     }
   }
 
+  function prototypeFromCard(c) {
+    const artifact = (c.artifacts || []).find(item => item.kind === 'interface_preview')
+    if (!artifact) return null
+    return normalizePrototypeSummary({
+      artifactId: artifact.id,
+      status: artifact.status,
+      label: artifact.label,
+      previewUrl: artifact.previewUrl,
+      jobId: artifact.jobId,
+      stepId: artifact.stepId,
+      manifest: artifact.metadata && artifact.metadata.manifest ? artifact.metadata.manifest : {},
+      contract: artifact.metadata && artifact.metadata.contract ? artifact.metadata.contract : {},
+    })
+  }
+
+  async function handleOpenPrototype(proto) {
+    if (proto.previewUrl) window.open(proto.previewUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  async function handlePrototypeFeedback(proto) {
+    const feedback = window.prompt('请输入原型修改意见')
+    if (!feedback || !feedback.trim()) return
+    await factoryApi.sendPrototypeFeedback(proto.jobId, proto.stepId, feedback.trim())
+  }
+
+  async function handleConfirmPrototype(proto) {
+    await factoryApi.confirmPrototype(proto.jobId, proto.stepId)
+  }
+
+  async function handleContinuePrototype(proto) {
+    await factoryApi.continuePrototypeWithoutConfirmation(proto.jobId, proto.stepId)
+  }
+
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -477,9 +511,14 @@ export function ConversationWorkbench({
               thinking=""
               analysisLog=""
               questions={card.key === aggregateGraph.activeCardKey ? activeQuestions : []}
+              prototype={card.key === 'interface_parsing' ? prototypeFromCard(card) : null}
               onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
               onOpenArtifact={openArtifact}
               onSubmitCredential={submitCredential}
+              onOpenPrototype={handleOpenPrototype}
+              onPrototypeFeedback={handlePrototypeFeedback}
+              onConfirmPrototype={handleConfirmPrototype}
+              onContinuePrototype={handleContinuePrototype}
             />
           ))}
 
@@ -796,7 +835,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
             {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
             {item.kind === 'step' ? '生成过程' : '分析过程'}
           </span>
-          <pre className="cw-live-text">{item.content}</pre>
+          <pre className="cw-live-text">{translateAnalysisText(item.content)}</pre>
         </div>
       </CopyableBlock>
     )
@@ -874,6 +913,11 @@ function ThinkingSummary({ item }) {
   const summary = String(item.summary || '').trim()
   const raw = String(item.content || '').trim()
   const copyValue = summary || raw
+  // Translate known internal English tokens (status keys, requirement field
+  // names, skill slugs, …) that leak into the streamed thinking / analysis text
+  // so the 思考过程 surface reads in Chinese. Conservative whole-token replace.
+  const displaySummary = translateAnalysisText(summary)
+  const displayRaw = translateAnalysisText(raw)
   const live = item.pending || item.type === 'live_thinking'
   const liveThinkingScrollRef = useRef(null)
   const liveThinkingShouldFollowRef = useRef(true)
@@ -900,25 +944,25 @@ function ThinkingSummary({ item }) {
           {live ? <Loader2 size={12} className="cw-spin" /> : null}
           {live ? '正在思考…' : '思考摘要'}
         </span>
-        {live && raw ? (
+        {live && displayRaw ? (
           <div
             ref={liveThinkingScrollRef}
             className="cw-raw-thinking-stream"
             onScroll={updateLiveThinkingFollowState}
           >
-            <pre className="cw-live-text">{raw}</pre>
+            <pre className="cw-live-text">{displayRaw}</pre>
           </div>
         ) : (
           <>
-            {summary ? (
-              <pre className="cw-live-text cw-thinking-summary-text">{summary}</pre>
+            {displaySummary ? (
+              <pre className="cw-live-text cw-thinking-summary-text">{displaySummary}</pre>
             ) : (
               <p className="cw-thinking-summary-empty">中文摘要将在分析过程生成后显示。</p>
             )}
-            {raw ? (
+            {displayRaw ? (
               <details className="cw-raw-thinking">
                 <summary>原始思考过程</summary>
-                <pre className="cw-live-text">{raw}</pre>
+                <pre className="cw-live-text">{displayRaw}</pre>
               </details>
             ) : null}
           </>
@@ -935,7 +979,7 @@ function ThinkingSummary({ item }) {
 // Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
 function FoldedAnalysis({ content, label, expanded: initialExpanded, rawThinking }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
-  const text = String(content || '')
+  const text = translateAnalysisText(String(content || ''))
   const raw = String(rawThinking || '')
   return (
     <CopyableBlock text={text} className="cw-agent-wrap" copyLabel="复制分析">

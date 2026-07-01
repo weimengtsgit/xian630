@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -522,13 +523,16 @@ func TestValidateRequirementAnalysisToleratesThinkingAndWorkLog(t *testing.T) {
 	}
 }
 
-func TestValidateRequirementAnalysisRejectsSummaryChecksumMismatch(t *testing.T) {
+func TestValidateRequirementAnalysisRejectsStructuredFieldMismatch(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "output.json")
+	// The output's appType diverges from the confirmed requirement — a real
+	// structured-contract mismatch the consistency check must catch. (`summary`
+	// is no longer part of the check — see the accept-test below.)
 	raw := `{
 	  "confirmedRequirementId":"clar_1",
 	  "summary":"需求摘要 B",
-	  "appType":"operations_tool",
+	  "appType":"operations_management",
 	  "appName":"请假审批",
 	  "targetUsers":["员工"],
 	  "coreScenario":"提交和审批请假",
@@ -544,19 +548,23 @@ func TestValidateRequirementAnalysisRejectsSummaryChecksumMismatch(t *testing.T)
 	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
 		t.Fatalf("write output: %v", err)
 	}
-	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, `{"summary":"需求摘要 A","appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假"}`)
+	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, `{"appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假"}`)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed (appType mismatch)", err)
 	}
 }
 
-func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T) {
+func TestValidateRequirementAnalysisAcceptsMatchingStructuredFields(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "output.json")
-	confirmed := `{"summary":"需求摘要 A","appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	// Production shape: the confirmed requirement (from clarification) carries
+	// NO free-text `summary` — only the 7 structured fields. The analysis agent
+	// produces its own summary, which MUST NOT affect the consistency check. So
+	// even with a totally different summary, matching structured fields → accept.
+	confirmed := `{"appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
 	raw := `{
 	  "confirmedRequirementId":"clar_1",
-	  "summary":"需求摘要 A",
+	  "summary":"agent 生成的摘要，与确认需求无关，不应影响一致性校验",
 	  "appType":"operations_tool",
 	  "appName":"请假审批",
 	  "targetUsers":["员工"],
@@ -574,7 +582,7 @@ func TestValidateRequirementAnalysisAcceptsMatchingSummaryChecksum(t *testing.T)
 		t.Fatalf("write output: %v", err)
 	}
 	if _, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed); err != nil {
-		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v", err)
+		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v (summary must be ignored)", err)
 	}
 }
 
@@ -689,4 +697,82 @@ func writeTempFileForContractTest(t *testing.T, path, raw string) string {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path
+}
+
+func writeTempJSON(t *testing.T, v any) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "output.json")
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestValidateDesignContractRequiresPrototypeHomePage(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":            "passed",
+		"summary":           "首页静态原型已生成",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{"name"},
+		"prototype": map[string]any{
+			"style":          "ued_review",
+			"targetAudience": "ued",
+			"targetPlatform": "responsive",
+			"fidelity":       "static",
+			"defaultPage":    "home",
+			"pages": []any{
+				map[string]any{"id": "home", "title": "首页", "generated": true, "visibleByDefault": true},
+			},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	out, detail, err := ValidateDesignContract(path)
+	if err != nil {
+		t.Fatalf("ValidateDesignContract err = %v", err)
+	}
+	if out.NeedsUserInput {
+		t.Fatalf("NeedsUserInput = true, want false")
+	}
+	if detail.Prototype.DefaultPage != "home" || len(detail.Prototype.Pages) != 1 {
+		t.Fatalf("prototype not decoded: %+v", detail.Prototype)
+	}
+}
+
+func TestValidateDesignContractRejectsPrototypeWithoutHome(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":            "passed",
+		"summary":           "bad prototype",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{},
+		"prototype": map[string]any{
+			"style":              "business_demo",
+			"targetAudience":     "business_reviewer",
+			"targetPlatform":     "web",
+			"fidelity":           "static",
+			"defaultPage":        "home",
+			"pages":              []any{},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	_, _, err := ValidateDesignContract(path)
+	if err == nil {
+		t.Fatalf("expected schema error for missing homepage")
+	}
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	}
 }

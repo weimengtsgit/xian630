@@ -393,9 +393,9 @@ func ValidateRequirementAnalysisWithConfirmedSummary(path, confirmedRequirementJ
 	if out.NeedsUserInput {
 		return out, nil
 	}
-		wantFields := requirementFieldsFromConfirmed(confirmedRequirementJSON)
-		want := requirementSummaryChecksum(wantFields)
-		got := requirementSummaryChecksum(requirementFieldsFromOutputForConfirmed(raw, wantFields))
+	wantFields := requirementFieldsFromConfirmed(confirmedRequirementJSON)
+	want := requirementSummaryChecksum(wantFields)
+	got := requirementSummaryChecksum(requirementFieldsFromOutputForConfirmed(raw, wantFields))
 	if want != got {
 		return StepOutput{}, fmt.Errorf("confirmed requirement consistency mismatch: %w", ErrSchemaValidationFailed)
 	}
@@ -476,14 +476,16 @@ func requirementFieldsFromOutputForConfirmed(raw requirementAnalysisOutput, conf
 	return out
 }
 
-// pickRequirementFields keeps only the summary-critical keys that define
-// WHETHER two requirements are the same requirement: the one-line summary plus
-// the stable identity/scenario fields. Audit color (generationProfile,
-// constraints, risks, workLog, validation) is excluded on purpose — it is not
-// part of what the user confirmed and must not gate the consistency check.
+// pickRequirementFields keeps only the BUSINESS-LOGIC keys the consistency check
+// compares: the identity/scenario fields the 业务逻辑 clarification settles.
+// `summary` is EXCLUDED (only the analysis agent produces one). `primaryView` and
+// `dataPolicy` are EXCLUDED too — they are deferred to later stages (界面解析 /
+// 数据抓取) and may be empty in the confirmed requirement while the analysis
+// freeze step fills them; comparing them would mismatch. mainEntities (the
+// business domain objects) IS compared.
 func pickRequirementFields(doc map[string]any) map[string]any {
 	out := map[string]any{}
-	for _, key := range []string{"summary", "appType", "appName", "coreScenario", "primaryView", "mainEntities", "dataPolicy", "acceptanceFocus"} {
+	for _, key := range []string{"appType", "appName", "coreScenario", "mainEntities", "acceptanceFocus"} {
 		if v, ok := doc[key]; ok {
 			out[key] = v
 		}
@@ -584,14 +586,15 @@ func ValidateSolutionDesign(path string) (StepOutput, error) {
 // assumedDataFields (field names the preview depends on but data capture has
 // not yet confirmed), and the shared workLog/warnings.
 type DesignContractOutput struct {
-	Status            string         `json:"status"`
-	Summary           string         `json:"summary"`
-	NeedsUserInput    bool           `json:"needsUserInput"`
-	Questions         []Question     `json:"questions"`
-	DesignDocument    any            `json:"designDocument"`
-	AssumedDataFields []string       `json:"assumedDataFields"`
-	WorkLog           []workLogEntry `json:"workLog"`
-	Warnings          []string       `json:"warnings"`
+	Status            string              `json:"status"`
+	Summary           string              `json:"summary"`
+	NeedsUserInput    bool                `json:"needsUserInput"`
+	Questions         []Question          `json:"questions"`
+	DesignDocument    any                 `json:"designDocument"`
+	AssumedDataFields []string            `json:"assumedDataFields"`
+	Prototype         model.PrototypeSpec `json:"prototype"`
+	WorkLog           []workLogEntry      `json:"workLog"`
+	Warnings          []string            `json:"warnings"`
 }
 
 // ValidateDesignContract decodes a design_contract attempt's output.json and
@@ -614,7 +617,29 @@ func ValidateDesignContract(path string) (StepOutput, DesignContractOutput, erro
 	if strings.TrimSpace(raw.Summary) == "" || raw.DesignDocument == nil {
 		return StepOutput{}, raw, fmt.Errorf("design summary and designDocument required: %w", ErrSchemaValidationFailed)
 	}
+	if err := validatePrototypeSpec(raw.Prototype); err != nil {
+		return StepOutput{}, raw, err
+	}
 	return StepOutput{}, raw, nil
+}
+
+func validatePrototypeSpec(p model.PrototypeSpec) error {
+	if strings.TrimSpace(p.Style) == "" ||
+		strings.TrimSpace(p.TargetAudience) == "" ||
+		strings.TrimSpace(p.TargetPlatform) == "" ||
+		strings.TrimSpace(p.Fidelity) == "" ||
+		strings.TrimSpace(p.DefaultPage) == "" ||
+		strings.TrimSpace(p.ConfirmationPolicy) == "" {
+		return fmt.Errorf("prototype style, targetAudience, targetPlatform, fidelity, defaultPage and confirmationPolicy required: %w", ErrSchemaValidationFailed)
+	}
+	if len(p.Pages) == 0 {
+		return fmt.Errorf("prototype homepage required: %w", ErrSchemaValidationFailed)
+	}
+	home := p.Pages[0]
+	if home.ID != p.DefaultPage || home.ID != "home" || !home.Generated || !home.VisibleByDefault {
+		return fmt.Errorf("prototype first page must be generated visible home page: %w", ErrSchemaValidationFailed)
+	}
+	return nil
 }
 
 // DataIntegrationOutput mirrors the data_integration step's output.json (Task 9).

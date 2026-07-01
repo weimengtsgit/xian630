@@ -238,6 +238,7 @@ function artifactsForCard(view, cardKey) {
       previewUrl: String(item.previewUrl || ''),
       status: String(item.status || 'active'),
       jobId: String(item.jobId || item.job_id || ''),
+      stepId: String(item.stepId || item.step_id || ''),
       metadata: parseArtifactMetadata(item.metadata),
     }))
 }

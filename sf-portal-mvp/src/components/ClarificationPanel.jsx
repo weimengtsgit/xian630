@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusText } from '../hooks/clarificationLogic'
-import { formatAppType } from '../utils/formatLabels'
+import { formatAppType, formatDataPolicy, formatRequirementTerm, translateAnalysisText } from '../utils/formatLabels'
 import './ClarificationPanel.css'
 
 // Renders the clarification flow: streaming analysis work-logs, structured
@@ -143,7 +143,7 @@ export function ClarificationPanel({
                 key={m.id || `m_${i}`}
                 className={`clar-message clar-kind-${m.kind || 'analysis_work_log'}`}
               >
-                {m.content}
+                {translateAnalysisText(m.content)}
               </div>
             ))}
           </div>
@@ -267,17 +267,20 @@ export function ClarificationPanel({
               <SummaryRow label="应用名称" value={requirement.appName} />
               <SummaryRow label="核心场景" value={requirement.coreScenario} />
               <SummaryRow label="主视图" value={requirement.primaryView} />
-              <SummaryRow label="数据策略" value={requirement.dataPolicy} />
+              <SummaryRow label="数据策略" value={formatDataPolicy(requirement.dataPolicy)} />
             </div>
             {Array.isArray(requirement.blueprintRefs) &&
             requirement.blueprintRefs.length > 0 ? (
               <div className="clar-summary-refs">
                 <span className="clar-summary-refs-label">蓝本引用：</span>
-                {requirement.blueprintRefs.map((ref, i) => (
-                  <span key={ref.id || ref.name || `ref_${i}`} className="clar-ref-chip">
-                    {ref.name || ref.id || ref}
-                  </span>
-                ))}
+                {requirement.blueprintRefs.map((ref, i) => {
+                  const raw = ref && (ref.name || ref.id) ? (ref.name || ref.id) : ref
+                  return (
+                    <span key={(ref && (ref.id || ref.name)) || `ref_${i}`} className="clar-ref-chip">
+                      {formatRequirementTerm(raw)}
+                    </span>
+                  )
+                })}
               </div>
             ) : null}
           </div>
