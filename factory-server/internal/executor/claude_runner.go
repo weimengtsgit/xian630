@@ -1086,6 +1086,7 @@ func collaborationProducerName(kind model.StepKind) string {
 		return "领域分析"
 	case model.StepDesignContract:
 		return "界面设计"
+		return "原型设计"
 	case model.StepDataIntegration:
 		return "数据接入"
 	default:
