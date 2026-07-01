@@ -181,9 +181,14 @@ function App() {
   // generated application id. A seeded job alone can exist before code_generation
   // has registered the project, so it is not enough to enable the drawer.
   const view = dialogue.view
+  // applicationProjectId resolves to the registered app ID (post-codegen), the
+  // job's bound app ID, or the bare AppSlug (pre-codegen). The slug is enough
+  // for the workspace backend to resolve generated-apps/<slug>/ and serve the
+  // projected docs (需求文档 etc.) before a full Application record exists.
   const applicationProjectId =
     (view && view.resolvedApplication && view.resolvedApplication.id) ||
     (view && view.seededJob && (view.seededJob.application_id || view.seededJob.created_app_id)) ||
+    (view && view.seededJob && view.seededJob.app_slug) ||
     ''
   const hasBoundApplication = !!applicationProjectId
 
