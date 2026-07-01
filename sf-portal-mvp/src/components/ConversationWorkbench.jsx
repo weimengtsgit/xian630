@@ -43,6 +43,7 @@ import './ConversationWorkbench.css'
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
 // its business-facing content is being reworked. Flip to true to bring it back.
 const SHOW_WORK_TRACE = false
+const TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
 
 export function ConversationWorkbench({
   session,
@@ -926,8 +927,11 @@ const TASK_STEP_STATUS_LABEL = {
 
 function TaskExecutionBlock({ item }) {
   const [userExpandedOverride, setUserExpandedOverride] = useState(null)
+  const taskThinkingScrollRef = useRef(null)
+  const taskThinkingShouldFollowRef = useRef(true)
   useEffect(() => {
     setUserExpandedOverride(null)
+    taskThinkingShouldFollowRef.current = true
   }, [item.id])
   const expanded = userExpandedOverride ?? !!item.expanded
   const status = item.status || 'pending'
@@ -937,6 +941,18 @@ function TaskExecutionBlock({ item }) {
   const error = String(item.error || '')
   const taskThinking = String(item.taskThinking || '')
   const copyText = [safeExecution, summary, taskThinking].filter(Boolean).join('\n\n')
+  const updateTaskThinkingFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    taskThinkingShouldFollowRef.current = distanceToBottom <= TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = taskThinkingScrollRef.current
+    if (!el || !expanded || !taskThinkingShouldFollowRef.current) return
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [taskThinking, expanded])
   return (
     <CopyableBlock text={copyText} className="cw-task-wrap" copyLabel="复制任务块">
       <div className={`cw-item cw-task-block cw-task-status-${status}`}>
@@ -955,7 +971,11 @@ function TaskExecutionBlock({ item }) {
             {taskThinking ? (
               <section className="cw-task-section cw-task-thinking-section">
                 <h5>任务思考过程{item.taskThinkingRedacted ? <em className="cw-redacted-note">已脱敏/截断</em> : null}</h5>
-                <pre className="cw-live-text">{taskThinking}</pre>
+                <pre
+                  ref={taskThinkingScrollRef}
+                  className="cw-live-text cw-task-thinking-scroll"
+                  onScroll={updateTaskThinkingFollowState}
+                >{taskThinking}</pre>
               </section>
             ) : null}
             {safeExecution ? (
