@@ -90,14 +90,9 @@ function Dashboard({ payload }) {
   const [sourceFilter, setSourceFilter] = useState(sourceOptions[0]);
   const [areaFilter, setAreaFilter] = useState("全部区域");
   const [query, setQuery] = useState("");
-  const [replayFrac, setReplayFrac] = useState(1);
   const [mapFocus, setMapFocus] = useState(null);
   const [cardAlert, setCardAlert] = useState(null);
   const [showAlertDrawer, setShowAlertDrawer] = useState(false);
-  const minTime = Date.parse(analysis.metadata.dataWindow.start);
-  const maxTime = Date.parse(analysis.metadata.dataWindow.end);
-  const replayEnd = Number.isFinite(minTime) && Number.isFinite(maxTime) ? minTime + (maxTime - minTime) * replayFrac : Infinity;
-  const replayEndIso = Number.isFinite(replayEnd) ? new Date(replayEnd).toISOString() : analysis.metadata.dataWindow.end;
   const visibleTargets = useMemo(() => {
     const q = query.trim().toLowerCase();
     return analysis.targets.filter((target) => {
@@ -114,7 +109,7 @@ function Dashboard({ payload }) {
   const visibleAlerts = useMemo(() => analysis.alerts.filter((alert) => visibleMmsi.has(alert.targetMmsi)), [analysis.alerts, visibleMmsi]);
   const selectedTarget = analysis.targets.find((target) => target.mmsi === selectedMmsi) || visibleTargets[0] || analysis.targets[0];
   const selectedAlert = analysis.alerts.find((alert) => alert.id === selectedAlertId) || selectedTarget?.alerts?.[0] || visibleAlerts[0] || null;
-  const mapData = useMemo(() => buildMapData({ targets: visibleTargets, areas: analysis.monitoredAreas, segments: visibleSegments, aisGaps: visibleGaps, alerts: visibleAlerts, replayEnd, coast: coastData, selectedTarget }), [analysis.monitoredAreas, replayEnd, visibleAlerts, visibleGaps, visibleSegments, visibleTargets, selectedTarget]);
+  const mapData = useMemo(() => buildMapData({ targets: visibleTargets, areas: analysis.monitoredAreas, segments: visibleSegments, aisGaps: visibleGaps, alerts: visibleAlerts, coast: coastData, selectedTarget }), [analysis.monitoredAreas, visibleAlerts, visibleGaps, visibleSegments, visibleTargets, selectedTarget]);
   const summary = analysis.summary;
   const handleTargetSelect = (mmsi) => {
     const target = analysis.targets.find((item) => item.mmsi === mmsi);
@@ -149,7 +144,7 @@ function Dashboard({ payload }) {
         <div className="top-metrics">
           <span><Database size={14} />目标 {analysis.metadata.targetCount}</span>
           <span><AlertTriangle size={14} />告警 {analysis.alerts.length}</span>
-          <span><Clock3 size={14} />{fmtDateTime(replayEndIso)}</span>
+          <span><Clock3 size={14} />数据至 {fmtDateTime(analysis.metadata.dataWindow.end)}</span>
         </div>
       </header>
 
@@ -206,11 +201,6 @@ function Dashboard({ payload }) {
 
       <AnalysisPanel analysis={analysis} selectedTarget={selectedTarget} coast={coastData} />
       <AlertCard alert={cardAlert} onClose={() => setCardAlert(null)} />
-      <footer className="timeline">
-        <div><strong>回放</strong><span>{fmtDateTime(analysis.metadata.dataWindow.start)} → {fmtDateTime(analysis.metadata.dataWindow.end)}</span></div>
-        <input type="range" min="0" max="100" value={Math.round(replayFrac * 100)} onChange={(e) => setReplayFrac(Number(e.target.value) / 100)} />
-        <time>{fmtDateTime(replayEndIso)}</time>
-      </footer>
     </main>
   );
 }

@@ -289,3 +289,12 @@ html, body { overflow: auto; }
 .target-panel { height: auto; max-height: 620px; }
 .analysis-panel { align-items: start; }
 .loading-shell { min-height: 100vh; }
+
+/* === 图放大：2列网格 === */
+.chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.chart-card { padding: 10px; }
+.chart-card header { font-size: 12px; margin-bottom: 6px; }
+.chart-svg { min-height: 120px; }
+@media (max-width: 820px) {
+  .chart-grid { grid-template-columns: 1fr; }
+}

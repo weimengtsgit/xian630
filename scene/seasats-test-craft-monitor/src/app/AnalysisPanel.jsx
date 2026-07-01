@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { AlertTriangle, Clock3, Gauge, MapPin, Navigation, Radio, ShieldAlert, Ship } from "lucide-react";
 import { speedSeries, coastDistanceSeries, statusDistribution, alertDistribution, hourDistribution, headingDistribution, targetDistanceDistribution, activityDaysTop } from "../logic/analytics.js";
 
-const W = 300, H = 84, PAD = 8;
+const W = 320, H = 130, PAD = 12;
 
 function EmptyChart({ label }) {
   return <div className="chart-empty">{label}</div>;
