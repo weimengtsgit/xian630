@@ -62,12 +62,12 @@ describe('frontend workbench state', () => {
   it('formats share success messages with the confirmed shared output path', () => {
     const message = createShareSuccessMessage({
       url: 'http://localhost/preview/abc',
-      confirmedOutputPath: '共享/interface-agent/prototype.html',
+      confirmedOutputPath: '共享/prototype.html',
       copied: true,
     });
 
     expect(message).toContain('预览链接已复制：http://localhost/preview/abc');
-    expect(message).toContain('共享文件已写入：共享/interface-agent/prototype.html');
+    expect(message).toContain('共享文件已写入：共享/prototype.html');
   });
 
   it('renders HTML into the sandboxed iframe srcdoc', () => {

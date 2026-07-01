@@ -60,7 +60,7 @@ pm2 save
 | `BLADE_OS_BASE_URL` | 空 | Blade OS 文件服务地址，例如 `http://115.190.152.1` |
 | `BLADE_OS_PAT` | 空 | Blade OS Bearer PAT，仅服务端使用 |
 | `BLADE_OS_TIMEOUT_MS` | `30000` | 文件服务请求超时时间 |
-| `PENDING_INPUT_PATH` | 空 | 待定输入共享文件路径，例如 `共享/interface-agent/pending.md` |
+| `PENDING_INPUT_PATH` | 空 | 待定输入共享文件路径，例如 `共享/pending.md` |
 | `CONFIRMED_OUTPUT_PATH` | 空 | 用户确认后写入的 HTML 共享文件路径 |
 | `PENDING_POLL_INTERVAL_MS` | `3000` | 前端轮询待定文件的间隔，单位毫秒 |
 

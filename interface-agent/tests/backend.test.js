@@ -59,15 +59,15 @@ describe('config loading', () => {
     const config = loadConfig({
       BLADE_OS_BASE_URL: 'http://115.190.152.1/',
       BLADE_OS_PAT: 'sk-test',
-      PENDING_INPUT_PATH: '共享/interface-agent/pending.md',
-      CONFIRMED_OUTPUT_PATH: '共享/interface-agent/prototype.html',
+      PENDING_INPUT_PATH: '共享/pending.md',
+      CONFIRMED_OUTPUT_PATH: '共享/prototype.html',
       PENDING_POLL_INTERVAL_MS: '5000',
     });
 
     expect(config.bladeOsBaseUrl).toBe('http://115.190.152.1');
     expect(config.bladeOsPat).toBe('sk-test');
-    expect(config.pendingInputPath).toBe('共享/interface-agent/pending.md');
-    expect(config.confirmedOutputPath).toBe('共享/interface-agent/prototype.html');
+    expect(config.pendingInputPath).toBe('共享/pending.md');
+    expect(config.confirmedOutputPath).toBe('共享/prototype.html');
     expect(config.pendingPollIntervalMs).toBe(5000);
   });
 });
@@ -245,7 +245,7 @@ describe('preview-only sharing', () => {
         deepseekBaseUrl: 'https://example.test',
         deepseekModel: 'deepseek-chat',
         publicBaseUrl: 'http://192.168.1.109:3100',
-        confirmedOutputPath: '共享/interface-agent/prototype.html',
+        confirmedOutputPath: '共享/prototype.html',
         port: 3000,
       },
       deepseekClient: { generateHtml: vi.fn() },
@@ -257,9 +257,9 @@ describe('preview-only sharing', () => {
       .send({ html: '<main><h1>Confirmed</h1></main>' });
 
     expect(response.status).toBe(200);
-    expect(response.body.confirmedOutputPath).toBe('共享/interface-agent/prototype.html');
+    expect(response.body.confirmedOutputPath).toBe('共享/prototype.html');
     expect(fileClient.uploadText).toHaveBeenCalledWith(
-      '共享/interface-agent/prototype.html',
+      '共享/prototype.html',
       '<main><h1>Confirmed</h1></main>',
     );
   });
@@ -276,7 +276,7 @@ describe('preview-only sharing', () => {
           deepseekBaseUrl: 'https://example.test',
           deepseekModel: 'deepseek-chat',
           publicBaseUrl: 'http://192.168.1.109:3100',
-          confirmedOutputPath: '共享/interface-agent/prototype.html',
+          confirmedOutputPath: '共享/prototype.html',
           port: 3000,
         },
         deepseekClient: { generateHtml: vi.fn() },
@@ -305,7 +305,7 @@ describe('pending input polling', () => {
         deepseekApiKey: 'test-key',
         deepseekBaseUrl: 'https://example.test',
         deepseekModel: 'deepseek-chat',
-        pendingInputPath: '共享/interface-agent/pending.md',
+        pendingInputPath: '共享/pending.md',
         port: 3000,
       },
       deepseekClient: { generateHtml: vi.fn() },
@@ -318,10 +318,10 @@ describe('pending input polling', () => {
     expect(response.body).toEqual({
       available: true,
       content: '# 生成态势页面\n请使用深色风格',
-      path: '共享/interface-agent/pending.md',
+      path: '共享/pending.md',
       pollIntervalMs: 3000,
     });
-    expect(fileClient.readText).toHaveBeenCalledWith('共享/interface-agent/pending.md');
+    expect(fileClient.readText).toHaveBeenCalledWith('共享/pending.md');
   });
 
   it('returns unavailable when the pending input file is not found', async () => {
@@ -335,7 +335,7 @@ describe('pending input polling', () => {
         deepseekApiKey: 'test-key',
         deepseekBaseUrl: 'https://example.test',
         deepseekModel: 'deepseek-chat',
-        pendingInputPath: '共享/interface-agent/pending.md',
+        pendingInputPath: '共享/pending.md',
         port: 3000,
       },
       deepseekClient: { generateHtml: vi.fn() },
