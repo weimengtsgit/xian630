@@ -17,11 +17,11 @@ import (
 // knows which app it targets). The classifier must emit exactly one of the five
 // model.TurnIntent values.
 type TurnInput struct {
-	DialogueID           string                `json:"dialogueId"`
-	UserMessage          string                `json:"userMessage"`
-	Messages             []DialogueMessageView `json:"messages"`
-	LinkedApplicationID  string                `json:"linkedApplicationId,omitempty"`
-	LinkedApplicationSlug string               `json:"linkedApplicationSlug,omitempty"`
+	DialogueID            string                `json:"dialogueId"`
+	UserMessage           string                `json:"userMessage"`
+	Messages              []DialogueMessageView `json:"messages"`
+	LinkedApplicationID   string                `json:"linkedApplicationId,omitempty"`
+	LinkedApplicationSlug string                `json:"linkedApplicationSlug,omitempty"`
 }
 
 // DocumentDraftChangeRef links a change summary to a saved document draft.
@@ -83,6 +83,16 @@ var ErrTurnInvalidIntent = fmt.Errorf("turn intent must be one of application_mo
 // change description; new_application carries a fork seed; inquiry/control/
 // general carry no job and may carry a conversational reply.
 func (r Runner) ClassifyTurn(ctx context.Context, input TurnInput, emit func(StreamEvent)) (TurnOutput, error) {
+	for attempt := 1; attempt <= maxDialogueInvalidJSONAttempts; attempt++ {
+		out, err := r.classifyTurnOnce(ctx, input, emit)
+		if !shouldRetryDialogueInvalidJSON(err, attempt) {
+			return out, err
+		}
+	}
+	return TurnOutput{}, nil
+}
+
+func (r Runner) classifyTurnOnce(ctx context.Context, input TurnInput, emit func(StreamEvent)) (TurnOutput, error) {
 	dir := filepath.Join(r.artifactRoot(), "dialogues", input.DialogueID, "turn")
 	out, err := r.runModel(ctx, dir, input.DialogueID, "turn", input, r.turnPrompt, emit, "dialogue.turn")
 	if err != nil {

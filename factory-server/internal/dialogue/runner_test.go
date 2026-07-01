@@ -9,23 +9,51 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 )
 
 // --- fakes (mirror clarification/runner_test.go) ---
 
 type fakeCommandRunner struct {
-	dir       string
-	name      string
-	args      []string
-	rawStdout string
-	rawStderr string
-	exitCode  int
+	dir        string
+	name       string
+	args       []string
+	rawStdout  string
+	rawStdouts []string
+	rawStderr  string
+	exitCode   int
+	calls      int
+	outputPath string
+	output     string
+	outputs    []string
 }
 
 func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
 	f.dir, f.name, f.args = dir, name, args
-	return runner.CommandResult{Stdout: f.rawStdout, Stderr: f.rawStderr, ExitCode: f.exitCode}, nil
+	f.calls++
+	if f.outputPath != "" {
+		output := f.output
+		if len(f.outputs) > 0 {
+			idx := f.calls - 1
+			if idx >= len(f.outputs) {
+				idx = len(f.outputs) - 1
+			}
+			output = f.outputs[idx]
+		}
+		if err := os.WriteFile(f.outputPath, []byte(output), 0o644); err != nil {
+			return runner.CommandResult{}, err
+		}
+	}
+	stdout := f.rawStdout
+	if len(f.rawStdouts) > 0 {
+		idx := f.calls - 1
+		if idx >= len(f.rawStdouts) {
+			idx = len(f.rawStdouts) - 1
+		}
+		stdout = f.rawStdouts[idx]
+	}
+	return runner.CommandResult{Stdout: stdout, Stderr: f.rawStderr, ExitCode: f.exitCode}, nil
 }
 
 type fakeStreamCommandRunner struct {
@@ -93,14 +121,14 @@ func TestRouteIntentPromptUsesSkillAndPermitsOnlyReadGrepGlob(t *testing.T) {
 	if fr.name != "claude" {
 		t.Fatalf("command = %s", fr.name)
 	}
-	if !argContains(fr.args, "--permission-mode", "plan") {
-		t.Fatalf("missing plan mode: %v", fr.args)
+	if !argContains(fr.args, "--permission-mode", "acceptEdits") {
+		t.Fatalf("missing acceptEdits mode: %v", fr.args)
 	}
-	if !argContains(fr.args, "--allowedTools", "Read,Grep,Glob") {
+	if !argContains(fr.args, "--allowedTools", "Read,Grep,Glob,Write") {
 		t.Fatalf("missing allowedTools: %v", fr.args)
 	}
-	if !argHasDisallowed(fr.args, "Bash,Edit,Write") {
-		t.Fatalf("missing disallowedTools Bash,Edit,Write: %v", fr.args)
+	if !argHasDisallowed(fr.args, "Bash,Edit") {
+		t.Fatalf("missing disallowedTools Bash,Edit: %v", fr.args)
 	}
 	var sawPromptSkill bool
 	for _, a := range fr.args {
@@ -125,6 +153,9 @@ func TestRouteIntentPromptUsesSkillAndPermitsOnlyReadGrepGlob(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, ".factory-runs", "dialogues", "dia_1", "route", rel)); err != nil {
 			t.Fatalf("missing %s: %v", rel, err)
 		}
+	}
+	if !strings.Contains(prompt, "output.json") || !strings.Contains(prompt, "Write the final JSON object") {
+		t.Fatalf("prompt must instruct file-first output: %s", prompt)
 	}
 }
 
@@ -153,6 +184,92 @@ func TestRouteIntentPromptHidesBusinessProcessingAgentRoute(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "assistant application") && !strings.Contains(prompt, "助手应用") {
 		t.Fatalf("prompt must tell agent/assistant requests to become application_generation: %s", prompt)
+	}
+}
+
+func TestRouteIntentRetriesInvalidJSON(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdouts: []string{
+		"我先解释一下 {{{",
+		mustJSON(t, RouteOutput{
+			Intent:           IntentApplicationGeneration,
+			Confidence:       ConfidenceHigh,
+			UserFacingReason: "将先澄清需求并生成应用。",
+		}),
+	}}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_route_retry", UserMessage: "生成一个todo",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("calls = %d, want 2", fr.calls)
+	}
+	if out.Intent != IntentApplicationGeneration {
+		t.Fatalf("intent = %s, want application_generation", out.Intent)
+	}
+}
+
+func TestRouteIntentPrefersOutputJSONFileOverStdout(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{
+		rawStdout:  "路由结果已写入 output.json。",
+		outputPath: filepath.Join(root, ".factory-runs", "dialogues", "dia_route_file", "route", "output.json"),
+		output: mustJSON(t, RouteOutput{
+			Intent:           IntentApplicationGeneration,
+			Confidence:       ConfidenceHigh,
+			UserFacingReason: "将先澄清需求并生成应用。",
+		}),
+	}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_route_file", UserMessage: "生成一个todo",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if out.Intent != IntentApplicationGeneration {
+		t.Fatalf("intent = %s, want application_generation from file output", out.Intent)
+	}
+}
+
+func TestRouteIntentRepairsInvalidOutputJSONBeforeFullRetry(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{
+		rawStdouts: []string{
+			"已写入 output.json",
+			"已修复 output.json",
+		},
+		outputPath: filepath.Join(root, ".factory-runs", "dialogues", "dia_route_repair", "route", "output.json"),
+		outputs: []string{
+			`{"intent":"application_generation","confidence":"high",`,
+			mustJSON(t, RouteOutput{
+				Intent:           IntentApplicationGeneration,
+				Confidence:       ConfidenceHigh,
+				UserFacingReason: "将先澄清需求并生成应用。",
+			}),
+		},
+	}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_route_repair", UserMessage: "生成一个todo",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RouteIntent: %v", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("calls = %d, want initial run + JSON repair", fr.calls)
+	}
+	if !strings.Contains(strings.Join(fr.args, " "), "Repair malformed JSON") {
+		t.Fatalf("second call must be JSON repair, args=%v", fr.args)
+	}
+	if out.Intent != IntentApplicationGeneration {
+		t.Fatalf("intent = %s, want repaired route output", out.Intent)
 	}
 }
 
@@ -577,6 +694,51 @@ func TestBusinessDraftRoundRejectsMalformedJSON(t *testing.T) {
 	}, func(ev StreamEvent) {})
 	if err == nil {
 		t.Fatalf("expected error for malformed JSON")
+	}
+}
+
+func TestBusinessDraftRoundRetriesInvalidJSON(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdouts: []string{
+		"不是 JSON",
+		mustJSON(t, BusinessDraftOutput{
+			Status: "ready_to_confirm", Round: 1,
+			AgentDraft: BusinessAgentDraft{Name: "x", Description: "y", Prompt: "z"},
+		}),
+	}}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunBusinessDraftRound(context.Background(), BusinessDraftInput{
+		DialogueID: "dia_b_retry", Round: 1, MaxRounds: 6, UserMessage: "x",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunBusinessDraftRound: %v", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("calls = %d, want 2", fr.calls)
+	}
+	if out.AgentDraft.Name != "x" {
+		t.Fatalf("agentDraft = %+v, want retry output", out.AgentDraft)
+	}
+}
+
+func TestClassifyTurnRetriesInvalidJSON(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdouts: []string{
+		"先分析一下，不是 JSON",
+		mustJSON(t, TurnSummary{Intent: model.TurnIntentGeneralDialogue, Reply: "ok"}),
+	}}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.ClassifyTurn(context.Background(), TurnInput{
+		DialogueID: "dia_turn_retry", UserMessage: "继续",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("ClassifyTurn: %v", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("calls = %d, want 2", fr.calls)
+	}
+	if out.Intent != model.TurnIntentGeneralDialogue {
+		t.Fatalf("intent = %s, want general_dialogue", out.Intent)
 	}
 }
 

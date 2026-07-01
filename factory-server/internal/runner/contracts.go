@@ -326,24 +326,24 @@ func quoteTerminatesString(s string, quote int) bool {
 // clarification allowlist, so high-impact gaps may return structured questions;
 // ordinary incomplete/unsupported audit results remain schema failures.
 type requirementAnalysisOutput struct {
-	NeedsUserInput         bool                `json:"needsUserInput"`
-	Questions              []Question          `json:"questions"`
-	ConfirmedRequirementID string              `json:"confirmedRequirementId"`
-	Summary                string              `json:"summary"`
-	AppType                string              `json:"appType"`
-	AppName                string              `json:"appName"`
-	TargetUsers            []string            `json:"targetUsers"`
-	CoreScenario           string              `json:"coreScenario"`
-	PrimaryView            string              `json:"primaryView"`
-	MainEntities           []string            `json:"mainEntities"`
-	DataPolicy             string              `json:"dataPolicy"`
-	AcceptanceFocus        []string            `json:"acceptanceFocus"`
+	NeedsUserInput         bool       `json:"needsUserInput"`
+	Questions              []Question `json:"questions"`
+	ConfirmedRequirementID string     `json:"confirmedRequirementId"`
+	Summary                string     `json:"summary"`
+	AppType                string     `json:"appType"`
+	AppName                string     `json:"appName"`
+	TargetUsers            []string   `json:"targetUsers"`
+	CoreScenario           string     `json:"coreScenario"`
+	PrimaryView            string     `json:"primaryView"`
+	MainEntities           []string   `json:"mainEntities"`
+	DataPolicy             string     `json:"dataPolicy"`
+	AcceptanceFocus        []string   `json:"acceptanceFocus"`
 	// Description carries the optional detailed Chinese paragraph surfaced in
 	// the 确认需求摘要. omitempty: existing requirement JSON still validates.
-	Description            string              `json:"description,omitempty"`
-	GenerationProfile      map[string][]string `json:"generationProfile"`
-	Constraints            json.RawMessage     `json:"constraints"`
-	Risks                  json.RawMessage     `json:"risks"`
+	Description       string              `json:"description,omitempty"`
+	GenerationProfile map[string][]string `json:"generationProfile"`
+	Constraints       json.RawMessage     `json:"constraints"`
+	Risks             json.RawMessage     `json:"risks"`
 	// WorkLog is the OPTIONAL public progress log the agent may author. It is
 	// the ONLY agent-authored field the executor lifts into summary records.
 	// thinking/reasoning and every other hidden provider field are NOT in this
@@ -420,6 +420,7 @@ func validateRequirementAnalysisDecoded(path string) (StepOutput, requirementAna
 		}
 		return StepOutput{NeedsUserInput: true, Questions: raw.Questions}, raw, nil
 	}
+	normalizeRequirementAnalysisValidation(&raw.Validation)
 	if !raw.Validation.Complete || !raw.Validation.Supported {
 		return StepOutput{}, raw, fmt.Errorf("confirmed requirement rejected: %w%s",
 			ErrSchemaValidationFailed, requirementRejectionDetail(raw.Validation))
@@ -500,6 +501,38 @@ func requirementSummaryChecksum(fields map[string]any) string {
 	raw, _ := json.Marshal(fields)
 	sum := sha256.Sum256(raw)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func normalizeRequirementAnalysisValidation(v *requirementValidation) {
+	if v == nil {
+		return
+	}
+	v.MissingFields = blockingRequirementAnalysisMissingFields(v.MissingFields)
+	// primaryView/dataPolicy 属于后续界面解析/数据抓取阶段，不能让旧口径
+	// 的需求分析 agent 仅因这些延后字段把已确认业务需求判为 incomplete。
+	if !v.Complete && len(v.MissingFields) == 0 {
+		v.Complete = true
+	}
+}
+
+func blockingRequirementAnalysisMissingFields(fields []string) []string {
+	blocking := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if isDeferredRequirementAnalysisField(field) {
+			continue
+		}
+		blocking = append(blocking, field)
+	}
+	return blocking
+}
+
+func isDeferredRequirementAnalysisField(field string) bool {
+	switch field {
+	case "primaryView", "dataPolicy":
+		return true
+	default:
+		return false
+	}
 }
 
 // requirementRejectionDetail formats the agent's missingFields and

@@ -201,9 +201,9 @@ func doJSON(t *testing.T, r *Router, method, path string, body any) *httptest.Re
 
 // TestCreateJobCreatesFixedSteps verifies that POST /api/jobs seeds the default
 // collaboration plan's agent steps (the testConfirmedRequirement carries no
-// public-web/security trigger, so exactly the 12 base agents) in plan order,
+// public-web/security trigger, so exactly the 10 base agents) in plan order,
 // each with the right agent key, all pending. The first step is the plan head
-// (collaboration_orchestration) and the job points its current_step_kind at it.
+// (requirement_analysis) and the job points its current_step_kind at it.
 func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	_, r, _ := newJobsTestServer(t, config.Config{})
 
@@ -218,8 +218,8 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	if job.Status != model.JobStatusQueued {
 		t.Fatalf("status = %q, want queued", job.Status)
 	}
-	if job.CurrentStepKind != model.StepKind("collaboration_orchestration") {
-		t.Fatalf("current_step_kind = %q, want collaboration_orchestration", job.CurrentStepKind)
+	if job.CurrentStepKind != model.StepKind("requirement_analysis") {
+		t.Fatalf("current_step_kind = %q, want requirement_analysis", job.CurrentStepKind)
 	}
 	if job.UserPrompt != "生成航母编队月度航迹复盘" {
 		t.Fatalf("user_prompt = %q", job.UserPrompt)
@@ -237,9 +237,7 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 	// The default plan's agent roles in order (no security reviewer: the test
 	// confirmed requirement has no public_web / auth / upload trigger).
 	wantKinds := []model.StepKind{
-		model.StepKind("collaboration_orchestration"),
 		model.StepKind("requirement_analysis"),
-		model.StepKind("domain_analysis"),
 		model.StepKind("design_contract"),
 		model.StepKind("data_integration"),
 		model.StepKind("solution_design"),
@@ -254,18 +252,16 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 		t.Fatalf("len(steps) = %d, want %d", len(steps), len(wantKinds))
 	}
 	wantAgents := map[model.StepKind]string{
-		model.StepKind("collaboration_orchestration"): "collaboration-orchestrator",
-		model.StepKind("requirement_analysis"):        "requirement-analyst",
-		model.StepKind("domain_analysis"):             "domain-analyst",
-		model.StepKind("design_contract"):             "designer",
-		model.StepKind("data_integration"):            "data-integration",
-		model.StepKind("solution_design"):             "solution-designer",
-		model.StepKind("code_generation"):             "code-generator",
-		model.StepKind("code_review"):                 "code-reviewer",
-		model.StepKind("test_verification"):           "tester",
-		model.StepKind("product_acceptance"):          "product-acceptance",
-		model.StepKind("image_build"):                 "image-builder",
-		model.StepKind("deployment"):                  "deployer",
+		model.StepKind("requirement_analysis"): "requirement-analyst",
+		model.StepKind("design_contract"):      "designer",
+		model.StepKind("data_integration"):     "data-integration",
+		model.StepKind("solution_design"):      "solution-designer",
+		model.StepKind("code_generation"):      "code-generator",
+		model.StepKind("code_review"):          "code-reviewer",
+		model.StepKind("test_verification"):    "tester",
+		model.StepKind("product_acceptance"):   "product-acceptance",
+		model.StepKind("image_build"):          "image-builder",
+		model.StepKind("deployment"):           "deployer",
 	}
 	for i, s := range steps {
 		if s.Kind != wantKinds[i] {
@@ -284,7 +280,7 @@ func TestCreateJobCreatesFixedSteps(t *testing.T) {
 }
 
 // TestCreateJobSeedsCollaborationPlanSteps verifies that POST /api/jobs now
-// seeds the dynamic collaboration plan (12 agents, 13 with security reviewer)
+// seeds the dynamic collaboration plan (10 agents, 11 with security reviewer)
 // instead of the legacy fixed 6 steps: the job carries a CollaborationPlanJSON,
 // its steps carry agent snapshots, and the plan's dependency edges persist.
 func TestCreateJobSeedsCollaborationPlanSteps(t *testing.T) {
@@ -305,11 +301,11 @@ func TestCreateJobSeedsCollaborationPlanSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListJobSteps: %v", err)
 	}
-	if len(steps) < 12 {
+	if len(steps) < 10 {
 		t.Fatalf("steps = %d, want collaboration plan steps", len(steps))
 	}
-	if steps[0].AgentKey != "collaboration-orchestrator" || steps[0].SnapshotJSON == "" {
-		t.Fatalf("first step = %+v, want collaboration orchestrator with snapshot", steps[0])
+	if steps[0].AgentKey != "requirement-analyst" || steps[0].SnapshotJSON == "" {
+		t.Fatalf("first step = %+v, want requirement analyst with snapshot", steps[0])
 	}
 	edges, err := st.ListJobStepEdges(context.Background(), job.ID)
 	if err != nil {

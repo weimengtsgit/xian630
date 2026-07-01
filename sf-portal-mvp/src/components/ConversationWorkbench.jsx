@@ -44,6 +44,9 @@ import './ConversationWorkbench.css'
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
 // its business-facing content is being reworked. Flip to true to bring it back.
 const SHOW_WORK_TRACE = false
+const WORKBENCH_BODY_FOLLOW_BOTTOM_THRESHOLD = 24
+const LIVE_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
+const TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
 
 export function ConversationWorkbench({
   session,
@@ -87,6 +90,8 @@ export function ConversationWorkbench({
   const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
   const [aggregateGraphCompactOverride, setAggregateGraphCompactOverride] = useState(null)
   const textareaRef = useRef(null)
+  const cwBodyScrollRef = useRef(null)
+  const cwBodyShouldFollowRef = useRef(true)
   const previousHasSubmittedRequirementRef = useRef(false)
   const requestAbandonRequirement = () => {
     if (!onAbandon || submitting) return
@@ -120,6 +125,7 @@ export function ConversationWorkbench({
   useEffect(() => {
     setManualStepConfirmation(false)
     setAggregateGraphCompactOverride(null)
+    cwBodyShouldFollowRef.current = true
     previousHasSubmittedRequirementRef.current = false
   }, [session && session.id])
   const status = session && session.status
@@ -183,6 +189,34 @@ export function ConversationWorkbench({
       .join(' / ')
     : ''
   const taskBadge = taskDrawerBadgeInfo(focusTask)
+  const timelineFollowSignature = useMemo(() => {
+    const items = Array.isArray(timeline) ? timeline : []
+    return items.map(item => [
+      item.id,
+      item.type,
+      item.content || '',
+      item.summary || '',
+      item.taskThinking || '',
+      item.safeExecution || '',
+      item.error || '',
+      item.rawThinking || '',
+      item.pending ? 'pending' : '',
+      item.expanded ? 'expanded' : '',
+    ].join(':')).join('|')
+  }, [timeline])
+  const updateWorkbenchBodyFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    cwBodyShouldFollowRef.current = distanceToBottom <= WORKBENCH_BODY_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = cwBodyScrollRef.current
+    if (!el || !cwBodyShouldFollowRef.current) return
+    // 只有用户停在底部时才跟随新增思考内容；上滑查看历史时不打断。
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [timelineFollowSignature])
 
   // Aggregate orchestration graph (Task 2): a fixed five-card overview of the
   // whole pipeline (用户输入/业务逻辑/界面解析/数据抓取/生产交付) that stays pinned
@@ -463,7 +497,7 @@ export function ConversationWorkbench({
         onOpenTaskStep={onOpenTaskStep}
       />
 
-      <div className="cw-body">
+      <div ref={cwBodyScrollRef} className="cw-body" onScroll={updateWorkbenchBodyFollowState}>
         {timeline.map(item => (
           <TimelineItem
             key={item.id}
@@ -917,6 +951,24 @@ function ThinkingSummary({ item }) {
   const displaySummary = translateAnalysisText(summary)
   const displayRaw = translateAnalysisText(raw)
   const live = item.pending || item.type === 'live_thinking'
+  const liveThinkingScrollRef = useRef(null)
+  const liveThinkingShouldFollowRef = useRef(true)
+  useEffect(() => {
+    liveThinkingShouldFollowRef.current = true
+  }, [item.id])
+  const updateLiveThinkingFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    liveThinkingShouldFollowRef.current = distanceToBottom <= LIVE_THINKING_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = liveThinkingScrollRef.current
+    if (!el || !live || !liveThinkingShouldFollowRef.current) return
+    // 思考流内部也按“贴底才跟随”处理，避免用户上滑阅读时被拉回底部。
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [raw, live])
   return (
     <CopyableBlock text={copyValue} className="cw-agent-wrap" copyLabel="复制思考摘要">
       <div className="cw-item cw-agent cw-live-thinking cw-thinking-summary">
@@ -925,7 +977,11 @@ function ThinkingSummary({ item }) {
           {live ? '正在思考…' : '思考摘要'}
         </span>
         {live && displayRaw ? (
-          <div className="cw-raw-thinking-stream">
+          <div
+            ref={liveThinkingScrollRef}
+            className="cw-raw-thinking-stream"
+            onScroll={updateLiveThinkingFollowState}
+          >
             <pre className="cw-live-text">{displayRaw}</pre>
           </div>
         ) : (
@@ -1002,8 +1058,11 @@ const TASK_STEP_STATUS_LABEL = {
 
 function TaskExecutionBlock({ item }) {
   const [userExpandedOverride, setUserExpandedOverride] = useState(null)
+  const taskThinkingScrollRef = useRef(null)
+  const taskThinkingShouldFollowRef = useRef(true)
   useEffect(() => {
     setUserExpandedOverride(null)
+    taskThinkingShouldFollowRef.current = true
   }, [item.id])
   const expanded = userExpandedOverride ?? !!item.expanded
   const status = item.status || 'pending'
@@ -1013,6 +1072,18 @@ function TaskExecutionBlock({ item }) {
   const error = String(item.error || '')
   const taskThinking = String(item.taskThinking || '')
   const copyText = [safeExecution, summary, taskThinking].filter(Boolean).join('\n\n')
+  const updateTaskThinkingFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    taskThinkingShouldFollowRef.current = distanceToBottom <= TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = taskThinkingScrollRef.current
+    if (!el || !expanded || !taskThinkingShouldFollowRef.current) return
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [taskThinking, expanded])
   return (
     <CopyableBlock text={copyText} className="cw-task-wrap" copyLabel="复制任务块">
       <div className={`cw-item cw-task-block cw-task-status-${status}`}>
@@ -1031,7 +1102,11 @@ function TaskExecutionBlock({ item }) {
             {taskThinking ? (
               <section className="cw-task-section cw-task-thinking-section">
                 <h5>任务思考过程{item.taskThinkingRedacted ? <em className="cw-redacted-note">已脱敏/截断</em> : null}</h5>
-                <pre className="cw-live-text">{taskThinking}</pre>
+                <pre
+                  ref={taskThinkingScrollRef}
+                  className="cw-live-text cw-task-thinking-scroll"
+                  onScroll={updateTaskThinkingFollowState}
+                >{taskThinking}</pre>
               </section>
             ) : null}
             {safeExecution ? (

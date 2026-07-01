@@ -29,7 +29,7 @@ assert.match(state, /buildCollaborationCardView/, 'collaboration plan state help
 assert.match(execState, /fixedSteps\s*=\s*\[\]/, 'execution record helper should accept dynamic step definitions')
 assert.doesNotMatch(jobCenter, /3x2 matrix of the six fixed stages/, 'JobCenter should no longer describe only fixed six stages')
 assert.match(workbench, /collaboration_plan_preview/, 'confirm preview graph should render as a dialogue timeline item')
-assert.match(workbench, /CollaborationExecutionGraph/, 'ConversationWorkbench should render the extracted graph component')
+assert.match(workbench, /AggregateOrchestrationGraph/, 'ConversationWorkbench should render the aggregate orchestration graph component')
 assert.match(workbench, /manualStepConfirmation/, 'ConversationWorkbench should own the manual step confirmation preference before generation')
 assert.match(workbench, /executionPolicy:\s*\{\s*manualStepConfirmation/, 'confirm action should submit the manual step confirmation execution policy')
 assert.doesNotMatch(workbench, /function CollaborationPlanPreviewCard/, 'old inline collaboration preview card should be removed')

@@ -28,6 +28,29 @@ type fakeRunner struct {
 	ctxCh      chan context.Context // if non-nil, receives every Run ctx
 }
 
+type sequenceStepRunner struct {
+	mu      sync.Mutex
+	results []StepResult
+	calls   int
+}
+
+func (f *sequenceStepRunner) Run(ctx context.Context, _ model.Job, _ model.JobStep, _ runner.StepRecordEmitter) (StepResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	idx := f.calls - 1
+	if idx >= len(f.results) {
+		idx = len(f.results) - 1
+	}
+	return f.results[idx], nil
+}
+
+func (f *sequenceStepRunner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func (f *fakeRunner) Run(ctx context.Context, _ model.Job, step model.JobStep, _ runner.StepRecordEmitter) (StepResult, error) {
 	f.mu.Lock()
 	f.lastCtx = ctx
@@ -273,6 +296,34 @@ func TestExecutorFailureMarksJobFailed(t *testing.T) {
 		if s := stepByKind(t, steps, k); s.Status != model.StepStatusPending {
 			t.Fatalf("step %s = %s, want pending", k, s.Status)
 		}
+	}
+}
+
+func TestExecutorRetriesOutputInvalidJSONBeforeFailingStep(t *testing.T) {
+	runner := &sequenceStepRunner{results: []StepResult{
+		{Status: model.StepStatusFailed, ErrorCode: model.ErrorOutputInvalidJSON, ErrorMessage: "bad json"},
+		{Status: model.StepStatusSucceeded},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	drain(t, context.Background(), e)
+	if runner.callCount() != len(FixedSteps())+1 {
+		t.Fatalf("runner calls = %d, want %d", runner.callCount(), len(FixedSteps())+1)
+	}
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusCompleted {
+		t.Fatalf("job status = %s, want completed after automatic retry", job.Status)
+	}
+	if job.CurrentStepKind != model.StepDeployment {
+		t.Fatalf("current step = %s, want deployment", job.CurrentStepKind)
+	}
+	step := stepByKind(t, mustSteps(t, st, id), model.StepRequirementAnalysis)
+	if step.Status != model.StepStatusSucceeded {
+		t.Fatalf("requirement step status = %s, want succeeded", step.Status)
+	}
+	if step.Attempt != 2 {
+		t.Fatalf("requirement step attempt = %d, want 2", step.Attempt)
 	}
 }
 

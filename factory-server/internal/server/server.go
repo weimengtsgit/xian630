@@ -399,6 +399,9 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.store.BackfillClarificationDialogues(ctx); err != nil {
 		log.Printf("backfill clarification dialogues: %v", err)
 	}
+	if err := s.store.ReconcileDialogueClarificationFailures(ctx); err != nil {
+		log.Printf("reconcile clarification dialogue failures: %v", err)
+	}
 	// Idempotently transition legacy resolved dialogues into continuing active
 	// sessions so a dialogue whose first application is deployed stays open for
 	// follow-up modification/inquiry turns (Task 2). Best-effort, like the

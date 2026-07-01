@@ -45,6 +45,8 @@ type StepResult struct {
 	Questions []runner.Question
 }
 
+const maxOutputInvalidJSONAttempts = 3
+
 // Executor drives the fixed pipeline forward: it runs up to MaxConcurrentJobs
 // jobs at once across DIFFERENT applications, serializing jobs of the SAME
 // application (ClaimNextRunnableJob excludes a queued job whose app_slug already
@@ -573,6 +575,10 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 		if err := e.store.MarkStepFailed(ctx, stepID, res.ErrorCode, res.ErrorMessage); err != nil {
 			return err
 		}
+		if e.maybeRetryOutputInvalidJSON(ctx, jobID, stepID, res) {
+			e.notify(ctx, jobID, stepID)
+			return nil
+		}
 		// Bounded auto-repair: before failing the job terminally, check whether
 		// this failure is a repairable gate that is still under the policy's
 		// repair caps. If so, rewind to code_generation and re-queue instead of
@@ -711,6 +717,34 @@ func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	// Re-queue so the drain loop runs the next step. started_at is preserved
 	// (MarkJobQueued only flips status + updated_at).
 	return e.store.MarkJobQueued(ctx, jobID)
+}
+
+func (e *Executor) maybeRetryOutputInvalidJSON(ctx context.Context, jobID, stepID string, res StepResult) bool {
+	if res.ErrorCode != model.ErrorOutputInvalidJSON {
+		return false
+	}
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil || job == nil {
+		return false
+	}
+	step, err := e.store.GetStepByKind(ctx, jobID, job.CurrentStepKind)
+	if err != nil || step == nil || step.ID != stepID {
+		return false
+	}
+	if step.Attempt >= maxOutputInvalidJSONAttempts {
+		return false
+	}
+	// 无效 JSON 通常是模型输出被说明文字污染；自动重跑当前节点，保留失败 attempt 的审计记录。
+	if err := e.store.ResetStepToPending(ctx, stepID); err != nil {
+		return false
+	}
+	if err := e.store.MarkJobQueued(ctx, jobID); err != nil {
+		return false
+	}
+	emitter := e.newStepEmitter(jobID, stepID, job.DialogueID, step.Attempt, step.AgentKey)
+	emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
+	e.Signal()
+	return true
 }
 
 // nextPlanStepKind returns the step kind that follows currentKind in the job's

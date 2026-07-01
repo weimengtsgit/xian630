@@ -1,5 +1,5 @@
 const STORAGE_KEY = 'ai-prototype-workbench-state';
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 
 export function createDefaultPrototype() {
   return `<!doctype html>
@@ -57,7 +57,7 @@ export function loadWorkbenchState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return { messages: [], currentHtml: createDefaultPrototype() };
+      return { messages: [], currentHtml: createDefaultPrototype(), pendingPollingStopped: false };
     }
     const parsed = JSON.parse(raw);
     if (parsed.version !== STORAGE_VERSION) {
@@ -67,9 +67,10 @@ export function loadWorkbenchState() {
     return {
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
       currentHtml: typeof parsed.currentHtml === 'string' ? parsed.currentHtml : createDefaultPrototype(),
+      pendingPollingStopped: Boolean(parsed.pendingPollingStopped),
     };
   } catch {
-    return { messages: [], currentHtml: createDefaultPrototype() };
+    return { messages: [], currentHtml: createDefaultPrototype(), pendingPollingStopped: false };
   }
 }
 
@@ -78,7 +79,40 @@ export function saveWorkbenchState(state) {
     version: STORAGE_VERSION,
     messages: state.messages,
     currentHtml: state.currentHtml,
+    pendingPollingStopped: Boolean(state.pendingPollingStopped),
   }));
+}
+
+export function appendPendingInputToState(state, content) {
+  const value = String(content || '').trim();
+  if (!value) return '';
+
+  state.messages.push({ role: 'user', content: value, pendingInput: true });
+  state.pendingPollingStopped = true;
+  return value;
+}
+
+export function createShareSuccessMessage({ url, confirmedOutputPath, copied }) {
+  const firstLine = copied ? `预览链接已复制：${url}` : `预览链接已生成，请手动复制：${url}`;
+  if (!confirmedOutputPath) {
+    return firstLine;
+  }
+  return `${firstLine}\n共享文件已写入：${confirmedOutputPath}`;
+}
+
+export function prepareGenerationSubmission(state, message) {
+  const lastMessage = state.messages.at(-1);
+  const reusingPendingInput = lastMessage?.pendingInput && lastMessage.content === message;
+  if (!reusingPendingInput) {
+    state.messages.push({ role: 'user', content: message });
+    return { requestState: state, reusingPendingInput: false };
+  }
+
+  // 待定文件内容已作为本次 message 发送时，不再作为历史重复传给模型。
+  return {
+    requestState: { ...state, messages: state.messages.slice(0, -1) },
+    reusingPendingInput: true,
+  };
 }
 
 export function renderPreview(iframe, html) {
@@ -150,7 +184,16 @@ async function requestGeneration({ message, state }) {
   return payload.html;
 }
 
-async function createPreviewShareUrl(html) {
+async function requestPendingInput() {
+  const response = await fetch('/api/pending-input');
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || '读取待定输入文件失败。');
+  }
+  return payload;
+}
+
+async function createPreviewSharePayload(html) {
   const response = await fetch('/api/previews', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -162,7 +205,7 @@ async function createPreviewShareUrl(html) {
     throw new Error(payload.error || '创建预览链接失败。');
   }
 
-  return payload.url;
+  return payload;
 }
 
 function bootstrap() {
@@ -180,8 +223,51 @@ function bootstrap() {
   const submit = document.querySelector('#submit');
 
   const state = loadWorkbenchState();
+  let pendingTimer = null;
+  let pendingPollIntervalMs = 3000;
   renderPreview(iframe, state.currentHtml);
   renderMessages(messagesEl, state.messages);
+
+  const stopPendingPolling = () => {
+    if (!pendingTimer) return;
+    clearInterval(pendingTimer);
+    pendingTimer = null;
+  };
+
+  const checkPendingInput = async () => {
+    if (state.pendingPollingStopped) {
+      stopPendingPolling();
+      return;
+    }
+
+    try {
+      const payload = await requestPendingInput();
+      if (Number.isFinite(payload.pollIntervalMs) && payload.pollIntervalMs > 0) {
+        pendingPollIntervalMs = payload.pollIntervalMs;
+      }
+      if (!payload.available) return;
+
+      const pendingText = appendPendingInputToState(state, payload.content);
+      if (!pendingText) return;
+
+      // 待定文件只作为输入来源，不做移动/复制/删除；加载后由用户手动决定是否生成。
+      input.value = pendingText;
+      status.textContent = '已加载待定需求';
+      renderMessages(messagesEl, state.messages);
+      saveWorkbenchState(state);
+      stopPendingPolling();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  };
+
+  const startPendingPolling = () => {
+    if (state.pendingPollingStopped || pendingTimer) return;
+    checkPendingInput();
+    pendingTimer = setInterval(checkPendingInput, pendingPollIntervalMs);
+  };
+
+  startPendingPolling();
 
   input.addEventListener('keydown', (event) => {
     if (!shouldSubmitOnKeydown(event)) return;
@@ -199,7 +285,7 @@ function bootstrap() {
     const message = input.value.trim();
     if (!message) return;
 
-    state.messages.push({ role: 'user', content: message });
+    const generationSubmission = prepareGenerationSubmission(state, message);
     const pendingMessage = { role: 'assistant', content: createLoadingText(0), pending: true };
     const startedAt = Date.now();
     const renderPending = () => {
@@ -218,7 +304,7 @@ function bootstrap() {
     saveWorkbenchState(state);
 
     try {
-      const html = await requestGeneration({ message, state });
+      const html = await requestGeneration({ message, state: generationSubmission.requestState });
       state.currentHtml = html;
       state.messages.push({ role: 'assistant', content: '已更新上方原型界面。' });
       renderPreview(iframe, html);
@@ -239,10 +325,12 @@ function bootstrap() {
   reset.addEventListener('click', () => {
     state.messages = [];
     state.currentHtml = createDefaultPrototype();
+    state.pendingPollingStopped = false;
     saveWorkbenchState(state);
     renderPreview(iframe, state.currentHtml);
     renderMessages(messagesEl, state.messages);
     status.textContent = '已重置';
+    startPendingPolling();
   });
 
   share.addEventListener('click', async () => {
@@ -250,18 +338,18 @@ function bootstrap() {
     status.textContent = '正在创建预览链接';
 
     try {
-      const url = await createPreviewShareUrl(state.currentHtml);
+      const payload = await createPreviewSharePayload(state.currentHtml);
       try {
-        await navigator.clipboard.writeText(url);
-        state.messages.push({ role: 'assistant', content: `预览链接已复制：${url}` });
-        status.textContent = '预览链接已复制';
+        await navigator.clipboard.writeText(payload.url);
+        state.messages.push({ role: 'assistant', content: createShareSuccessMessage({ ...payload, copied: true }) });
+        status.textContent = payload.confirmedOutputPath ? '已确认并写入共享文件' : '预览链接已复制';
       } catch {
-        state.messages.push({ role: 'assistant', content: `预览链接已生成，请手动复制：${url}` });
-        status.textContent = '预览链接已生成';
+        state.messages.push({ role: 'assistant', content: createShareSuccessMessage({ ...payload, copied: false }) });
+        status.textContent = payload.confirmedOutputPath ? '已确认并写入共享文件' : '预览链接已生成';
       }
     } catch (error) {
       state.messages.push({ role: 'assistant', content: error.message });
-      status.textContent = '复制预览链接失败';
+      status.textContent = '确认共享失败';
     } finally {
       share.disabled = false;
       renderMessages(messagesEl, state.messages);
