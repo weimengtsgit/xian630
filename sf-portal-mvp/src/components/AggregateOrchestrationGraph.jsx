@@ -33,7 +33,7 @@ const STATE_ICON = {
 // live action — the action is shown inside the card via the 正在… phase).
 const CARD_DESCRIPTIONS = {
   user_input: '用户的需求输入与澄清回答',
-  business_logic: '识别业务目标、对象与规则，澄清并确认需求摘要（需求分析 + 领域分析）',
+  business_logic: '识别业务目标、对象与规则，澄清并确认需求摘要（需求分析）',
   interface_parsing: '设计界面视图、布局与组件，产出界面预览与设计契约',
   data_capture: '验证数据来源与字段映射，按 本体→互联网→演示 顺序确认数据契约',
   production_delivery: '方案设计 → 代码生成 → 审查 → 测试 → 镜像构建 → 部署',

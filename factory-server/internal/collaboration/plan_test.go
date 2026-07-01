@@ -8,9 +8,7 @@ func TestDefaultPlanIncludesRequiredAgentsAndEdges(t *testing.T) {
 	})
 	keys := plan.AgentKeys()
 	for _, want := range []string{
-		"collaboration-orchestrator",
 		"requirement-analyst",
-		"domain-analyst",
 		"designer",
 		"data-integration",
 		"solution-designer",

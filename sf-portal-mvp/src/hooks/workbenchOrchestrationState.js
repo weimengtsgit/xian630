@@ -11,7 +11,6 @@ const CARD_LABELS = {
 const AGENT_TO_CARD = {
   '__user_input__': 'user_input',
   'requirement-analyst': 'business_logic',
-  'domain-analyst': 'business_logic',
   designer: 'interface_parsing',
   'data-integration': 'data_capture',
   'solution-designer': 'production_delivery',
@@ -26,7 +25,6 @@ const AGENT_TO_CARD = {
 
 const KIND_TO_CARD = {
   requirement_analysis: 'business_logic',
-  domain_analysis: 'business_logic',
   design_contract: 'interface_parsing',
   data_integration: 'data_capture',
   solution_design: 'production_delivery',
