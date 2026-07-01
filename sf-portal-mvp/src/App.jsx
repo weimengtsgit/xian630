@@ -49,14 +49,6 @@ function App() {
     dialogue.setJobsForFocus(jobs.jobs)
   }, [jobs.jobs, dialogue.setJobsForFocus])
 
-  // Feed the active task's step/summary state into the dialogue hook so the
-  // conversation timeline can render a task_execution_block per executing step
-  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
-  // low-frequency change (useJobs refresh on SSE step.updated).
-  useEffect(() => {
-    dialogue.setJobStepBlocks(buildTaskBlocks(jobs.steps, jobs.summary))
-  }, [jobs.steps, jobs.summary, dialogue.setJobStepBlocks])
-
   // The 任务执行 drawer shows ALL generation tasks for the selected dialogue,
   // defaulting to the focus task (plan §Task Execution Drawer). The drawer's
   // task list is the dialogue's jobs ranked by attention priority (focus task
@@ -70,6 +62,24 @@ function App() {
   const effectiveTaskId = selectedTaskId || (dialogue.focusTask && dialogue.focusTask.id) || null
   const activeJob =
     dialogueJobs.find(j => j.id === effectiveTaskId) || dialogue.focusTask || null
+  const activeJobId = activeJob && activeJob.id
+  const scopedTraceSteps = useMemo(() => {
+    if (!activeJobId) return []
+    const list = Array.isArray(jobs.steps) ? jobs.steps : []
+    return list.filter(step => {
+      const stepJobId = step && (step.job_id || step.jobId || '')
+      return !stepJobId || stepJobId === activeJobId
+    })
+  }, [jobs.steps, activeJobId])
+
+  // Feed the active task's step/summary state into the dialogue hook so the
+  // conversation timeline can render a task_execution_block per executing step
+  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
+  // low-frequency change (useJobs refresh on SSE step.updated).
+  useEffect(() => {
+    dialogue.setJobStepBlocks(buildTaskBlocks(scopedTraceSteps, jobs.summary))
+  }, [scopedTraceSteps, jobs.summary, dialogue.setJobStepBlocks])
+
   const [selectedClarificationScope, setSelectedClarificationScope] = useState(null)
   const openClarifications = useMemo(() => {
     const items = Array.isArray(dialogue.timeline) ? dialogue.timeline : []
@@ -215,7 +225,7 @@ function App() {
               focusTask={dialogue.focusTask}
               clarificationScope={activeClarification}
               onSelectClarificationScope={onSelectClarificationScope}
-              traceSteps={jobs.steps}
+              traceSteps={scopedTraceSteps}
               drawerEntry={drawerEntry}
               onToggleDrawerEntry={toggleDrawerEntry}
               onOpenTaskStep={openTaskStepFromGraph}
