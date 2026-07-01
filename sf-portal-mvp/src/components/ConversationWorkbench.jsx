@@ -855,7 +855,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     // fills the composer (the reply goes through the normal send → answerJob
     // path, which resets the step so the agent reads the user's answer).
     return (
-      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} onConfirmDataAccess={onConfirmDataAccess} submitting={submitting} />
+      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} onConfirmDataAccess={onConfirmDataAccess} onConfirmPrototype={onConfirmPrototype} submitting={submitting} />
     )
   }
   if (item.type === 'analysis_stream') {
@@ -1387,7 +1387,7 @@ function shortId(value) {
 // submit + draftAnswers state), a job-step clarification is answered via the
 // normal composer: picking an option (or typing) fills the composer, and sending
 // goes through answerJob → the step resets and the agent reads the reply.
-function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAccess, submitting }) {
+function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAccess, onConfirmPrototype, submitting }) {
   const questions = Array.isArray(item.questions) ? item.questions : []
   const open = item.status === 'open'
   const [expanded, setExpanded] = useState(item.expanded !== false)
@@ -1422,6 +1422,24 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAcc
       setConfirming(true)
       try {
         await onConfirmDataAccess(scope.taskId, scope.stepId, { version: question.defaultAnswer || '', attempt: scope.attempt })
+      } catch {
+        // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
+      } finally {
+        setConfirming(false)
+      }
+      return
+    }
+    if (
+      question &&
+      question.id === 'prototype_confirmation' &&
+      opt &&
+      opt.value === 'confirm' &&
+      typeof onConfirmPrototype === 'function'
+    ) {
+      setConfirming(true)
+      try {
+        // 原型确认应推进界面设计步骤，不能作为普通澄清回复重跑设计师。
+        await onConfirmPrototype({ jobId: scope.taskId, stepId: scope.stepId, canConfirm: true })
       } catch {
         // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
       } finally {
@@ -1950,5 +1968,4 @@ function PrototypePreviewModal({ prototype, onClose }) {
     </div>
   )
 }
-
 

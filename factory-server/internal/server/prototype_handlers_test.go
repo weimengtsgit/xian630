@@ -12,7 +12,7 @@ import (
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
 
-func setupPrototypeFixture(t *testing.T) (*Server, http.Handler, string, model.Job, model.JobStep) {
+func setupPrototypeFixture(t *testing.T) (*Server, *Router, string, model.Job, model.JobStep) {
 	t.Helper()
 	srv, router, root := newTestServerWithStore(t)
 	ctx := testCtx()
@@ -167,6 +167,52 @@ func TestConfirmPrototypeAdvancesJobToNextStep(t *testing.T) {
 		t.Fatalf("design step status = %s, want succeeded", updatedStep.Status)
 	}
 }
+
+func TestAnswerJobPrototypeConfirmationAdvancesInsteadOfRerunningDesign(t *testing.T) {
+	srv, router, _, job, step := setupPrototypeFixture(t)
+	ctx := testCtx()
+	if err := srv.store.AdvanceJobStep(ctx, job.ID, model.StepDesignContract); err != nil {
+		t.Fatalf("point job to design step: %v", err)
+	}
+	if err := srv.store.MarkJobWaitingUser(ctx, job.ID); err != nil {
+		t.Fatalf("mark job waiting: %v", err)
+	}
+	if err := srv.store.MarkStepWaitingUser(ctx, step.ID, `[{"id":"prototype_confirmation","options":[{"value":"confirm","label":"确定原型并继续"}]}]`); err != nil {
+		t.Fatalf("mark step waiting: %v", err)
+	}
+	if err := srv.store.CreateJobStep(ctx, model.JobStep{ID: "step_solution", JobID: job.ID, Kind: model.StepSolutionDesign, Seq: 2, Status: model.StepStatusPending}); err != nil {
+		t.Fatalf("create next step: %v", err)
+	}
+
+	rec := doJSON(t, router, http.MethodPost, "/api/jobs/"+job.ID+"/answer", map[string]any{
+		"answer": "确定原型并继续", "stepId": step.ID, "attempt": step.Attempt,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	updated, err := srv.store.GetJob(ctx, job.ID)
+	if err != nil || updated == nil {
+		t.Fatalf("get job after answer: %v", err)
+	}
+	if updated.Status != model.JobStatusQueued || updated.CurrentStepKind != model.StepSolutionDesign {
+		t.Fatalf("job after answer = %s/%s, want queued/solution_design", updated.Status, updated.CurrentStepKind)
+	}
+	updatedStep, err := srv.store.GetStepByKind(ctx, job.ID, model.StepDesignContract)
+	if err != nil || updatedStep == nil {
+		t.Fatalf("get design step after answer: %v", err)
+	}
+	if updatedStep.Status != model.StepStatusSucceeded || updatedStep.UserPrompt != "" {
+		t.Fatalf("design step after answer = status %s user_prompt %q, want succeeded without rerun prompt", updatedStep.Status, updatedStep.UserPrompt)
+	}
+	refs, err := srv.store.ListWorkbenchArtifactRefsByJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Status != "confirmed" {
+		t.Fatalf("prototype ref after answer = %#v, want confirmed", refs)
+	}
+}
+
 func TestContinuePrototypeMarksReference(t *testing.T) {
 	_, router, _, _, step := setupPrototypeFixture(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/jobs/job_proto/steps/"+step.ID+"/prototype/continue-without-confirmation", nil)

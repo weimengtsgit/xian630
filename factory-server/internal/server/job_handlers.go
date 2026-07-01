@@ -680,6 +680,22 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "step is waiting for manual confirmation; use the step confirm endpoint")
 			return
 		}
+		if isPrototypeConfirmationAnswer(targetStep.PendingQuestions, content) {
+			// 原型确认是“推进当前设计步骤”的决策，不是给设计师的新反馈；
+			// 这里兼容旧前端/其他客户端误发到通用 answer 接口的情况，避免重复重跑界面设计。
+			if err := s.applyLatestPrototypeDecision(r.Context(), id, targetStep.ID, "confirmed"); err != nil {
+				writeError(w, http.StatusInternalServerError, "confirm prototype")
+				return
+			}
+			job, err = s.store.GetJob(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "get job")
+				return
+			}
+			s.hub.Publish(Event{Type: "job.updated", Data: job})
+			writeJSON(w, http.StatusOK, job)
+			return
+		}
 		// Persist the user's answer onto the step's user_prompt so the re-run can
 		// read it (the generative-step prompts append step.UserPrompt as a
 		// clarification). Without this the step re-runs with identical input and
@@ -795,6 +811,46 @@ func isManualStepConfirmationQuestions(raw string) bool {
 		if item.Type == "manual_step_confirmation" && item.Confirm {
 			return true
 		}
+	}
+	return false
+}
+
+func isPrototypeConfirmationAnswer(raw, answer string) bool {
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(answer) == "" {
+		return false
+	}
+	type option struct {
+		Value string `json:"value"`
+		Label string `json:"label"`
+	}
+	type question struct {
+		ID      string   `json:"id"`
+		Options []option `json:"options"`
+	}
+	var items []question
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		var wrapped struct {
+			Questions []question `json:"questions"`
+		}
+		if err := json.Unmarshal([]byte(raw), &wrapped); err != nil {
+			return false
+		}
+		items = wrapped.Questions
+	}
+	normalized := strings.TrimSpace(answer)
+	for _, item := range items {
+		if item.ID != "prototype_confirmation" {
+			continue
+		}
+		for _, opt := range item.Options {
+			if opt.Value == "confirm" && (normalized == opt.Value || normalized == opt.Label) {
+				return true
+			}
+		}
+		// 兼容卡片级确认按钮传入的中文文案，不把“提出修改意见”误判为确认。
+		return strings.Contains(normalized, "原型") &&
+			(strings.Contains(normalized, "确定") || strings.Contains(normalized, "确认")) &&
+			!strings.Contains(normalized, "修改")
 	}
 	return false
 }

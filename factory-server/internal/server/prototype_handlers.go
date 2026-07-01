@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -121,21 +122,13 @@ func (s *Server) setPrototypeStatus(w http.ResponseWriter, r *http.Request, stat
 		writeError(w, http.StatusNotFound, "prototype not found")
 		return
 	}
-	if ref.Status == "confirmed" && status != "confirmed" {
-		writeError(w, http.StatusConflict, "confirmed prototype is immutable")
-		return
-	}
-	ref.Status = status
-	ref.UpdatedAt = time.Now()
-	if err := s.store.UpsertWorkbenchArtifactRef(r.Context(), *ref); err != nil {
-		writeError(w, http.StatusInternalServerError, "update prototype")
-		return
-	}
-	if status == "confirmed" || status == "continued_without_confirmation" {
-		if err := s.advancePrototypeStepAfterDecision(r.Context(), ref.JobID, ref.StepID); err != nil {
-			writeError(w, http.StatusInternalServerError, "advance prototype step")
+	if err := s.applyPrototypeDecision(r.Context(), ref, status); err != nil {
+		if err == errConfirmedPrototypeImmutable {
+			writeError(w, http.StatusConflict, "confirmed prototype is immutable")
 			return
 		}
+		writeError(w, http.StatusInternalServerError, "update prototype")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"artifactId": ref.ID,
@@ -143,6 +136,46 @@ func (s *Server) setPrototypeStatus(w http.ResponseWriter, r *http.Request, stat
 		"manifest":   manifest,
 		"contract":   contract,
 	})
+}
+
+var errConfirmedPrototypeImmutable = errors.New("confirmed prototype is immutable")
+
+func (s *Server) applyPrototypeDecision(ctx context.Context, ref *model.WorkbenchArtifactRef, status string) error {
+	if ref.Status == "confirmed" && status != "confirmed" {
+		return errConfirmedPrototypeImmutable
+	}
+	ref.Status = status
+	ref.UpdatedAt = time.Now()
+	if err := s.store.UpsertWorkbenchArtifactRef(ctx, *ref); err != nil {
+		return err
+	}
+	if status == "confirmed" || status == "continued_without_confirmation" {
+		if err := s.advancePrototypeStepAfterDecision(ctx, ref.JobID, ref.StepID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) applyLatestPrototypeDecision(ctx context.Context, jobID, stepID, status string) error {
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	var match *model.WorkbenchArtifactRef
+	for i := range refs {
+		ref := &refs[i]
+		if ref.StepID != stepID || ref.Kind != model.WorkbenchArtifactInterfacePreview || ref.CardKey != "interface_parsing" {
+			continue
+		}
+		if match == nil || ref.UpdatedAt.After(match.UpdatedAt) {
+			match = ref
+		}
+	}
+	if match == nil {
+		return os.ErrNotExist
+	}
+	return s.applyPrototypeDecision(ctx, match, status)
 }
 
 func (s *Server) advancePrototypeStepAfterDecision(ctx context.Context, jobID, stepID string) error {
