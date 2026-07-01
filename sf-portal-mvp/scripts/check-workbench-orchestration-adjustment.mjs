@@ -6,16 +6,17 @@ import {
   buildWorkbenchOrchestrationView,
   aggregateCardLabel,
 } from '../src/hooks/workbenchOrchestrationState.js'
+import { describeSessionError, buildDialogueTimeline } from '../src/hooks/dialogueTimeline.js'
 
 const empty = buildWorkbenchOrchestrationView({ view: null, workTraceItems: [], jobStepBlocks: [] })
 assert.deepEqual(
   empty.cards.map(card => [card.key, card.label, card.state]),
   [
     ['user_input', '用户输入', 'not_started'],
-    ['business_logic', '业务逻辑', 'not_started'],
-    ['interface_parsing', '界面解析', 'not_started'],
-    ['data_capture', '数据抓取', 'not_started'],
-    ['production_delivery', '生产交付', 'not_started'],
+    ['business_logic', '业务逻辑智能体', 'not_started'],
+    ['interface_parsing', '界面解析智能体', 'not_started'],
+    ['data_capture', '数据抓取智能体', 'not_started'],
+    ['production_delivery', '生产交付智能体', 'not_started'],
   ],
 )
 assert.deepEqual(empty.edges, [
@@ -25,10 +26,10 @@ assert.deepEqual(empty.edges, [
   { from: 'interface_parsing', to: 'production_delivery', state: 'inactive' },
   { from: 'data_capture', to: 'production_delivery', state: 'inactive' },
 ])
-assert.equal(aggregateCardLabel('requirement-analyst'), '业务逻辑')
-assert.equal(aggregateCardLabel('designer'), '界面解析')
-assert.equal(aggregateCardLabel('data-integration'), '数据抓取')
-assert.equal(aggregateCardLabel('code-generator'), '生产交付')
+assert.equal(aggregateCardLabel('requirement-analyst'), '业务逻辑智能体')
+assert.equal(aggregateCardLabel('designer'), '界面解析智能体')
+assert.equal(aggregateCardLabel('data-integration'), '数据抓取智能体')
+assert.equal(aggregateCardLabel('code-generator'), '生产交付智能体')
 
 const running = buildWorkbenchOrchestrationView({
   view: {
@@ -58,6 +59,14 @@ assert.equal(running.cardsByKey.data_capture.state, 'waiting_upstream')
 assert.equal(running.cardsByKey.production_delivery.state, 'waiting_upstream')
 assert.equal(running.activeCardKey, 'interface_parsing')
 assert.equal(running.focusQueue.join('>'), 'business_logic>interface_parsing>data_capture>production_delivery')
+assert.equal(running.cardsByKey.business_logic.interactionRole, '交互智能体', '业务逻辑 must carry a separate interaction identity')
+assert.match(running.cardsByKey.business_logic.interactionDescription, /理解指挥员意图、分析业务逻辑/, '业务逻辑 hover text must explain its responsibility')
+assert.equal(running.cardsByKey.interface_parsing.interactionRole, '交互智能体', '界面解析 must carry a separate interaction identity')
+assert.match(running.cardsByKey.interface_parsing.interactionDescription, /回应指挥员关切，按要求调整配置界面/, '界面解析 hover text must explain its responsibility')
+assert.equal(running.cardsByKey.data_capture.interactionRole, '交互智能体', '数据抓取 must carry a separate interaction identity')
+assert.match(running.cardsByKey.data_capture.interactionDescription, /深入动态数据对象进行数据抓取、接口对接/, '数据抓取 hover text must explain its responsibility')
+assert.equal(running.cardsByKey.data_capture.interactionDescription.endsWith('。'), false, '数据抓取 responsibility text should remove the trailing Chinese period to fit the card')
+assert.equal(running.cardsByKey.production_delivery.interactionRole, '', '生产交付 must not be marked as a persistent interaction agent')
 
 const freshInput = buildWorkbenchOrchestrationView({
   view: {
@@ -113,6 +122,23 @@ assert.equal(dataGraph.cardsByKey.data_capture.currentAction.includes('本体接
 
 assert.deepEqual(AGGREGATE_CARD_KEYS, ['user_input', 'business_logic', 'interface_parsing', 'data_capture', 'production_delivery'])
 
+// ---- pre-task clarification: business_logic is the active responsibility ---
+// Before the job is created, business_logic has NO job steps, so without a
+// dialogue-aware override the card sits at 'ready' (待启动) even while the agent
+// is actively running clarification rounds — the graph looks frozen. The card
+// must reflect that activity (执行中 + 需求澄清中 / 分析需求中).
+const clarifying = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_clar', status: 'drafting_application', intent: 'application_generation' }, messages: [{ id: 'u', role: 'user', content: '做一个后勤管理应用' }] },
+  jobStepBlocks: [],
+})
+assert.equal(clarifying.cardsByKey.business_logic.state, 'running', 'business_logic must be running during pre-task clarification (not 待启动)')
+assert.equal(/澄清|分析/.test(clarifying.cardsByKey.business_logic.currentAction), true, 'business_logic currentAction must say it is clarifying/analyzing')
+const analyzingDlg = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_ana', status: 'analyzing', intent: 'application_generation' }, messages: [{ id: 'u', role: 'user', content: 'x' }] },
+  jobStepBlocks: [],
+})
+assert.equal(analyzingDlg.cardsByKey.business_logic.state, 'running', 'business_logic must be running while the dialogue is analyzing')
+
 const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
 assert.equal(graphSource.includes('协作编排'), false, 'aggregate graph must not render 协作编排 as a card')
 const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.css', import.meta.url), 'utf8')
@@ -124,6 +150,8 @@ assert.equal(css.includes('max-height'), false, 'aggregate graph should not cap 
 assert.equal(css.includes('justify-content: center'), true, 'aggregate graph cards should be centered in the overview canvas')
 assert.equal(css.includes('.aog .ceg-canvas'), true, 'aggregate graph must tune the canvas without changing shared ceg styles')
 assert.equal(css.includes('padding: 12px 2px 10px'), true, 'aggregate graph should reduce top padding after removing wave labels')
+assert.equal(css.includes('.aog .ceg-card-state-running'), true, 'aggregate 执行中 card carries a scoped running tint')
+assert.equal(/\.aog \.ceg-card\b[\s\S]*?transition:/.test(css), true, 'aggregate card state changes animate (transition) instead of snapping')
 
 // ---- Task 4: attachment composer + message send-path ----------------------
 const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
@@ -298,7 +326,7 @@ assert.equal(aggregateGraphSrc.includes('正在执行'), true, 'running card tex
 assert.equal(aggregateGraphSrc.includes('步骤已完成'), true, 'completed card text must be a short status label')
 assert.equal(aggregateGraphSrc.includes('执行失败，查看详情'), true, 'failed card text must be a short status label')
 assert.equal(aggregateGraphSrc.includes('读取生成文件失败'), true, 'file-read failures must be shortened on the card')
-assert.equal(aggregateGraphSrc.includes('getCardTooltip'), true, 'aggregate graph must keep full card descriptions in the tooltip')
+assert.equal(aggregateGraphSrc.includes('getCardHoverRecord'), true, 'aggregate graph must keep full execution records in the external hover tooltip')
 assert.equal(aggregateGraphSrc.includes('onOpenTaskStep'), true, 'failed cards must expose a task detail entry')
 assert.equal(aggregateGraphSrc.includes('step.step_id'), true, 'task detail entry must support backend step_id fields')
 assert.equal(aggregateGraphSrc.includes('function WaveConnector'), true, 'aggregate graph must restore the old WaveConnector renderer')
@@ -310,5 +338,95 @@ assert.equal(aggregateGraphSrc.includes('aog-card-actions'), false, 'aggregate c
 assert.equal(aggregateGraphSrc.includes('aog-connector-merge'), false, 'aggregate graph should use the old connector model instead of a manual merge class')
 assert.equal(css.includes('.aog-connector'), false, 'aggregate CSS should not override the old connector geometry')
 assert.equal(css.includes('.aog-action-link'), false, 'aggregate CSS should not add non-legacy card action buttons')
+assert.equal(aggregateGraphSrc.includes('ceg-card-interaction-role'), true, 'persistent interaction identity must render separately from the state badge')
+assert.equal(aggregateGraphSrc.includes('interactionDescription'), true, 'aggregate cards must use role-specific hover descriptions')
+assert.equal(aggregateGraphSrc.includes('aog-card-hover-detail'), true, 'responsibility content must render inside the card on hover')
+assert.equal(aggregateGraphSrc.includes('card.executionRecord'), true, 'external hover tooltip must include the prior execution record when present')
+assert.equal(aggregateGraphSrc.includes('ceg-card-tooltip'), true, 'aggregate graph must restore the external floating tooltip for execution records')
+assert.equal(aggregateGraphSrc.includes('aria-describedby'), true, 'aggregate graph must describe cards through the execution-record tooltip')
+assert.equal(css.includes('.aog .ceg-card.is-active .aog-card-hover-detail'), false, 'active cards must not show in-card responsibility detail unless hovered/focused')
+assert.equal(css.includes('.aog .ceg-card.is-active .aog-record-tooltip'), true, 'active cards must explicitly keep the execution-record tooltip closed until hovered')
+assert.equal(css.includes('[data-agent-key="interface_parsing"] .aog-record-tooltip'), true, 'interface parsing execution-record hover must be placed below the card')
+assert.equal(css.includes('.aog .aog-record-tooltip {\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  border-color: rgba(104, 221, 255, 0.56);\n  background: rgba(2, 13, 22, 0.98);'), true, 'execution-record hover must use the shared opaque dark style')
+assert.equal(css.includes('background: rgba(2, 13, 22, 0.98)'), true, 'interface parsing lower hover must use a darker near-opaque background')
+assert.equal(css.includes('border-color: rgba(104, 221, 255, 0.56)'), true, 'interface parsing lower hover must use a stronger border contrast')
+assert.equal(css.includes('.aog-hover-record'), false, 'execution record must not render in the in-card responsibility detail')
+assert.equal(css.includes('.aog-tooltip-record'), true, 'execution record in the external hover tooltip must have truncation styling')
+assert.equal(aggregateGraphSrc.includes('aog-summary-chip'), true, 'summary chips must have dedicated readable classes')
+assert.equal(css.includes('.aog-summary-chip'), true, 'aggregate CSS must visibly tune the header summary chips')
+assert.equal(css.includes('.aog-summary-current'), true, 'aggregate CSS must distinguish the current-status chip')
+assert.equal(workbenchSrc.includes('aggregateGraphCompactOverride'), true, 'ConversationWorkbench must track manual aggregate graph collapse state')
+assert.equal(workbenchSrc.includes('hasSubmittedRequirement'), true, 'aggregate graph default expansion must key off submitted user input')
+assert.equal(workbenchSrc.includes('compact={aggregateGraphCompact}'), true, 'ConversationWorkbench must pass compact state into AggregateOrchestrationGraph')
+assert.equal(workbenchSrc.includes('onToggleCompact'), true, 'ConversationWorkbench must wire the aggregate graph collapse toggle')
+
+// describeSessionError turns a raw session failure into plain-Chinese
+// {title, detail, hint} and MUST NOT leak the operator-grade raw blob.
+const e402 = describeSessionError('route_failed', 'claude exit 1: {"type":"result","is_error":true,"api_error_status":402,"result":"API Error: 402 Insufficient Balance"}: runner_exit_nonzero')
+assert.equal(e402 && e402.title.includes('余额'), true, '402 → 余额不足 title')
+assert.equal(e402 && e402.hint && e402.hint.length > 0, true, 'error must carry an actionable hint')
+assert.equal(JSON.stringify(e402).includes('claude exit'), false, 'friendly error must not leak raw "claude exit" blob')
+assert.equal(JSON.stringify(e402).includes('api_error_status'), false, 'friendly error must not leak raw JSON')
+assert.equal(describeSessionError('', 'api_error_status: 401 Unauthorized').title.includes('鉴权'), true, '401 → 鉴权')
+assert.equal(describeSessionError('', 'context deadline exceeded').title.includes('超时'), true, 'timeout → 超时')
+assert.equal(describeSessionError('', 'dial tcp: connection refused').title.includes('连接'), true, 'conn refused → 连接失败')
+const eUnknown = describeSessionError('', 'something weird happened')
+assert.equal(eUnknown.title, '会话处理失败', 'unknown → generic title')
+assert.equal(eUnknown.detail.includes('something weird happened'), true, 'unknown fallback surfaces cleaned cause')
+assert.equal(describeSessionError('', ''), null, 'no error → null')
+
+// 分析过程 / 思考摘要 merge: a clarification round with BOTH a thinking message
+// and an analysis_work_log must render ONE 分析过程 block (carrying the
+// comprehensive analysis + the raw thinking as a collapsible 原始思考过程) and NO
+// standalone 思考摘要 block — the old behavior duplicated the analysis text across
+// both. flushPendingThinking still covers the rare thinking-without-analysis case.
+const mergeItems = buildDialogueTimeline({
+  session: { id: 'dlg_merge', status: 'drafting_application', intent: 'application_generation' },
+  messages: [],
+  child: {
+    messages: [
+      { id: 'm1', role: 'agent', kind: 'thinking', content: 'RAWTHINK 识别为后勤管理类应用' },
+      { id: 'm2', role: 'agent', kind: 'analysis_work_log', content: 'THEANALYSIS 识别为后勤管理类应用，推荐物资调度模式' },
+    ],
+  },
+})
+const mergeTypes = mergeItems.map(i => i.type)
+assert.equal(mergeTypes.includes('thinking_summary'), false, '思考摘要 block must merge away when 分析过程 exists for the round')
+const mergedAnalysis = mergeItems.find(i => i.type === 'analysis_stream')
+assert.equal(!!mergedAnalysis, true, '分析过程 block must render for the round')
+assert.equal(mergedAnalysis.content.includes('THEANALYSIS'), true, '分析过程 carries the comprehensive analysis text')
+assert.equal(!!(mergedAnalysis.rawThinking && mergedAnalysis.rawThinking.includes('RAWTHINK')), true, '原始思考过程 must attach to 分析过程 as rawThinking')
+// ConversationWorkbench must surface the session error (not just "已失败").
+assert.equal(workbenchSrc.includes('describeSessionError'), true, 'ConversationWorkbench must render the session error via describeSessionError')
+assert.equal(workbenchSrc.includes('cw-session-error'), true, 'ConversationWorkbench must render a session-error block')
+
+// ---- Item 3: aggregate card polish (breathing, 正在… phase, function tooltip) ----
+// The pinned overview must match the execution graph's polish: the active
+// running card breathes via cegOrchestratePulse, a 正在… phase hint shows the
+// live action, the tooltip describes what the card DOES (not the live action),
+// and a running production card surfaces its current sub-agent name + action +
+// sub-agent function description.
+assert.equal(aggregateGraphSrc.includes('CARD_DESCRIPTIONS'), true, 'aggregate graph must carry a CARD_DESCRIPTIONS function-description map')
+assert.equal(aggregateGraphSrc.includes('SUBAGENT_DESCRIPTIONS'), true, 'aggregate graph must carry a SUBAGENT_DESCRIPTIONS map for running production sub-agents')
+assert.equal(aggregateGraphSrc.includes('ceg-orchestration-phase'), true, 'aggregate graph must render the 正在… phase via the shared .ceg-orchestration-phase span')
+assert.equal(css.includes('cegOrchestratePulse'), true, 'aggregate CSS must wire the purple cegOrchestratePulse breathing on the active running card')
+assert.equal(css.includes('.aog .ceg-card.ceg-card-state-running.is-active::before'), true, 'aggregate CSS must override the active running card ::before to the breathing pulse')
+assert.equal(css.includes('prefers-reduced-motion'), true, 'aggregate CSS breathing must be reduced-motion-guarded')
+// The tooltip for a running production card is the CURRENT sub-agent function
+// description; for other cards it is the card function description (NOT the live
+// action). Drive a running production step end-to-end through the view builder.
+const item3Production = buildWorkbenchOrchestrationView({
+  view: { session: { id: 'dlg_i3', status: 'task_running', intent: 'application_generation' }, messages: [{ id: 'u', role: 'user', kind: 'prompt', content: '生成系统' }] },
+  jobStepBlocks: [
+    { stepId: 'r', kind: 'requirement_analysis', agentKey: 'requirement-analyst', status: 'succeeded', summary: '需求完成' },
+    { stepId: 'd', kind: 'design_contract', agentKey: 'designer', status: 'succeeded', summary: '界面完成' },
+    { stepId: 'x', kind: 'data_integration', agentKey: 'data-integration', status: 'succeeded', summary: '数据契约完成' },
+    { stepId: 'c', kind: 'code_generation', agentKey: 'code-generator', status: 'running', name: '代码生成', summary: '正在生成代码' },
+  ],
+})
+const item3Card = item3Production.cardsByKey.production_delivery
+assert.equal(item3Card.state, 'running')
+assert.equal(item3Card.subStage, '代码生成', 'running production card must surface the sub-agent name as subStage')
+assert.equal(item3Card.currentAction.includes('生成'), true, 'running production card currentAction must mention the sub-agent verb (生成)')
 
 console.log('check-workbench-orchestration-adjustment: ok')

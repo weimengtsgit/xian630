@@ -151,13 +151,49 @@ func (r Runner) runModel(ctx context.Context, dir, dialogueID, op string, input 
 		return "", fmt.Errorf("claude run: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return "", fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
+		return "", claudeExitError(res)
 	}
 	if strings.TrimSpace(assistantText) == "" {
 		assistantText = res.Stdout
 	}
 	_ = streamed
 	return extractJSONObject(assistantText), nil
+}
+
+func claudeExitError(res runner.CommandResult) error {
+	if reason := claudeExitReason(res); reason != "" {
+		return fmt.Errorf("claude exit %d: %s: %w", res.ExitCode, reason, runner.ErrRunnerExitNonzero)
+	}
+	return fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
+}
+
+func claudeExitReason(res runner.CommandResult) string {
+	text := strings.TrimSpace(res.Stderr)
+	if strings.TrimSpace(res.Stdout) != "" {
+		text = strings.TrimSpace(res.Stdout) + "\n" + text
+	}
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.Contains(line, "API Error:") {
+			return limitExitReason(line)
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return limitExitReason(line)
+		}
+	}
+	return ""
+}
+
+func limitExitReason(s string) string {
+	compact := strings.Join(strings.Fields(s), " ")
+	if len(compact) > 240 {
+		return compact[:240] + "..."
+	}
+	return compact
 }
 
 func (r Runner) runClaude(ctx context.Context, dialogueID, op, startedType, prompt string, emit func(StreamEvent)) (runner.CommandResult, string, bool, error) {

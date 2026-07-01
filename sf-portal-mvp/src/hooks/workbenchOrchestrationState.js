@@ -2,10 +2,16 @@ export const AGGREGATE_CARD_KEYS = ['user_input', 'business_logic', 'interface_p
 
 const CARD_LABELS = {
   user_input: '用户输入',
-  business_logic: '业务逻辑',
-  interface_parsing: '界面解析',
-  data_capture: '数据抓取',
-  production_delivery: '生产交付',
+  business_logic: '业务逻辑智能体',
+  interface_parsing: '界面解析智能体',
+  data_capture: '数据抓取智能体',
+  production_delivery: '生产交付智能体',
+}
+
+const INTERACTION_AGENT_DETAILS = {
+  business_logic: '业务逻辑智能体重点是理解指挥员意图、分析业务逻辑，形成智能体生成方案。',
+  interface_parsing: '界面解析智能体重点是回应指挥员关切，按要求调整配置界面。',
+  data_capture: '数据抓取智能体重点是深入动态数据对象进行数据抓取、接口对接，共同完成各类智能体的快速生成',
 }
 
 const AGENT_TO_CARD = {
@@ -72,6 +78,9 @@ export function buildWorkbenchOrchestrationView({ view, workTraceItems = [], job
     currentAction: '',
     subStage: '',
     summary: '',
+    // 三个协作节点是交互智能体，身份标识独立于执行状态。
+    interactionRole: INTERACTION_AGENT_DETAILS[key] ? '交互智能体' : '',
+    interactionDescription: INTERACTION_AGENT_DETAILS[key] || '',
     artifacts: artifactsForCard(view, key),
     steps: [],
   }))
@@ -105,6 +114,23 @@ export function buildWorkbenchOrchestrationView({ view, workTraceItems = [], job
   production.summary = latestTerminalSummary(production.steps)
 
   applyUpstreamWaiting(cardsByKey)
+  // Pre-task clarification: before the job is created, business_logic has NO
+  // job steps, so the upstream-waiting pass leaves it at 'ready' (待启动) even
+  // while the agent is actively running clarification rounds — the graph looks
+  // frozen. Reflect that activity: business_logic → 执行中 (running, which also
+  // pulses via ceg-card-state-running) + a currentAction naming the phase. Only
+  // applies when there are no business_logic steps (pre-job); once the job is
+  // seeded the step statuses drive the card as usual.
+  const sess = view && view.session
+  if (!cardsByKey.business_logic.steps.length && sess) {
+    if (sess.status === 'drafting_application') {
+      cardsByKey.business_logic.state = 'running'
+      if (!cardsByKey.business_logic.currentAction) cardsByKey.business_logic.currentAction = '需求澄清中'
+    } else if (sess.status === 'analyzing') {
+      cardsByKey.business_logic.state = 'running'
+      if (!cardsByKey.business_logic.currentAction) cardsByKey.business_logic.currentAction = '分析需求中'
+    }
+  }
   // Task 13: interface/data compatibility gate. When a confirmed data contract
   // is incompatible with the interface preview (the data-integration step
   // surfaced it as a data_contract artifact with status 'compatible_failed'),

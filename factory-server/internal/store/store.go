@@ -146,6 +146,13 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate job_steps.pending_questions: %w", err)
 	}
+	// job_steps.snapshot_json: 每个任务步骤的可编辑快照。旧库缺少该列时，
+	// 确认澄清会在写入固定步骤计划时失败，因此必须随 Open 做幂等补列。
+	if err := s.ensureColumn(ctx, "job_steps", "snapshot_json",
+		`ALTER TABLE job_steps ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job_steps.snapshot_json: %w", err)
+	}
 	// workbench_artifact_refs.metadata: producer-authored JSON the orchestration
 	// view projects onto a card (e.g. the data_capture card's data-verification
 	// summary — sourceBoundary + per-boundary verdicts + fallback history + sample/

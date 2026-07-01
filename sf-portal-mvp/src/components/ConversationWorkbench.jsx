@@ -26,7 +26,6 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
-import { CollaborationExecutionGraph } from './CollaborationExecutionGraph'
 import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
 import { WorkbenchAgentBlock } from './WorkbenchAgentBlock'
 import { AttachmentComposer } from './AttachmentComposer'
@@ -35,7 +34,7 @@ import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
 import { InterfacePreviewModal } from './InterfacePreviewModal'
 import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
-import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
+import { resolveWorkbenchTitle, statusText, describeSessionError } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy } from '../utils/formatLabels'
 import { factoryApi } from '../api/client'
@@ -85,7 +84,9 @@ export function ConversationWorkbench({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
   const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
+  const [aggregateGraphCompactOverride, setAggregateGraphCompactOverride] = useState(null)
   const textareaRef = useRef(null)
+  const previousHasSubmittedRequirementRef = useRef(false)
   const requestAbandonRequirement = () => {
     if (!onAbandon || submitting) return
     setMoreMenuOpen(false)
@@ -117,6 +118,8 @@ export function ConversationWorkbench({
   }, [moreMenuOpen, abandonConfirmOpen])
   useEffect(() => {
     setManualStepConfirmation(false)
+    setAggregateGraphCompactOverride(null)
+    previousHasSubmittedRequirementRef.current = false
   }, [session && session.id])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
@@ -137,6 +140,10 @@ export function ConversationWorkbench({
   const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
+  // Surface WHY a session failed (e.g. 模型服务余额不足), not just "已失败". The
+  // raw error_message is operator-grade; describeSessionError maps it to a
+  // plain-Chinese {title, detail, hint} and never leaks the raw blob.
+  const sessionError = status === 'failed' ? describeSessionError(session && session.error_code, session && session.error_message) : null
 
   // ---- continuous-workbench derived state (Task 7) ------------------------
   const traceItems = Array.isArray(workTrace) ? workTrace : []
@@ -184,6 +191,22 @@ export function ConversationWorkbench({
     workTraceItems: traceItems,
     jobStepBlocks: traceSteps,
   }), [view, traceItems, traceSteps])
+  const hasSubmittedRequirement = aggregateGraph.cardsByKey &&
+    aggregateGraph.cardsByKey.user_input &&
+    aggregateGraph.cardsByKey.user_input.state === 'confirmed'
+  useEffect(() => {
+    if (hasSubmittedRequirement && !previousHasSubmittedRequirementRef.current) {
+      setAggregateGraphCompactOverride(false)
+    }
+    previousHasSubmittedRequirementRef.current = hasSubmittedRequirement
+  }, [hasSubmittedRequirement])
+  const aggregateGraphCompact = aggregateGraphCompactOverride == null ? !hasSubmittedRequirement : aggregateGraphCompactOverride
+  const toggleAggregateGraphCompact = () => {
+    setAggregateGraphCompactOverride(current => {
+      const compactNow = current == null ? !hasSubmittedRequirement : current
+      return !compactNow
+    })
+  }
 
   // Session attachments (Task 4): pending composer attachments for the current
   // message. focusKey mirrors the aggregate graph's active card so uploaded
@@ -367,7 +390,13 @@ export function ConversationWorkbench({
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
-      <AggregateOrchestrationGraph graph={aggregateGraph} onOpenArtifact={openArtifact} onOpenTaskStep={onOpenTaskStep} />
+      <AggregateOrchestrationGraph
+        graph={aggregateGraph}
+        compact={aggregateGraphCompact}
+        onToggleCompact={toggleAggregateGraphCompact}
+        onOpenArtifact={openArtifact}
+        onOpenTaskStep={onOpenTaskStep}
+      />
 
       <div className="cw-body">
         {timeline.map(item => (
@@ -521,7 +550,16 @@ export function ConversationWorkbench({
         {status === 'resolved' && !composerActive ? (
           <p className="cw-terminal-hint">会话已完成，在左侧「会话导航」开始新的需求。</p>
         ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
-          <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
+          <>
+            {sessionError ? (
+              <div className="cw-session-error" role="alert">
+                <div className="cw-session-error-title">{sessionError.title}</div>
+                {sessionError.detail ? <div className="cw-session-error-detail">{sessionError.detail}</div> : null}
+                {sessionError.hint ? <div className="cw-session-error-hint">{sessionError.hint}</div> : null}
+              </div>
+            ) : null}
+            <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
+          </>
         ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
@@ -702,7 +740,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     // D6: the persisted analysis lands after the round completes and renders
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
     // the full text. Rendered as plaintext only (never dangerouslySetInnerHTML).
-    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} />
+    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} rawThinking={item.rawThinking} />
   }
   if (item.type === 'task_execution_block') {
     // Phase 3: one block per executing task step. Running/waiting/failed steps
@@ -732,18 +770,11 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   if (item.type === 'live_thinking' || item.type === 'thinking_summary') {
     return <ThinkingSummary item={item} />
   }
+  // The detailed 协作编排执行图 is hidden from the conversation flow: the pinned
+  // 编排执行总览 (AggregateOrchestrationGraph) is now the primary orchestration
+  // view. Per-agent execution detail still lives in the task drawer.
   if (item.type === 'collaboration_plan_preview') {
-    return (
-      <CollaborationExecutionGraph
-        graph={item.graph}
-        onOpenTask={card => {
-          if (card && card.stepId && onOpenTaskStep) onOpenTaskStep(card)
-        }}
-        onConfirmStep={onConfirmTaskStep}
-        manualStepConfirmation={manualStepConfirmation}
-        onToggleManualStepConfirmation={onToggleManualStepConfirmation}
-      />
-    )
+    return null
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
@@ -846,9 +877,10 @@ function ThinkingSummary({ item }) {
 // block with an expand/collapse toggle. The round's streamed analysis folds above
 // its conclusion once the persisted analysis lands; the user expands to read it.
 // Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
-function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
+function FoldedAnalysis({ content, label, expanded: initialExpanded, rawThinking }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
   const text = String(content || '')
+  const raw = String(rawThinking || '')
   return (
     <CopyableBlock text={text} className="cw-agent-wrap" copyLabel="复制分析">
       <div className="cw-item cw-agent cw-folded-analysis">
@@ -862,6 +894,12 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
           <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
         </button>
         {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+        {expanded && raw ? (
+          <details className="cw-raw-thinking">
+            <summary>原始思考过程</summary>
+            <pre className="cw-live-text">{raw}</pre>
+          </details>
+        ) : null}
       </div>
     </CopyableBlock>
   )

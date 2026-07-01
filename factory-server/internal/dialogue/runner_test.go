@@ -19,11 +19,13 @@ type fakeCommandRunner struct {
 	name      string
 	args      []string
 	rawStdout string
+	rawStderr string
+	exitCode  int
 }
 
 func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
 	f.dir, f.name, f.args = dir, name, args
-	return runner.CommandResult{Stdout: f.rawStdout, ExitCode: 0}, nil
+	return runner.CommandResult{Stdout: f.rawStdout, Stderr: f.rawStderr, ExitCode: f.exitCode}, nil
 }
 
 type fakeStreamCommandRunner struct {
@@ -403,6 +405,25 @@ func TestRouteIntentRejectsMalformedJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "output") && !strings.Contains(err.Error(), "JSON") {
 		t.Fatalf("error should describe JSON failure: %v", err)
+	}
+}
+
+func TestRouteIntentIncludesAPIErrorOnNonZeroExit(t *testing.T) {
+	root := t.TempDir()
+	fr := &fakeCommandRunner{rawStdout: "API Error: 402 Insufficient Balance", exitCode: 1}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	_, err := r.RouteIntent(context.Background(), RouteInput{
+		DialogueID: "dia_api_error", UserMessage: "请做一个后勤管理应用",
+		ExistingApplications: sampleApps(), Blueprints: sampleBlueprints(),
+	}, func(ev StreamEvent) {})
+	if err == nil {
+		t.Fatalf("expected route runner error")
+	}
+	if !strings.Contains(err.Error(), "API Error: 402 Insufficient Balance") {
+		t.Fatalf("error should include the Claude API error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), runner.ErrRunnerExitNonzero.Error()) {
+		t.Fatalf("error should preserve runner_exit_nonzero sentinel, got: %v", err)
 	}
 }
 
