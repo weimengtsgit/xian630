@@ -71,6 +71,94 @@ export function statusText(status) {
   return map[status] || status
 }
 
+// SESSION_ERROR_PATTERNS maps known failure signals (HTTP status embedded in the
+// raw error, timeout, connection, output-contract) to a plain-Chinese
+// {title, detail, hint}. The raw error_message is operator-grade — often
+// `claude exit 1: {…}` wrapping an upstream API error — so describeSessionError
+// MUST NOT surface it verbatim. Order matters: most-specific first.
+const SESSION_ERROR_PATTERNS = [
+  {
+    match: /api_error_status["']?\s*[:=]\s*402|Insufficient Balance|余额不足/i,
+    title: '模型服务余额不足',
+    detail: '调用大模型服务时返回「账户余额不足」(HTTP 402)。',
+    hint: '请到对应模型服务控制台充值，或更换有余额的 API 密钥后重试。',
+  },
+  {
+    match: /api_error_status["']?\s*[:=]\s*401|Unauthorized|invalid[_ -]?key|鉴权失败|未授权/i,
+    title: '模型服务鉴权失败',
+    detail: 'API 密钥无效或已过期 (HTTP 401)。',
+    hint: '请检查 API 密钥（如 ANTHROPIC_AUTH_TOKEN）是否正确且未失效。',
+  },
+  {
+    match: /api_error_status["']?\s*[:=]\s*429|rate[_ -]?limit|Too Many Requests|限流/i,
+    title: '模型服务已限流',
+    detail: '请求频率或配额超出限制 (HTTP 429)。',
+    hint: '请稍后重试；若持续，可降低并发或更换额度更高的密钥。',
+  },
+  {
+    match: /api_error_status["']?\s*[:=]\s*5\d\d|Internal Server Error|Bad Gateway|服务(器)?异常/i,
+    title: '模型服务端异常',
+    detail: '模型服务返回了服务端错误 (5xx)。',
+    hint: '请稍后重试；若持续，请检查模型服务本身的可用性。',
+  },
+  {
+    match: /timeout|deadline exceeded|context deadline|调用超时|超时/i,
+    title: '模型服务调用超时',
+    detail: '调用模型服务未在限定时间内返回。',
+    hint: '请稍后重试；若持续，请检查网络或模型服务的响应速度。',
+  },
+  {
+    match: /dial tcp|no such host|connection refused|ECONN|网络不可达|无法连接/i,
+    title: '无法连接模型服务',
+    detail: '到模型服务的网络连接失败。',
+    hint: '请检查 ANTHROPIC_BASE_URL 是否正确，以及本机网络/代理是否可达。',
+  },
+  {
+    match: /output_invalid_json|output_missing|invalid JSON|无法解析|parse error|unexpected token/i,
+    title: '模型返回内容无法解析',
+    detail: '模型返回的内容不符合预期格式。',
+    hint: '请重试；若持续出现，可能是当前模型不满足所需的输出契约。',
+  },
+]
+
+// cleanSessionErrorMessage strips operator-grade wrappers (a leading
+// `claude exit N:` and trailing `: error_code`) and, when a JSON blob is
+// embedded, extracts its inner `result`/`error` text — so the fallback never
+// pastes `claude exit 1: {…}` verbatim. Output is collapsed + capped.
+function cleanSessionErrorMessage(raw) {
+  let s = String(raw || '')
+    .replace(/^claude exit \d+\s*:\s*/i, '')
+    .replace(/:\s*[a-z_]+$/i, '')
+  const jsonMatch = s.match(/\{[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const obj = JSON.parse(jsonMatch[0])
+      if (obj && typeof obj.result === 'string' && obj.result.trim()) s = obj.result
+      else if (obj && typeof obj.error === 'string' && obj.error.trim()) s = obj.error
+    } catch { /* keep the stripped text */ }
+  }
+  s = s.replace(/\s+/g, ' ').trim()
+  return s.length > 160 ? `${s.slice(0, 160)}…` : s
+}
+
+// describeSessionError translates a session failure (error_code + error_message,
+// as persisted by the backend) into a user-facing {title, detail, hint}. Returns
+// null when there is nothing to describe. This is the ONLY place session error
+// strings are turned into user copy; the workbench imports it (no inline maps).
+export function describeSessionError(errorCode, errorMessage) {
+  const raw = String(errorMessage || '')
+  if (!raw) return null
+  for (const p of SESSION_ERROR_PATTERNS) {
+    if (p.match.test(raw)) return { title: p.title, detail: p.detail, hint: p.hint }
+  }
+  const cleaned = cleanSessionErrorMessage(raw)
+  return {
+    title: '会话处理失败',
+    detail: cleaned ? `原因：${cleaned}` : '发生未知错误。',
+    hint: '可重试本轮；若持续失败，请检查服务配置或联系管理员。',
+  }
+}
+
 // titleForDialogue derives a short, human title from a session. It prefers an
 // app name in the resolved requirement, then the initial prompt.
 export function titleForDialogue(session) {
@@ -339,6 +427,8 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   const hasPersistedAnalysis = parentMessages.some(
     msg => msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output'),
   )
+  const route = view.route || {}
+  let routeThinkingRendered = false
 
   // Task-internal clarification answers are persisted as dialogue user messages
   // (kind=task_clarification_answer) so the answer becomes part of the normal
@@ -379,6 +469,17 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       }
       continue
     }
+    if (msg.role === 'agent' && msg.kind === 'thinking') {
+      routeThinkingRendered = true
+      items.push({
+        id: msg.id,
+        type: 'thinking_summary',
+        content: safeString(msg.content),
+        summary: safeString(route.userFacingReason),
+        label: '思考摘要',
+      })
+      continue
+    }
     if (msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
       // D6: the persisted analysis lands ONLY after the round completes. It
       // renders as a collapsible block above the conclusion (`folded`), default
@@ -408,7 +509,27 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   // content always appears after the latest persisted content — see below.
 
   // 2. Route choice cards when the intent is ambiguous (needs confirmation).
-  const route = view.route
+  if (statusIsRouting(view.session) && !(route && route.intent) && !(liveThinking && liveThinking.content) && !(liveAnalysis && liveAnalysis.content)) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_route_pending_thinking`,
+      type: 'live_thinking',
+      content: '正在识别你的需求，并判断是复用已有应用还是生成新应用。',
+      summary: '',
+      pending: true,
+      kind: 'round',
+    })
+  }
+  if (route && route.needsRouteConfirmation && statusIsRouting(view.session) && route.intent && !routeThinkingRendered) {
+    const summary = safeString(route.userFacingReason)
+    items.push({
+      id: `${view.session.id || 'dlg'}_route_thinking_summary`,
+      type: 'thinking_summary',
+      content: '',
+      summary: summary || '已完成需求识别，等待用户确认下一步处理方式。',
+      label: '思考摘要',
+    })
+    routeThinkingRendered = true
+  }
   if (route && route.needsRouteConfirmation && statusIsRouting(view.session)) {
     items.push({
       id: `${view.session.id || 'dlg'}_route`,
