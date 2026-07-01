@@ -152,6 +152,7 @@
 .aog .ceg-card[data-agent-key="interface_parsing"] .aog-record-tooltip {
   top: calc(100% + 8px);
   bottom: auto;
+  background: rgb(2, 13, 22);
 }
 
 .aog .ceg-card[data-agent-key="interface_parsing"] .aog-record-tooltip::after {
@@ -163,6 +164,14 @@
   border-top: 1px solid rgba(104, 221, 255, 0.56);
   background: rgba(2, 13, 22, 0.98);
   transform: translate(-50%, 4px) rotate(45deg);
+}
+
+/* tooltip 弹向卡片下方，正压在下一个兄弟卡片（data_capture）上；
+   后到的兄弟按 DOM 顺序会盖住 tooltip，故 hover 时提升本卡片层叠级，
+   让 tooltip 整体浮在 data_capture 之上 */
+.aog .ceg-card[data-agent-key="interface_parsing"]:hover,
+.aog .ceg-card[data-agent-key="interface_parsing"]:focus-visible {
+  z-index: 20;
 }
 
 .aog-tooltip-label {
