@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { SessionNav } from './components/SessionNav'
@@ -79,6 +79,23 @@ function App() {
   useEffect(() => {
     dialogue.setJobStepBlocks(buildTaskBlocks(scopedTraceSteps, jobs.summary))
   }, [scopedTraceSteps, jobs.summary, dialogue.setJobStepBlocks])
+
+  // Prototype dock reactivity: when useJobs receives step.updated /
+  // artifact.created SSE it refreshes jobs.artifacts, but the dialogue view
+  // (view.workbenchArtifacts) is only refreshed on dialogue.* events. Bridge
+  // the gap so the cw-prototype-dock appears immediately when a design step
+  // transitions to waiting_user and projects an interface_preview artifact —
+  // without requiring a page refresh.
+  const initialArtifactsLoadedRef = useRef(false)
+  useEffect(() => {
+    if (!initialArtifactsLoadedRef.current) {
+      initialArtifactsLoadedRef.current = true
+      return
+    }
+    if (dialogue.selectedDialogueId && dialogue.refreshSelectedView) {
+      dialogue.refreshSelectedView()
+    }
+  }, [jobs.artifacts, dialogue.selectedDialogueId, dialogue.refreshSelectedView])
 
   const [selectedClarificationScope, setSelectedClarificationScope] = useState(null)
   const openClarifications = useMemo(() => {

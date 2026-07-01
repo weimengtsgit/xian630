@@ -62,16 +62,30 @@ func splitPath(p string) []string {
 }
 
 func match(pattern, path []string) (map[string]string, bool) {
-	if len(pattern) != len(path) {
-		return nil, false
-	}
 	params := map[string]string{}
 	for i := range pattern {
+		// Wildcard segment (*name): captures all remaining path segments joined
+		// by "/". Must be the LAST segment in the pattern. This lets routes like
+		// "/api/jobs/:id/steps/:stepID/prototype/static/*path" serve arbitrary
+		// sub-resources from a directory.
+		if strings.HasPrefix(pattern[i], "*") {
+			if i >= len(path) {
+				return nil, false
+			}
+			params[pattern[i][1:]] = strings.Join(path[i:], "/")
+			return params, true
+		}
+		if i >= len(path) {
+			return nil, false
+		}
 		if strings.HasPrefix(pattern[i], ":") {
 			params[pattern[i][1:]] = path[i]
 		} else if pattern[i] != path[i] {
 			return nil, false
 		}
+	}
+	if len(pattern) != len(path) {
+		return nil, false
 	}
 	return params, true
 }

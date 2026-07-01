@@ -616,16 +616,3 @@
   justify-content: flex-end;
   gap: 8px;
 }
-
-.cw-prototype-preview-modal {
-  width: min(1180px, 96vw);
-  height: min(820px, 90vh);
-}
-
-.cw-prototype-preview-frame {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  border: 0;
-  background: #fff;
-}
