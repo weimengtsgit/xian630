@@ -224,16 +224,29 @@
   opacity: 0.6;
 }
 
-/* In-app delete confirmation (never window.confirm). Positioned inside the rail
- * so the confirm card anchors to the rail the way the old workbench drawer did. */
+/* In-app delete confirmation (never window.confirm). The popover is anchored
+ * to the row whose delete button was clicked (.session-nav-row is the relative
+ * positioning context). It overlaps the row's footprint (aligned to the row's
+ * right edge near the delete button) so it never spills outside the scroll
+ * region horizontally. When the clicked row sits near the viewport bottom, the
+ * .flip-up modifier renders the popover ABOVE the row so it stays fully visible
+ * (会话删除确认浮层: clamped to rail, never overflows the viewport). */
 .session-nav-delete-confirm {
   position: absolute;
-  left: 0;
+  top: 100%;
+  /* Anchor to the row's right edge (where the delete button sits) and size the
+   * card to its content, capped so it never exceeds the row width — this keeps
+   * the popover a SMALL card near the delete button rather than a full-width
+   * bar, and avoids horizontal clipping by the scroll region. */
   right: 0;
-  bottom: 0;
-  z-index: 5;
-  padding: 10px;
-  background: linear-gradient(180deg, rgba(3, 17, 29, 0.4), rgba(3, 17, 29, 0.96) 40%);
+  width: min(260px, 100%);
+  z-index: 20;
+  padding: 4px;
+}
+
+.session-nav-delete-confirm.flip-up {
+  top: auto;
+  bottom: 100%;
 }
 
 .session-nav-delete-card {

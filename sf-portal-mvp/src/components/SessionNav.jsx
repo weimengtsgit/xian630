@@ -12,6 +12,12 @@ import {
 import { statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import './SessionNav.css'
 
+// Conservative height budget for the delete-confirm popover (~150–170px card
+// + padding + shadow). Used to decide whether opening the popover BELOW the
+// clicked row would overflow the viewport; if so the popover flips to sit
+// ABOVE the row so it stays fully visible (会话删除确认浮层: clamped to rail).
+const POPOVER_FLIP_BUDGET = 200
+
 // SessionNav is the left 会话导航栏: a collapsible rail that owns the new-session
 // action and the historical-dialogue list (moved here from ConversationWorkbench's
 // top header buttons + its DialogueHistoryDrawer in Phase 1 of the workbench-drawer
@@ -32,6 +38,9 @@ export function SessionNav({
 }) {
   const list = Array.isArray(sessions) ? sessions : []
   const [pendingDelete, setPendingDelete] = useState(null)
+  // `flipUp` is set when the clicked row sits near the bottom of the viewport —
+  // the popover then opens ABOVE the row instead of below so it never overflows.
+  const [flipUp, setFlipUp] = useState(false)
   const pendingTitle = pendingDelete ? titleForDialogue(pendingDelete.session || pendingDelete) : ''
   const confirmingDelete = pendingDelete && deletingDialogueId === (pendingDelete.session && pendingDelete.session.id)
 
@@ -43,9 +52,21 @@ export function SessionNav({
     if (!list.some(v => v.session && v.session.id === pid)) setPendingDelete(null)
   }, [pendingDelete, list.map(v => v.session && v.session.id).join('|')])
 
-  const requestDelete = entry => {
+  const requestDelete = (entry, clickEvent) => {
     const sess = entry && entry.session
     if (!sess) return
+    // Decide whether the popover would overflow the viewport bottom if it
+    // opened below the clicked row. The card is ~150–170px tall; we measure
+    // against the click target's bottom + a conservative budget so it never
+    // spills past the viewport. If so, flip the popover to sit ABOVE the row.
+    const target = clickEvent && clickEvent.currentTarget
+    let flip = false
+    if (target && typeof target.getBoundingClientRect === 'function') {
+      const rect = target.getBoundingClientRect()
+      const spaceBelow = (window.innerHeight || document.documentElement.clientHeight) - rect.bottom
+      if (spaceBelow < POPOVER_FLIP_BUDGET) flip = true
+    }
+    setFlipUp(flip)
     setPendingDelete(entry)
   }
 
@@ -56,9 +77,15 @@ export function SessionNav({
     try {
       await onDeleteSession(sess.id)
       setPendingDelete(null)
+      setFlipUp(false)
     } catch (_) {
       // The dialogue hook surfaces the error in the workbench error bar.
     }
+  }
+
+  const cancelDelete = () => {
+    setPendingDelete(null)
+    setFlipUp(false)
   }
 
   if (collapsed) {
@@ -145,38 +172,41 @@ export function SessionNav({
                   type="button"
                   className="session-nav-delete"
                   disabled={deletingDialogueId === sess.id}
-                  onClick={() => requestDelete(entry)}
+                  onClick={e => requestDelete(entry, e)}
                   title="删除历史会话"
                   aria-label="删除历史会话"
                 >
                   {deletingDialogueId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                 </button>
+                {pendingDelete && (pendingDelete.session && pendingDelete.session.id) === sess.id ? (
+                  <div
+                    className={`session-nav-delete-confirm${flipUp ? ' flip-up' : ''}`}
+                    role="dialog"
+                    aria-labelledby="session-nav-delete-title"
+                  >
+                    <div className="session-nav-delete-card">
+                      <span className="session-nav-delete-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
+                      <div className="session-nav-delete-copy">
+                        <strong id="session-nav-delete-title">删除历史会话</strong>
+                        <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
+                      </div>
+                      <div className="session-nav-delete-actions">
+                        <button type="button" className="session-nav-delete-cancel" onClick={cancelDelete} disabled={confirmingDelete}>
+                          <X size={12} /> 取消
+                        </button>
+                        <button type="button" className="session-nav-delete-danger" onClick={confirmDelete} disabled={confirmingDelete}>
+                          {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )
           })
         )}
       </div>
-
-      {pendingDelete ? (
-        <div className="session-nav-delete-confirm" role="dialog" aria-labelledby="session-nav-delete-title">
-          <div className="session-nav-delete-card">
-            <span className="session-nav-delete-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
-            <div className="session-nav-delete-copy">
-              <strong id="session-nav-delete-title">删除历史会话</strong>
-              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
-            </div>
-            <div className="session-nav-delete-actions">
-              <button type="button" className="session-nav-delete-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>
-                <X size={12} /> 取消
-              </button>
-              <button type="button" className="session-nav-delete-danger" onClick={confirmDelete} disabled={confirmingDelete}>
-                {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </aside>
   )
 }
