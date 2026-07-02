@@ -604,6 +604,20 @@ WHERE id = ?`, appID, string(model.DialogueStatusTaskRunning), string(model.Dial
 	return tx.Commit()
 }
 
+// DialogueOwnsJobWithSlug reports whether the dialogue owns a generating job
+// whose app_slug matches slug. Used pre-codegen — before SetJobCreatedApp stamps
+// resolved_application_id — to authorize project-file access for a task_running
+// job whose Application row does not exist yet. Slugs carry a random suffix, so
+// cross-dialogue slug collision is not a practical concern.
+func (s *Store) DialogueOwnsJobWithSlug(ctx context.Context, dialogueID, slug string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM jobs WHERE dialogue_id = ? AND app_slug = ?`, dialogueID, slug).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // GetLatestJobForApplication returns the newest job that produced or targets
 // appID. Revision confirmation reuses its server-confirmed requirement rather
 // than accepting a requirement payload from the browser.
