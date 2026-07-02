@@ -64,6 +64,10 @@ _Avoid_: 已有应用复用, 业务处理智能体草稿, 复制场景源代码
 A generated application that presents an assistant-like or agent-like workflow as a runnable software product. In the current phase, user requests to create an intelligent agent are routed to assistant-application generation rather than business-processing agent drafting.
 _Avoid_: 业务处理智能体定义, 不可运行 prompt, 右侧业务处理 Tab 项
 
+**演示材料智能体称谓**:
+A presentation-facing label used in customer training material when a generated runnable application must be described as an 智能体 to match the deck's audience language. It does not create a separate agent concept; product, project, and implementation discussions still use 应用.
+_Avoid_: 协作智能体, 纳管智能体, 业务处理智能体, 生成智能体
+
 **会话草稿**:
 A not-yet-persisted dialogue placeholder that becomes a dialogue session only after the user sends the first request.
 _Avoid_: 生成任务草稿, 空任务
@@ -84,8 +88,12 @@ _Avoid_: 会话删除, 应用删除, 完成后自动关闭
 An explicitly confirmed, irreversible removal of a dialogue session and its messages, visible work trace, and audit attachments.
 _Avoid_: 会话归档, 应用删除, 自动清理
 
+**会话删除确认浮层**:
+A lightweight confirmation popover anchored near the delete action for one historical dialogue session in the session navigation. It confirms an irreversible session deletion without moving the user away from the session list context.
+_Avoid_: 固定底部确认条, 页面居中大弹窗, window.confirm
+
 **会话工作台**:
-The central portal experience for reviewing and continuing a dialogue session, including intent results, model analysis process, route-specific confirmation, and application requirement clarification where applicable.
+The central portal experience for reviewing and continuing a dialogue session, including intent results, model analysis process, route-specific confirmation, and application requirement clarification where applicable. Its conversation area preserves user messages, agent replies, clarification cards, confirmation results, thinking summaries, and preview confirmations in their actual timeline order.
 _Avoid_: 需求澄清区域, 独立澄清面板, 任务区
 
 **工作台抽屉**:
@@ -97,20 +105,36 @@ A visual grouping of collaboration-agent task cards whose dependency position al
 _Avoid_: 并行任务, 固定六阶段泳道, 实际并发保证
 
 **协作编排执行图**:
-A conversation-flow visualization of collaboration-agent participation and dependency flow for one generation task, showing either collaboration agents or user-facing aggregate orchestration cards with their execution state and upstream/downstream relationship. It uses horizontal execution waves derived from the dependency graph, with a user-input origin card before the first agent or aggregate wave. Before confirmation it represents the planned orchestration; after confirmation it represents the accepted orchestration with real task execution state.
+A pinned conversation-workbench visualization of collaboration-agent participation and dependency flow for one generation task, showing either collaboration agents or user-facing aggregate orchestration cards with their execution state and upstream/downstream relationship. It uses horizontal execution waves derived from the dependency graph, with a user-input origin card before the first agent or aggregate wave. Before confirmation it represents the planned orchestration; after confirmation it represents the accepted orchestration with real task execution state; the workbench uses this pinned aggregate graph instead of restoring the older detailed graph inside the conversation flow.
 _Avoid_: 静态参与列表, 模拟执行动画, 真实并发保证, 自由漂浮网络图
 
 **编排聚合卡片**:
 A user-facing card in the conversation-workbench orchestration graph that presents one generation responsibility label or aggregates several downstream collaboration-agent responsibilities. The visible labels may be 业务逻辑, 界面解析, 数据抓取, and 生产交付, but this does not rename collaboration agents, change their bounded responsibilities, or merge their machine execution contracts.
 _Avoid_: 协作智能体替换, 机器执行契约合并, 原始执行记录重命名
 
+**四类编排责任**:
+The fixed user-facing responsibility set used to explain Factory orchestration: 业务逻辑, 界面解析, 数据抓取, and 生产交付. It is the stable presentation and workbench abstraction for the application-generation flow, not a replaceable five-step pipeline or a renamed collaboration-agent list.
+_Avoid_: 五阶段流程, 六阶段流水线, 协作智能体列表, 可随意改名的流程
+
+**业务逻辑编排责任**:
+The orchestration responsibility that turns user intent into a confirmed requirement boundary through analysis and user-facing requirement clarification. It captures the task goal, actors and objects, business rules, constraints, and acceptance focus before interface parsing, data capture, and production delivery proceed.
+_Avoid_: 纯需求复述, 无用户确认的任务创建, 代码实现步骤
+
+**数据抓取编排责任**:
+The orchestration responsibility that selects and validates the data-source boundary for a generated application, centered on ontology data sources and public internet sources in customer-facing explanations. Any demonstration-data fallback remains a separately confirmed data-truth boundary rather than a peer source label in the main flow.
+_Avoid_: 静默造数, mock 伪装真实数据, 未说明来源的抓取
+
 **编排澄清焦点**:
 The single orchestration card whose clarification request is currently active in the conversation workbench. The execution graph may show sibling cards in the same wave, but the conversation input answers one clarification focus at a time before moving to the next focus.
 _Avoid_: 并行澄清输入, 多智能体同框待答, 无归属用户回复
 
+**澄清交互卡片**:
+A conversation-flow card that contains one clarification or confirmation interaction, including structured options, custom input when allowed, the submit or confirm action, and the retained final answer. It is the unified interaction surface for requirement clarification, task-internal clarification, interface-preview confirmation, and data-contract confirmation.
+_Avoid_: 输入框回填选项, 右下角悬浮确认, 卡片外提交, 临时表单
+
 **编排产物确认**:
-A user action that approves the current orchestration card's produced artifact package and allows Factory to advance the clarification focus or production flow. It confirms the artifact's acceptability; it is not a manual scheduler command.
-_Avoid_: 手动调度下一步, 普通聊天回复, 无产物确认
+A user action in the conversation timeline that approves the current orchestration card's produced artifact package and allows Factory to advance the clarification focus or production flow. It confirms the artifact's acceptability; it is not a manual scheduler command, and drawer-only confirmation is not sufficient for user-facing review.
+_Avoid_: 手动调度下一步, 普通聊天回复, 无产物确认, 仅抽屉内确认
 
 **业务逻辑结果包**:
 The business-logic card's user-visible result across two moments: before task creation the user confirms the confirmed requirement summary; after task creation the requirement-analysis step projects the associated requirement document. The task-owned document must validate against the confirmed summary, but it is not a second pre-task user confirmation gate.
@@ -129,7 +153,7 @@ A user-confirmed return to an earlier orchestration card after its artifact pack
 _Avoid_: 静默覆盖已确认产物, 删除历史产物, 无影响提示的返工
 
 **折叠澄清摘要卡**:
-The compact retained form of a completed orchestration clarification block in the conversation workbench. It keeps the agent label, completion state, thinking summary, confirmed artifact links, confirmation time, and an expand action after the detailed conversation folds.
+The default compact retained form of a completed orchestration clarification block in the conversation workbench. It keeps the agent label, completion state, thinking summary, final answer or confirmation result, confirmed artifact links, confirmation time, and an expand action after the detailed conversation folds.
 _Avoid_: 删除历史澄清, 隐藏产物入口, 只显示完成图标
 
 **编排卡片状态**:
@@ -211,6 +235,10 @@ _Avoid_: 机器执行契约, 审计附件, 任务执行日志
 **项目文档预览**:
 A read-only rich rendering of a project document inside the conversation workbench. User changes to the underlying content must be requested through the conversation so the owning task output, machine contract, document, and downstream inputs stay consistent.
 _Avoid_: 直接编辑器, 绕过机器执行契约, 无归属文档修改
+
+**工作台预览弹窗**:
+A centered conversation-workbench modal used to inspect retained attachments, project documents, interface previews, workspace files, and code content with a consistent shell. It supports rich document rendering and language-aware code highlighting while keeping the underlying artifact read-only unless a separate draft workflow is explicitly entered.
+_Avoid_: 抽屉内小窗拼接, 纯文本预览, 每类产物独立弹窗样式, 直接修改产物
 
 **项目文档索引**:
 A factory-owned metadata file in an application project that links each project document to its source machine execution contract and generation attribution.
