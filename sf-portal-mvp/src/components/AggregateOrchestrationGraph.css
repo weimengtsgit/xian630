@@ -208,10 +208,61 @@
   cursor: pointer;
 }
 
+.aog-compact-summary {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.aog-compact-name {
+  font-weight: 700;
+  font-size: 12px;
+  color: #edfaff;
+}
+
+.aog-compact-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .aog-compact em {
   color: #68ddff;
   font-style: normal;
   font-size: 11px;
+}
+
+/* Explicit expand affordance on the collapsed bar — mirrors the
+   expanded-state collapse button so both directions read at a glance. */
+.aog-expand-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(104, 221, 255, 0.3);
+  border-radius: 7px;
+  background: rgba(6, 18, 29, 0.58);
+  color: #9ddff0;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.aog-compact:hover .aog-expand-btn,
+.aog-compact:focus-visible .aog-expand-btn {
+  border-color: rgba(104, 221, 255, 0.62);
+  background: rgba(16, 57, 78, 0.82);
+  color: #edfaff;
+}
+
+/* Light collapse/expand transition on the overview body. The container stays
+   in normal flow; the body fades + lifts slightly so the pinned header does
+   not jump. (We avoid capping the canvas height — opacity + transform only.) */
+.aog .aog-canvas-expandable {
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .aog-collapse-btn {
@@ -295,5 +346,8 @@
   }
   .aog .ceg-card.ceg-card-state-running.is-active::before {
     animation: none !important;
+  }
+  .aog .aog-canvas-expandable {
+    transition: none;
   }
 }

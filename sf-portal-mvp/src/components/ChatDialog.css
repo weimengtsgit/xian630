@@ -29,13 +29,8 @@
   flex: 1 1 auto;
 }
 
-.chat-dock-messages::-webkit-scrollbar {
-  width: 6px;
-}
-.chat-dock-messages::-webkit-scrollbar-thumb {
-  background: rgba(111, 218, 255, 0.24);
-  border-radius: 3px;
-}
+/* Scrollbar styling for .chat-dock-messages is provided by the shared
+ * .sf-scroll utility class in App.css (applied in JSX). */
 
 .chat-dock-empty {
   font-size: 12px;

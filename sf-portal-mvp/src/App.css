@@ -274,3 +274,39 @@ body,
   font-size: 14px;
   color: #a5bdca;
 }
+
+/*
+ * Shared scrollbar utility (.sf-scroll).
+ * One canonical dark-theme cyan scrollbar for every scroll region in the portal.
+ * Token values consolidate the previously divergent per-file families:
+ *   - 6px webkit family (ChatDialog/SessionNav/ApplicationsPanel/AgentsPanel/
+ *     ApplicationStorePage/JobCenter): ~6px, rgba(111,218,255,0.24-0.28) thumb,
+ *     0.4-0.44 hover.
+ *   - Firefox shorthand family (cw-task-thinking-scroll, cw-collaboration-rail,
+ *     ceg-canvas): scrollbar-width: thin; scrollbar-color
+ *     rgba(104,221,255,0.42) rgba(6,18,29,0.28).
+ * Do not introduce a new visual style — these are the existing tokens.
+ */
+.sf-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(111, 218, 255, 0.42) rgba(6, 18, 29, 0.28);
+}
+
+.sf-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.sf-scroll::-webkit-scrollbar-track {
+  background: rgba(6, 18, 29, 0.28);
+  border-radius: 999px;
+}
+
+.sf-scroll::-webkit-scrollbar-thumb {
+  background: rgba(111, 218, 255, 0.26);
+  border-radius: 999px;
+}
+
+.sf-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(111, 218, 255, 0.42);
+}

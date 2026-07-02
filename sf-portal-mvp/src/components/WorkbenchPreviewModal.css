@@ -1,0 +1,223 @@
+/* WorkbenchPreviewModal — shared shell for the 工作台预览弹窗.
+ *
+ * Consolidates the previously-divergent .cw-preview-modal-layer (fixed/z1200/
+ * 720px) and .cw-doc-modal-layer (absolute/z32/760px) into ONE centered layer +
+ * panel with a single z-index and sizing token set, so every preview surface
+ * (attachments, project documents, interface previews, workspace maximize)
+ * shares the same shell (glossary _Avoid_ 每类产物独立弹窗样式).
+ *
+ * Tokens reuse the existing dark-theme cyan/accent palette — no new colors:
+ *   panel bg #03111d / rgba(4,18,30,0.98), border rgba(111,218,255,0.28),
+ *   title #edfaff, body #d7eef8, accent cyan #68ddff. */
+
+.wpm-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.wpm-panel {
+  width: min(760px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(111, 218, 255, 0.28);
+  border-radius: 10px;
+  background: #03111d;
+  color: #d7eef8;
+  overflow: hidden;
+}
+
+.wpm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(111, 218, 255, 0.18);
+}
+
+.wpm-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #edfaff;
+  font-size: 13px;
+}
+
+.wpm-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wpm-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(215, 238, 248, 0.7);
+  cursor: pointer;
+}
+
+.wpm-close:hover {
+  background: rgba(111, 218, 255, 0.12);
+  color: #d7eef8;
+}
+
+.wpm-body {
+  padding: 14px 16px;
+  overflow: auto;
+  color: #d7eef8;
+  line-height: 1.6;
+}
+
+.wpm-note {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(215, 238, 248, 0.72);
+}
+
+/* ---- Rich markdown + code rendering (react-markdown + rehype-highlight) ----
+ * Minimal token colors painted from the existing dark-theme cyan/accent tokens.
+ * highlight.js emits .hljs-* classes on code spans/blocks; we map the common
+ * token kinds to the existing palette (cyan #68ddff, amber #f3c761, green
+ * #7feb9b, muted #8fb0bf) — NO new clashing palette, NO imported hljs theme. */
+
+.wpm-rich {
+  font-size: 13px;
+  line-height: 1.62;
+  color: #d7eef8;
+  overflow-wrap: anywhere;
+}
+
+.wpm-rich h1,
+.wpm-rich h2,
+.wpm-rich h3,
+.wpm-rich h4 {
+  color: #edfaff;
+  margin: 16px 0 8px;
+}
+
+.wpm-rich h1 { font-size: 20px; }
+.wpm-rich h2 { font-size: 17px; }
+.wpm-rich h3 { font-size: 15px; color: #68ddff; }
+.wpm-rich h4 { font-size: 13px; color: #68ddff; }
+
+.wpm-rich p { margin: 0 0 8px; }
+.wpm-rich ul,
+.wpm-rich ol { margin: 0 0 8px; padding-left: 22px; }
+.wpm-rich li { margin: 2px 0; }
+
+.wpm-rich a {
+  color: #68ddff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wpm-rich blockquote {
+  margin: 0 0 8px;
+  padding: 4px 12px;
+  border-left: 3px solid rgba(111, 218, 255, 0.4);
+  color: rgba(215, 238, 248, 0.7);
+}
+
+.wpm-rich table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+}
+
+.wpm-rich th,
+.wpm-rich td {
+  border: 1px solid rgba(111, 218, 255, 0.2);
+  padding: 4px 8px;
+}
+
+.wpm-rich code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: #d7eef8;
+}
+
+.wpm-rich pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(111, 218, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(0, 8, 14, 0.62);
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wpm-rich pre code {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  font-size: 12px;
+  color: #d7eef8;
+}
+
+/* highlight.js token mapping — existing dark-theme palette, no new colors. */
+.wpm-rich .hljs-comment,
+.wpm-rich .hljs-quote {
+  color: #8fb0bf;
+  font-style: italic;
+}
+
+.wpm-rich .hljs-keyword,
+.wpm-rich .hljs-selector-tag,
+.wpm-rich .hljs-built_in,
+.wpm-rich .hljs-name,
+.wpm-rich .hljs-tag {
+  color: #68ddff;
+}
+
+.wpm-rich .hljs-string,
+.wpm-rich .hljs-attr,
+.wpm-rich .hljs-template-string,
+.wpm-rich .hljs-addition {
+  color: #7feb9b;
+}
+
+.wpm-rich .hljs-number,
+.wpm-rich .hljs-literal,
+.wpm-rich .hljs-type,
+.wpm-rich .hljs-symbol {
+  color: #f3c761;
+}
+
+.wpm-rich .hljs-title,
+.wpm-rich .hljs-section,
+.wpm-rich .hljs-function .hljs-title {
+  color: #8fd0ff;
+}
+
+.wpm-rich .hljs-attribute,
+.wpm-rich .hljs-variable,
+.wpm-rich .hljs-property {
+  color: #cfe9f4;
+}
+
+.wpm-rich .hljs-meta {
+  color: #8fb0bf;
+}
+
+.wpm-rich .hljs-deletion {
+  color: #ff9a9a;
+}

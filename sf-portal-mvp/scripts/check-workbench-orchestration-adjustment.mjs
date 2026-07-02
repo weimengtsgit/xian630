@@ -1,6 +1,6 @@
 // sf-portal-mvp/scripts/check-workbench-orchestration-adjustment.mjs
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import {
   AGGREGATE_CARD_KEYS,
   buildWorkbenchOrchestrationView,
@@ -140,7 +140,24 @@ const analyzingDlg = buildWorkbenchOrchestrationView({
 assert.equal(analyzingDlg.cardsByKey.business_logic.state, 'running', 'business_logic must be running while the dialogue is analyzing')
 
 const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
-assert.equal(graphSource.includes('协作编排'), false, 'aggregate graph must not render 协作编排 as a card')
+// ---- Task 4 (wic): unified surface name 协作编排执行图 in BOTH states ----
+// The pinned aggregate overview is named 协作编排执行图 per the glossary. The
+// expanded <h3> AND the collapsed bar must both carry that exact title; the old
+// 编排执行总览 / 协作执行图 drift is gone. The guard against restoring the old
+// detailed collaboration graph as a freestanding card still holds below.
+assert.equal(graphSource.includes('<h3>协作编排执行图</h3>'), true, 'expanded AggregateOrchestrationGraph title must be 协作编排执行图')
+assert.equal(graphSource.includes('aria-label="协作编排执行图"'), true, 'expanded section aria-label must be the unified name')
+assert.equal(graphSource.includes('aria-label="展开协作编排执行图"'), true, 'collapsed bar must expose an expand affordance labelled with the unified name')
+assert.equal(graphSource.includes('className="aog-compact-name">协作编排执行图'), true, 'collapsed bar must render the unified name as its label')
+assert.equal(graphSource.includes('编排执行总览'), false, 'old expanded title 编排执行总览 must be replaced by the unified name')
+assert.equal(graphSource.includes("'协作执行图'"), false, 'old collapsed fallback label 协作执行图 must be replaced by the unified name')
+// Collapsed bar surfaces the same summary chips that today only show expanded:
+// the stage count + the current label/state, and an explicit expand icon.
+assert.equal(graphSource.includes('aog-compact-chips'), true, 'collapsed bar must wrap its summary chips in a dedicated container')
+assert.equal(/aog-compact-chips[\s\S]*aog-summary-total[\s\S]*个阶段/.test(graphSource), true, 'collapsed bar must show the {n} 个阶段 chip')
+assert.equal(graphSource.includes('ChevronDown'), true, 'collapsed bar must import an explicit expand (chevron-down) icon')
+assert.equal(graphSource.includes('aog-expand-btn'), true, 'collapsed bar must render the explicit expand affordance')
+assert.equal(graphSource.includes('aog-canvas-expandable'), true, 'expandable body must carry a transition hook class for the light collapse/expand animation')
 const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.css', import.meta.url), 'utf8')
 const collaborationGraphCss = readFileSync(new URL('../src/components/CollaborationExecutionGraph.css', import.meta.url), 'utf8')
 assert.equal(collaborationGraphCss.includes('@media (prefers-reduced-motion: reduce)'), true, 'shared ceg pulse motion must respect reduced motion')
@@ -152,6 +169,13 @@ assert.equal(css.includes('.aog .ceg-canvas'), true, 'aggregate graph must tune 
 assert.equal(css.includes('padding: 10px 2px 10px'), true, 'aggregate graph canvas padding is symmetric 10px so the top and bottom cards sit the same distance from the edges')
 assert.equal(css.includes('.aog .ceg-card-state-running'), true, 'aggregate 执行中 card carries a scoped running tint')
 assert.equal(/\.aog \.ceg-card\b[\s\S]*?transition:/.test(css), true, 'aggregate card state changes animate (transition) instead of snapping')
+// ---- Task 4 (wic): collapsed bar layout + light collapse/expand transition ----
+assert.equal(css.includes('.aog-compact-name'), true, 'collapsed bar name must be styled')
+assert.equal(css.includes('.aog-compact-chips'), true, 'collapsed bar chip cluster must be styled')
+assert.equal(css.includes('.aog-expand-btn'), true, 'collapsed bar expand affordance must be styled')
+assert.equal(/\.aog \.aog-canvas-expandable[\s\S]*?transition:/.test(css), true, 'expandable overview body must declare a transition for the collapse/expand animation')
+assert.equal(/aog-canvas-expandable[\s\S]*?(0\.1[89]|0\.2[01]?)s/.test(css), true, 'collapse/expand transition must be in the 180–220ms band')
+assert.equal(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.aog \.aog-canvas-expandable[\s\S]*?transition: none/.test(css), true, 'collapse/expand transition must be disabled under prefers-reduced-motion')
 
 // ---- Task 4: attachment composer + message send-path ----------------------
 const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
@@ -173,25 +197,25 @@ assert.equal(appSource.includes('dialogue.send(prompt, options)'), true, 'App mu
 
 // ---- Task 7: workbench agent blocks + responsibility tracks ----------------
 const blockSource = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
-for (const text of ['思考过程', '思考摘要', '模型分析过程', '确认业务逻辑并继续', '确认界面解析并继续', '确认数据抓取并继续']) {
+for (const text of ['思考过程', '思考摘要', '模型分析过程', '需求确认', '界面确认', '数据确认']) {
   assert.equal(blockSource.includes(text), true, `agent block must include ${text}`)
 }
-const tracksSource = readFileSync(new URL('../src/components/WorkbenchTracks.jsx', import.meta.url), 'utf8')
-for (const text of ['目标识别', '布局分区', '来源', '方案设计', '部署']) {
-  assert.equal(tracksSource.includes(text), true, `tracks must include ${text}`)
-}
+// ---- Task 1 (wic): status/data-flow track strips removed from in-conversation stage blocks ----
+// The static status lanes (目标识别→摘要生成; 来源/处理/流向 nodes) used to render
+// inside WorkbenchAgentBlock via <WorkbenchTrack/>. They were pulled OUT of the
+// conversation area by user goal #4: the stage content (思考过程/思考摘要/产物/
+// 确认) stays, but the track strip is gone. Assert the strip is no longer
+// mounted in the block, the import is gone, and the now-unused component file
+// was deleted (no consumer remains).
+assert.equal(blockSource.includes('WorkbenchTrack'), false, 'in-conversation agent block must no longer render the WorkbenchTrack strip')
+assert.equal(existsSync(new URL('../src/components/WorkbenchTracks.jsx', import.meta.url)), false, 'WorkbenchTracks.jsx must be deleted once its only in-conversation consumer is removed')
 
-// ---- Fix wave F6: data-flow track is data-driven, not a static label list ----
-// The data_capture track must derive its node states from the REAL verification
-// state projected onto the data_contract artifact (ontology/internet/demo
-// sources, verification verdicts, fallback history). Assert the component
-// references those signals and the metadata that carries them, confirming the
-// track is no longer the fixed 来源/连接验证/样本获取/字段识别/契约生成/流向
-// label array it replaced.
-for (const text of ['ontology', 'internet', 'demo']) {
-  assert.equal(tracksSource.includes(text), true, `data-flow track must reference source boundary ${text}`)
-}
-assert.equal(tracksSource.includes('metadata') || tracksSource.includes('verification') || tracksSource.includes('fallbackHistory'), true, 'data-flow track must read verification metadata')
+// ---- Fix wave F6: verification metadata still projects onto the card ----
+// The data_capture track strip was removed, but the verification summary
+// (sourceBoundary + per-boundary verdicts + fallback history) the executor
+// projects onto the data_contract artifact is still meaningful (downstream
+// cards read it). Keep asserting it round-trips onto the card; only the track
+// *render* went away.
 const orchestrationSource = readFileSync(new URL('../src/hooks/workbenchOrchestrationState.js', import.meta.url), 'utf8')
 assert.equal(orchestrationSource.includes('metadata') && orchestrationSource.includes('parseArtifactMetadata'), true, 'orchestration state must parse artifact metadata onto the card')
 // The data_contract artifact carries the verification summary (sourceBoundary +

@@ -92,6 +92,31 @@ assert.match(drawerCss, /\.workbench-drawer\s*\{[\s\S]*right:\s*16px/, 'the over
 // The close button toggles the entry back to null.
 assert.match(drawerJsx, /workbench-drawer-close/, 'the drawer must have a dedicated close control')
 
+// ---- Task 6: agents drawer header dedup -----------------------------------
+// When the drawer hosts AgentsPanel (entry 'agents'), AgentsPanel renders its
+// OWN <h2>协作智能体</h2> header (with count + create). To show exactly ONE
+// 协作智能体 title, the drawer OMITS its outer header for the agents entry and
+// threads onClose into AgentsPanel so the close (X) lives in that single header.
+const agentsJsx = readFileSync(new URL('../src/components/AgentsPanel.jsx', import.meta.url), 'utf8')
+// The drawer gates the outer header on `activeEntry !== 'agents'` (i.e. it does
+// NOT unconditionally render <header className="workbench-drawer-header">).
+assert.match(drawerJsx, /!\s*agentsHosted\s*\?[\s\S]*workbench-drawer-header/, "Task 6: the drawer must skip its outer header for the 'agents' entry ( AgentsPanel renders the single title )")
+assert.match(drawerJsx, /const agentsHosted = activeEntry === 'agents'/, "Task 6: the drawer must compute an agentsHosted flag for the header-dedup branch")
+// The close affordance is threaded into AgentsPanel instead of being lost.
+assert.match(drawerJsx, /onClose=\{onClose\}/, "Task 6: the drawer must thread onClose into AgentsPanel so the close (X) stays reachable in the single header")
+// AgentsPanel renders the close button in its header actions when hosted.
+assert.match(agentsJsx, /onClose,/, "Task 6: AgentsPanel must accept an onClose prop for drawer-hosted close")
+assert.match(agentsJsx, /\{onClose \?[\s\S]*className="agent-icon-button"[\s\S]*onClick=\{onClose\}[\s\S]*<X size=\{16\} \/>/, "Task 6: AgentsPanel must render a close (X) button in its header when onClose is passed")
+// The single visible title is AgentsPanel's <h2>协作智能体</h2>; the drawer's
+// <strong> title must not also render for agents (it lives inside the gated
+// header block, so a bare unconditional <strong>协作智能体</strong> must NOT
+// appear in WorkbenchDrawer.jsx at all — the title comes from ENTRY_TITLES).
+assert.doesNotMatch(drawerJsx, /<strong>协作智能体<\/strong>/, 'Task 6: WorkbenchDrawer must not hardcode a duplicate 协作智能体 strong title (AgentsPanel provides the single <h2>)')
+// Sanity: AgentsPanel still owns the single title + count + create.
+assert.match(agentsJsx, /<h2>协作智能体<\/h2>/, 'Task 6: AgentsPanel must keep its single <h2>协作智能体</h2> title')
+assert.match(agentsJsx, /className="panel-count"/, 'Task 6: AgentsPanel must keep the agent count reachable in the single header')
+assert.match(agentsJsx, /onClick=\{openCreateDialog\}/, 'Task 6: AgentsPanel must keep the create(+) button reachable in the single header')
+
 // ---- toggle reducer (pure, mirrored from App.jsx) --------------------------
 
 // Exercise the exact mutual-exclusivity reducer App.jsx uses, so a regression

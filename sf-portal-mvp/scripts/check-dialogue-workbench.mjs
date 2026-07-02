@@ -77,6 +77,33 @@ const artifactTimeline = buildDialogueTimeline({
 const artifactLabels = artifactTimeline.filter(item => item.type === 'artifact_link').map(item => item.label)
 assert.deepEqual(artifactLabels, ['需求文档', '原型预览', '数据方案'], 'timeline must surface the generated data access plan chip')
 
+// Task 2 (编排产物确认): a confirmed prototype must leave a DURABLE timeline
+// record, not just the ephemeral Dock. Derived from the interface_preview
+// workbench artifact whose status is 'confirmed' (or, when the backend has not
+// populated that field, the design_contract step having succeeded).
+const confirmedProtoView = {
+  session: { id: 'dlg_proto_conf', status: 'task_running', intent: 'application_generation', route_locked: true },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '生成管理系统' }],
+  route: {},
+  workbenchArtifacts: [
+    {
+      id: 'warf_proto_conf',
+      kind: 'interface_preview',
+      label: '原型预览',
+      previewUrl: '/api/jobs/j1/steps/s1/prototype/preview',
+      updatedAt: '2026-07-01T10:01:00Z',
+      status: 'confirmed',
+      jobId: 'j1',
+      stepId: 's1',
+    },
+  ],
+}
+const confirmedProtoTimeline = buildDialogueTimeline(confirmedProtoView)
+const confirmedProtoItem = confirmedProtoTimeline.find(item => item.type === 'prototype_confirmed')
+assert.ok(confirmedProtoItem, 'a confirmed prototype must emit a durable prototype_confirmed timeline item')
+assert.equal(confirmedProtoItem.confirmLabel, '确定原型并继续', 'durable prototype_confirmed item must carry the confirm action label')
+assert.equal(confirmedProtoItem.artifact.kind, 'interface_preview', 'durable prototype_confirmed item must reference the interface_preview artifact')
+
 // Continuing-session inquiry replies are persisted as ordinary agent replies and
 // must remain visible in the dialogue thread, not be dropped as unknown metadata.
 const inquiryTimeline = buildDialogueTimeline({

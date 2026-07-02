@@ -8,7 +8,7 @@
 .ceg-manual-toggle.is-readonly { cursor: default; opacity: 0.82; }
 .ceg-manual-toggle input { width: 13px; height: 13px; margin: 0; accent-color: #f3c761; cursor: pointer; }
 .ceg-manual-toggle input:disabled { cursor: not-allowed; opacity: 0.55; }
-.ceg-canvas { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 2px 6px; scrollbar-width: thin; scrollbar-color: rgba(104, 221, 255, 0.42) rgba(6, 18, 29, 0.28); }
+.ceg-canvas { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 2px 6px; }
 .ceg-wave-group { display: flex; align-items: stretch; flex: 0 0 auto; }
 .ceg-wave { min-width: 154px; display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
 .ceg-wave-label { color: #75bfd2; font-size: 10px; text-align: center; }

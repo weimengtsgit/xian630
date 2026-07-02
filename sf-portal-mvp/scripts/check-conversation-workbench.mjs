@@ -161,7 +161,13 @@ assert.doesNotMatch(sessionNavJsx, /window\.confirm\s*\(/, 'SessionNav history d
 assert.match(sessionNavJsx, /pendingDelete/, 'SessionNav history deletion must keep pending confirmation state')
 assert.match(sessionNavJsx, /session-nav-delete-confirm/, 'SessionNav history deletion must render a custom confirmation panel')
 assert.doesNotMatch(sessionNavJsx, /进行中的会话不可删除/, 'SessionNav must allow deleting a session in any status (no in-flight gate)')
-assert.match(sessionNavCss, /\.session-nav-delete-confirm\s*\{[\s\S]*position:\s*absolute/, 'custom delete confirmation must be positioned inside the SessionNav rail')
+// Task 8: the confirm is now a row-anchored popover (会话删除确认浮层), NOT the old
+// rail-bottom bar. The old rail-anchor (bottom:0;left:0;right:0 on .session-nav-
+// delete-confirm) is gone; the popover anchors to the clicked row and flips up
+// near the viewport bottom. Detailed assertions live in check-session-nav-delete-popover.mjs.
+assert.match(sessionNavCss, /\.session-nav-delete-confirm\s*\{[\s\S]*position:\s*absolute/, 'delete confirm popover must be absolutely positioned (anchored to the row)')
+assert.doesNotMatch(sessionNavCss, /\.session-nav-delete-confirm\s*\{[\s\S]*?bottom:\s*0[\s\S]*?left:\s*0[\s\S]*?right:\s*0/, 'delete confirm must NOT be the old rail-bottom bar (bottom:0;left:0;right:0)')
+assert.match(sessionNavCss, /\.session-nav-delete-confirm\.flip-up\s*\{[\s\S]*?bottom:\s*100%/, 'delete confirm must support a flip-up (open above row) variant for viewport clamping')
 assert.match(sessionNavCss, /\.session-nav-delete-actions/, 'custom delete confirmation must style action buttons')
 assert.match(apiClientJs, /deleteDialogue/, 'API client must expose dialogue history deletion')
 assert.match(eventsJs, /clarification\.deleted/, 'SSE event registry must include clarification.deleted')

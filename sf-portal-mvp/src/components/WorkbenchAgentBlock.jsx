@@ -1,6 +1,5 @@
 ﻿import { CheckCircle2, ChevronDown, ChevronRight, FileText, MonitorCheck } from 'lucide-react'
 import { useState } from 'react'
-import { WorkbenchTrack } from './WorkbenchTracks'
 import { isPreviewableArtifact } from '../utils/workbenchArtifact'
 
 const CONFIRM_LABEL = {
@@ -36,7 +35,6 @@ export function WorkbenchAgentBlock({ card, thinking, analysisLog, questions = [
       </button>
       {open ? (
         <div className="cw-agent-block-body">
-          <WorkbenchTrack cardKey={card.key} activeLabel={card.subStage || card.currentAction} failedLabel={card.state === 'failed' ? card.currentAction : ''} card={card} />
           {thinking ? <section className="cw-agent-section"><h4>思考过程</h4><pre>{thinking}</pre></section> : null}
           {card.summary ? <section className="cw-agent-section"><h4>思考摘要</h4><p>{card.summary}</p></section> : null}
           {analysisLog ? <section className="cw-agent-section"><h4>模型分析过程</h4><pre>{analysisLog}</pre></section> : null}

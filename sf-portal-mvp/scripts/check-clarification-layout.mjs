@@ -102,4 +102,33 @@ assert.match(
   'multi-select options must expose a selected visual state',
 )
 
+// ---------------------------------------------------------------------------
+// Task 3: the ConversationWorkbench job-step ClarificationPromptCard must
+// answer IN-CARD (no composer refill). The pre-job ClarificationPanel keeps its
+// own in-card round submit; the workbench card must have its own in-card submit
+// affordance too (澄清交互卡片 _Avoid_: 输入框回填选项, 卡片外提交).
+// ---------------------------------------------------------------------------
+const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
+assert.match(
+  workbenchJsx,
+  /cw-clarification-submit/,
+  'the workbench ClarificationPromptCard must have an in-card submit affordance (cw-clarification-submit)',
+)
+assert.match(
+  workbenchJsx,
+  /cw-clarification-custom/,
+  'the workbench ClarificationPromptCard must offer an in-card custom-answer input (not the composer)',
+)
+assert.doesNotMatch(
+  workbenchJsx,
+  /onPickClarification/,
+  'the workbench must NOT keep the onPickClarification composer-refill path',
+)
+assert.match(
+  workbenchCss,
+  /\.cw-clarification-submit\s*\{/,
+  'the in-card submit affordance must have its own style (cw-clarification-submit)',
+)
+
 console.log('check-clarification-layout: OK')

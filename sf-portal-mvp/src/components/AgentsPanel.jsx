@@ -30,6 +30,11 @@ export function AgentsPanel({
   onDeleteAgent,
   deletingAgentId,
   onHidePanel,
+  // When hosted inside WorkbenchDrawer, the drawer omits its own outer header
+  // for the 'agents' entry and instead passes an onClose here so the close (X)
+  // affordance lives inside THIS panel header — keeping a single 协作智能体
+  // title (this <h2>) while the drawer close stays reachable.
+  onClose,
 }) {
   const list = Array.isArray(agents) ? agents : []
   const [selectedId, setSelectedId] = useState('')
@@ -161,12 +166,23 @@ export function AgentsPanel({
               <ChevronRight size={16} />
             </button>
           ) : null}
+          {onClose ? (
+            <button
+              type="button"
+              className="agent-icon-button"
+              onClick={onClose}
+              title="关闭"
+              aria-label="关闭"
+            >
+              <X size={16} />
+            </button>
+          ) : null}
         </div>
       </div>
 
       {error && <div className="panel-error">加载失败：{error}</div>}
 
-      <div className="panel-content">
+      <div className="panel-content sf-scroll">
         {loading && list.length === 0 ? (
           <div className="panel-loading">加载中...</div>
         ) : list.length === 0 ? (
