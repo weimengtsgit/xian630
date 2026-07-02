@@ -808,6 +808,7 @@ export function useDialogueSessions() {
     // Task 7 continuous-workbench surface:
     workTrace: workTrace.items,
     workTraceCursor: workTrace.highestSequence,
+    taskThinking: taskThinking.items,
     pendingTurn,
     focusTask,
     setJobsForFocus,

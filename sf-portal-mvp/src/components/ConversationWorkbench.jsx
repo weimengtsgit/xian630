@@ -38,6 +38,7 @@ import { useSessionAttachments } from '../hooks/useSessionAttachments'
 import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
 import { normalizePrototypeSummary } from '../hooks/prototypeState'
 import { resolveWorkbenchTitle, statusText, describeSessionError, isRequirementConfirmPending } from '../hooks/dialogueTimeline'
+import { deriveCardAnalysisLog, deriveCardThinking } from '../hooks/cardStageContent'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy, formatAppType, translateAnalysisText } from '../utils/formatLabels'
 import { factoryApi, absoluteApiUrl } from '../api/client'
@@ -68,6 +69,7 @@ export function ConversationWorkbench({
   onRetry,
   onAbandon,
   workTrace,
+  taskThinking,
   pendingTurn,
   focusTask,
   clarificationScope,
@@ -373,29 +375,23 @@ export function ConversationWorkbench({
     await factoryApi.continuePrototypeWithoutConfirmation(proto.jobId, proto.stepId)
   }
 
-  function timelineBlocksForCard(card) {
-    const ids = new Set((card.steps || []).map(step => step && (step.id || step.stepId)).filter(Boolean))
-    if (!ids.size) return []
-    return (Array.isArray(timeline) ? timeline : []).filter(item =>
-      item && item.type === 'task_execution_block' && ids.has(item.stepId),
-    )
-  }
-
   function thinkingForCard(card) {
-    return timelineBlocksForCard(card)
-      .map(item => String(item.taskThinking || '').trim())
-      .filter(Boolean)
-      .join('\n')
+    return deriveCardThinking({
+      card,
+      timeline,
+      taskThinkingItems: taskThinking,
+    })
   }
   // analysisLogForCard surfaces each step's safe analysis work-log (执行过程)
   // for the agent block's "模型分析过程" section, paralleling thinkingForCard
   // (which is the raw 思考过程). Without it the section rendered empty for every
   // stage including interface/data.
   function analysisLogForCard(card) {
-    return timelineBlocksForCard(card)
-      .map(item => String(item.safeExecution || '').trim())
-      .filter(Boolean)
-      .join('\n')
+    return deriveCardAnalysisLog({
+      card,
+      timeline,
+      workTraceItems: traceItems,
+    })
   }
 
   function questionsForCard(card) {

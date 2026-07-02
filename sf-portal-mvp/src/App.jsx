@@ -243,6 +243,7 @@ function App() {
               error={dialogue.error || jobs.error}
               submitting={dialogue.submitting}
               workTrace={dialogue.workTrace}
+              taskThinking={dialogue.taskThinking}
               pendingTurn={dialogue.pendingTurn}
               focusTask={dialogue.focusTask}
               clarificationScope={activeClarification}
