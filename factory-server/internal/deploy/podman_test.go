@@ -406,6 +406,46 @@ func TestHintIfMissingBinaryMatchesWrappedText(t *testing.T) {
 	}
 }
 
+func TestEnvForCommandDropsUnsupportedSocksProxyForClaude(t *testing.T) {
+	env := []string{
+		`PATH=C:\bin`,
+		"HTTP_PROXY=socks5://127.0.0.1:7897",
+		"HTTPS_PROXY=socks5h://127.0.0.1:7897",
+		"ALL_PROXY=socks4://127.0.0.1:7897",
+		"NO_PROXY=localhost,127.0.0.1",
+		"ANTHROPIC_BASE_URL=https://ark.cn-beijing.volces.com/api/coding",
+	}
+
+	got := envForCommand(`C:\tools\claude.exe`, env)
+	joined := "\n" + strings.Join(got, "\n") + "\n"
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"} {
+		if strings.Contains(joined, "\n"+key+"=") {
+			t.Fatalf("%s was not removed from claude env:\n%s", key, strings.Join(got, "\n"))
+		}
+	}
+	for _, want := range []string{
+		`PATH=C:\bin`,
+		"NO_PROXY=localhost,127.0.0.1",
+		"ANTHROPIC_BASE_URL=https://ark.cn-beijing.volces.com/api/coding",
+	} {
+		if !strings.Contains(joined, "\n"+want+"\n") {
+			t.Fatalf("env missing %q after sanitizing:\n%s", want, strings.Join(got, "\n"))
+		}
+	}
+}
+
+func TestEnvForCommandPreservesProxyForNonClaudeCommands(t *testing.T) {
+	env := []string{
+		"HTTP_PROXY=socks5://127.0.0.1:7897",
+		"HTTPS_PROXY=socks5://127.0.0.1:7897",
+	}
+
+	got := envForCommand("podman", env)
+	if strings.Join(got, "\n") != strings.Join(env, "\n") {
+		t.Fatalf("non-claude env changed:\n got %v\nwant %v", got, env)
+	}
+}
+
 func testShell(script string) (string, []string) {
 	if runtime.GOOS == "windows" {
 		return "cmd", []string{"/C", script}

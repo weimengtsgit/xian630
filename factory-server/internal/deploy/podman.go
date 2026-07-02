@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -297,6 +298,7 @@ func (t *streamTailBuffer) String() string { return string(t.buf) }
 func runStreamOS(ctx context.Context, dir, input, name string, args []string, stdoutCB, stderrCB func(string)) (CommandResult, error) {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = commandEnv(name)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -370,9 +372,64 @@ func copyLines(r io.Reader, dst io.Writer, onLine func(string)) {
 	}
 }
 
+func commandEnv(name string) []string {
+	env := os.Environ()
+	filtered := envForCommand(name, env)
+	if len(filtered) == len(env) {
+		return nil
+	}
+	return filtered
+}
+
+func envForCommand(name string, env []string) []string {
+	if !isClaudeCommand(name) {
+		return env
+	}
+	out := make([]string, 0, len(env))
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if ok && isProxyEnvKey(key) && hasUnsupportedProxyProtocol(value) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func isClaudeCommand(name string) bool {
+	base := strings.TrimSpace(name)
+	if i := strings.LastIndexAny(base, `\/`); i >= 0 {
+		base = base[i+1:]
+	}
+	switch strings.ToLower(base) {
+	case "claude", "claude.exe", "claude.cmd":
+		return true
+	default:
+		return false
+	}
+}
+
+func isProxyEnvKey(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasUnsupportedProxyProtocol(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(value, "socks4://") ||
+		strings.HasPrefix(value, "socks4a://") ||
+		strings.HasPrefix(value, "socks5://") ||
+		strings.HasPrefix(value, "socks5h://")
+}
+
 func runOSCommand(ctx context.Context, dir, input, name string, args ...string) (CommandResult, error) {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = commandEnv(name)
 	if dir != "" {
 		cmd.Dir = dir
 	}
