@@ -278,6 +278,9 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	jobs, err := s.store.ListJobs(r.Context(), status)
 	if err != nil {
+		if clientGone(r) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "list jobs")
 		return
 	}

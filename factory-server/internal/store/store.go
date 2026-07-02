@@ -153,6 +153,18 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate job_steps.snapshot_json: %w", err)
 	}
+	// job_steps.summary: the human-readable summary a step's agent produced (from
+	// output.json), surfaced in the workbench's agent blocks so a confirmed/
+	// delivered card shows content instead of an empty placeholder. It lives in
+	// schema.sql's CREATE TABLE, so brand-new DBs have it, but DBs created before
+	// the column shipped need this backfill — otherwise MarkStepSucceeded (which
+	// sets summary = ?) fails with "no such column: summary" on every successful
+	// step and the summary never persists.
+	if err := s.ensureColumn(ctx, "job_steps", "summary",
+		`ALTER TABLE job_steps ADD COLUMN summary TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job_steps.summary: %w", err)
+	}
 	// workbench_artifact_refs.metadata: producer-authored JSON the orchestration
 	// view projects onto a card (e.g. the data_capture card's data-verification
 	// summary — sourceBoundary + per-boundary verdicts + fallback history + sample/

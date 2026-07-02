@@ -15,6 +15,9 @@ import (
 func (s *Server) listApps(w http.ResponseWriter, r *http.Request) {
 	apps, err := s.store.ListApplications(r.Context())
 	if err != nil {
+		if clientGone(r) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "list apps")
 		return
 	}
@@ -31,6 +34,9 @@ func (s *Server) listApps(w http.ResponseWriter, r *http.Request) {
 func (s *Server) appGenerationStats(w http.ResponseWriter, r *http.Request) {
 	apps, err := s.store.ListApplications(r.Context())
 	if err != nil {
+		if clientGone(r) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "list apps")
 		return
 	}

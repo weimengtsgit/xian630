@@ -4,6 +4,20 @@
 // var is unset, so the local factory address is used as before.
 const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL ?? 'http://127.0.0.1:8787'
 
+// absoluteApiUrl prefixes a relative /api path with the API origin when the
+// portal and the API are on DIFFERENT origins (npm run dev: the SPA is served
+// by Vite on :3001, the API on :8787, with no proxy). In production
+// API_BASE_URL is "" (same-origin behind a reverse proxy), so the path is
+// returned unchanged. Use this for any URL handed to <iframe src>/<img
+// src>/window.open that the server emitted as a relative path — otherwise the
+// browser resolves it against the SPA origin and (in dev) Vite serves its
+// index.html shell, booting a nested copy of the app inside the iframe.
+export function absoluteApiUrl(path) {
+  if (!path) return path
+  if (/^(https?:)?\/\//.test(path)) return path
+  return `${API_BASE_URL}${path}`
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
