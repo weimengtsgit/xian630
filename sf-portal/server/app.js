@@ -38,7 +38,7 @@ export function createApp(storeOverride) {
 
   app.post('/api/stages/:key', (req, res) => {
     try {
-      const stages = store.update(req.params.key, req.body?.status)
+      const stages = store.update(req.params.key, req.body || {})
       res.json({ stages })
     } catch (err) {
       res.status(400).json({ error: err.message })

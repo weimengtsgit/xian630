@@ -43,10 +43,16 @@ export function createStageStore(config) {
 
   return {
     read() { return snapshot() },
-    update(key, status) {
+    update(key, patch = {}) {
       if (!STAGE_KEYS.includes(key)) throw new Error(`unknown stage key: ${key}`)
-      if (!VALID_STATUS.includes(status)) throw new Error(`invalid status: ${status}`)
-      state.set(key, status)
+      const stage = cfg.find(s => s.key === key)
+      if (patch.status !== undefined) {
+        if (!VALID_STATUS.includes(patch.status)) throw new Error(`invalid status: ${patch.status}`)
+        state.set(key, patch.status)
+      }
+      if (patch.url !== undefined) {
+        stage.url = String(patch.url)
+      }
       return snapshot()
     },
     reset() {
