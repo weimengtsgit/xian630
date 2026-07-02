@@ -15,6 +15,9 @@ import (
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 	agents, err := s.store.ListAgents(r.Context())
 	if err != nil {
+		if clientGone(r) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "list agents")
 		return
 	}

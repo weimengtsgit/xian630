@@ -38,7 +38,7 @@ import { normalizePrototypeSummary } from '../hooks/prototypeState'
 import { resolveWorkbenchTitle, statusText, describeSessionError, isRequirementConfirmPending } from '../hooks/dialogueTimeline'
 import { STAGE_LABELS } from './StepCard'
 import { formatDataPolicy, formatAppType, translateAnalysisText } from '../utils/formatLabels'
-import { factoryApi } from '../api/client'
+import { factoryApi, absoluteApiUrl } from '../api/client'
 import './ConversationWorkbench.css'
 
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
@@ -974,11 +974,15 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   }
   if (item.type === 'artifact_link') {
     const art = item.artifact
-    // 原型设计 step: render the generated HTML inline via iframe.
+    // 原型设计 step: render the generated HTML inline via iframe. The server
+    // emits previewUrl as a relative /api path; in dev the SPA is served on a
+    // different origin than the API (no Vite proxy), so a relative src would
+    // hit the dev server and fall back to the SPA shell — booting a nested copy
+    // of the whole app inside the iframe. Absolutize via the shared helper.
     if (art && art.kind === 'interface_preview' && art.previewUrl) {
       return (
         <div className="cw-timeline-prototype-embed">
-          <iframe className="cw-prototype-inline-frame" src={art.previewUrl} title="原型设计预览" />
+          <iframe className="cw-prototype-inline-frame" src={absoluteApiUrl(art.previewUrl)} title="原型设计预览" />
         </div>
       )
     }

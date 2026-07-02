@@ -1024,6 +1024,9 @@ func (s *Server) listDialogues(w http.ResponseWriter, r *http.Request) {
 	limit := 50
 	sessions, err := s.store.ListDialogueSessions(r.Context(), limit)
 	if err != nil {
+		if clientGone(r) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "list dialogues")
 		return
 	}

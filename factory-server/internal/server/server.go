@@ -580,6 +580,16 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
 }
 
+// clientGone reports whether the requesting client has already disconnected
+// (page navigation, conversation switch, tab close) or the request context was
+// otherwise canceled. A store call that fails ONLY because the client gave up
+// returns context.Canceled; surfacing that as a 500 makes the browser log a
+// spurious "接口报错" even though nothing is actually wrong. Handlers should
+// guard store errors with this before calling writeError.
+func clientGone(r *http.Request) bool {
+	return r.Context().Err() != nil
+}
+
 // corsMiddleware injects permissive CORS headers so the portal (served by Vite
 // on localhost:3001) can call factory-server (127.0.0.1:8787) from the browser
 // for the local MVP. Preflight OPTIONS requests are answered 204 directly; all
