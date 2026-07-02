@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS job_steps (
     error_message       TEXT    NOT NULL DEFAULT '',
     claude_session_id   TEXT    NOT NULL DEFAULT '',
     cc_status_session_id TEXT   NOT NULL DEFAULT '',
-    snapshot_json TEXT NOT NULL DEFAULT ''
+    snapshot_json TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS job_step_edges (
