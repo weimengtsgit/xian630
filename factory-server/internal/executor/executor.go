@@ -39,6 +39,10 @@ type StepResult struct {
 	// FrozenRequirementJSON carries the requirement_analysis step's canonical
 	// output so the job row becomes the source of truth for later steps and UI.
 	FrozenRequirementJSON string
+	// Summary is the human-readable summary extracted from the step's
+	// output.json (the agent's `summary` field). Persisted on the step so the
+	// workbench's agent blocks can surface 思考摘要.
+	Summary string
 	// Questions is the clarifying questions a step raised when pausing for user
 	// input (waiting_user). Persisted on the step so the job detail can surface
 	// them; empty for non-waiting results.
@@ -562,7 +566,7 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 			e.notify(ctx, jobID, stepID)
 			return nil
 		}
-		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
+		if err := e.store.MarkStepSucceeded(ctx, stepID, res.Summary); err != nil {
 			return err
 		}
 		// Find the succeeded step's kind to decide advance vs complete.
@@ -892,7 +896,7 @@ func (e *Executor) ConfirmManualStep(ctx context.Context, jobID, stepID string, 
 	if err := e.store.AdvanceJobStep(ctx, jobID, step.Kind); err != nil {
 		return model.Job{}, fmt.Errorf("point job to confirmed step: %w", err)
 	}
-	if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
+	if err := e.store.MarkStepSucceeded(ctx, stepID, ""); err != nil {
 		return model.Job{}, fmt.Errorf("mark step succeeded: %w", err)
 	}
 	if err := e.advanceOrComplete(ctx, jobID); err != nil {
@@ -935,7 +939,7 @@ func (e *Executor) ConfirmDataAccessStep(ctx context.Context, jobID, stepID stri
 	if err := e.store.AdvanceJobStep(ctx, jobID, step.Kind); err != nil {
 		return model.Job{}, fmt.Errorf("point job to data access step: %w", err)
 	}
-	if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
+	if err := e.store.MarkStepSucceeded(ctx, stepID, ""); err != nil {
 		return model.Job{}, fmt.Errorf("mark step succeeded: %w", err)
 	}
 	if err := e.advanceOrComplete(ctx, jobID); err != nil {

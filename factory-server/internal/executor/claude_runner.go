@@ -300,7 +300,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	case model.StepRequirementAnalysis:
 		out, err := runner.ValidateRequirementAnalysisWithConfirmedSummary(ws.OutputPath(), string(confirmedReq))
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		res := c.resultFromValidatedOutput(ctx, trace, out, ws.OutputPath(), err)
 		res = c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res)
 		// Surface the projected 需求文档 (docs/01-requirements.md) as a
 		// project_document workbench artifact on the business_logic card so the
@@ -314,7 +314,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 	case model.StepSolutionDesign:
 		out, err := runner.ValidateSolutionDesign(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		res := c.resultFromValidatedOutput(ctx, trace, out, ws.OutputPath(), err)
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	case model.StepCodeGeneration:
 		res := c.finishCodeGeneration(ctx, trace, job, step, ws.OutputPath(), baseline)
@@ -370,7 +370,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		// render whether the app is wired to ontology, internet, or demo data.
 		out, dataDetail, err := runner.ValidateDataIntegration(ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		res := c.resultFromValidatedOutput(ctx, trace, out, ws.OutputPath(), err)
 		// F6 + review-round-2: project the data-verification summary onto the
 		// data_contract artifact on BOTH success AND needs_input (waiting_user).
 		// During the degradation-confirmation wait the workbench data-flow track
@@ -403,7 +403,7 @@ func (c *ClaudeStepRunner) Run(ctx context.Context, job model.Job, step model.Jo
 		// other producers must degrade uncertainty into warnings and continue.
 		out, err := validateCollaborationProducer(step.Kind, ws.OutputPath())
 		c.emitWorkLog(ctx, emit, ws.OutputPath())
-		res := c.resultFromValidatedOutput(ctx, trace, out, err)
+		res := c.resultFromValidatedOutput(ctx, trace, out, ws.OutputPath(), err)
 		return c.projectDocsAfterStep(ctx, trace, job, step, ws.OutputPath(), res), nil
 	}
 }
@@ -451,7 +451,7 @@ func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runn
 	}
 	if raw.DataAccessResult == nil {
 		out, err := validateCollaborationProducer(step.Kind, outputPath)
-		return c.resultFromValidatedOutput(ctx, trace, out, err)
+		return c.resultFromValidatedOutput(ctx, trace, out, outputPath, err)
 	}
 	if raw.NeedsUserInput || strings.EqualFold(strings.TrimSpace(raw.Status), "needs_input") {
 		if len(raw.Questions) == 0 {
@@ -755,7 +755,20 @@ func finishReviewGate(ctx context.Context, trace runner.TraceEmitter, step model
 		}
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorBlockingReview, ErrorMessage: msg}
 	}
-	return StepResult{Status: model.StepStatusSucceeded}
+	return StepResult{Status: model.StepStatusSucceeded, Summary: readStepSummary(outputPath)}
+}
+
+// readStepSummary extracts the human-readable `summary` field from a step's
+// output.json so the executor can persist it on the job step (→ the workbench's
+// agent blocks surface 思考摘要). Lenient: missing/empty/unreadable → "".
+func readStepSummary(outputPath string) string {
+	var shape struct {
+		Summary string `json:"summary"`
+	}
+	if err := runner.ReadAndDecode(outputPath, &shape); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(shape.Summary)
 }
 
 // reviewGateOutput is the decoded shape of a blocking-review gate output.json.
@@ -849,7 +862,7 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 	if err := c.Store.SetJobCreatedApp(ctx, job.ID, app.ID, app.Slug, app.Name); err != nil {
 		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("link job app: %v", err)}
 	}
-	return StepResult{Status: model.StepStatusSucceeded}
+	return StepResult{Status: model.StepStatusSucceeded, Summary: readStepSummary(outputPath)}
 }
 
 func (c *ClaudeStepRunner) applicationFromManifest(projectDir string) (model.Application, error) {
@@ -882,7 +895,7 @@ func (c *ClaudeStepRunner) applicationFromManifest(projectDir string) (model.App
 	}, nil
 }
 
-func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace runner.TraceEmitter, out runner.StepOutput, err error) StepResult {
+func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace runner.TraceEmitter, out runner.StepOutput, outputPath string, err error) StepResult {
 	if err != nil {
 		return c.failureFromError(err)
 	}
@@ -895,7 +908,7 @@ func (c *ClaudeStepRunner) resultFromValidatedOutput(ctx context.Context, trace 
 	if len(out.Warnings) > 0 {
 		emitClarificationTrace(ctx, trace, nil, out.Warnings)
 	}
-	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON}
+	return StepResult{Status: model.StepStatusSucceeded, FrozenRequirementJSON: out.FrozenRequirementJSON, Summary: readStepSummary(outputPath)}
 }
 
 func (c *ClaudeStepRunner) failureFromError(err error) StepResult {

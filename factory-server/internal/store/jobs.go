@@ -659,12 +659,14 @@ func (s *Store) IncrementStepAttempt(ctx context.Context, stepID string) error {
 	return err
 }
 
-// MarkStepSucceeded flips a step to succeeded with ended_at.
-func (s *Store) MarkStepSucceeded(ctx context.Context, stepID string) error {
+// MarkStepSucceeded flips a step to succeeded with ended_at + the agent's
+// human-readable summary (from output.json) so the workbench's agent blocks
+// can surface 思考摘要.
+func (s *Store) MarkStepSucceeded(ctx context.Context, stepID, summary string) error {
 	now := ms(time.Now())
 	_, err := s.db.ExecContext(ctx, `
-UPDATE job_steps SET status = ?, ended_at = ?, needs_user_input = 0, pending_questions = '' WHERE id = ?`,
-		string(model.StepStatusSucceeded), now, stepID)
+UPDATE job_steps SET status = ?, ended_at = ?, needs_user_input = 0, pending_questions = '', summary = ? WHERE id = ?`,
+		string(model.StepStatusSucceeded), now, summary, stepID)
 	return err
 }
 

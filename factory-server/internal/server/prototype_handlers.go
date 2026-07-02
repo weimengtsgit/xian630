@@ -193,7 +193,7 @@ func (s *Server) advancePrototypeStepAfterDecision(ctx context.Context, jobID, s
 	if current == nil || current.Kind != model.StepDesignContract || current.Status != model.StepStatusWaitingUser {
 		return nil
 	}
-	if err := s.store.MarkStepSucceeded(ctx, current.ID); err != nil {
+	if err := s.store.MarkStepSucceeded(ctx, current.ID, ""); err != nil {
 		return err
 	}
 	var next *model.JobStep
