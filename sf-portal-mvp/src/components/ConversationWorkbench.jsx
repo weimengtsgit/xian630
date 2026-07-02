@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
+  AlertCircle,
   AlertTriangle,
   Archive,
   ArrowRight,
@@ -997,21 +998,34 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     )
   }
   if (item.type === 'prototype_confirmed') {
-    // Durable record of a confirmed prototype (编排产物确认). The
-    // PrototypeConfirmationDock is the in-flight confirm surface; once the gate
-    // is past this retained item stays in the timeline so the user can re-open
-    // the confirmed prototype preview and see what was confirmed. Plain card for
-    // now — Task 3 folds it into a summary.
+    // Durable record of a prototype decision (编排产物确认). The
+    // PrototypeConfirmationDock is the in-flight surface; once the user picks an
+    // outcome this retained item stays in the timeline so the user can re-open
+    // the prototype preview and see what was decided. The item carries an
+    // `outcome` discriminator ('confirmed' | 'continued_without_confirmation'
+    // | 'unknown') plus outcome-specific copy so the card is always truthful
+    // about which decision was made — a user who chose 继续不确认原型 must NOT
+    // see a card labeled 原型已确认. Plain card for now — Task 3 folds it into
+    // a summary.
     const art = item.artifact
+    const outcome = item.outcome || 'unknown'
+    const title = item.title || '原型阶段完成'
+    const detail = item.detail || item.confirmLabel || ''
+    const OutcomeIcon = outcome === 'confirmed' ? CheckCircle2
+      : outcome === 'continued_without_confirmation' ? AlertCircle
+      : HelpCircle
+    const previewTitle = outcome === 'confirmed' ? '查看已确认的原型'
+      : outcome === 'continued_without_confirmation' ? '查看未确认的原型'
+      : '查看原型'
     return (
-      <div className="cw-item cw-agent cw-prototype-confirmed">
+      <div className="cw-item cw-agent cw-prototype-confirmed" data-outcome={outcome}>
         <span className="cw-item-label">
-          <CheckCircle2 size={12} />
-          原型已确认
+          <OutcomeIcon size={12} />
+          {title}
         </span>
-        <span className="cw-prototype-confirmed-detail">{item.confirmLabel}</span>
+        <span className="cw-prototype-confirmed-detail">{detail}</span>
         {art && (art.previewUrl || art.id) ? (
-          <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)} title="查看确认的原型">
+          <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)} title={previewTitle}>
             <MonitorCheck size={14} />
             <span>{item.label}</span>
           </button>

@@ -435,19 +435,46 @@ function appendArtifactLinks(items, view) {
   }
 }
 
-// appendPrototypeConfirmation emits a DURABLE timeline record for a confirmed
-// prototype (design_contract step). The PrototypeConfirmationDock alone is not
-// a durable timeline item — when the user confirms a prototype the dock simply
-// disappears, leaving no conversation record of what was confirmed. This helper
+// appendPrototypeConfirmation emits a DURABLE timeline record for a prototype
+// decision (design_contract step). The PrototypeConfirmationDock alone is not a
+// durable timeline item — once the user picks an outcome the dock simply
+// disappears, leaving no conversation record of what was decided. This helper
 // derives the record purely from existing frontend data:
 //   - the interface_preview workbench artifact (the same one the interface_parsing
 //     card projects and the Dock opens) — carries label/previewUrl/jobId/stepId;
-//   - the confirm signal: artifact.status === 'confirmed'. When the backend has
-//     not populated that field (current state), fall back to the design_contract
-//     step having succeeded/completed (the step moved past the prototype gate)
-//     while an interface_preview artifact for it exists.
-// The item carries the artifact link + a confirm label so Task 3 can fold it
-// into a summary. One item per confirmed interface_preview artifact (dedup by id).
+//   - the decision signal: artifact.status. The backend
+//     (factory-server/.../prototype_handlers.go) writes either 'confirmed' (user
+//     picked 确定原型并继续) or 'continued_without_confirmation' (user picked
+//     继续不确认原型); both advance the design_contract step identically.
+//   - FALLBACK: when the backend has not yet populated artifact.status (legacy /
+//     in-flight), fall back to the design_contract step having succeeded/completed
+//     (the step moved past the prototype gate) while an interface_preview artifact
+//     exists for it. In that case the outcome is genuinely unknown, so the card is
+//     labeled NEUTRALLY ("原型阶段完成（结果待确认）") rather than asserting a
+//     confirmation that may not have happened.
+//
+// The item carries an `outcome` discriminator — 'confirmed' |
+// 'continued_without_confirmation' | 'unknown' — plus outcome-specific copy so the
+// rendered card is always truthful about which decision was made. One item per
+// decided interface_preview artifact (dedup by id).
+const PROTOTYPE_OUTCOME_COPY = {
+  confirmed: {
+    title: '原型已确认',
+    detail: '确定原型并继续',
+    outcome: 'confirmed',
+  },
+  continued_without_confirmation: {
+    title: '原型未确认，已继续',
+    detail: '用户选择不确认原型并继续',
+    outcome: 'continued_without_confirmation',
+  },
+  unknown: {
+    title: '原型阶段完成',
+    detail: '原型阶段完成（结果待确认）',
+    outcome: 'unknown',
+  },
+}
+
 function appendPrototypeConfirmation(items, view, jobStepBlocks) {
   const artifacts = view && Array.isArray(view.workbenchArtifacts) ? view.workbenchArtifacts : []
   const protoArtifacts = artifacts.filter(
@@ -455,7 +482,7 @@ function appendPrototypeConfirmation(items, view, jobStepBlocks) {
   )
   if (protoArtifacts.length === 0) return
   // design_contract step statuses that indicate the prototype gate is past
-  // (used as the fallback confirm signal when artifact.status is not 'confirmed').
+  // (used as the fallback signal when artifact.status is not a known outcome).
   const steps = Array.isArray(jobStepBlocks) ? jobStepBlocks : []
   const designContractSucceeded = new Set(
     steps
@@ -463,17 +490,33 @@ function appendPrototypeConfirmation(items, view, jobStepBlocks) {
       .map(step => step.stepId)
   )
   for (const art of protoArtifacts) {
-    const confirmed = String(art.status || '').toLowerCase() === 'confirmed'
-    const stepSucceeded = art.stepId
-      ? designContractSucceeded.has(String(art.stepId))
-      : designContractSucceeded.size > 0
-    if (!confirmed && !stepSucceeded) continue
+    const rawStatus = String(art.status || '').toLowerCase()
+    let copy
+    if (rawStatus === 'confirmed') {
+      copy = PROTOTYPE_OUTCOME_COPY.confirmed
+    } else if (rawStatus === 'continued_without_confirmation') {
+      copy = PROTOTYPE_OUTCOME_COPY.continued_without_confirmation
+    } else {
+      // Fallback: artifact status empty/unknown. Only emit when the
+      // design_contract step has moved past the gate; label NEUTRALLY because
+      // we cannot tell confirm vs continue-without-confirmation apart here.
+      const stepSucceeded = art.stepId
+        ? designContractSucceeded.has(String(art.stepId))
+        : designContractSucceeded.size > 0
+      if (!stepSucceeded) continue
+      copy = PROTOTYPE_OUTCOME_COPY.unknown
+    }
     items.push({
       id: `prototype_confirmed_${art.id || art.stepId || 'proto'}`,
       type: 'prototype_confirmed',
       artifact: art,
       label: art.label || ARTIFACT_LINK_LABEL.interface_preview,
-      confirmLabel: '确定原型并继续',
+      // Kept for backwards compatibility with any consumer reading confirmLabel;
+      // carries the truthful, outcome-specific detail text.
+      confirmLabel: copy.detail,
+      outcome: copy.outcome,
+      title: copy.title,
+      detail: copy.detail,
       confirmedAt: safeString(art.updatedAt || art.updated_at),
     })
   }
