@@ -981,8 +981,11 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     // of the whole app inside the iframe. Absolutize via the shared helper.
     if (art && art.kind === 'interface_preview' && art.previewUrl) {
       return (
-        <div className="cw-timeline-prototype-embed">
-          <iframe className="cw-prototype-inline-frame" src={absoluteApiUrl(art.previewUrl)} title="原型设计预览" />
+        <div className="cw-timeline-artifact-link">
+          <button type="button" className="cw-artifact-chip" onClick={() => window.open(absoluteApiUrl(art.previewUrl), '_blank')}>
+            <FileText size={14} />
+            <span>{art.label || item.label || '原型预览'}</span>
+          </button>
         </div>
       )
     }
