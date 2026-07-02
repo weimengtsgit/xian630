@@ -1,0 +1,143 @@
+# .understandignore — patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+# Lines below are suggestions — uncomment to activate.
+# Use ! prefix to force-include something excluded by defaults.
+#
+# Built-in defaults (always excluded unless negated):
+#   node_modules/, .git/, dist/, build/, obj/, *.lock, *.min.js, etc.
+#
+
+# --- From .gitignore (uncomment to exclude) ---
+
+# .pnp/
+# .pnp.js
+# dist-ssr/
+# *.local
+# .vite/
+# *.swp
+# *.swo
+# *~
+# .DS_Store
+# Thumbs.db
+# logs/
+# npm-debug.log*
+# yarn-debug.log*
+# yarn-error.log*
+# pnpm-debug.log*
+# lerna-debug.log*
+# .env
+# .env.local
+# .env.*.local
+# .factory-secrets/
+# .nyc_output/
+# .parcel-cache/
+# .eslintcache
+# bin/
+# /xian630
+# /cc-status/cc-status
+# /cc-status/cc-status.exe
+# /vendor/
+# *.db
+# *.db-wal
+# *.db-shm
+# *.sqlite
+# *.sqlite3
+# /factory-server/.factory-runs/
+# /generated-apps
+# __debug*
+# .cc-status
+# *.exe
+# .superpowers/
+# .playwright-mcp/
+# .worktrees/
+# .claude/worktrees/
+# .factory-iso/
+# .factory-runs/
+# sf-deploy.tar.gz
+# /*.py
+# /*.ps1
+# /*.sh
+# /operations-management-c4fn-live*/
+# /local-ais-demo/
+# /local-ais-podj-fix*/
+# /fix-cors/
+# /fix-nginx/
+# /fix-ontology-adapter/
+# /ontology_specs/
+# /ontology_specs_all/
+# /carrier-data-debug/
+# /online-backups/
+# /*-index-*.js
+# /*-bundle*.js
+# /*-bundle*.mjs
+# /*.html
+# /*.txt
+# /ontology_catalog.md
+# /ais-dkcf-CarrierMap.tsx
+# /*.zip
+# /sf-deploy-*.tar.gz
+
+# --- Detected directories (uncomment to exclude) ---
+
+# docs/
+
+# --- Test file patterns (uncomment to exclude) ---
+
+# JS / TS
+# *.test.*
+# *.spec.*
+# *.snap
+# C# / .NET
+# **/*Tests.cs
+# **/*Test.cs
+# **/*Fixture.cs
+# **/*.Tests.csproj
+# Java / Kotlin
+# **/src/test/**
+# **/*Test.java
+# **/*IT.java
+# **/*Spec.kt
+# Go
+# **/*_test.go
+
+# --- User scope: only factory-server, sf-portal-mvp, cc-status (per /understand) ---
+scene/
+sf-portal/
+docs/
+software-factory-course/
+interface-agent/
+deploy/
+.claude/
+.factory/
+.playwright-mcp/
+# keep root README.md / CONTEXT.md out of the node set too (scoped analysis)
+/README.md
+/CONTEXT.md
+
+# --- Active exclusions (scan-time noise reduction) ---
+
+# Playwright MCP debug snapshots (yml/log/png) — zero architectural value
+.playwright-mcp/
+# macOS / Windows clutter
+.DS_Store
+Thumbs.db
+# Factory runtime artifacts & generated outputs
+.factory-runs/
+.factory-iso/
+generated-apps/
+.cc-status
+__debug*
+# Skill / SDD working artifacts
+.superpowers/
+# Worktrees & backups
+.worktrees/
+.claude/worktrees/
+online-backups/
+# Build binaries & DB files
+*.exe
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+vendor/
