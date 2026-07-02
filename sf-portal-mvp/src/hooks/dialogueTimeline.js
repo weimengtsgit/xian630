@@ -612,6 +612,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       stepId,
       attempt: Number(meta.attempt || 0) || 0,
       agentKey: safeString(meta.agentKey || meta.agent_key),
+      createdAt: safeString(msg.created_at || msg.createdAt),
     })
   }
 
@@ -875,6 +876,9 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       })
       const answerKey = safeExecutionKey(stepId, attempt)
       const answers = taskAnswerByStepAttempt[answerKey] || []
+      // confirmedAt: the most recent answer's timestamp (when the user
+      // submitted the clarification). Used by the folded summary card.
+      const confirmedAt = answers.map(a => a.createdAt).filter(Boolean).slice(-1)[0] || ''
       const item = {
         id: `clarify_${c.dialogueId || ''}_${seq}_${c.id || ''}`,
         type: 'clarification_prompt',
@@ -882,12 +886,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         stepId,
         attempt,
         agentKey,
+        stepKind: safeString(match && match.kind),
         stepName: safeString(match && match.name) || stepId,
         status: statusOpen ? 'open' : 'answered',
         folded: !statusOpen,
         expanded: statusOpen,
         answers,
         finalAnswer: safeString(answers.map(a => a.content).filter(Boolean).join('；')),
+        confirmedAt,
         questions,
       }
       clarificationItems.push(item)

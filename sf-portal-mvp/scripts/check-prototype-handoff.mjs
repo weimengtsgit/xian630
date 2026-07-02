@@ -38,7 +38,13 @@ assert.match(workbench, /请描述您的修改意见/, 'prototype feedback form 
 assert.doesNotMatch(workbench, /thinking=\"\"/, 'workbench must not pass empty thinking into agent cards')
 assert.match(workbench, /questionsForCard/, 'workbench must derive card questions from job step pendingQuestions')
 assert.match(workbench, /thinkingForCard/, 'workbench must derive card thinking from task execution timeline')
-assert.match(workbench, /handlePickCardQuestion/, 'workbench must let users answer card-level structured questions in-app')
+// Task 3: card-level structured questions are answered IN-CARD via an in-card
+// submit (cw-clarification-submit → onSubmitClarification → onSend → answerJob).
+// The old handlePickCardQuestion composer-refill path is gone (澄清交互卡片
+// _Avoid_: 输入框回填选项, 卡片外提交).
+assert.match(workbench, /onSubmitClarification/, 'workbench must let users answer card-level structured questions in-card (onSubmitClarification)')
+assert.match(workbench, /cw-clarification-submit/, 'the in-card submit affordance must exist on the clarification card')
+assert.doesNotMatch(workbench, /handlePickCardQuestion/, 'the composer-refill path (handlePickCardQuestion) must be removed')
 assert.doesNotMatch(workbench, /window\.prompt\('请输入原型修改意见'\)/, 'prototype feedback must not use blocking prompt')
 // Task 2: a confirmed prototype must also leave a DURABLE timeline record (not
 // just the ephemeral Dock). The retained prototype_confirmed card lives in the

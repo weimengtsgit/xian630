@@ -143,12 +143,17 @@ assert.equal(
   'no interface_preview artifact => no prototype_confirmed item',
 )
 
-// ---- Static: ConversationWorkbench must render the item as a retained card ----
+// ---- Static: ConversationWorkbench must render the item as a folded summary ----
+// Task 3: the durable prototype_confirmed item renders as a 折叠澄清摘要卡
+// (FoldedClarificationSummary), carrying agent label, completion state, the
+// confirmation result, the clickable artifact entry (产物入口), confirmation
+// time, and an expand action — never reduced to just an icon.
 const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
 assert.match(workbenchJsx, /item\.type === 'prototype_confirmed'/, 'ConversationWorkbench must render a prototype_confirmed branch')
-assert.match(workbenchJsx, /cw-prototype-confirmed/, 'the retained prototype_confirmed card must have a dedicated class')
-assert.match(workbenchJsx, /data-outcome=\{outcome\}/, 'the card must stamp the outcome discriminator on the DOM so styles/tests can branch')
-assert.match(workbenchJsx, /MonitorCheck/, 'the retained card must render a prototype-preview affordance icon')
+assert.match(workbenchJsx, /FoldedClarificationSummary/, 'the retained prototype_confirmed card must render as a folded summary (折叠澄清摘要卡)')
+assert.match(workbenchJsx, /cw-clarification-summary/, 'the folded summary must carry the cw-clarification-summary class')
+assert.match(workbenchJsx, /outcome=\{item\.outcome\}/, 'the summary must pass the outcome discriminator so it can branch on confirm vs continue-without-confirmation')
+assert.match(workbenchJsx, /MonitorCheck/, 'the retained card must render a prototype-preview affordance icon (产物入口)')
 // The Dock (in-flight surface) is preserved alongside the durable record — Task 2 does not remove it.
 assert.match(workbenchJsx, /PrototypeConfirmationDock/, 'the in-flight PrototypeConfirmationDock must remain for the pre-confirm case')
 

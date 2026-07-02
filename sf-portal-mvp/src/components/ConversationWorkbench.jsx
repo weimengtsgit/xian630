@@ -407,13 +407,6 @@ export function ConversationWorkbench({
     return card.key === aggregateGraph.activeCardKey ? activeQuestions : []
   }
 
-  function handlePickCardQuestion(value) {
-    if (!value) return
-    setInput(prev => {
-      const trimmed = String(prev).trim()
-      return trimmed ? `${trimmed}；${value}` : value
-    })
-  }
   const activePrototype = useMemo(() => {
     const card = (aggregateGraph.cards || []).find(item => item.key === 'interface_parsing')
     const proto = card ? prototypeFromCard(card) : null
@@ -578,17 +571,16 @@ export function ConversationWorkbench({
             onOpenPrototype={handleOpenPrototype}
             onConfirmPrototype={handleConfirmPrototype}
             onPrototypeFeedback={handlePrototypeFeedback}
-            onPickClarification={(scope, value) => {
-              if (!value) return
+            // In-card submit for job-step clarifications (澄清交互卡片: no composer
+            // refill). The card stages its own selection + optional custom answer,
+            // then submits directly through onSend. onSend already routes to
+            // jobs.answerJob when the clarification scope is active, so we set the
+            // scope first, then send the combined answer text. The composer input
+            // is never touched.
+            onSubmitClarification={async (scope, value) => {
+              if (!value || submitting) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
-              setInput(prev => {
-                const trimmed = String(prev).trim()
-                // Append rather than overwrite so multi-question clarifications
-                // (or multiple picks) accumulate in the composer. The answer goes
-                // to answerJob as free text the agent reads, so a combined reply
-                // like "演示数据；两级审批；年假、病假" is exactly what we want.
-                return trimmed ? `${trimmed}；${value}` : value
-              })
+              await onSend(value, { attachmentIds: [], pendingAttachments: [] })
             }}
           />
         ))}
@@ -608,7 +600,6 @@ export function ConversationWorkbench({
               onSubmitCredential={submitCredential}
               onOpenPrototype={handleOpenPrototype}
               onPrototypeFeedback={handlePrototypeFeedback}
-              onPickQuestion={handlePickCardQuestion}
               onConfirmPrototype={handleConfirmPrototype}
               onContinuePrototype={handleContinuePrototype}
             />
@@ -858,7 +849,7 @@ function taskDrawerBadgeInfo(task) {
   return { state: 'unknown', label: '状态未知' }
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onOpenArtifact, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation, activePrototype, onOpenPrototype, onConfirmPrototype, onPrototypeFeedback }) {
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onOpenArtifact, onAcceptConsolidation, onSend, onSelectClarificationScope, onSubmitClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation, activePrototype, onOpenPrototype, onConfirmPrototype, onPrototypeFeedback }) {
   if (item.type === 'user_message') {
     // Submitted attachment refs (Task 11 / spec decision #22): after send, the
     // persisted user_message carries `attachments` [{ id, active, name,
@@ -894,11 +885,21 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   }
   if (item.type === 'clarification_prompt') {
     // A pipeline step (solution_design / code_generation) paused for user input.
-    // Render the question(s) + structured options as a card; picking an option
-    // fills the composer (the reply goes through the normal send → answerJob
-    // path, which resets the step so the agent reads the user's answer).
+    // Rendered as a unified 澄清交互卡片: the user selects option(s) INSIDE the card
+    // (with an optional in-card custom answer field) and submits via an in-card
+    // action. The composer is NEVER filled (no 输入框回填). Once answered the card
+    // folds to a 折叠澄清摘要卡 that retains agent label, completion state, the
+    // final answer, artifact entries, confirmation time, and an expand action.
     return (
-      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} onConfirmDataAccess={onConfirmDataAccess} onConfirmPrototype={onConfirmPrototype} submitting={submitting} />
+      <ClarificationPromptCard
+        item={item}
+        onSelectScope={onSelectClarificationScope}
+        onSubmit={onSubmitClarification}
+        onConfirmDataAccess={onConfirmDataAccess}
+        onConfirmPrototype={onConfirmPrototype}
+        onOpenArtifact={onOpenArtifact}
+        submitting={submitting}
+      />
     )
   }
   if (item.type === 'analysis_stream') {
@@ -998,39 +999,37 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
     )
   }
   if (item.type === 'prototype_confirmed') {
-    // Durable record of a prototype decision (编排产物确认). The
-    // PrototypeConfirmationDock is the in-flight surface; once the user picks an
-    // outcome this retained item stays in the timeline so the user can re-open
-    // the prototype preview and see what was decided. The item carries an
-    // `outcome` discriminator ('confirmed' | 'continued_without_confirmation'
-    // | 'unknown') plus outcome-specific copy so the card is always truthful
-    // about which decision was made — a user who chose 继续不确认原型 must NOT
-    // see a card labeled 原型已确认. Plain card for now — Task 3 folds it into
-    // a summary.
-    const art = item.artifact
-    const outcome = item.outcome || 'unknown'
-    const title = item.title || '原型阶段完成'
-    const detail = item.detail || item.confirmLabel || ''
-    const OutcomeIcon = outcome === 'confirmed' ? CheckCircle2
-      : outcome === 'continued_without_confirmation' ? AlertCircle
-      : HelpCircle
-    const previewTitle = outcome === 'confirmed' ? '查看已确认的原型'
-      : outcome === 'continued_without_confirmation' ? '查看未确认的原型'
-      : '查看原型'
+    // Durable record of a prototype decision (编排产物确认), rendered as a folded
+    // 折叠澄清摘要卡. The item carries an `outcome` discriminator
+    // ('confirmed' | 'continued_without_confirmation' | 'unknown') plus
+    // outcome-specific copy so the card is always truthful about which decision
+    // was made. The summary keeps the required glossary fields: agent label,
+    // completion state, confirmation result, the confirmed artifact entry
+    // (产物入口 — clickable), confirmation time, and an expand action that
+    // reveals the full question/options.
     return (
-      <div className="cw-item cw-agent cw-prototype-confirmed" data-outcome={outcome}>
-        <span className="cw-item-label">
-          <OutcomeIcon size={12} />
-          {title}
-        </span>
-        <span className="cw-prototype-confirmed-detail">{detail}</span>
-        {art && (art.previewUrl || art.id) ? (
-          <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)} title={previewTitle}>
-            <MonitorCheck size={14} />
-            <span>{item.label}</span>
-          </button>
-        ) : null}
-      </div>
+      <FoldedClarificationSummary
+        agentLabel="界面设计 · 设计师"
+        completionState="已确认原型"
+        resultText={item.detail || item.confirmLabel || ''}
+        summary={item.title || '原型阶段完成'}
+        artifact={item.artifact}
+        artifactLabel={item.label}
+        confirmedAt={item.confirmedAt}
+        outcome={item.outcome}
+        onOpenArtifact={onOpenArtifact}
+        expandBody={
+          <div className="cw-clarification-q">
+            <p className="cw-clarification-text">
+              {item.outcome === 'confirmed'
+                ? '已确认该原型方案，进入下一阶段。'
+                : item.outcome === 'continued_without_confirmation'
+                ? '用户选择不确认原型并继续后续阶段。'
+                : '原型阶段已完成，具体确认结果以记录为准。'}
+            </p>
+          </div>
+        }
+      />
     )
   }
   if (item.type === 'business_recommendation') {
@@ -1473,23 +1472,26 @@ function shortId(value) {
 }
 
 // ClarificationPromptCard renders a job-step clarification (solution_design /
-// code_generation pausing for user input) as a distinct, attention-grabbing card
-// in the conversation flow. Unlike the pre-job QuestionCard (which has its own
-// submit + draftAnswers state), a job-step clarification is answered via the
-// normal composer: picking an option (or typing) fills the composer, and sending
-// goes through answerJob → the step resets and the agent reads the reply.
-function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAccess, onConfirmPrototype, submitting }) {
+// code_generation pausing for user input) as a unified 澄清交互卡片. The user
+// selects option(s) INSIDE the card and submits via an in-card action — the
+// composer is NEVER filled (the 输入框回填 path was removed). For questions that
+// allow a custom answer, an in-card input is rendered. Once answered (status !==
+// 'open'), the card folds to a 折叠澄清摘要卡 that retains agent label,
+// completion state, the final answer, artifact entries, confirmation time, and
+// an expand action that reveals the full original question/options.
+function ClarificationPromptCard({ item, onSelectScope, onSubmit, onConfirmDataAccess, onConfirmPrototype, onOpenArtifact, submitting }) {
   const questions = Array.isArray(item.questions) ? item.questions : []
   const open = item.status === 'open'
   const [expanded, setExpanded] = useState(item.expanded !== false)
   const [confirming, setConfirming] = useState(false)
-  // Whether ANY question offers structured options. The agent does not always
-  // emit an options array (sometimes it writes (A)/(B)/(C) into the question
-  // text instead). When there are no pickable options, the hint must NOT say
-  // "点击上方选项" — it would mislead the user.
+  // In-card staged selection: a Map of questionId → chosen value (string).
+  // Selection state lives entirely inside the card; the composer is untouched.
+  const [selections, setSelections] = useState({})
+  const [customText, setCustomText] = useState('')
   const hasAnyOptions = questions.some(q => Array.isArray(q.options) && q.options.length > 0)
   const firstQuestion = questions[0] && questions[0].question
   const finalAnswer = String(item.finalAnswer || '')
+  const agentLabel = resolveClarificationAgentLabel(item)
   const attribution = [
     item.taskId ? `任务 ${shortId(item.taskId)}` : '',
     item.stepName || item.stepId ? `步骤 ${item.stepName || shortId(item.stepId)}` : '',
@@ -1501,48 +1503,109 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAcc
     if (!open || typeof onSelectScope !== 'function') return
     onSelectScope(scope)
   }
-  const pick = async (value, opt, question) => {
-    if (!open || submitting || confirming || typeof onPick !== 'function') return
-    if (
-      question &&
-      question.id === 'data_access_summary_confirmation' &&
-      opt &&
-      opt.value === 'confirm' &&
-      typeof onConfirmDataAccess === 'function'
-    ) {
-      setConfirming(true)
-      try {
-        await onConfirmDataAccess(scope.taskId, scope.stepId, { version: question.defaultAnswer || '', attempt: scope.attempt })
-      } catch {
-        // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
-      } finally {
-        setConfirming(false)
-      }
+  const chooseOption = (question, opt) => {
+    if (!open || submitting || confirming) return
+    // Specialized confirm questions short-circuit through their dedicated APIs
+    // (they are NOT free-text answers and must not be re-run as plain replies).
+    if (question && question.id === 'data_access_summary_confirmation' && opt && opt.value === 'confirm' && typeof onConfirmDataAccess === 'function') {
+      runConfirm(() => onConfirmDataAccess(scope.taskId, scope.stepId, { version: question.defaultAnswer || '', attempt: scope.attempt }))
       return
     }
-    if (
-      question &&
-      question.id === 'prototype_confirmation' &&
-      opt &&
-      opt.value === 'confirm' &&
-      typeof onConfirmPrototype === 'function'
-    ) {
-      setConfirming(true)
-      try {
-        // 原型确认应推进界面设计步骤，不能作为普通澄清回复重跑设计师。
-        await onConfirmPrototype({ jobId: scope.taskId, stepId: scope.stepId, canConfirm: true })
-      } catch {
-        // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
-      } finally {
-        setConfirming(false)
-      }
+    if (question && question.id === 'prototype_confirmation' && opt && opt.value === 'confirm' && typeof onConfirmPrototype === 'function') {
+      runConfirm(() => onConfirmPrototype({ jobId: scope.taskId, stepId: scope.stepId, canConfirm: true }))
       return
     }
-    onPick(scope, value)
+    setSelections(prev => ({ ...prev, [question && question.id]: opt.label || opt.value }))
   }
+  const runConfirm = async fn => {
+    setConfirming(true)
+    try {
+      await fn()
+    } catch {
+      // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
+    } finally {
+      setConfirming(false)
+    }
+  }
+  const canSubmitInCard = open && !submitting && !confirming && (() => {
+    // The in-card submit is enabled once every question has a staged selection
+    // OR (when a question has no options) a non-empty custom answer.
+    const hasCustom = !!customText.trim()
+    return questions.every(q => {
+      if (selections[q.id]) return true
+      // A no-option question can be satisfied by the shared custom input.
+      if (!Array.isArray(q.options) || q.options.length === 0) return hasCustom
+      return false
+    })
+  })()
+  const submitInCard = async () => {
+    if (!canSubmitInCard || typeof onSubmit !== 'function') return
+    const parts = questions.map(q => selections[q.id]).filter(Boolean)
+    const custom = customText.trim()
+    if (custom) parts.push(custom)
+    const value = parts.join('；')
+    if (!value) return
+    setConfirming(true)
+    try {
+      await onSubmit(scope, value)
+    } catch {
+      // error surfaced via the global submitting/error UX
+    } finally {
+      setConfirming(false)
+      setSelections({})
+      setCustomText('')
+    }
+  }
+  // ANSWERED → render the folded summary (expandable to the full question).
+  if (!open) {
+    return (
+      <FoldedClarificationSummary
+        agentLabel={agentLabel}
+        completionState="已澄清"
+        resultText={finalAnswer}
+        summary={firstQuestion || '任务内澄清'}
+        attribution={attribution}
+        confirmedAt={item.confirmedAt}
+        onOpenArtifact={onOpenArtifact}
+        artifact={item.artifact}
+        artifactLabel={item.artifactLabel}
+        expandBody={
+          <>
+            {questions.map((q, qi) => (
+              <div key={q.id || qi} className="cw-clarification-q">
+                <p className="cw-clarification-text">{q.question}</p>
+                {q.options && q.options.length > 0 ? (
+                  <div className="cw-options cw-clarification-options-readonly">
+                    {q.options.map(opt => (
+                      <span
+                        key={opt.value || opt.label}
+                        className={`cw-option cw-clarification-option cw-clarification-option-static${opt.recommended ? ' cw-option-recommended' : ''}`}
+                      >
+                        <span className="cw-option-head">
+                          <b>{opt.label || opt.value}</b>
+                          {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+            {finalAnswer ? (
+              <div className="cw-clarification-final-answer">
+                <strong>最终回答</strong>
+                <p>{finalAnswer}</p>
+              </div>
+            ) : null}
+          </>
+        }
+      />
+    )
+  }
+  // OPEN → render the unified in-card clarification card.
   return (
     <div
-      className={`cw-item cw-agent cw-clarification${open ? ' cw-clarification-open' : ' cw-clarification-answered'}`}
+      className={`cw-item cw-agent cw-clarification cw-clarification-card${open ? ' cw-clarification-open' : ' cw-clarification-answered'}`}
       onMouseDown={selectScope}
       onFocusCapture={selectScope}
     >
@@ -1563,40 +1626,154 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, onConfirmDataAcc
               <p className="cw-clarification-text">{q.question}</p>
               {q.options && q.options.length > 0 ? (
                 <div className="cw-options">
-                  {q.options.map(opt => (
-                    <button
-                      key={opt.value || opt.label}
-                      type="button"
-                      className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
-                      onClick={() => pick(opt.label || opt.value, opt, q)}
-                      disabled={!open || submitting || confirming}
-                    >
-                      <span className="cw-option-head">
-                        <b>{opt.label || opt.value}</b>
-                        {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
-                      </span>
-                    </button>
-                  ))}
+                  {q.options.map(opt => {
+                    const selected = selections[q.id] === (opt.label || opt.value)
+                    return (
+                      <button
+                        key={opt.value || opt.label}
+                        type="button"
+                        className={`cw-option cw-clarification-option${selected ? ' selected' : ''}${opt.recommended ? ' cw-option-recommended' : ''}`}
+                        onClick={() => chooseOption(q, opt)}
+                        disabled={!open || submitting || confirming}
+                        aria-pressed={selected}
+                      >
+                        <span className="cw-option-head">
+                          <b>{opt.label || opt.value}</b>
+                          {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               ) : null}
               {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
             </div>
           ))}
-          {!open && finalAnswer ? (
-            <div className="cw-clarification-final-answer">
-              <strong>最终回答</strong>
-              <p>{finalAnswer}</p>
-            </div>
-          ) : null}
-          <small className="cw-clarification-hint">
-            {open
-              ? hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'
-              : '该澄清已归档为只读。'}
-          </small>
+          {/* In-card custom answer (optional). Rendered when at least one
+              question has no options, or always as a free-text supplement. */}
+          <div className="cw-clarification-custom">
+            <input
+              className="cw-custom-input"
+              value={customText}
+              onChange={e => setCustomText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && canSubmitInCard) { e.preventDefault(); submitInCard() } }}
+              placeholder="补充说明（可选）"
+              disabled={submitting || confirming}
+            />
+          </div>
+          <div className="cw-clarification-submit-bar">
+            <small className="cw-clarification-hint">
+              {hasAnyOptions ? '选择上方选项后提交本轮澄清' : '在上方输入框回复后提交本轮澄清'}
+            </small>
+            <button
+              type="button"
+              className="cw-clarification-submit primary"
+              onClick={submitInCard}
+              disabled={!canSubmitInCard}
+            >
+              {confirming ? '处理中…' : '提交本轮澄清'}
+            </button>
+          </div>
         </>
       ) : null}
     </div>
   )
+}
+
+// resolveClarificationAgentLabel derives the 阶段/责任名 (agent label) for a
+// clarification/confirmation card from its step kind / agent key, falling back
+// to the generic "任务内澄清" when neither is available.
+function resolveClarificationAgentLabel(item) {
+  if (!item) return '任务内澄清'
+  const stepKind = String(item.stepKind || '')
+  if (stepKind && STAGE_LABELS && STAGE_LABELS[stepKind]) return STAGE_LABELS[stepKind]
+  const agentKey = String(item.agentKey || '')
+  if (agentKey === 'designer' || stepKind === 'design_contract') return '界面设计 · 设计师'
+  if (agentKey === 'data_engineer' || agentKey === 'data') return '数据抓取 · 数据工程师'
+  if (agentKey === 'solution_architect' || stepKind === 'solution_design') return '方案设计 · 架构师'
+  if (agentKey === 'coder' || stepKind === 'code_generation') return '代码生成 · 工程师'
+  return '任务内澄清'
+}
+
+// FoldedClarificationSummary is the 折叠澄清摘要卡: the default compact retained
+// form of a COMPLETED clarification/confirmation. It MUST keep (glossary):
+// agent label (阶段/责任名), completion state, 思考摘要 (optional), final answer or
+// confirmation result, confirmed artifact links (产物入口 — clickable),
+// confirmation time, and an expand action. It MUST NOT: delete history, hide
+// artifact entries, show only a completion icon.
+function FoldedClarificationSummary({
+  agentLabel,
+  completionState,
+  resultText,
+  summary,
+  attribution,
+  artifact,
+  artifactLabel,
+  confirmedAt,
+  outcome,
+  onOpenArtifact,
+  expandBody,
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const OutcomeIcon = outcome === 'confirmed' ? CheckCircle2
+    : outcome === 'continued_without_confirmation' ? AlertCircle
+    : null
+  const time = confirmedAt ? formatConfirmedAt(confirmedAt) : ''
+  const previewTitle = outcome === 'confirmed' ? '查看已确认的原型'
+    : outcome === 'continued_without_confirmation' ? '查看未确认的原型'
+    : '查看产物'
+  return (
+    <div className={`cw-item cw-agent cw-clarification cw-clarification-answered cw-clarification-summary${expanded ? ' is-expanded' : ''}`}>
+      <button
+        type="button"
+        className="cw-clarification-toggle cw-clarification-summary-toggle"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-item-label">
+          {OutcomeIcon ? <OutcomeIcon size={12} /> : null}
+          {agentLabel}
+          <em className="cw-clarification-state">{completionState}</em>
+        </span>
+        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {attribution ? <small className="cw-clarification-attribution">{attribution}</small> : null}
+      <div className="cw-clarification-summary-body">
+        {summary ? <p className="cw-clarification-summary-text">{summary}</p> : null}
+        {resultText ? (
+          <div className="cw-clarification-final-answer">
+            <strong>{outcome ? '确认结果' : '最终回答'}</strong>
+            <p>{resultText}</p>
+          </div>
+        ) : null}
+        {artifact && (artifact.previewUrl || artifact.id || artifact.path) ? (
+          <button
+            type="button"
+            className="cw-artifact-chip"
+            onClick={() => onOpenArtifact && onOpenArtifact(artifact)}
+            title={previewTitle}
+          >
+            <MonitorCheck size={14} />
+            <span>{artifactLabel || artifact.label || '查看产物'}</span>
+          </button>
+        ) : null}
+        {time ? <small className="cw-clarification-time">确认时间：{time}</small> : null}
+      </div>
+      {expanded && expandBody ? (
+        <div className="cw-clarification-summary-expand">{expandBody}</div>
+      ) : null}
+    </div>
+  )
+}
+
+function formatConfirmedAt(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
 }
 
 // RequirementConfirmCard surfaces the requirement_analysis manual-confirmation

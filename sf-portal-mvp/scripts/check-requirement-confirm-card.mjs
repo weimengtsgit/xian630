@@ -7,7 +7,12 @@
 // 拉成 waiting_user，job.pending_questions 塞入一个无选项的 manual_step_confirmation。
 // 这张卡片绕开脆弱的 jobs.steps 链路，直接读 dialogue view 的 seededJob。
 // 返回 null → 不渲染；返回 {jobId, stepId, requirement} → 渲染卡片。
+//
+// Task 3 addition: the card-level 确认 button (cw-stage-confirm) must remain
+// IN-CARD (not a floating bottom-right confirm). 澄清交互卡片 _Avoid_:
+// 右下角悬浮确认, 卡片外提交.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { isRequirementConfirmPending } from '../src/hooks/dialogueTimeline.js'
 
 // 1. 无 view / 无 seededJob → null
@@ -102,5 +107,30 @@ const noReq = isRequirementConfirmPending({
 assert.equal(noReq.jobId, 'job_0faf')
 assert.equal(noReq.stepId, 'step_65b2')
 assert.equal(noReq.requirement, null)
+
+// ---------------------------------------------------------------------------
+// 8. Layout: the card-level 确认 button is IN-CARD (Task 3). The
+//    WorkbenchAgentBlock stage confirm (cw-stage-confirm) lives inside the
+//    agent block body, and the RequirementConfirmCard renders its own confirm
+//    button inline — neither is a floating bottom-right bar.
+//    澄清交互卡片 _Avoid_: 右下角悬浮确认, 卡片外提交.
+// ---------------------------------------------------------------------------
+const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+const agentBlockJsx = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
+assert.match(
+  agentBlockJsx,
+  /cw-stage-confirm/,
+  'the stage confirm button must be in-card (cw-stage-confirm inside WorkbenchAgentBlock)',
+)
+assert.match(
+  agentBlockJsx,
+  /cw-requirement-confirm-btn/,
+  'the stage confirm must use the in-card cw-requirement-confirm-btn affordance',
+)
+assert.match(
+  workbenchJsx,
+  /cw-requirement-confirm-btn/,
+  'the RequirementConfirmCard must render its confirm button in-card',
+)
 
 console.log('check-requirement-confirm-card: ok')
