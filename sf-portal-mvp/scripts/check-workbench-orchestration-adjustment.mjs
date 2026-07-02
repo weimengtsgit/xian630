@@ -1,6 +1,6 @@
 // sf-portal-mvp/scripts/check-workbench-orchestration-adjustment.mjs
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import {
   AGGREGATE_CARD_KEYS,
   buildWorkbenchOrchestrationView,
@@ -173,25 +173,25 @@ assert.equal(appSource.includes('dialogue.send(prompt, options)'), true, 'App mu
 
 // ---- Task 7: workbench agent blocks + responsibility tracks ----------------
 const blockSource = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
-for (const text of ['思考过程', '思考摘要', '模型分析过程', '确认业务逻辑并继续', '确认界面解析并继续', '确认数据抓取并继续']) {
+for (const text of ['思考过程', '思考摘要', '模型分析过程', '需求确认', '界面确认', '数据确认']) {
   assert.equal(blockSource.includes(text), true, `agent block must include ${text}`)
 }
-const tracksSource = readFileSync(new URL('../src/components/WorkbenchTracks.jsx', import.meta.url), 'utf8')
-for (const text of ['目标识别', '布局分区', '来源', '方案设计', '部署']) {
-  assert.equal(tracksSource.includes(text), true, `tracks must include ${text}`)
-}
+// ---- Task 1 (wic): status/data-flow track strips removed from in-conversation stage blocks ----
+// The static status lanes (目标识别→摘要生成; 来源/处理/流向 nodes) used to render
+// inside WorkbenchAgentBlock via <WorkbenchTrack/>. They were pulled OUT of the
+// conversation area by user goal #4: the stage content (思考过程/思考摘要/产物/
+// 确认) stays, but the track strip is gone. Assert the strip is no longer
+// mounted in the block, the import is gone, and the now-unused component file
+// was deleted (no consumer remains).
+assert.equal(blockSource.includes('WorkbenchTrack'), false, 'in-conversation agent block must no longer render the WorkbenchTrack strip')
+assert.equal(existsSync(new URL('../src/components/WorkbenchTracks.jsx', import.meta.url)), false, 'WorkbenchTracks.jsx must be deleted once its only in-conversation consumer is removed')
 
-// ---- Fix wave F6: data-flow track is data-driven, not a static label list ----
-// The data_capture track must derive its node states from the REAL verification
-// state projected onto the data_contract artifact (ontology/internet/demo
-// sources, verification verdicts, fallback history). Assert the component
-// references those signals and the metadata that carries them, confirming the
-// track is no longer the fixed 来源/连接验证/样本获取/字段识别/契约生成/流向
-// label array it replaced.
-for (const text of ['ontology', 'internet', 'demo']) {
-  assert.equal(tracksSource.includes(text), true, `data-flow track must reference source boundary ${text}`)
-}
-assert.equal(tracksSource.includes('metadata') || tracksSource.includes('verification') || tracksSource.includes('fallbackHistory'), true, 'data-flow track must read verification metadata')
+// ---- Fix wave F6: verification metadata still projects onto the card ----
+// The data_capture track strip was removed, but the verification summary
+// (sourceBoundary + per-boundary verdicts + fallback history) the executor
+// projects onto the data_contract artifact is still meaningful (downstream
+// cards read it). Keep asserting it round-trips onto the card; only the track
+// *render* went away.
 const orchestrationSource = readFileSync(new URL('../src/hooks/workbenchOrchestrationState.js', import.meta.url), 'utf8')
 assert.equal(orchestrationSource.includes('metadata') && orchestrationSource.includes('parseArtifactMetadata'), true, 'orchestration state must parse artifact metadata onto the card')
 // The data_contract artifact carries the verification summary (sourceBoundary +
