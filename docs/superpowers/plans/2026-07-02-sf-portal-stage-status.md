@@ -829,3 +829,14 @@ curl -s -X POST http://220.154.5.91:18002/api/stages/agent-prototype -H 'Content
 ## 待同步：spec key 命名对齐
 
 实现决定把 key 从 spec 的 `business`/`ui`/`data`/`delivery` 改为真实 agent id（`agent-business`/`agent-prototype`/`agent-data`/`agent-production`）以消除前端映射层。需用同样改动更新 `docs/superpowers/specs/2026-07-02-sf-portal-stage-status-design.md` 的：数据模型示例、curl 示例、URL 表。在本 plan 落盘后一并 commit。
+
+## 实施中设计变更（v2，2026-07-02）
+
+本地验证后用户把状态模型从两态改为三态流转 + 刷新清空（详见 spec「设计变更 v2」段）。Task1-7 实际按 v2 实施：
+
+- store 改纯内存（不写盘）+ `working` 态 + `reset()`（Task1 重做）。
+- `POST /api/stages/reset` 端点（Task2，注意路由要在 `/:key` 之前）。
+- `useStages` 加载时 POST reset + `activate(key)` 点击发 working（Task3 重做）。
+- `AgentNode` 三态视觉 + 点击 `pending→working+跳转`、`completed→跳转`、`working/无url→不可点`（Task4 重做）。
+- AgentStatus 改用 useStages 显示 `completed/total`（Task5）。
+- 测试 13 pass；线上 `node:20-alpine` bind mount `/root/sf-portal-node` 部署验证通过（Task7）。

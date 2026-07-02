@@ -153,3 +153,14 @@ URL 配置在 `server/stages.json`，前端不硬编码：
 
 1. `agent-prototype` 卡片 URL 是否 = `http://220.154.5.91:18020`（interface-agent）。
 2. `agent-data`、`agent-production` 卡片 URL（未提供则留空、卡片不可点）。
+
+## 设计变更 v2（2026-07-02 实施中调整）
+
+本地验证后用户调整了状态模型（取代上面 §接口契约 / §数据模型 / §前端改动 里的两态描述）：
+
+- **三态流转**：`pending`（待处理）→ `working`（进行中）→ `completed`（已完成）。
+- **状态只存后端内存，不写盘**：`stages.json` 只保留静态 `name` / `url`；运行状态默认 `pending`，服务重启或 reset 回全 pending。
+- **新增 `POST /api/stages/reset`**：前端页面加载时调用（强刷清空 → 4 卡全回待处理）。
+- **点击卡片**（`pending` 且有 url）：前端 `POST {status:"working"}` + `window.open(url)` 跳转；`working` 中不可点；`completed` 可点跳转产出。
+- **上报完成**：其他模块 `POST /api/stages/:key {status:"completed"}`。
+- 删掉了原「写盘持久化」设计；store 改纯内存 + `reset()`。
