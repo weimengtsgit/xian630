@@ -13,6 +13,7 @@ import {
   Link,
 } from 'lucide-react'
 import { orderApplicationsForDisplay } from '../hooks/applicationOrdering'
+import { formatAppType } from '../utils/formatLabels'
 import './ApplicationsPanel.css'
 
 const STATUS_TEXT = {
@@ -47,20 +48,6 @@ function formatCreatedAt(app) {
     minute: '2-digit',
     hour12: false,
   })
-}
-
-function formatAppType(type) {
-  const map = {
-    command_dashboard: '指挥仪表盘',
-    situation_replay: '态势复盘',
-    operations_management: '运营管理',
-    managed_agent: '纳管智能体',
-    'command-dashboard': '指挥仪表盘',
-    'affiliation-inference-dashboard': '归属推断仪表盘',
-    'timeline-replay': '态势复盘',
-    'map-dashboard': '地图态势',
-  }
-  return map[type] || type || '-'
 }
 
 function orderManagedAgents(agents) {

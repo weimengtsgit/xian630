@@ -260,7 +260,7 @@ export function useDialogueSessions() {
   // the backend returns a 202 ack {dialogueId, turnId, acceptedAt} instead of a
   // composed view — we surface it as a pending turn and let the trace stream
   // drive the follow-up refresh.
-  const send = useCallback(async content => {
+  const send = useCallback(async (content, options = {}) => {
     const prompt = String(content || '').trim()
     if (!prompt || submitting) return null
     setSubmitting(true)
@@ -288,9 +288,18 @@ export function useDialogueSessions() {
         // arrives, letting the routing analysis + thinking fold live. The flag is
         // cleared when selectedDialogueId becomes set (effect below) or on error.
         pendingNewDialogueRef.current = true
-        view = await factoryApi.createDialogue({ initialPrompt: prompt })
+        // First-message attachments: when no dialogue exists yet the composer
+        // stages files locally (status 'local', no attachment.id). Thread those
+        // File objects into createDialogue so the backend multipart-creates the
+        // dialogue AND uploads + links them to the first message in one call.
+        // submitText (App.jsx) calls clearPending() after send, so the local
+        // chips clear once the multipart create links them server-side.
+        const localFiles = Array.isArray(options.pendingAttachments)
+          ? options.pendingAttachments.map(item => item && item.file).filter(Boolean)
+          : []
+        view = await factoryApi.createDialogue({ initialPrompt: prompt, files: localFiles })
       } else {
-        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt)
+        const result = await factoryApi.sendDialogueMessage(state.view.session.id, prompt, { attachmentIds: options.attachmentIds })
         // 202 ack (continuing session): result carries {dialogueId, turnId, acceptedAt}
         // and NO composed view. 200 path: result IS the composed view (has .session).
         if (result && result.session) {
@@ -431,7 +440,7 @@ export function useDialogueSessions() {
     }
   }, [loadView, state.view, submitting])
 
-  const confirm = useCallback(async () => {
+  const confirm = useCallback(async (options = {}) => {
     if (!state.view || submitting) return null
     setSubmitting(true)
     setError(null)
@@ -440,7 +449,7 @@ export function useDialogueSessions() {
       if (state.view.session.intent === 'business_processing_agent') {
         view = await factoryApi.confirmDialogueBusinessAgent(state.view.session.id)
       } else {
-        view = await factoryApi.confirmDialogueClarification(state.view.session.id)
+        view = await factoryApi.confirmDialogueClarification(state.view.session.id, options)
       }
       await refreshSessions()
       await loadView(view.session.id)
@@ -761,6 +770,17 @@ export function useDialogueSessions() {
   // task panel shows its empty placeholder instead of the cross-session fallback
   // (which would otherwise surface the previous session's task in a workbench
   // whose conversation has already been cleared).
+  // Prototype dock reactivity: the dock reads view.workbenchArtifacts, which is
+  // populated by the server on getDialogue. When useJobs receives step.updated /
+  // artifact.created SSE it refreshes jobs.artifacts but NOT the dialogue view —
+  // so an interface_preview artifact projected by a waiting_user step is invisible
+  // until the next dialogue.* event or page reload. This stable callback lets
+  // App.jsx bridge the gap by re-fetching the view after jobs.artifacts changes.
+  const refreshSelectedView = useCallback(() => {
+    const id = selectedDialogueIdRef.current
+    if (id) loadView(id)
+  }, [loadView])
+
   const focusTask = state.view ? selectFocusTask(jobsForFocus, state.selectedDialogueId) : null
 
   return {
@@ -796,5 +816,6 @@ export function useDialogueSessions() {
     rollback,
     confirmChange,
     archive,
+    refreshSelectedView,
   }
 }

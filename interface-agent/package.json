@@ -1,0 +1,23 @@
+{
+  "name": "ai-prototype-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "vitest run",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.8",
+    "jsdom": "^25.0.1",
+    "supertest": "^7.0.0",
+    "vitest": "^2.1.8"
+  }
+}

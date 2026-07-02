@@ -14,9 +14,21 @@ import './AgentsPanel.css'
 
 // 流水线节点元信息：图标与职责描述
 const AGENT_META = {
-  'agent-business': { icon: Briefcase, desc: '业务流程建模 · 逻辑拆解' },
-  'agent-prototype': { icon: Figma, desc: '界面结构 · 元素解析' },
-  'agent-data': { icon: BarChart3, desc: '数据采集 · 字段抽取' },
+  'agent-business': {
+    icon: Briefcase,
+    desc: '业务流程建模 · 逻辑拆解',
+    detail: '业务逻辑智能体重点是理解指挥员意图、分析业务逻辑，形成智能体生成方案。'
+  },
+  'agent-prototype': {
+    icon: Figma,
+    desc: '界面结构 · 元素解析',
+    detail: '界面解析智能体重点是回应指挥员关切，按要求调整配置界面。'
+  },
+  'agent-data': {
+    icon: BarChart3,
+    desc: '数据采集 · 字段抽取',
+    detail: '数据抓取智能体重点是深入动态数据对象进行数据抓取、接口对接，共同完成各类智能体的快速生成。'
+  },
   'agent-production': { icon: Code2, desc: '代码生成 · 工程交付' }
 }
 
@@ -42,7 +54,12 @@ function AgentNode({ agent }) {
   const StatusIcon = statusInfo.icon
 
   return (
-    <div className="agent-node" data-agent-id={agent.id} data-status={agent.status}>
+    <div className="agent-node" data-agent-id={agent.id} data-status={agent.status} tabIndex={meta.detail ? 0 : undefined}>
+      {meta.detail && (
+        <div className="agent-node-tooltip" role="tooltip">
+          {meta.detail}
+        </div>
+      )}
       <div className="agent-node-head">
         <div className="agent-node-icon" style={{ background: statusInfo.bgColor }}>
           <Icon size={30} style={{ color: statusInfo.color }} />

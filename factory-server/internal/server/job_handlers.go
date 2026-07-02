@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/collaboration"
+	"github.com/weimengtsgit/xian630/factory-server/internal/dataaccess"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -277,6 +278,9 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	jobs, err := s.store.ListJobs(r.Context(), status)
 	if err != nil {
+		if clientGone(r) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "list jobs")
 		return
 	}
@@ -540,11 +544,12 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 // answerJobBody is accepted by POST /api/jobs/:id/answer; either "answer" or
 // "content" is accepted for interoperability with older clients.
 type answerJobBody struct {
-	Answer      string `json:"answer"`
-	Content     string `json:"content"`
-	StepID      string `json:"stepId"`
-	StepIDSnake string `json:"step_id"`
-	Attempt     int    `json:"attempt"`
+	Answer        string   `json:"answer"`
+	Content       string   `json:"content"`
+	StepID        string   `json:"stepId"`
+	StepIDSnake   string   `json:"step_id"`
+	Attempt       int      `json:"attempt"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
 }
 
 // answerJob handles POST /api/jobs/:id/answer — appends a user conversation
@@ -614,6 +619,20 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		}
 		targetStep = step
 	}
+	originalTargetStep := targetStep
+	reroutedForCompatibility := false
+	if targetStep != nil {
+		routeStep, rerouted, err := s.compatibilityRevalidationTarget(r.Context(), job, targetStep)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "route compatibility revalidation")
+			return
+		}
+		if rerouted && routeStep != nil {
+			targetStep = routeStep
+			stepID = targetStep.ID
+			reroutedForCompatibility = true
+		}
+	}
 
 	msg := model.ConversationMessage{
 		ID:        "conv_" + idpkg.New(),
@@ -646,8 +665,40 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "append dialogue answer")
 			return
 		}
+		// Bind any attachments the user pinned to this task-internal clarification
+		// answer. Each id is validated (active check) by createDialogueAttachmentRefs;
+		// only the attachment id + focus key are persisted, never file content or
+		// credentials. Without this the attachments the user supplied during a
+		// 业务逻辑/界面解析/数据抓取 phase were dropped.
+		if len(body.AttachmentIDs) > 0 {
+			focusKey := stepKindToFocusKey(targetStep.Kind)
+			if err := s.createDialogueAttachmentRefs(r.Context(), job.DialogueID, dlgMsg.ID, body.AttachmentIDs, focusKey); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid attachment reference")
+				return
+			}
+		}
 	}
 	if job.Status == model.JobStatusWaitingUser && targetStep != nil {
+		if isManualStepConfirmationQuestions(targetStep.PendingQuestions) {
+			writeError(w, http.StatusConflict, "step is waiting for manual confirmation; use the step confirm endpoint")
+			return
+		}
+		if isPrototypeConfirmationAnswer(targetStep.PendingQuestions, content) {
+			// 原型确认是“推进当前设计步骤”的决策，不是给设计师的新反馈；
+			// 这里兼容旧前端/其他客户端误发到通用 answer 接口的情况，避免重复重跑界面设计。
+			if err := s.applyLatestPrototypeDecision(r.Context(), id, targetStep.ID, "confirmed"); err != nil {
+				writeError(w, http.StatusInternalServerError, "confirm prototype")
+				return
+			}
+			job, err = s.store.GetJob(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "get job")
+				return
+			}
+			s.hub.Publish(Event{Type: "job.updated", Data: job})
+			writeJSON(w, http.StatusOK, job)
+			return
+		}
 		// Persist the user's answer onto the step's user_prompt so the re-run can
 		// read it (the generative-step prompts append step.UserPrompt as a
 		// clarification). Without this the step re-runs with identical input and
@@ -661,6 +712,17 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.ResetStepToPending(r.Context(), targetStep.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "reset step")
 			return
+		}
+		if reroutedForCompatibility && originalTargetStep != nil && originalTargetStep.ID != targetStep.ID {
+			if err := s.store.ResetStepToPending(r.Context(), originalTargetStep.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "reset compatibility step")
+				return
+			}
+			if err := s.markCompatibilityRevalidationRequested(r.Context(), id, originalTargetStep.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, "mark compatibility revalidation")
+				return
+			}
+			s.publishStepUpdated(r.Context(), originalTargetStep.ID)
 		}
 		// Step-scoped answers may target a waiting step that is not the job's current
 		// pointer. Move current_step_kind before re-queueing so the executor reruns
@@ -687,6 +749,132 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+func (s *Server) compatibilityRevalidationTarget(ctx context.Context, job *model.Job, targetStep *model.JobStep) (*model.JobStep, bool, error) {
+	if job == nil || targetStep == nil || targetStep.Kind != model.StepDataIntegration {
+		return targetStep, false, nil
+	}
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	hasCompatibilityFailure := false
+	for _, ref := range refs {
+		if ref.Kind == model.WorkbenchArtifactDataContract && ref.Status == "compatible_failed" {
+			hasCompatibilityFailure = true
+			break
+		}
+	}
+	if !hasCompatibilityFailure {
+		return targetStep, false, nil
+	}
+	steps, err := s.store.ListJobSteps(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	for i := range steps {
+		if steps[i].Kind == model.StepDesignContract {
+			return &steps[i], true, nil
+		}
+	}
+	return targetStep, false, nil
+}
+
+func (s *Server) markCompatibilityRevalidationRequested(ctx context.Context, jobID string, dataStepID string) error {
+	refs, err := s.store.ListWorkbenchArtifactRefsByJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		if ref.Kind != model.WorkbenchArtifactDataContract || ref.Status != "compatible_failed" {
+			continue
+		}
+		if dataStepID != "" && ref.StepID != dataStepID {
+			continue
+		}
+		ref.Status = "interface_revalidation_requested"
+		if err := s.store.UpsertWorkbenchArtifactRef(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isManualStepConfirmationQuestions(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var items []struct {
+		Type    string `json:"type"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Type == "manual_step_confirmation" && item.Confirm {
+			return true
+		}
+	}
+	return false
+}
+
+func isPrototypeConfirmationAnswer(raw, answer string) bool {
+	if strings.TrimSpace(raw) == "" || strings.TrimSpace(answer) == "" {
+		return false
+	}
+	type option struct {
+		Value string `json:"value"`
+		Label string `json:"label"`
+	}
+	type question struct {
+		ID      string   `json:"id"`
+		Options []option `json:"options"`
+	}
+	var items []question
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		var wrapped struct {
+			Questions []question `json:"questions"`
+		}
+		if err := json.Unmarshal([]byte(raw), &wrapped); err != nil {
+			return false
+		}
+		items = wrapped.Questions
+	}
+	normalized := strings.TrimSpace(answer)
+	for _, item := range items {
+		if item.ID != "prototype_confirmation" {
+			continue
+		}
+		for _, opt := range item.Options {
+			if opt.Value == "confirm" && (normalized == opt.Value || normalized == opt.Label) {
+				return true
+			}
+		}
+		// 兼容卡片级确认按钮传入的中文文案，不把“提出修改意见”误判为确认。
+		return strings.Contains(normalized, "原型") &&
+			(strings.Contains(normalized, "确定") || strings.Contains(normalized, "确认")) &&
+			!strings.Contains(normalized, "修改")
+	}
+	return false
+}
+
+// stepKindToFocusKey projects a job step kind onto the workbench focus key the
+// task-internal clarification binding uses. It mirrors currentWorkbenchFocusKey
+// (dialogue_handlers.go) so an attachment pinned during a task-internal
+// clarification lands on the same focus lane as the step that asked for it.
+func stepKindToFocusKey(kind model.StepKind) string {
+	switch kind {
+	case model.StepDesignContract:
+		return "interface_parsing"
+	case model.StepDataIntegration:
+		return "data_capture"
+	case model.StepSolutionDesign, model.StepCodeGeneration, model.StepCodeReview, model.StepSecurityReview, model.StepTestVerification, model.StepProductAcceptance, model.StepImageBuild, model.StepDeployment:
+		return "production_delivery"
+	default:
+		return "business_logic"
+	}
+}
+
 // retryCurrentStep handles POST /api/jobs/:id/retry-current-step. It resets the
 // job's current failed step to pending and re-queues the job. Only failed jobs
 // may be retried; anything else is a 409.
@@ -702,6 +890,100 @@ func (s *Server) retryCurrentStep(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+	writeJSON(w, http.StatusOK, job)
+}
+
+type confirmJobStepBody struct {
+	Attempt int `json:"attempt"`
+}
+
+func (s *Server) confirmJobStep(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+	stepID := Param(r, "stepID")
+	var body confirmJobStepBody
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	var confirmingRequirement bool
+	var clarificationID string
+	if before, err := s.store.GetJob(r.Context(), jobID); err == nil && before != nil {
+		clarificationID = before.ClarificationSessionID
+		if steps, err := s.store.ListJobSteps(r.Context(), jobID); err == nil {
+			for _, step := range steps {
+				if step.ID == stepID && step.Kind == model.StepRequirementAnalysis {
+					confirmingRequirement = true
+					break
+				}
+			}
+		}
+	}
+	job, err := s.exec.ConfirmManualStep(r.Context(), jobID, stepID, body.Attempt)
+	if err != nil {
+		switch {
+		case err.Error() == "job not found" || err.Error() == "step not found":
+			writeError(w, http.StatusNotFound, "not found")
+		default:
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	if confirmingRequirement && clarificationID != "" {
+		// 需求分析产物已经由用户确认，澄清子会话此时才进入 confirmed；
+		// 这避免澄清结束就被误认为用户已经确认需求。
+		_ = s.store.SetClarificationStatus(r.Context(), clarificationID, model.ClarificationStatusConfirmed, "", "")
+	}
+	s.publishStepUpdated(r.Context(), stepID)
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+	writeJSON(w, http.StatusOK, job)
+}
+
+type confirmDataAccessBody struct {
+	Version string `json:"version"`
+	Attempt int    `json:"attempt"`
+}
+
+func (s *Server) confirmDataAccessStep(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+	stepID := Param(r, "stepID")
+	var body confirmDataAccessBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	body.Version = strings.TrimSpace(body.Version)
+	if body.Version == "" {
+		writeError(w, http.StatusBadRequest, "version required")
+		return
+	}
+	if err := s.exec.ValidateDataAccessStepConfirmation(r.Context(), jobID, stepID, body.Attempt); err != nil {
+		switch {
+		case err.Error() == "job not found" || err.Error() == "step not found":
+			writeError(w, http.StatusNotFound, "not found")
+		default:
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	// 数据接入确认只固化当前草案版本，不重跑模型；推进由 executor 统一处理。
+	if err := dataaccess.FinalizeVersion(s.cfg.ArtifactRoot, jobID, body.Version, "user"); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	job, err := s.exec.ConfirmDataAccessStep(r.Context(), jobID, stepID, body.Attempt)
+	if err != nil {
+		switch {
+		case err.Error() == "job not found" || err.Error() == "step not found":
+			writeError(w, http.StatusNotFound, "not found")
+		default:
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	s.publishStepUpdated(r.Context(), stepID)
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)
 }

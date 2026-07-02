@@ -324,6 +324,43 @@ func TestLegacyClarificationBackfillDialogue(t *testing.T) {
 	}
 }
 
+func TestReconcileDialogueClarificationFailures(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	child := model.ClarificationSession{
+		ID: "clar_failed_linked", Status: model.ClarificationStatusFailed,
+		InitialPrompt: "生成一个todo", Round: 5, MaxRounds: 6, RequirementJSON: `{}`,
+		ErrorCode: string(model.ErrorOutputInvalidJSON), ErrorMessage: "decode clarification output",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateClarificationSession(ctx, child); err != nil {
+		t.Fatalf("create clarification: %v", err)
+	}
+	dlg := model.DialogueSession{
+		ID: "dlg_failed_linked", InitialPrompt: "生成一个todo",
+		Status: model.DialogueStatusDraftingApplication, Intent: model.DialogueIntentApplicationGeneration,
+		RouteLocked: true, ClarificationSessionID: child.ID, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("create dialogue: %v", err)
+	}
+
+	if err := st.ReconcileDialogueClarificationFailures(ctx); err != nil {
+		t.Fatalf("ReconcileDialogueClarificationFailures: %v", err)
+	}
+	got, err := st.GetDialogueSession(ctx, dlg.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get dialogue: %v", err)
+	}
+	if got.Status != model.DialogueStatusFailed {
+		t.Fatalf("status = %q, want failed", got.Status)
+	}
+	if got.ErrorCode != string(model.ErrorOutputInvalidJSON) || got.ErrorMessage == "" {
+		t.Fatalf("error = %q/%q, want child failure propagated", got.ErrorCode, got.ErrorMessage)
+	}
+}
+
 // TestLegacyClarificationBackfillExceedsListCap asserts the backfill visits
 // EVERY legacy session even when there are more than the ListClarificationSessions
 // cap of 200. A deployment with >200 rows must not silently leave the oldest

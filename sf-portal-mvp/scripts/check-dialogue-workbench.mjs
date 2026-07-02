@@ -64,6 +64,19 @@ for (const card of appItem.cards) {
   assert.equal(card.blueprint, undefined, 'card must not leak blueprint field')
 }
 
+const artifactTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_artifacts', status: 'active', intent: 'application_generation', route_locked: true },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '生成一个 todo list 服务' }],
+  route: {},
+  workbenchArtifacts: [
+    { id: 'warf_req', kind: 'project_document', label: '需求文档', path: 'docs/01-requirements.md', updatedAt: '2026-07-01T10:00:00Z' },
+    { id: 'warf_proto', kind: 'interface_preview', label: '原型预览', path: 'jobs/job_1/design_contract/attempt-1/prototype/preview-manifest.json', updatedAt: '2026-07-01T10:01:00Z' },
+    { id: 'warf_data', kind: 'data_access_plan', label: '数据方案', path: 'jobs/job_1/data-access/versions/1.0.0/data-access.redacted.md', updatedAt: '2026-07-01T10:02:00Z' },
+  ],
+})
+const artifactLabels = artifactTimeline.filter(item => item.type === 'artifact_link').map(item => item.label)
+assert.deepEqual(artifactLabels, ['需求文档', '原型预览', '数据方案'], 'timeline must surface the generated data access plan chip')
+
 // Continuing-session inquiry replies are persisted as ordinary agent replies and
 // must remain visible in the dialogue thread, not be dropped as unknown metadata.
 const inquiryTimeline = buildDialogueTimeline({
@@ -185,6 +198,39 @@ const generationChoiceView = {
 const generationChoice = buildDialogueTimeline(generationChoiceView).find(item => item.type === 'route_recommendation')
 assert.ok(generationChoice, 'application generation must render a route-selection action')
 assert.equal(generationChoice.canReuseExistingApplication, false, 'an empty existing-app match must not render a reuse action')
+const routingPendingTimeline = buildDialogueTimeline({
+  session: { id: 'dlg_routing_pending', status: 'routing', intent: 'routing', route_locked: false, initial_prompt: '请做一个后勤管理应用' },
+  messages: [{ id: 'u1', role: 'user', kind: 'prompt', content: '请做一个后勤管理应用' }],
+  route: { intent: '', confidence: '', needsRouteConfirmation: false, userFacingReason: '' },
+})
+assert.equal(
+  routingPendingTimeline.some(item => item.type === 'live_thinking' && item.pending),
+  true,
+  'routing view without a route result must show a pending thinking item',
+)
+const generationChoiceTypes = buildDialogueTimeline(generationChoiceView).map(item => item.type)
+const generationChoiceTimeline = buildDialogueTimeline(generationChoiceView)
+assert.equal(
+  generationChoiceTypes.includes('thinking_summary'),
+  true,
+  'route result must render a thinking summary before user confirmation',
+)
+assert.equal(
+  generationChoiceTypes.indexOf('thinking_summary') < generationChoiceTypes.indexOf('route_recommendation'),
+  true,
+  'thinking summary must appear before the route confirmation card',
+)
+const generationChoiceThinking = generationChoiceTimeline.find(item => item.type === 'thinking_summary')
+assert.equal(
+  generationChoiceThinking.content,
+  '',
+  'deterministic route summaries must not fabricate raw thinking content',
+)
+assert.equal(
+  generationChoiceThinking.summary,
+  '我会澄清需求并生成一个可运行的新应用。',
+  'deterministic route summary should carry only the user-facing route summary',
+)
 
 // resolved/abandoned/failed => terminal => composer locked
 for (const status of ['resolved', 'abandoned', 'failed']) {
@@ -384,6 +430,7 @@ assert.equal(statusText('unknown'), 'unknown')
 
 const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
 const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
+const agentBlockJsx = readFileSync(new URL('../src/components/WorkbenchAgentBlock.jsx', import.meta.url), 'utf8')
 const appJsx = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 const apiClientJs = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')
 const eventsJs = readFileSync(new URL('../src/api/events.js', import.meta.url), 'utf8')
@@ -449,6 +496,16 @@ assert.match(workbenchJsx, /consolidation_table|consolidation/, 'round-5 table m
 // Business recommendation with explicit confirm + re-describe.
 assert.match(workbenchJsx, /确认创建|确认配置/, 'business recommendation must offer an explicit confirm/create action')
 assert.match(workbenchJsx, /重新描述|重新说明/, 'business recommendation must offer a re-describe action')
+
+// Post-analysis confirmation flow: application generation must not ask the user
+// to "确认并生成" immediately after clarification. It presents three ordered
+// conversation blocks with short confirmation labels instead.
+assert.doesNotMatch(workbenchJsx, /确认并生成/, 'application generation must not expose the old pre-analysis 确认并生成 action')
+assert.match(agentBlockJsx, /需求理解结果/, 'business logic block must title the requirement-analysis result as 需求理解结果')
+assert.match(agentBlockJsx, /界面确认/, 'interface block must expose 界面确认')
+assert.match(agentBlockJsx, /数据方案确认/, 'data block must expose 数据方案确认')
+assert.match(agentBlockJsx, /需求确认/, 'business logic confirmation button must be 需求确认')
+assert.match(agentBlockJsx, /cw-agent-block-divider/, 'interface/data blocks must be separated in the conversation flow')
 
 // Route choices must NOT expose the business_processing_agent option, but must
 // still offer existing-app reuse and app generation.
@@ -522,7 +579,7 @@ assert.match(dialogueHookJs, /optimisticUserMessage/, 'send must reference optim
 // Extract ONLY the send function body so the refresh-ordering assertion does not
 // trip on the other mutating actions (selectRoute/openApp/...) which legitimately
 // await refreshSessions before loadView.
-const sendFnMatch = dialogueHookJs.match(/const send = useCallback\(async content => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
+const sendFnMatch = dialogueHookJs.match(/const send = useCallback\(async \(content, options = \{\}\) => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
 assert.ok(sendFnMatch, 'could not locate the send useCallback body for static checks')
 const sendBody = sendFnMatch[0]
 assert.ok(
@@ -560,5 +617,36 @@ assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static 
 const retryBody = retryFnMatch[0]
 assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
 assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
+
+// ---- requirement term mapping (Item 2) --------------------------------------
+// The shared term map + text translator live in utils/formatLabels.js so the
+// internal English keys (statuses, requirement fields, skill slugs) that leak
+// into the 分析过程 / requirement summary render as Chinese. Assert the map
+// exists, covers a sample slug, and the text helper swaps whole tokens only.
+import { formatRequirementTerm, translateAnalysisText } from '../src/utils/formatLabels.js'
+assert.equal(formatRequirementTerm('software-factory-app'), '软件工厂应用', 'skill slug must map to Chinese')
+assert.equal(formatRequirementTerm('operations-management-console'), '运维管理控制台', 'operations slug must map')
+assert.equal(formatRequirementTerm('ready_to_confirm'), '待确认', 'status key must map')
+assert.equal(formatRequirementTerm('openHighImpact'), '待确认的高影响决策', 'field key must map')
+assert.equal(formatRequirementTerm('未知字段'), '未知字段', 'unknown keys pass through unchanged')
+// translateAnalysisText replaces whole known tokens but never partial matches.
+assert.equal(
+  translateAnalysisText('本次选用 generationProfile.data 与 software-factory-app 蓝本'),
+  '本次选用 生成画像.data 与 软件工厂应用 蓝本',
+  'translateAnalysisText must swap whole known tokens in free text',
+)
+// The boundary class [^\w-] treats `-` as part of an identifier, so a longer
+// hyphenated slug (software-factory-app-v2) is NOT a whole-token match and must
+// be left intact — only the exact catalog keys translate.
+assert.equal(
+  translateAnalysisText('software-factory-app-v2 仍保留后缀'),
+  'software-factory-app-v2 仍保留后缀',
+  'translateAnalysisText must NOT match a known token embedded in a longer hyphenated slug',
+)
+assert.equal(
+  translateAnalysisText('依据 blueprintRefs 与 defense-operations-ui'),
+  '依据 蓝本引用 与 防务运营界面',
+  'translateAnalysisText must handle dotted/hyphenated tokens with boundary chars',
+)
 
 console.log('check-dialogue-workbench: OK')

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,12 +40,24 @@ var ErrRouteSlugNotCandidate = fmt.Errorf("route returned a slug that is not a s
 // than one question.
 var ErrDraftTooManyQuestions = fmt.Errorf("business draft contract allows at most one question per round")
 
+const maxDialogueInvalidJSONAttempts = 3
+
 // RouteIntent runs one intent-routing model turn. It writes the bounded input,
 // invokes claude in plan mode with Read/Grep/Glob only, parses + validates the
 // RouteOutput, and emits redacted stream events. The returned RouteOutput keeps
 // the internalBlueprintSlug for server-side use; it is stripped from every
 // emitted StreamEvent.
 func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(StreamEvent)) (RouteOutput, error) {
+	for attempt := 1; attempt <= maxDialogueInvalidJSONAttempts; attempt++ {
+		out, err := r.routeIntentOnce(ctx, input, emit)
+		if !shouldRetryDialogueInvalidJSON(err, attempt) {
+			return out, err
+		}
+	}
+	return RouteOutput{}, nil
+}
+
+func (r Runner) routeIntentOnce(ctx context.Context, input RouteInput, emit func(StreamEvent)) (RouteOutput, error) {
 	dir := filepath.Join(r.artifactRoot(), "dialogues", input.DialogueID, "route")
 	out, err := r.runModel(ctx, dir, input.DialogueID, "route", input, r.routePrompt, emit, "dialogue.route")
 	if err != nil {
@@ -88,6 +101,16 @@ func (r Runner) RouteIntent(ctx context.Context, input RouteInput, emit func(Str
 // the same one-decision / consolidation / 6-round rules as clarification. It
 // validates the draft and rejects rounds emitting more than one question.
 func (r Runner) RunBusinessDraftRound(ctx context.Context, input BusinessDraftInput, emit func(StreamEvent)) (BusinessDraftOutput, error) {
+	for attempt := 1; attempt <= maxDialogueInvalidJSONAttempts; attempt++ {
+		out, err := r.runBusinessDraftRoundOnce(ctx, input, emit)
+		if !shouldRetryDialogueInvalidJSON(err, attempt) {
+			return out, err
+		}
+	}
+	return BusinessDraftOutput{}, nil
+}
+
+func (r Runner) runBusinessDraftRoundOnce(ctx context.Context, input BusinessDraftInput, emit func(StreamEvent)) (BusinessDraftOutput, error) {
 	op := fmt.Sprintf("draft-round-%d", input.Round)
 	dir := filepath.Join(r.artifactRoot(), "dialogues", input.DialogueID, op)
 	out, err := r.runModel(ctx, dir, input.DialogueID, op, input, r.draftPrompt, emit, "dialogue.draft")
@@ -117,6 +140,14 @@ func (r Runner) RunBusinessDraftRound(ctx context.Context, input BusinessDraftIn
 	return draftOut, nil
 }
 
+func shouldRetryDialogueInvalidJSON(err error, attempt int) bool {
+	if err == nil || !errors.Is(err, runner.ErrOutputInvalidJSON) {
+		return false
+	}
+	// 只重试模型输出 JSON 不合法的情况；字段校验失败通常代表语义错误，继续暴露给调用方处理。
+	return attempt < maxDialogueInvalidJSONAttempts
+}
+
 // runModel is the shared artifact+stream+validate shell for both contracts.
 // It writes input.json + prompt.md, runs claude in plan mode with
 // Read/Grep/Glob only, captures stdout/stderr/stream, extracts the JSON object,
@@ -133,6 +164,10 @@ func (r Runner) runModel(ctx context.Context, dir, dialogueID, op string, input 
 	if err != nil {
 		return "", fmt.Errorf("resolve input path: %w", err)
 	}
+	absOutput, err := filepath.Abs(filepath.Join(dir, "output.json"))
+	if err != nil {
+		return "", fmt.Errorf("resolve output path: %w", err)
+	}
 	in, err := json.MarshalIndent(input, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode %s input: %w", op, err)
@@ -140,7 +175,9 @@ func (r Runner) runModel(ctx context.Context, dir, dialogueID, op string, input 
 	if err := os.WriteFile(absInput, in, 0o644); err != nil {
 		return "", err
 	}
-	prompt := promptFn(absInput)
+	// 自动重试复用同一个 op 目录；先删除旧文件，保证本次只消费当前 attempt 的产物。
+	_ = os.Remove(absOutput)
+	prompt := promptFn(absInput) + outputFileInstruction(absOutput)
 	if err := os.WriteFile(filepath.Join(dir, "prompt.md"), []byte(prompt), 0o644); err != nil {
 		return "", err
 	}
@@ -151,13 +188,118 @@ func (r Runner) runModel(ctx context.Context, dir, dialogueID, op string, input 
 		return "", fmt.Errorf("claude run: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return "", fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
+		return "", claudeExitError(res)
 	}
 	if strings.TrimSpace(assistantText) == "" {
 		assistantText = res.Stdout
 	}
 	_ = streamed
-	return extractJSONObject(assistantText), nil
+	if raw, ok, rerr := readModelOutputFile(absOutput); rerr != nil {
+		return "", rerr
+	} else if ok {
+		// 文件输出是主契约；stdout/stream 只保留为兼容旧模型的兜底。
+		return r.repairJSONIfNeeded(ctx, absOutput, raw), nil
+	}
+	return r.repairJSONIfNeeded(ctx, absOutput, assistantText), nil
+}
+
+func readModelOutputFile(path string) (string, bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read output file: %w", err)
+	}
+	return string(raw), true, nil
+}
+
+func outputFileInstruction(outputPath string) string {
+	return fmt.Sprintf(" Write the final JSON object to the absolute path %s using the Write tool. The file must contain JSON only, with no markdown fences and no prose. After writing the file, the final assistant message may be a short confirmation; Factory parses output.json first and stdout only as fallback.", outputPath)
+}
+
+func (r Runner) repairJSONIfNeeded(ctx context.Context, outputPath, raw string) string {
+	candidate := extractJSONObject(raw)
+	if json.Valid([]byte(candidate)) || strings.TrimSpace(raw) == "" {
+		return candidate
+	}
+	repaired, ok := r.repairOutputJSON(ctx, outputPath, raw, candidate)
+	if !ok {
+		return candidate
+	}
+	return extractJSONObject(repaired)
+}
+
+func (r Runner) repairOutputJSON(ctx context.Context, outputPath, badOutput, extracted string) (string, bool) {
+	// 修复轮只修 JSON 语法，不重新执行路由/草稿/意图分类，避免完整重试改变业务判断。
+	prompt := "Repair malformed JSON for the dialogue contract. " +
+		fmt.Sprintf("Write the repaired JSON object to the absolute path %s using the Write tool. ", outputPath) +
+		"Preserve the original fields, values, and business decision; only fix JSON syntax, escaping, truncation, or markdown/prose wrapping. " +
+		"Do not add new intent, questions, resource names, reasoning, markdown, or explanatory prose. " +
+		fmt.Sprintf("Malformed output:\n%s\n\nExtracted candidate:\n%s", limitRepairPayload(badOutput, 24000), limitRepairPayload(extracted, 12000))
+	dir := filepath.Dir(outputPath)
+	_ = os.WriteFile(filepath.Join(dir, "repair-prompt.md"), []byte(prompt), 0o644)
+	_ = os.Remove(outputPath)
+	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(),
+		"--print", prompt,
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Grep,Glob,Write",
+		"--disallowedTools", "Bash,Edit")
+	_ = os.WriteFile(filepath.Join(dir, "repair-stdout.log"), []byte(res.Stdout), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "repair-stderr.log"), []byte(res.Stderr), 0o644)
+	if err != nil || res.ExitCode != 0 {
+		return "", false
+	}
+	if raw, ok, rerr := readModelOutputFile(outputPath); rerr == nil && ok {
+		return raw, true
+	}
+	if strings.TrimSpace(res.Stdout) != "" {
+		return res.Stdout, true
+	}
+	return "", false
+}
+
+func limitRepairPayload(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n...[truncated]"
+}
+
+func claudeExitError(res runner.CommandResult) error {
+	if reason := claudeExitReason(res); reason != "" {
+		return fmt.Errorf("claude exit %d: %s: %w", res.ExitCode, reason, runner.ErrRunnerExitNonzero)
+	}
+	return fmt.Errorf("claude exit %d: %w", res.ExitCode, runner.ErrRunnerExitNonzero)
+}
+
+func claudeExitReason(res runner.CommandResult) string {
+	text := strings.TrimSpace(res.Stderr)
+	if strings.TrimSpace(res.Stdout) != "" {
+		text = strings.TrimSpace(res.Stdout) + "\n" + text
+	}
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.Contains(line, "API Error:") {
+			return limitExitReason(line)
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return limitExitReason(line)
+		}
+	}
+	return ""
+}
+
+func limitExitReason(s string) string {
+	compact := strings.Join(strings.Fields(s), " ")
+	if len(compact) > 240 {
+		return compact[:240] + "..."
+	}
+	return compact
 }
 
 func (r Runner) runClaude(ctx context.Context, dialogueID, op, startedType, prompt string, emit func(StreamEvent)) (runner.CommandResult, string, bool, error) {
@@ -166,9 +308,9 @@ func (r Runner) runClaude(ctx context.Context, dialogueID, op, startedType, prom
 	}
 	res, err := r.Cmd.Run(ctx, r.workspaceRoot(), r.binary(),
 		"--print", prompt,
-		"--permission-mode", "plan",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write")
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Grep,Glob,Write",
+		"--disallowedTools", "Bash,Edit")
 	return res, res.Stdout, false, err
 }
 
@@ -224,9 +366,9 @@ func (r Runner) runClaudeStream(ctx context.Context, sr streamCommandRunner, dia
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--verbose",
-		"--permission-mode", "plan",
-		"--allowedTools", "Read,Grep,Glob",
-		"--disallowedTools", "Bash,Edit,Write")
+		"--permission-mode", "acceptEdits",
+		"--allowedTools", "Read,Grep,Glob,Write",
+		"--disallowedTools", "Bash,Edit")
 	finalText := assistantText.String()
 	if strings.TrimSpace(finalText) == "" {
 		finalText = resultText

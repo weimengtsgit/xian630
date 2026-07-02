@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,6 +43,9 @@ func (f *fakeDialogueRunner) Run(ctx context.Context, dir, name string, args ...
 	// .../route, draft uses .../draft-round-N). We sniff the prompt instead which
 	// carries "dialogue-intent-routing" vs "business-agent-drafting".
 	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "requirement-clarification") {
+		return runner.CommandResult{ExitCode: 0, Stdout: waitingUserOutput}, nil
+	}
 	if strings.Contains(joined, "business-agent-drafting") {
 		f.draftCalls++
 		if f.draftErr {
@@ -193,6 +198,9 @@ type businessDraftSequenceRunner struct {
 
 func (r *businessDraftSequenceRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
 	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "requirement-clarification") {
+		return runner.CommandResult{ExitCode: 0, Stdout: waitingUserOutput}, nil
+	}
 	if strings.Contains(joined, "business-agent-drafting") {
 		idx := r.draftCalls
 		r.draftCalls++
@@ -374,6 +382,29 @@ func TestCreateDialoguePersistsMessageAndRoutes(t *testing.T) {
 	}
 	if !sawIntent {
 		t.Fatalf("did not see dialogue.intent.updated event; got %#v", eventTypes(events))
+	}
+}
+
+func TestCreateDialogueExplicitApplicationCreationUsesLLMRoute(t *testing.T) {
+	fr := &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}
+	_, r, _ := newDialogueTestServer(t, fr)
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "请做一个后勤管理应用"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode view: %v", err)
+	}
+	if view.Session.Status == model.DialogueStatusFailed {
+		t.Fatalf("explicit application creation should not fail routing: %#v", view.Session)
+	}
+	if view.Route.Intent != dialogue.IntentApplicationGeneration {
+		t.Fatalf("route intent = %q, want application_generation", view.Route.Intent)
+	}
+	if fr.routeCalls != 1 {
+		t.Fatalf("explicit application creation must use the LLM route, got %d calls", fr.routeCalls)
 	}
 }
 
@@ -683,6 +714,36 @@ func TestCreateDialogueRejectsInventedSlug(t *testing.T) {
 	}
 }
 
+func TestCreateDialogueMarksFailedWhenRouterUnavailable(t *testing.T) {
+	srv, r, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeErr: true})
+
+	rec := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "请做一个后勤管理应用"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.NewDecoder(rec.Body).Decode(&view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if view.Session.Status != model.DialogueStatusFailed {
+		t.Fatalf("session status = %q, want failed when routing runner is unavailable", view.Session.Status)
+	}
+	if view.Route.Intent != "" {
+		t.Fatalf("failed routing must not persist a fallback route, got %q", view.Route.Intent)
+	}
+
+	persisted, err := srv.store.GetDialogueSession(context.Background(), view.Session.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("re-read dialogue: %v", err)
+	}
+	if persisted.Status != model.DialogueStatusFailed {
+		t.Fatalf("persisted status = %q, want failed", persisted.Status)
+	}
+	if persisted.ErrorCode != "route_failed" || !strings.Contains(persisted.ErrorMessage, runner.ErrRunnerExitNonzero.Error()) {
+		t.Fatalf("persisted error = %q/%q, want route_failed runner_exit_nonzero", persisted.ErrorCode, persisted.ErrorMessage)
+	}
+}
+
 // --- route selection + lock ---
 
 // TestRouteSelectExistingAppLocksAndRecommends verifies POST .../route with an
@@ -793,6 +854,49 @@ func TestRouteSelectApplicationGenerationCreatesChildClarification(t *testing.T)
 	}
 	if child.Round < 1 {
 		t.Fatalf("child round = %d, want >=1", child.Round)
+	}
+}
+
+func TestDialogueClarificationFailureMarksParentDialogueFailed(t *testing.T) {
+	srv, r, st := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	badClarifier := &clarSequenceRunner{outputs: []string{"Let me explain first, then maybe JSON."}}
+	srv.clarifier = clarification.Runner{
+		Cmd:           badClarifier,
+		WorkspaceRoot: srv.cfg.WorkspaceRoot,
+		ArtifactRoot:  t.TempDir(),
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "生成一个todo"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", create.Code, create.Body.String())
+	}
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+
+	routeRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{
+		"intent": "application_generation",
+	})
+	if routeRec.Code != http.StatusOK {
+		t.Fatalf("route status = %d body=%s", routeRec.Code, routeRec.Body.String())
+	}
+	var view dialogueView
+	json.NewDecoder(routeRec.Body).Decode(&view)
+	if view.Child == nil || view.Child.Status != model.ClarificationStatusFailed {
+		t.Fatalf("child status = %+v, want failed", view.Child)
+	}
+	if view.Session.Status != model.DialogueStatusFailed {
+		t.Fatalf("dialogue status = %q, want failed", view.Session.Status)
+	}
+	if view.Session.ErrorCode == "" {
+		t.Fatalf("dialogue error_code is empty, want propagated child failure")
+	}
+
+	persisted, err := st.GetDialogueSession(context.Background(), created.Session.ID)
+	if err != nil || persisted == nil {
+		t.Fatalf("get dialogue: %v", err)
+	}
+	if persisted.Status != model.DialogueStatusFailed {
+		t.Fatalf("persisted dialogue status = %q, want failed", persisted.Status)
 	}
 }
 
@@ -1366,6 +1470,82 @@ func TestApplicationClarificationAcceptConsolidation(t *testing.T) {
 	}
 }
 
+func TestDialogueClarificationReadyAutoSeedsRequirementAnalysisJob(t *testing.T) {
+	seq := &clarSequenceRunner{
+		outputs: []string{
+			roundOutputOneQuestion(1, "appType"),
+			roundOutputOneQuestion(2, "primaryView"),
+			roundOutputOneQuestion(3, "dataPolicy"),
+			roundOutputOneQuestion(4, "targetUsers"),
+			roundOutputConsolidation(5),
+		},
+	}
+	srv, r, st := newDialogueTestServer(t, seq)
+	srv.dialogueRouter = dialogue.Runner{
+		Cmd: &fakeDialogueRunner{routeStdout: routeAmbiguousOutput}, WorkspaceRoot: srv.cfg.WorkspaceRoot, ArtifactRoot: srv.cfg.ArtifactRoot,
+	}
+
+	create := doJSON(t, r, http.MethodPost, "/api/dialogues", map[string]string{"prompt": "做一个复盘应用"})
+	var created dialogueView
+	json.NewDecoder(create.Body).Decode(&created)
+	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/route", map[string]any{"intent": "application_generation"})
+	var routed dialogueView
+	_ = json.NewDecoder(doJSON(t, r, http.MethodGet, "/api/dialogues/"+created.Session.ID, nil).Body).Decode(&routed)
+	childID := routed.Session.ClarificationSessionID
+	if childID == "" {
+		t.Fatalf("no child clarification linked")
+	}
+
+	answerRound := func(questionID, value string) {
+		rec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers", map[string]string{
+			"questionId": questionID, "value": value,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("answer %s status = %d body=%s", questionID, rec.Code, rec.Body.String())
+		}
+	}
+	answerRound("appType", "situation_replay")
+	answerRound("primaryView", "地图 + 时间轴")
+	answerRound("dataPolicy", "mock_data")
+	answerRound("targetUsers", "作战参谋")
+
+	acceptRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
+		"consolidationAccept": true,
+	})
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept status = %d body=%s", acceptRec.Code, acceptRec.Body.String())
+	}
+	var acceptView dialogueView
+	json.NewDecoder(acceptRec.Body).Decode(&acceptView)
+	if acceptView.Child == nil || acceptView.Child.Status != model.ClarificationStatusReadyToConfirm {
+		t.Fatalf("child status = %+v, want ready_to_confirm after accept-all", acceptView.Child)
+	}
+	if acceptView.Session.Status != model.DialogueStatusTaskRunning {
+		t.Fatalf("dialogue status = %q, want task_running after auto seed", acceptView.Session.Status)
+	}
+	if acceptView.SeededJob == nil {
+		t.Fatalf("ready clarification must auto-seed the requirement analysis job before user confirmation")
+	}
+	if acceptView.SeededJob.CurrentStepKind != model.StepRequirementAnalysis {
+		t.Fatalf("current step = %q, want requirement_analysis", acceptView.SeededJob.CurrentStepKind)
+	}
+	child, _ := st.GetClarificationSession(context.Background(), childID)
+	if child == nil || child.CreatedJobID != acceptView.SeededJob.ID {
+		t.Fatalf("child created job = %+v, want %s", child, acceptView.SeededJob.ID)
+	}
+	var plan struct {
+		ExecutionPolicy struct {
+			ManualStepConfirmation bool `json:"manualStepConfirmation"`
+		} `json:"executionPolicy"`
+	}
+	if err := json.Unmarshal([]byte(acceptView.SeededJob.CollaborationPlanJSON), &plan); err != nil {
+		t.Fatalf("decode collaboration plan: %v", err)
+	}
+	if plan.ExecutionPolicy.ManualStepConfirmation {
+		t.Fatalf("auto-seeded job must not enable global manual step confirmation")
+	}
+}
+
 // TestApplicationClarificationConsolidationGateHonorsOpenHighImpact is the D3
 // regression: a round-5 output can carry BOTH a consolidation list AND a
 // non-empty openHighImpact list (independent RoundOutput fields). Accepting the
@@ -1479,11 +1659,11 @@ func TestApplicationClarificationConsolidationGateHonorsOpenHighImpact(t *testin
 	}
 }
 
-// TestDialogueConfirmRollsBackOnMidSeedFailure asserts that when the job-seeding
-// transaction fails part-way through (a step insert errors), the confirm handler
-// leaves NO orphaned job row and moves the child clarification to a diagnosable
-// failed state — never ready_to_confirm with no linked job.
-func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
+// TestDialogueReadyAutoSeedRollsBackOnMidSeedFailure asserts that when the
+// ready-to-confirm auto-seed transaction fails part-way through (a step insert
+// errors), the handler leaves NO orphaned job row and moves the child
+// clarification to a diagnosable failed state.
+func TestDialogueReadyAutoSeedRollsBackOnMidSeedFailure(t *testing.T) {
 	seq := &clarSequenceRunner{
 		outputs: []string{
 			roundOutputOneQuestion(1, "appType"),
@@ -1524,12 +1704,9 @@ func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
 	answerRound("primaryView", "地图 + 时间轴")
 	answerRound("dataPolicy", "mock_data")
 	answerRound("targetUsers", "作战参谋")
-	_ = doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
-		"consolidationField": "coreScenario",
-		"consolidationValue": "复盘近 1 个月航迹",
-	})
 
-	// Snapshot the job count before confirm so we can prove no job was added.
+	// Snapshot the job count before the ready transition so we can prove no job
+	// was added when auto-seeding fails.
 	jobsBefore, err := st.ListJobs(context.Background(), "")
 	if err != nil {
 		t.Fatalf("list jobs before: %v", err)
@@ -1544,9 +1721,12 @@ func TestDialogueConfirmRollsBackOnMidSeedFailure(t *testing.T) {
 		return nil
 	})
 
-	confirmRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/confirm", nil)
-	if confirmRec.Code != http.StatusInternalServerError {
-		t.Fatalf("confirm status = %d, want 500; body=%s", confirmRec.Code, confirmRec.Body.String())
+	readyRec := doJSON(t, r, http.MethodPost, "/api/dialogues/"+created.Session.ID+"/clarification/answers/batch", map[string]any{
+		"consolidationField": "coreScenario",
+		"consolidationValue": "复盘近 1 个月航迹",
+	})
+	if readyRec.Code != http.StatusInternalServerError {
+		t.Fatalf("ready auto-seed status = %d, want 500; body=%s", readyRec.Code, readyRec.Body.String())
 	}
 
 	// NO orphaned job: the job count is unchanged.
@@ -2287,7 +2467,7 @@ func TestDialogueDoesNotProposeChangeBeforeInitialApplicationReady(t *testing.T)
 	_, r, st, clf := newDialogueTurnTestServer(t, newControllableTurnClassifier(dialogue.TurnOutput{
 		Intent: model.TurnIntentApplicationModification,
 		Summary: dialogue.TurnSummary{
-			UserFacingText:     "保留 XX 智能体作为正式名称",
+			UserFacingText:    "保留 XX 智能体作为正式名称",
 			ChangeDescription: "保留 XX 智能体作为正式名称",
 		},
 	}))
@@ -3169,14 +3349,14 @@ func TestConfirmDialogueChangeRejectsMissingDocumentDraft(t *testing.T) {
 
 	// Create a turn summary with a documentDraftChange referencing non-existent draft
 	summary := dialogue.TurnSummary{
-		Intent:         model.TurnIntentApplicationModification,
-		UserFacingText: "Change",
+		Intent:            model.TurnIntentApplicationModification,
+		UserFacingText:    "Change",
 		ChangeDescription: "Change",
 		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
-			DraftID: "non-existent-draft",
-			ApplicationID: "app_demo",
-			DialogueID: "dlg_test",
-			Path: "docs/overview.md",
+			DraftID:        "non-existent-draft",
+			ApplicationID:  "app_demo",
+			DialogueID:     "dlg_test",
+			Path:           "docs/overview.md",
 			SourceChecksum: "sha256:abc123",
 		},
 	}
@@ -3248,14 +3428,14 @@ func TestConfirmDialogueChangeRejectsMismatchedDocumentDraftOwnership(t *testing
 
 	// Create turn summary referencing the draft
 	summary := dialogue.TurnSummary{
-		Intent:         model.TurnIntentApplicationModification,
-		UserFacingText: "Change",
+		Intent:            model.TurnIntentApplicationModification,
+		UserFacingText:    "Change",
 		ChangeDescription: "Change",
 		DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
-			DraftID: "draft_1",
-			ApplicationID: "app_correct", // Mismatch with draft's app
-			DialogueID: "dlg_test",
-			Path: "docs/overview.md",
+			DraftID:        "draft_1",
+			ApplicationID:  "app_correct", // Mismatch with draft's app
+			DialogueID:     "dlg_test",
+			Path:           "docs/overview.md",
 			SourceChecksum: "sha256:abc123",
 		},
 	}
@@ -3325,14 +3505,14 @@ func TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus(t *testing.T
 
 			// Create turn summary
 			summary := dialogue.TurnSummary{
-				Intent:         model.TurnIntentApplicationModification,
-				UserFacingText: "Change",
+				Intent:            model.TurnIntentApplicationModification,
+				UserFacingText:    "Change",
 				ChangeDescription: "Change",
 				DocumentDraftChange: &dialogue.DocumentDraftChangeRef{
-					DraftID: "draft_1",
-					ApplicationID: "app_demo",
-					DialogueID: "dlg_test",
-					Path: "docs/overview.md",
+					DraftID:        "draft_1",
+					ApplicationID:  "app_demo",
+					DialogueID:     "dlg_test",
+					Path:           "docs/overview.md",
 					SourceChecksum: "sha256:abc123",
 				},
 			}
@@ -3362,5 +3542,205 @@ func TestConfirmDialogueChangeRejectsUnavailableDocumentDraftStatus(t *testing.T
 				t.Fatalf("confirm status=%d, want 409 Conflict for status=%s", rec.Code, status)
 			}
 		})
+	}
+}
+
+func TestDialogueMessageCreatesAttachmentReferences(t *testing.T) {
+	srv, router, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	_ = srv.store.CreateDialogueSession(ctx, model.DialogueSession{ID: "dlg_att", Status: model.DialogueStatusActive, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true})
+	att := model.DialogueAttachment{
+		ID: "att_msg", DialogueID: "dlg_att", FocusKey: "business_logic", OriginalName: "req.md",
+		StoredPath: "dialogue-attachments/dlg_att/att_msg/req.md", Mime: "text/markdown", Extension: ".md",
+		SizeBytes: 12, SHA256: "sha256:1", PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: time.Now(),
+	}
+	if err := srv.store.CreateDialogueAttachment(ctx, att); err != nil {
+		t.Fatalf("CreateDialogueAttachment: %v", err)
+	}
+	body := strings.NewReader(`{"content":"补充需求","attachmentIds":["att_msg"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues/dlg_att/messages", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, "dlg_att")
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 || refs[0].AttachmentID != "att_msg" || refs[0].MessageID == "" {
+		t.Fatalf("refs = %#v", refs)
+	}
+}
+
+// createDialogueMultipartBody builds a multipart/form-data body carrying a
+// `prompt` field plus one or more `files` parts, returning the body and the
+// content-type (with boundary) to set on the request. Used by the first-message
+// multipart createDialogue tests.
+func createDialogueMultipartBody(t *testing.T, prompt string, files map[string]string) (*bytes.Buffer, string) {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("prompt", prompt); err != nil {
+		t.Fatalf("WriteField prompt: %v", err)
+	}
+	for name, content := range files {
+		fw, err := w.CreateFormFile("files", name)
+		if err != nil {
+			t.Fatalf("CreateFormFile %s: %v", name, err)
+		}
+		if _, err := fw.Write([]byte(content)); err != nil {
+			t.Fatalf("Write %s: %v", name, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return &body, w.FormDataContentType()
+}
+
+// TestCreateDialogueMultipartPersistsFirstMessageAttachmentRefs verifies the
+// first-message multipart path: a file attached to the very first prompt (no
+// dialogue exists yet) is uploaded as part of POST /api/dialogues, persisted as
+// a DialogueAttachment, and linked to the first user message via a ref. Without
+// this path the locally-staged File is silently discarded by clearPending.
+func TestCreateDialogueMultipartPersistsFirstMessageAttachmentRefs(t *testing.T) {
+	srv, router, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	ctx := testCtx()
+	body, contentType := createDialogueMultipartBody(t, "生成排班系统", map[string]string{"requirements.md": "# 排班需求\n"})
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var view dialogueView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("unmarshal view: %v", err)
+	}
+	dialogueID := view.Session.ID
+	if dialogueID == "" {
+		t.Fatal("missing dialogue id")
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, dialogueID)
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 first-message ref, got %d: %#v", len(refs), refs)
+	}
+	if refs[0].MessageID == "" {
+		t.Fatalf("ref missing message id: %#v", refs[0])
+	}
+	if refs[0].Attachment.OriginalName != "requirements.md" {
+		t.Fatalf("ref original name = %q, want requirements.md", refs[0].Attachment.OriginalName)
+	}
+	// The first user message must carry the prompt content.
+	var sawPrompt bool
+	for _, m := range view.Messages {
+		if m.Role == "user" && m.Kind == "prompt" && m.Content == "生成排班系统" {
+			sawPrompt = true
+			break
+		}
+	}
+	if !sawPrompt {
+		t.Fatalf("first prompt message not in view: %#v", view.Messages)
+	}
+}
+
+// TestCreateDialogueMultipartRejectsCredentialFile verifies the multipart path
+// applies the SAME credential boundary as the follow-up upload: a token.env
+// file is rejected with 400 before its content is persisted. No plaintext
+// credential ever lands on disk or in the attachment table.
+func TestCreateDialogueMultipartRejectsCredentialFile(t *testing.T) {
+	srv, router, _ := newDialogueTestServer(t, &fakeDialogueRunner{routeStdout: routeAmbiguousOutput})
+	ctx := testCtx()
+	body, contentType := createDialogueMultipartBody(t, "上传密钥", map[string]string{"token.env": "API_KEY=secret\n"})
+	req := httptest.NewRequest(http.MethodPost, "/api/dialogues", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "controlled credential input") {
+		t.Fatalf("credential rejection message missing: %s", rec.Body.String())
+	}
+	// Recover the dialogue id the backend created before the credential was
+	// rejected so we can assert NO attachment row survived for it.
+	rows, err := srv.store.ListDialogueSessions(ctx, 50)
+	if err != nil {
+		t.Fatalf("ListDialogueSessions: %v", err)
+	}
+	var createdID string
+	for _, s := range rows {
+		if s.InitialPrompt == "上传密钥" {
+			createdID = s.ID
+			break
+		}
+	}
+	if createdID == "" {
+		t.Fatal("credential rejection aborted before the dialogue row was created")
+	}
+	refs, err := srv.store.ListDialogueAttachmentRefs(ctx, createdID)
+	if err != nil {
+		t.Fatalf("ListDialogueAttachmentRefs: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("credential file must not be linked: %#v", refs)
+	}
+	// And no file matching the credential name may exist anywhere under the
+	// artifact root.
+	matches, _ := filepath.Glob(filepath.Join(srv.cfg.ArtifactRoot, "dialogue-attachments", createdID, "*", "token.env"))
+	if len(matches) != 0 {
+		t.Fatalf("credential file persisted on disk: %#v", matches)
+	}
+}
+
+func TestConfirmDialogueClarificationSeedsJobWithAppSlug(t *testing.T) {
+	srv, router, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	dlg := model.DialogueSession{ID: "dlg_slug", Status: model.DialogueStatusDraftingApplication, Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true, ClarificationSessionID: "clar_slug", CreatedAt: testNow(), UpdatedAt: testNow()}
+	if err := srv.store.CreateDialogueSession(ctx, dlg); err != nil {
+		t.Fatalf("CreateDialogueSession: %v", err)
+	}
+	req := `{"appType":"operations_management","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","targetUsers":["员工"],"mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	clar := model.ClarificationSession{ID: "clar_slug", Status: model.ClarificationStatusReadyToConfirm, InitialPrompt: "做请假审批", RequirementJSON: req, CreatedAt: testNow(), UpdatedAt: testNow()}
+	if err := srv.store.CreateClarificationSession(ctx, clar); err != nil {
+		t.Fatalf("CreateClarificationSession: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/dialogues/dlg_slug/clarification/confirm", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	jobs, err := srv.store.ListJobsByDialogue(ctx, "dlg_slug")
+	if err != nil {
+		t.Fatalf("ListJobsByDialogue: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].AppSlug == "" {
+		t.Fatalf("confirmed dialogue must seed job with AppSlug for early project docs: %#v", jobs)
+	}
+}
+
+func TestComposeDialogueViewIncludesAttachmentRefsAndWorkbenchArtifacts(t *testing.T) {
+	srv, _, _ := newTestServerWithStore(t)
+	ctx := testCtx()
+	_ = srv.store.CreateDialogueSession(ctx, model.DialogueSession{ID: "dlg_view", Status: model.DialogueStatusActive, Intent: model.DialogueIntentApplicationGeneration})
+	_ = srv.store.AppendDialogueMessage(ctx, model.DialogueMessage{ID: "dmsg_view", DialogueID: "dlg_view", Role: "user", Kind: "message", Content: "带附件", CreatedAt: time.Now()})
+	_ = srv.store.CreateDialogueAttachment(ctx, model.DialogueAttachment{ID: "att_view", DialogueID: "dlg_view", OriginalName: "req.md", StoredPath: "dialogue-attachments/dlg_view/att_view/req.md", PreviewKind: model.AttachmentPreviewMarkdown, Status: model.AttachmentStatusActive, CreatedAt: time.Now()})
+	_ = srv.store.CreateDialogueAttachmentRef(ctx, model.DialogueAttachmentRef{ID: "aref_view", DialogueID: "dlg_view", MessageID: "dmsg_view", AttachmentID: "att_view", Active: true, CreatedAt: time.Now()})
+	_ = srv.store.UpsertWorkbenchArtifactRef(ctx, model.WorkbenchArtifactRef{ID: "warf_view", DialogueID: "dlg_view", JobID: "job_1", CardKey: "business_logic", Kind: model.WorkbenchArtifactProjectDocument, Label: "需求文档", Path: "docs/01-requirements.md", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	view, err := srv.composeDialogueView(ctx, "dlg_view")
+	if err != nil {
+		t.Fatalf("composeDialogueView: %v", err)
+	}
+	if len(view.AttachmentRefs) != 1 || view.AttachmentRefs[0].Attachment.OriginalName != "req.md" {
+		t.Fatalf("AttachmentRefs = %#v", view.AttachmentRefs)
+	}
+	if len(view.WorkbenchArtifacts) != 1 || view.WorkbenchArtifacts[0].Path != "docs/01-requirements.md" {
+		t.Fatalf("WorkbenchArtifacts = %#v", view.WorkbenchArtifacts)
 	}
 }

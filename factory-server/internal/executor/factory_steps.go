@@ -621,7 +621,19 @@ func copyDir(src, dst string) error {
 }
 
 func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
+	var runtimePorts map[int]bool
+	runtimePortsLoaded := false
 	return func(port int) bool {
+		if !runtimePortsLoaded {
+			runtimePorts = deploy.PublishedHostPorts(ctx, f.Cmds, f.runtime().Name())
+			runtimePortsLoaded = true
+		}
+		if runtimePorts[port] {
+			return true
+		}
+		if deploy.HostTCPPortInUse(port) {
+			return true
+		}
 		apps, err := f.Store.ListApplications(ctx)
 		if err != nil {
 			return false

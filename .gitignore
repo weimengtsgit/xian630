@@ -74,3 +74,39 @@ __debug*
 
 # Local isolated worktrees
 .worktrees/
+.claude/worktrees/
+
+# Factory runtime artifacts
+.factory-iso/
+.factory-runs/
+sf-deploy.tar.gz
+
+# === Local ops / diagnostic / deploy one-off scripts (source lives in subdirs) ===
+/*.py
+/*.ps1
+/*.sh
+
+# === Generated single apps / runtime debug snapshots (not factory source) ===
+/operations-management-c4fn-live*/
+/local-ais-demo/
+/local-ais-podj-fix*/
+/fix-cors/
+/fix-nginx/
+/fix-ontology-adapter/
+/ontology_specs/
+/ontology_specs_all/
+/carrier-data-debug/
+/online-backups/
+
+# === Fetched bundles / generated HTML / catalog docs ===
+/*-index-*.js
+/*-bundle*.js
+/*-bundle*.mjs
+/*.html
+/*.txt
+/ontology_catalog.md
+/ais-dkcf-CarrierMap.tsx
+
+# === Local delivery / deploy archives ===
+/*.zip
+/sf-deploy-*.tar.gz

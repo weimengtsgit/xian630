@@ -1,0 +1,317 @@
+.ceg { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 1px solid rgba(111, 218, 255, 0.3); border-radius: 8px; background: rgba(18, 72, 98, 0.38); }
+.ceg-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ceg-head h3 { margin: 0; color: #edfaff; font-size: 13px; font-weight: 600; }
+.ceg-head p { margin: 3px 0 0; color: #83cddd; font-size: 11px; }
+.ceg-summary { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ceg-summary span { min-height: 22px; padding: 3px 8px; border: 1px solid rgba(104, 221, 255, 0.24); border-radius: 999px; background: rgba(6, 18, 29, 0.5); color: #9ddff0; font-size: 11px; white-space: nowrap; }
+.ceg-manual-toggle { min-height: 22px; display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid rgba(243, 199, 97, 0.34); border-radius: 999px; background: rgba(45, 34, 12, 0.48); color: #ffe2a6; font-size: 11px; white-space: nowrap; cursor: pointer; user-select: none; }
+.ceg-manual-toggle.is-readonly { cursor: default; opacity: 0.82; }
+.ceg-manual-toggle input { width: 13px; height: 13px; margin: 0; accent-color: #f3c761; cursor: pointer; }
+.ceg-manual-toggle input:disabled { cursor: not-allowed; opacity: 0.55; }
+.ceg-canvas { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 6px 2px 6px; scrollbar-width: thin; scrollbar-color: rgba(104, 221, 255, 0.42) rgba(6, 18, 29, 0.28); }
+.ceg-wave-group { display: flex; align-items: stretch; flex: 0 0 auto; }
+.ceg-wave { min-width: 154px; display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
+.ceg-wave-label { color: #75bfd2; font-size: 10px; text-align: center; }
+.ceg-wave-cards { display: flex; flex-direction: column; justify-content: center; gap: 8px; min-height: 100%; }
+.ceg-card { position: relative; width: 154px; min-height: 116px; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 6px; align-items: start; padding: 10px; border: 1px solid rgba(104, 221, 255, 0.22); border-radius: 8px; background: linear-gradient(180deg, rgba(16, 57, 78, 0.92), rgba(8, 25, 39, 0.9)); color: #d7eef8; text-align: left; cursor: pointer; transition: border-color 0.16s ease, box-shadow 0.16s ease, opacity 0.22s ease, transform 0.22s ease; }
+.ceg-card[aria-disabled="true"] { cursor: default; }
+.ceg-card:hover, .ceg-card:focus-visible, .ceg-card.is-active { border-color: rgba(104, 221, 255, 0.65); box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.18), 0 10px 22px rgba(0, 0, 0, 0.25); transform: translateY(-1px); outline: none; }
+.ceg-card.is-dimmed { opacity: 0.42; }
+.ceg-card-icon { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; background: rgba(104, 221, 255, 0.14); color: #68ddff; }
+.ceg-card-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ceg-card-main strong { color: #f0fbff; font-size: 12px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ceg-card-main small { color: #75bfd2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ceg-card-desc { grid-column: 1 / -1; min-height: 28px; color: rgba(215, 238, 248, 0.72); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.ceg-orchestration-phase { grid-column: 1 / -1; min-height: 18px; display: inline-flex; align-items: center; justify-self: start; max-width: 100%; padding: 2px 7px; border: 1px solid rgba(167, 139, 250, 0.28); border-radius: 999px; background: rgba(30, 20, 62, 0.5); color: #c8b6ff; font-size: 10px; font-weight: 600; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: cegPhaseSwap 0.46s cubic-bezier(0.18, 0.76, 0.2, 1) both; }
+.ceg-orchestration-phase.is-exiting { animation: cegPhaseExit 0.26s ease-in both; }
+.ceg-card-state { grid-column: 1 / -1; justify-self: start; padding: 3px 8px; border-radius: 999px; background: rgba(6, 18, 29, 0.54); color: #9ddff0; font-size: 11px; font-weight: 600; }
+.ceg-card-confirm { grid-column: 1 / -1; justify-self: start; display: inline-flex; align-items: center; justify-content: center; min-height: 24px; padding: 3px 9px; border: 1px solid rgba(243, 199, 97, 0.46); border-radius: 6px; background: rgba(92, 58, 8, 0.48); color: #ffe2a6; font-size: 11px; font-weight: 600; cursor: pointer; transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease; }
+.ceg-card-confirm:hover, .ceg-card-confirm:focus-visible { border-color: rgba(243, 199, 97, 0.78); background: rgba(120, 78, 12, 0.68); color: #fff4d8; outline: none; }
+.ceg-card-wait { grid-column: 1 / -1; color: #83cddd; font-size: 10px; line-height: 1.3; overflow-wrap: anywhere; }
+.ceg-card-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 12; width: max-content; max-width: 220px; padding: 7px 9px; border: 1px solid rgba(104, 221, 255, 0.34); border-radius: 6px; background: rgba(3, 17, 29, 0.96); color: #d7eef8; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.36); font-size: 11px; line-height: 1.42; text-align: left; white-space: normal; overflow-wrap: anywhere; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, 4px); transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease; }
+.ceg-card-tooltip::after { content: ''; position: absolute; left: 50%; top: 100%; width: 8px; height: 8px; border-right: 1px solid rgba(104, 221, 255, 0.34); border-bottom: 1px solid rgba(104, 221, 255, 0.34); background: rgba(3, 17, 29, 0.96); transform: translate(-50%, -4px) rotate(45deg); }
+.ceg-card-tooltip-below { bottom: auto; top: calc(100% + 8px); transform: translate(-50%, -4px); }
+.ceg-card-tooltip-below::after { top: auto; bottom: 100%; border-right: none; border-bottom: none; border-left: 1px solid rgba(104, 221, 255, 0.34); border-top: 1px solid rgba(104, 221, 255, 0.34); transform: translate(-50%, 4px) rotate(45deg); }
+.ceg-card:hover .ceg-card-tooltip, .ceg-card:focus-visible .ceg-card-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.ceg-card:hover .ceg-card-tooltip-below, .ceg-card:focus-visible .ceg-card-tooltip-below { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.ceg-gate { position: absolute; top: 6px; right: 7px; padding: 1px 5px; border: 1px solid rgba(252, 211, 77, 0.38); border-radius: 999px; background: rgba(92, 58, 8, 0.42); color: #fde68a; font-size: 9px; font-style: normal; }
+.ceg-origin { border-color: rgba(252, 211, 77, 0.34); }
+.ceg-orchestrator { border-color: rgba(167, 139, 250, 0.55); box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.16), 0 10px 24px rgba(23, 15, 50, 0.24); }
+.ceg-card-state-running { border-color: rgba(104, 221, 255, 0.68); }
+.ceg-card-state-running::before { content: ''; position: absolute; inset: -1px; border-radius: 8px; border: 1px solid rgba(104, 221, 255, 0.58); animation: cegPulse 1.6s ease-in-out infinite; pointer-events: none; }
+.ceg-card-flash { position: absolute; inset: -1px; border-radius: 8px; border: 1px solid rgba(104, 221, 255, 0.85); box-shadow: 0 0 16px 2px rgba(104, 221, 255, 0.6); pointer-events: none; opacity: 0; animation: cegUserInputFlash 0.6s ease-out forwards; }
+@keyframes cegUserInputFlash { 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: 0; } }
+.ceg-card-state-completed .ceg-card-state { color: #9df3a6; background: rgba(20, 64, 50, 0.5); }
+.ceg-card-state-failed { border-color: rgba(255, 102, 94, 0.62); background: linear-gradient(180deg, rgba(80, 22, 28, 0.86), rgba(45, 12, 16, 0.9)); }
+.ceg-card-state-failed .ceg-card-state { color: #ff9b9b; background: rgba(96, 26, 36, 0.55); }
+.ceg-card-state-waiting_user .ceg-card-state { color: #ffd98a; background: rgba(92, 58, 8, 0.5); }
+.ceg-card-state-skipped .ceg-card-state { color: #a5bdca; }
+.ceg-connector { position: relative; width: 78px; min-height: 116px; align-self: stretch; flex: 0 0 78px; }
+.ceg-edge-seg { position: absolute; overflow: hidden; border-radius: 2px; opacity: 0.86; background: rgba(143, 176, 191, 0.24); box-shadow: 0 0 0 1px rgba(6, 18, 29, 0.16); }
+.ceg-edge-horizontal { height: 3px; transform: translateY(-50%); }
+.ceg-edge-vertical { width: 3px; transform: translateX(-50%); }
+.ceg-edge-flow-layer { position: absolute; inset: 0; opacity: 0; border-radius: inherit; pointer-events: none; }
+.ceg-edge-horizontal .ceg-edge-flow-layer { background-size: 20px 100%; animation: cegFlowRight 0.9s linear infinite; }
+.ceg-edge-vertical .ceg-edge-flow-layer { background-size: 100% 20px; animation: cegFlowDown 0.9s linear infinite; }
+.ceg-edge-planned { background: rgba(104, 221, 255, 0.18); }
+.ceg-edge-planned .ceg-edge-flow-layer { opacity: 0.48; background-image: repeating-linear-gradient(90deg, rgba(104, 221, 255, 0.68) 0 8px, rgba(104, 221, 255, 0.08) 8px 18px); }
+.ceg-edge-vertical.ceg-edge-planned .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(104, 221, 255, 0.68) 0 8px, rgba(104, 221, 255, 0.08) 8px 18px); }
+.ceg-edge-inactive { opacity: 0.52; background: rgba(143, 176, 191, 0.2); }
+.ceg-edge-inactive .ceg-edge-flow-layer { display: none; }
+.ceg-edge-flowing { opacity: 1; background: rgba(104, 221, 255, 0.34); box-shadow: 0 0 9px rgba(104, 221, 255, 0.32); }
+.ceg-edge-flowing .ceg-edge-flow-layer { opacity: 0.95; background-image: repeating-linear-gradient(90deg, rgba(104, 221, 255, 1) 0 10px, rgba(104, 221, 255, 0.12) 10px 20px); animation-duration: 0.68s; }
+.ceg-edge-vertical.ceg-edge-flowing .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(104, 221, 255, 1) 0 10px, rgba(104, 221, 255, 0.12) 10px 20px); }
+.ceg-edge-completed { opacity: 0.9; background: rgba(92, 220, 170, 0.28); }
+.ceg-edge-completed .ceg-edge-flow-layer { opacity: 0.38; background-image: repeating-linear-gradient(90deg, rgba(126, 231, 135, 0.78) 0 10px, rgba(126, 231, 135, 0.08) 10px 22px); animation-duration: 1.5s; }
+.ceg-edge-vertical.ceg-edge-completed .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(126, 231, 135, 0.78) 0 10px, rgba(126, 231, 135, 0.08) 10px 22px); }
+.ceg-edge-blocked { opacity: 0.94; background: rgba(252, 211, 77, 0.3); box-shadow: 0 0 9px rgba(252, 211, 77, 0.22); }
+.ceg-edge-blocked .ceg-edge-flow-layer { opacity: 0.82; background-image: repeating-linear-gradient(90deg, rgba(252, 211, 77, 0.95) 0 8px, rgba(252, 211, 77, 0.08) 8px 18px); animation-duration: 1.05s; }
+.ceg-edge-vertical.ceg-edge-blocked .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(252, 211, 77, 0.95) 0 8px, rgba(252, 211, 77, 0.08) 8px 18px); }
+.ceg-edge-blocked_waiting_user { opacity: 0.94; background: rgba(243, 199, 97, 0.3); box-shadow: 0 0 9px rgba(243, 199, 97, 0.24); }
+.ceg-edge-blocked_waiting_user .ceg-edge-flow-layer { opacity: 0.82; background-image: repeating-linear-gradient(90deg, rgba(243, 199, 97, 0.96) 0 8px, rgba(243, 199, 97, 0.08) 8px 18px); animation-duration: 1.05s; }
+.ceg-edge-vertical.ceg-edge-blocked_waiting_user .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(243, 199, 97, 0.96) 0 8px, rgba(243, 199, 97, 0.08) 8px 18px); }
+.ceg-edge-blocked_manual_confirmation { opacity: 0.96; background: rgba(243, 199, 97, 0.34); box-shadow: 0 0 10px rgba(243, 199, 97, 0.28); }
+.ceg-edge-blocked_manual_confirmation .ceg-edge-flow-layer { opacity: 0.72; background-image: repeating-linear-gradient(90deg, rgba(243, 199, 97, 0.98) 0 7px, rgba(243, 199, 97, 0.06) 7px 19px); animation-duration: 1.25s; }
+.ceg-edge-vertical.ceg-edge-blocked_manual_confirmation .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(243, 199, 97, 0.98) 0 7px, rgba(243, 199, 97, 0.06) 7px 19px); }
+.ceg-edge-blocked_failed { opacity: 0.95; background: rgba(255, 102, 94, 0.28); box-shadow: 0 0 9px rgba(255, 102, 94, 0.26); }
+.ceg-edge-blocked_failed .ceg-edge-flow-layer { opacity: 0.82; background-image: repeating-linear-gradient(90deg, rgba(255, 102, 94, 0.96) 0 8px, rgba(255, 102, 94, 0.08) 8px 18px); animation-duration: 1.05s; }
+.ceg-edge-vertical.ceg-edge-blocked_failed .ceg-edge-flow-layer { background-image: repeating-linear-gradient(180deg, rgba(255, 102, 94, 0.96) 0 8px, rgba(255, 102, 94, 0.08) 8px 18px); }
+.ceg-edge-arrow { position: absolute; right: 0; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 9px solid rgba(143, 176, 191, 0.48); transform: translateY(-50%); }
+.ceg-edge-arrow.ceg-edge-planned, .ceg-edge-arrow.ceg-edge-flowing, .ceg-edge-arrow.ceg-edge-completed { border-left-color: rgba(104, 221, 255, 0.78); filter: drop-shadow(0 0 4px rgba(104, 221, 255, 0.5)); }
+.ceg-edge-arrow.ceg-edge-completed { border-left-color: rgba(126, 231, 135, 0.76); filter: drop-shadow(0 0 4px rgba(126, 231, 135, 0.42)); }
+.ceg-edge-arrow.ceg-edge-blocked { border-left-color: rgba(252, 211, 77, 0.8); }
+.ceg-edge-arrow.ceg-edge-blocked_waiting_user { border-left-color: rgba(243, 199, 97, 0.82); }
+.ceg-edge-arrow.ceg-edge-blocked_manual_confirmation { border-left-color: rgba(243, 199, 97, 0.88); }
+.ceg-edge-arrow.ceg-edge-blocked_failed { border-left-color: rgba(255, 102, 94, 0.82); }
+.ceg-connector-state-flowing .ceg-edge-arrow { filter: drop-shadow(0 0 7px rgba(104, 221, 255, 0.72)); }
+.ceg-connector-state-completed .ceg-edge-seg { box-shadow: 0 0 7px rgba(126, 231, 135, 0.18); }
+.ceg-connector-state-inactive .ceg-edge-arrow { opacity: 0.48; }
+.ceg-connector-state-blocked .ceg-edge-arrow { filter: drop-shadow(0 0 6px rgba(252, 211, 77, 0.5)); }
+.ceg-connector-state-blocked_waiting_user .ceg-edge-arrow { filter: drop-shadow(0 0 6px rgba(243, 199, 97, 0.5)); }
+.ceg-connector-state-blocked_manual_confirmation .ceg-edge-arrow { filter: drop-shadow(0 0 6px rgba(243, 199, 97, 0.58)); }
+.ceg-connector-state-blocked_failed .ceg-edge-arrow { filter: drop-shadow(0 0 6px rgba(255, 102, 94, 0.5)); }
+.ceg-connector.is-active .ceg-edge-seg { box-shadow: 0 0 10px rgba(104, 221, 255, 0.42); opacity: 1; }
+.ceg-spin { animation: cegSpin 1s linear infinite; }
+@keyframes cegFlowRight { from { background-position: 0 0; } to { background-position: 20px 0; } }
+@keyframes cegFlowDown { from { background-position: 0 0; } to { background-position: 0 20px; } }
+@keyframes cegPulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 0.95; transform: scale(1.02); } }
+@keyframes cegSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes cegPhaseSwap {
+  0% {
+    opacity: 0;
+    transform: translateY(7px);
+    filter: brightness(0.86);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: brightness(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: none;
+  }
+}
+@keyframes cegPhaseExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+}
+
+/* Reveal animation classes */
+.ceg-card-is-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px) scale(0.98);
+}
+
+.ceg-card-is-revealed {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+}
+
+.ceg-card-is-revealing {
+  animation: cegAgentGlowReveal 1.18s cubic-bezier(0.18, 0.76, 0.2, 1) both;
+  box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.34), 0 0 22px rgba(104, 221, 255, 0.28), 0 12px 28px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  will-change: opacity, transform, filter;
+}
+
+.ceg-card-is-revealing::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(6, 18, 29, 0) 0%, rgba(104, 221, 255, 0.16) 17%, rgba(6, 18, 29, 0.7) 34%, rgba(6, 18, 29, 0.86) 100%);
+  transform: translateX(-18%);
+  animation: cegAgentLightWash 1.18s cubic-bezier(0.18, 0.76, 0.2, 1) both;
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+
+@keyframes cegAgentGlowReveal {
+  0% {
+    opacity: 0.36;
+    transform: translateX(-4px) scale(0.992);
+    filter: saturate(0.74) brightness(0.64);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    filter: none;
+  }
+}
+
+@keyframes cegAgentLightWash {
+  0% {
+    opacity: 1;
+    transform: translateX(-18%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(104%);
+  }
+}
+
+/* Orchestrator pulsing effect during reveal */
+.ceg-is-orchestrating {
+  overflow: hidden;
+  position: relative;
+}
+
+.ceg-is-orchestrating::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 139, 250, 0.7);
+  animation: cegOrchestratePulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.ceg-is-orchestrating::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: linear-gradient(105deg, transparent 0%, rgba(167, 139, 250, 0.06) 38%, rgba(104, 221, 255, 0.28) 50%, rgba(167, 139, 250, 0.06) 62%, transparent 100%);
+  transform: translateX(-120%);
+  animation: cegOrchestrateScan 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes cegOrchestratePulse {
+  0%, 100% {
+    opacity: 0.35;
+    transform: scale(1);
+    border-color: rgba(167, 139, 250, 0.5);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.02);
+    border-color: rgba(167, 139, 250, 0.9);
+  }
+}
+
+@keyframes cegOrchestrateScan {
+  0% { transform: translateX(-120%); }
+  48%, 100% { transform: translateX(120%); }
+}
+
+/* Edge reveal effect */
+.ceg-edge-is-revealing {
+  animation: cegLineDraw 0.46s ease-out both;
+}
+
+@keyframes cegLineDraw {
+  0% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0.92;
+  }
+}
+
+/* Reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .ceg-card-is-hidden,
+  .ceg-card-is-revealed,
+  .ceg-orchestration-phase {
+    opacity: 1 !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+
+  .ceg-is-orchestrating::before {
+    animation: none !important;
+  }
+
+  .ceg-card-state-running::before {
+    animation: none !important;
+  }
+
+  .ceg-is-orchestrating::after {
+    animation: none !important;
+  }
+
+  .ceg-edge-is-revealing {
+    animation: none !important;
+  }
+
+  .ceg-edge-flow-layer {
+    animation: none !important;
+  }
+
+  .ceg-card-is-revealing {
+    animation: none !important;
+    box-shadow: none !important;
+  }
+
+  .ceg-card-is-revealing::after {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+
+  .ceg-spin {
+    animation: none !important;
+  }
+
+  .ceg-orchestration-phase {
+    animation: none !important;
+  }
+
+  .ceg-orchestration-phase.is-exiting {
+    animation: none !important;
+  }
+
+  .ceg-edge-horizontal.ceg-edge-planned,
+  .ceg-edge-horizontal.ceg-edge-flowing,
+  .ceg-edge-horizontal.ceg-edge-completed,
+  .ceg-edge-vertical.ceg-edge-planned,
+  .ceg-edge-vertical.ceg-edge-flowing,
+  .ceg-edge-vertical.ceg-edge-completed,
+  .ceg-edge-horizontal.ceg-edge-blocked,
+  .ceg-edge-vertical.ceg-edge-blocked,
+  .ceg-edge-horizontal.ceg-edge-blocked_waiting_user,
+  .ceg-edge-vertical.ceg-edge-blocked_waiting_user,
+  .ceg-edge-horizontal.ceg-edge-blocked_failed,
+  .ceg-edge-vertical.ceg-edge-blocked_failed {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .ceg-head { flex-direction: column; }
+  .ceg-card { width: 142px; }
+  .ceg-connector { width: 42px; flex-basis: 42px; }
+}
