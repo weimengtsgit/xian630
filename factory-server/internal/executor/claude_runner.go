@@ -1053,11 +1053,8 @@ func finishReviewGate(ctx context.Context, trace runner.TraceEmitter, step model
 	if strings.EqualFold(raw.Status, "blocked") {
 		msg := "blocking review"
 		if len(raw.BlockingFindings) > 0 {
-			f := raw.BlockingFindings[0]
-			if f.Message != "" {
-				msg = f.Message
-			} else if f.Title != "" {
-				msg = f.Title
+			if m := reviewFindingMessage(raw.BlockingFindings[0]); m != "" {
+				msg = m
 			}
 		}
 		// Surface the block as an assumption trace so the dialogue workbench
@@ -1088,15 +1085,41 @@ func readStepSummary(outputPath string) string {
 // pass/block decision; advisory findings are decoded so they survive a future
 // "advisory-only passed" refinement without re-shaping.
 type reviewGateOutput struct {
-	Status           string `json:"status"`
-	BlockingFindings []struct {
-		Title   string `json:"title"`
-		Message string `json:"message"`
-	} `json:"blockingFindings"`
-	AdvisoryFindings []struct {
-		Title   string `json:"title"`
-		Message string `json:"message"`
-	} `json:"advisoryFindings"`
+	Status           string          `json:"status"`
+	BlockingFindings []reviewFinding `json:"blockingFindings"`
+	AdvisoryFindings []reviewFinding `json:"advisoryFindings"`
+}
+
+// reviewFinding decodes the several field shapes the review gates have been
+// observed to emit. The prompt asks for {title, message}, but the LLM agents
+// frequently drift to {summary, failure_scenario} and include file/line for
+// context. reviewFindingMessage picks the most descriptive available field so
+// the bounded-repair loop always receives a concrete, actionable reason — a
+// silent fallback to the default "blocking review" string starves the rewind
+// of anything to fix (production death loop on job_56cf69517f8c52e5e58327b1).
+type reviewFinding struct {
+	Title           string `json:"title"`
+	Message         string `json:"message"`
+	Summary         string `json:"summary"`
+	FailureScenario string `json:"failure_scenario"`
+	File            string `json:"file"`
+	Line            int    `json:"line"`
+}
+
+// reviewFindingMessage returns the most descriptive finding text in priority
+// order message → failure_scenario → summary → title. Returns "" when the
+// finding carried no recognizable text.
+func reviewFindingMessage(f reviewFinding) string {
+	if f.Message != "" {
+		return f.Message
+	}
+	if f.FailureScenario != "" {
+		return f.FailureScenario
+	}
+	if f.Summary != "" {
+		return f.Summary
+	}
+	return f.Title
 }
 
 func reviewBlockedPayload(step model.JobStep, msg string) string {
@@ -1398,11 +1421,11 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 			"不要输出隐藏推理链。" +
 			skillsPromptBlock(skillPaths, blueprintPaths, dataPolicy)
 	case model.StepCodeReview:
-		return "你是软件工厂的代码审查门禁。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。只有影响正确性、可部署性、数据诚实、安全或确认用户行为的问题可以 blocking。"
+		return "你是软件工厂的代码审查门禁。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。finding 对象字段为 {title, message}，title 为简述、message 写清具体失败场景与定位（blocking 时会作为自动返工依据，必须可执行可修复）。只有影响正确性、可部署性、数据诚实、安全或确认用户行为的问题可以 blocking。"
 	case model.StepProductAcceptance:
-		return "你是软件工厂的产品验收智能体。对照确认需求摘要、设计契约、数据契约和主要用户流程验收。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
+		return "你是软件工厂的产品验收智能体。对照确认需求摘要、设计契约、数据契约和主要用户流程验收。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。finding 对象字段为 {title, message}，title 为简述、message 写清具体偏差与定位（blocking 时会作为自动返工依据，必须可执行可修复）。"
 	case model.StepSecurityReview:
-		return "你是软件工厂的安全审查智能体。检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。"
+		return "你是软件工厂的安全审查智能体。检查公网数据、认证、上传、外部接口、敏感数据、权限和暴露部署面。只输出 JSON：{\"blockingFindings\":[],\"advisoryFindings\":[],\"status\":\"passed|blocked\"}。finding 对象字段为 {title, message}，title 为简述、message 写清具体风险与定位（blocking 时会作为自动返工依据，必须可执行可修复）。"
 	default:
 		return job.UserPrompt
 	}

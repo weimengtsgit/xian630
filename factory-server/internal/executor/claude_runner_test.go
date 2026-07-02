@@ -1801,3 +1801,45 @@ func TestEmitWorkLogTracesEachEntry(t *testing.T) {
 		t.Errorf("expected 2 assistant_output traces, got %d; events=%#v", count, trace.events)
 	}
 }
+
+// TestFinishReviewGate_FailureScenarioBecomesErrorMessage locks in the contract
+// that a blocking finding emitted with the agent's natural fields
+// ({file, line, summary, failure_scenario} — NOT {title, message}) still
+// surfaces its text as the StepResult error message. Without this the finding is
+// silently dropped, ErrorMessage falls back to the useless "blocking review"
+// default, and the bounded-repair loop rewinds code_generation with no concrete
+// failure to fix — observed in production as a 4-attempt death loop on the
+// 外勤人员实时调度管理系统 job (job_56cf69517f8c52e5e58327b1).
+func TestFinishReviewGate_FailureScenarioBecomesErrorMessage(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "output.json")
+	gateOut := `{
+		"status": "blocked",
+		"blockingFindings": [
+			{
+				"file": "Dockerfile",
+				"line": 4,
+				"summary": "npm ci requires a package-lock.json",
+				"failure_scenario": "Dockerfile uses RUN npm ci (line 4), which requires a package-lock.json that was never generated; the image build fails."
+			}
+		]
+	}`
+	if err := os.WriteFile(outputPath, []byte(gateOut), 0o644); err != nil {
+		t.Fatalf("write output.json: %v", err)
+	}
+
+	res := finishReviewGate(context.Background(), nil, model.JobStep{Kind: model.StepCodeReview}, outputPath)
+
+	if res.Status != model.StepStatusFailed {
+		t.Fatalf("status: got %q want %q", res.Status, model.StepStatusFailed)
+	}
+	if res.ErrorCode != model.ErrorBlockingReview {
+		t.Fatalf("error code: got %q want %q", res.ErrorCode, model.ErrorBlockingReview)
+	}
+	if res.ErrorMessage == "blocking review" {
+		t.Fatalf("ErrorMessage fell back to the default %q — the finding text was dropped instead of flowing to repair context", res.ErrorMessage)
+	}
+	if !strings.Contains(res.ErrorMessage, "package-lock.json") {
+		t.Fatalf("ErrorMessage should carry the finding text into repair context; got %q", res.ErrorMessage)
+	}
+}
