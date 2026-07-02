@@ -2012,13 +2012,35 @@ func normalizeCreatedFiles(projectDir string, files []string) []string {
 	return out
 }
 
+// slugFromProjectDir extracts the app slug from a code-generation project
+// directory. The directory is normally generated-apps/<slug>, but after a
+// review block the re-run targets a versioned directory
+// generated-apps/<slug>/versions/ver_<id>; in that case the slug is the
+// segment immediately after generated-apps/, NOT the trailing ver_<id>.
+// Returning ver_<id> would make AuditFiles's allowed root
+// generated-apps/ver_<id>/ and reject every declared file under the real app
+// tree (file_constraint_violated).
 func slugFromProjectDir(projectDir string) string {
-	projectDir = strings.Trim(filepath.ToSlash(projectDir), "/")
-	if projectDir == "" {
+	p := filepath.ToSlash(projectDir)
+	idx := strings.Index(p, "generated-apps/")
+	if idx < 0 {
+		// Not under generated-apps/ — fall back to the last segment so the
+		// audit still has a (best-effort) root rather than blocking everything.
+		trimmed := strings.Trim(p, "/")
+		if trimmed == "" {
+			return ""
+		}
+		parts := strings.Split(trimmed, "/")
+		return parts[len(parts)-1]
+	}
+	tail := strings.Trim(p[idx+len("generated-apps/"):], "/")
+	if tail == "" {
 		return ""
 	}
-	parts := strings.Split(projectDir, "/")
-	return parts[len(parts)-1]
+	if i := strings.Index(tail, "/"); i >= 0 {
+		return tail[:i]
+	}
+	return tail
 }
 
 // dataContractVerification is the per-boundary verdict projected onto the

@@ -157,3 +157,31 @@ func jsonStr(s string) string {
 	}
 	return string(b)
 }
+
+// TestSlugFromProjectDir covers the AuditFiles allowed-root derivation. The
+// versioned-dir case (generated-apps/<slug>/versions/ver_<id>, used when code
+// generation re-runs after a review block) must yield the app slug, NOT the
+// trailing ver_<id> — otherwise the allowed root becomes generated-apps/ver_<id>/
+// and every declared file under the real app tree is rejected with
+// file_constraint_violated.
+func TestSlugFromProjectDir(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{"plain", "generated-apps/command-dashboard-1993", "command-dashboard-1993"},
+		{"versioned", "generated-apps/command-dashboard-1993/versions/ver_19eee49b14fc391da7596c85", "command-dashboard-1993"},
+		{"absolute versioned", "/Users/x/ws/generated-apps/operations-management-8rua/versions/ver_abc", "operations-management-8rua"},
+		{"trailing slash", "generated-apps/foo/", "foo"},
+		{"empty", "", ""},
+		{"not under generated-apps (fallback last segment)", "some/where/else", "else"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := slugFromProjectDir(c.dir); got != c.want {
+				t.Fatalf("slugFromProjectDir(%q) = %q, want %q", c.dir, got, c.want)
+			}
+		})
+	}
+}
