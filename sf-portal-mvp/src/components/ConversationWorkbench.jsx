@@ -18,6 +18,7 @@ import {
   Image as ImageIcon,
   Loader2,
   MessageSquare,
+  MonitorCheck,
   MoreHorizontal,
   PlayCircle,
   RefreshCw,
@@ -992,6 +993,29 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
           <FileText size={14} />
           <span>{art.label || item.label}</span>
         </button>
+      </div>
+    )
+  }
+  if (item.type === 'prototype_confirmed') {
+    // Durable record of a confirmed prototype (编排产物确认). The
+    // PrototypeConfirmationDock is the in-flight confirm surface; once the gate
+    // is past this retained item stays in the timeline so the user can re-open
+    // the confirmed prototype preview and see what was confirmed. Plain card for
+    // now — Task 3 folds it into a summary.
+    const art = item.artifact
+    return (
+      <div className="cw-item cw-agent cw-prototype-confirmed">
+        <span className="cw-item-label">
+          <CheckCircle2 size={12} />
+          原型已确认
+        </span>
+        <span className="cw-prototype-confirmed-detail">{item.confirmLabel}</span>
+        {art && (art.previewUrl || art.id) ? (
+          <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)} title="查看确认的原型">
+            <MonitorCheck size={14} />
+            <span>{item.label}</span>
+          </button>
+        ) : null}
       </div>
     )
   }

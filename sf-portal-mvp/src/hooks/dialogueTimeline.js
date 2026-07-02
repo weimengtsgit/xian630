@@ -435,6 +435,50 @@ function appendArtifactLinks(items, view) {
   }
 }
 
+// appendPrototypeConfirmation emits a DURABLE timeline record for a confirmed
+// prototype (design_contract step). The PrototypeConfirmationDock alone is not
+// a durable timeline item — when the user confirms a prototype the dock simply
+// disappears, leaving no conversation record of what was confirmed. This helper
+// derives the record purely from existing frontend data:
+//   - the interface_preview workbench artifact (the same one the interface_parsing
+//     card projects and the Dock opens) — carries label/previewUrl/jobId/stepId;
+//   - the confirm signal: artifact.status === 'confirmed'. When the backend has
+//     not populated that field (current state), fall back to the design_contract
+//     step having succeeded/completed (the step moved past the prototype gate)
+//     while an interface_preview artifact for it exists.
+// The item carries the artifact link + a confirm label so Task 3 can fold it
+// into a summary. One item per confirmed interface_preview artifact (dedup by id).
+function appendPrototypeConfirmation(items, view, jobStepBlocks) {
+  const artifacts = view && Array.isArray(view.workbenchArtifacts) ? view.workbenchArtifacts : []
+  const protoArtifacts = artifacts.filter(
+    art => art && art.kind === 'interface_preview' && isPreviewableArtifact(art),
+  )
+  if (protoArtifacts.length === 0) return
+  // design_contract step statuses that indicate the prototype gate is past
+  // (used as the fallback confirm signal when artifact.status is not 'confirmed').
+  const steps = Array.isArray(jobStepBlocks) ? jobStepBlocks : []
+  const designContractSucceeded = new Set(
+    steps
+      .filter(step => step && step.kind === 'design_contract' && (step.status === 'succeeded' || step.status === 'completed'))
+      .map(step => step.stepId)
+  )
+  for (const art of protoArtifacts) {
+    const confirmed = String(art.status || '').toLowerCase() === 'confirmed'
+    const stepSucceeded = art.stepId
+      ? designContractSucceeded.has(String(art.stepId))
+      : designContractSucceeded.size > 0
+    if (!confirmed && !stepSucceeded) continue
+    items.push({
+      id: `prototype_confirmed_${art.id || art.stepId || 'proto'}`,
+      type: 'prototype_confirmed',
+      artifact: art,
+      label: art.label || ARTIFACT_LINK_LABEL.interface_preview,
+      confirmLabel: '确定原型并继续',
+      confirmedAt: safeString(art.updatedAt || art.updated_at),
+    })
+  }
+}
+
 export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = [], pendingTurn = null, jobStepBlocks = [], taskThinkingItems = []) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
@@ -530,20 +574,32 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
 
   // 1. Parent thread: user messages + analysis work logs, in persisted order.
   //    The INITIAL prompt (first non-task-clarification user message) renders in
-  //    place so it leads the thread. In the application-generation flow (which
-  //    carries a child clarification session) the first round's agent content
-  //    lives in the child, so the parent's later user messages + agent
-  //    thinking/analysis/reply are ITERATION turns: collect them into
+  //    place so it leads the thread. The parent's FIRST-ROUND agent content
+  //    (thinking / analysis_work_log / reply that chronologically sits BETWEEN
+  //    the initial prompt and the first ITERATION user message) renders inline
+  //    in `items` right after the initial prompt — BEFORE the child clarification
+  //    rounds — so the first user message's 思考过程 / 思考摘要 reads in true
+  //    persisted order (the prior bug diverted ALL parent agent content into
+  //    postConfirmationItems and appended it AFTER the child, hiding the first
+  //    round's reasoning beneath the clarification history).
+  //    Only ITERATION turns (a SECOND non-task-clarification user message and
+  //    any agent content chronologically after it) collect into
   //    postConfirmationItems and append AFTER the first-round clarification +
-  //    requirement-confirmation surface, so they never interleave with the first
-  //    round (they used to render right after the initial prompt, wedged before
-  //    the first-round clarification). Flows WITHOUT a child (routing, business)
-  //    keep parent agent content inline in persisted order.
+  //    requirement-confirmation surface, so they read as a continuation of the
+  //    conversation, not interleaved with the first round. Flows WITHOUT a child
+  //    (routing, business) keep ALL parent agent content inline in persisted
+  //    order (iterationTarget === items, so the threshold is a no-op).
   const refsByMessage = attachmentRefsByMessage(view)
   const hasChildClarification = !!(view.child && Array.isArray(view.child.messages) && view.child.messages.length)
   const postConfirmationItems = []
   const iterationTarget = hasChildClarification ? postConfirmationItems : items
   let initialPromptRendered = false
+  // iterationStarted flips true once the SECOND non-task-clarification user
+  // message is seen. Parent agent content emitted BEFORE it is first-round
+  // content and renders inline (items); content emitted AFTER it is iteration
+  // content and routes to iterationTarget (postConfirmationItems when a child
+  // exists, items otherwise — so the no-child path is unaffected).
+  let iterationStarted = false
   const pushUserMessage = (target, msg) => target.push({
     id: msg.id,
     type: 'user_message',
@@ -558,13 +614,21 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
         pushUserMessage(items, msg)
         initialPromptRendered = true
       } else {
+        // A non-initial user message starts an iteration turn. From here on,
+        // parent agent content belongs to the iteration and routes to
+        // postConfirmationItems (when a child exists) so it follows the
+        // first-round surface.
+        iterationStarted = true
         pushUserMessage(iterationTarget, msg)
       }
       continue
     }
+    // First-round parent agent content (before any iteration user message)
+    // renders inline in items; iteration content routes to iterationTarget.
+    const target = iterationStarted ? iterationTarget : items
     if (msg.role === 'agent' && msg.kind === 'thinking') {
       routeThinkingRendered = true
-      iterationTarget.push({
+      target.push({
         id: msg.id,
         type: 'thinking_summary',
         content: safeString(msg.content),
@@ -578,7 +642,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       // renders as a collapsible block above the conclusion (`folded`), default
       // EXPANDED so the reasoning is visible without an extra click; the user
       // can collapse it via the toggle.
-      iterationTarget.push({
+      target.push({
         id: msg.id,
         type: 'analysis_stream',
         content: safeString(msg.content),
@@ -588,7 +652,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       continue
     }
     if (msg.role === 'agent' && (msg.kind === 'reply' || msg.kind === 'message')) {
-      iterationTarget.push({
+      target.push({
         id: msg.id,
         type: 'agent_message',
         content: safeString(msg.content),
@@ -654,7 +718,13 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   }
 
   // 4. Child clarification (application-generation) surface.
+  //    Capture the insertion index BEFORE the child surface so a first-round
+  //    live stream (round-level, no iteration yet) can be placed WITH its round
+  //    — right after the parent's first-round content, before the child history
+  //    — instead of only at the tail. The tail placement is kept for iteration
+  //    rounds (a second user message has started) and step-level streams.
   const child = view.child
+  const firstRoundLiveInsertAt = items.length
   if (child) {
     appendChildItems(items, child, view.session)
   }
@@ -835,12 +905,16 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     if (Array.isArray(item.answers)) items.push(...item.answers)
   }
 
-  // 5c. Transient live items at the TAIL (after all persisted child/business
-  //     content, before resolved_outcome / system_status). Streaming content
-  //     must appear AFTER the latest persisted content so it sits at the bottom
-  //     of the conversation — not above the child history (the prior bug). The
-  //     D6 suppression is preserved: once the persisted analysis for the current
-  //     turn lands (hasPersistedAnalysis), the transient live_analysis is
+  // 5c. Transient live items. A first-round stream (round-level, child present,
+  //     no iteration user message yet) is placed WITH its round — at the captured
+  //     firstRoundLiveInsertAt index (right after the parent's first-round agent
+  //     content, before the child clarification history) — so the in-flight
+  //     思考过程 / 分析过程 reads where it chronologically belongs, not stranded at
+  //     the tail beneath the whole child history. Iteration rounds (a second user
+  //     message has started) and step-level streams keep the TAIL placement so the
+  //     latest streamed content sits at the bottom of the conversation.
+  //     The D6 suppression is preserved: once the persisted analysis for the
+  //     current turn lands (hasPersistedAnalysis), the transient live_analysis is
   //     suppressed (the folded persisted analysis is authoritative).
   //
   //     When a task execution block absorbed the in-flight step's safe-execution
@@ -848,8 +922,10 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   //     so it is not duplicated beneath the block. liveThinking currently has only
   //     round-level attribution (applyLiveThinkingEvent writes kind:'round'), so
   //     it stays independent until Phase 4 introduces step-attributed thinking.
+  const placeWithFirstRound = hasChildClarification && !iterationStarted
+  const liveItems = []
   if (liveThinking && liveThinking.content) {
-    items.push({
+    liveItems.push({
       id: `livethink_${safeString(liveThinking.key)}`,
       type: 'live_thinking',
       content: safeString(liveThinking.content),
@@ -858,12 +934,19 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     })
   }
   if (liveAnalysis && liveAnalysis.content && !hasPersistedAnalysis && !(absorbedStepId && liveAnalysis.kind === 'step')) {
-    items.push({
+    liveItems.push({
       id: `live_${safeString(liveAnalysis.key)}`,
       type: 'live_analysis',
       content: safeString(liveAnalysis.content),
       kind: liveAnalysis.kind === 'step' ? 'step' : 'round',
     })
+  }
+  if (liveItems.length > 0) {
+    if (placeWithFirstRound) {
+      items.splice(firstRoundLiveInsertAt, 0, ...liveItems)
+    } else {
+      items.push(...liveItems)
+    }
   }
 
   // 5d. Pending "thinking" placeholder. When a turn is in flight (pendingTurn
@@ -887,6 +970,22 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   // previewable artifacts, matching the card's isPreviewableArtifact filter so
   // the conversation chip and the card stay consistent.
   appendArtifactLinks(items, view)
+
+  // 6b. Durable prototype-confirmation record (编排产物确认 glossary: "drawer-only
+  //     confirmation is not sufficient for user-facing review"). A confirmed
+  //     prototype (design_contract step) must leave a RETAINED timeline item,
+  //     not just the ephemeral PrototypeConfirmationDock. Derived purely from
+  //     existing frontend data — the interface_preview workbench artifact (the
+  //     same one projected onto the interface_parsing card) plus the confirm
+  //     signal. The confirm signal is the artifact's own status field
+  //     (status === 'confirmed'); when the backend has not populated it, fall
+  //     back to the underlying design_contract step having moved past the
+  //     prototype-confirmation gate (the step succeeded while an
+  //     interface_preview artifact exists for it). The Dock stays for the
+  //     in-flight (status !== 'confirmed') case; this item is the durable
+  //     record once the gate is past. Rendered as a plain retained card here;
+  //     Task 3 folds it into a summary.
+  appendPrototypeConfirmation(items, view, jobStepBlocks)
 
   // 7. Resolved outcome (application / agent / seeded job).
   appendResolvedOutcome(items, view)
