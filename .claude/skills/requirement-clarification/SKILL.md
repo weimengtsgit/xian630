@@ -181,11 +181,14 @@ Output ONLY this JSON object (no prose, no ```json fences):
 - `appName`
 - `targetUsers`
 - `coreScenario`
-- `primaryView`
 - `mainEntities`
-- `dataPolicy`
 - `acceptanceFocus`
 - `generationProfile`
+
+`primaryView` and `dataPolicy` are deferred-stage fields. Include them when the
+user has already provided clear values, but leave them empty rather than asking
+interface/data-source questions during business-logic clarification. Missing
+`primaryView` or `dataPolicy` must not block `ready_to_confirm`.
 
 `blueprintRefs` is optional and may be an empty array when no internal Factory
 reference matches the user's app.

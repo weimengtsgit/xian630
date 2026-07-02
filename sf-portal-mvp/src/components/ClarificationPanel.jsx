@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { statusText } from '../hooks/clarificationLogic'
+import { formatAppType, formatDataPolicy, formatRequirementTerm, translateAnalysisText } from '../utils/formatLabels'
 import './ClarificationPanel.css'
 
 // Renders the clarification flow: streaming analysis work-logs, structured
@@ -23,6 +24,13 @@ export function ClarificationPanel({
 }) {
   const [pendingAnswerKey, setPendingAnswerKey] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  const handleAbandonRequirement = () => {
+    if (!onAbandon) return
+    const ok = typeof window === 'undefined'
+      ? true
+      : window.confirm('确定放弃本次需求吗？这会结束当前需求澄清/生成对话，但不会取消已经在执行的任务。如需停止任务，请在「任务执行」中取消。')
+    if (ok) onAbandon()
+  }
 
   useEffect(() => {
     const ids = new Set((questions || []).map(q => q.id))
@@ -135,7 +143,7 @@ export function ClarificationPanel({
                 key={m.id || `m_${i}`}
                 className={`clar-message clar-kind-${m.kind || 'analysis_work_log'}`}
               >
-                {m.content}
+                {translateAnalysisText(m.content)}
               </div>
             ))}
           </div>
@@ -251,22 +259,28 @@ export function ClarificationPanel({
         {requirement && (
           <div className="clar-summary">
             <strong className="clar-summary-title">确认需求摘要</strong>
+            {requirement.description ? (
+              <p className="clar-summary-desc">{requirement.description}</p>
+            ) : null}
             <div className="clar-summary-grid">
-              <SummaryRow label="应用类型" value={requirement.appType} />
+              <SummaryRow label="应用类型" value={formatAppType(requirement.appType)} />
               <SummaryRow label="应用名称" value={requirement.appName} />
               <SummaryRow label="核心场景" value={requirement.coreScenario} />
               <SummaryRow label="主视图" value={requirement.primaryView} />
-              <SummaryRow label="数据策略" value={requirement.dataPolicy} />
+              <SummaryRow label="数据策略" value={formatDataPolicy(requirement.dataPolicy)} />
             </div>
             {Array.isArray(requirement.blueprintRefs) &&
             requirement.blueprintRefs.length > 0 ? (
               <div className="clar-summary-refs">
                 <span className="clar-summary-refs-label">蓝本引用：</span>
-                {requirement.blueprintRefs.map((ref, i) => (
-                  <span key={ref.id || ref.name || `ref_${i}`} className="clar-ref-chip">
-                    {ref.name || ref.id || ref}
-                  </span>
-                ))}
+                {requirement.blueprintRefs.map((ref, i) => {
+                  const raw = ref && (ref.name || ref.id) ? (ref.name || ref.id) : ref
+                  return (
+                    <span key={(ref && (ref.id || ref.name)) || `ref_${i}`} className="clar-ref-chip">
+                      {formatRequirementTerm(raw)}
+                    </span>
+                  )
+                })}
               </div>
             ) : null}
           </div>
@@ -281,8 +295,8 @@ export function ClarificationPanel({
             重试本轮
           </button>
         )}
-        <button type="button" className="clar-action clar-abandon" onClick={onAbandon}>
-          放弃
+        <button type="button" className="clar-action clar-abandon" onClick={handleAbandonRequirement}>
+          放弃本次需求
         </button>
         <button
           type="button"

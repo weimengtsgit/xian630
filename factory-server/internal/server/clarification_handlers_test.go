@@ -229,6 +229,32 @@ func TestCreateClarificationDoesNotCreateJob(t *testing.T) {
 	}
 }
 
+func TestCreateClarificationRetriesInvalidJSONBeforeFailing(t *testing.T) {
+	fake := &sequenceClarRunner{outputs: []string{
+		"Let me explain first.\n```json\n{\"status\":\"waiting_user\"",
+		waitingUserOutput,
+	}}
+	_, r, _ := newClarTestServer(t, fake)
+
+	rec := doPost(t, r, http.MethodPost, "/api/clarifications", map[string]string{"prompt": "生成一个todo"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.calls != 2 {
+		t.Fatalf("clarifier calls = %d, want 2", fake.calls)
+	}
+	var sess model.ClarificationSession
+	if err := json.NewDecoder(rec.Body).Decode(&sess); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if sess.Status != model.ClarificationStatusWaitingUser {
+		t.Fatalf("session status = %q, want waiting_user after retry success", sess.Status)
+	}
+	if sess.ErrorCode != "" {
+		t.Fatalf("error_code = %q, want empty after retry success", sess.ErrorCode)
+	}
+}
+
 func TestCreateClarificationTreatsLLMConfirmedAsReadyToConfirm(t *testing.T) {
 	_, r, _ := newClarTestServer(t, fakeClarRunner{stdout: llmConfirmedOutput})
 

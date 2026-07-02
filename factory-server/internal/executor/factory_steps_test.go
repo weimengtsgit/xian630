@@ -2,9 +2,11 @@ package executor
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -938,6 +940,88 @@ func TestDeploymentSkipsPortsUsedByOtherRunningApps(t *testing.T) {
 	}
 	if dep.HostPort != 18001 {
 		t.Fatalf("host port = %d, want 18001 because 18000 is used by another app", dep.HostPort)
+	}
+}
+
+func TestDeploymentSkipsPortsAlreadyBoundOnHost(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+
+	// 模拟数据库没有记录、但宿主/容器运行时已经占用端口的真实部署场景。
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen occupied port: %v", err)
+	}
+	defer listener.Close()
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	occupiedPort, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse listener port: %v", err)
+	}
+
+	r, _ := newFactoryRunner(st, ws, true)
+	r.Alloc = deploy.Allocator{Start: occupiedPort, End: occupiedPort + 1}
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	dep, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || dep == nil {
+		t.Fatalf("get active deployment: %#v %v", dep, err)
+	}
+	if dep.HostPort != occupiedPort+1 {
+		t.Fatalf("host port = %d, want %d because %d is already bound", dep.HostPort, occupiedPort+1, occupiedPort)
+	}
+}
+
+func TestDeploymentSkipsPortsReportedByContainerRuntime(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen free port probe: %v", err)
+	}
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	runtimePort, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse listener port: %v", err)
+	}
+	_ = listener.Close()
+
+	r, cmds := newFactoryRunner(st, ws, true)
+	r.Alloc = deploy.Allocator{Start: runtimePort, End: runtimePort + 1}
+	// 模拟 Podman machine 内已有发布端口，但本地数据库没有对应 deployment 行。
+	cmds.setRes("podman ps", deploy.CommandResult{
+		ExitCode: 0,
+		Stdout:   "0.0.0.0:" + strconv.Itoa(runtimePort) + "->80/tcp\n",
+	})
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	dep, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || dep == nil {
+		t.Fatalf("get active deployment: %#v %v", dep, err)
+	}
+	if dep.HostPort != runtimePort+1 {
+		t.Fatalf("host port = %d, want %d because runtime reports %d as published", dep.HostPort, runtimePort+1, runtimePort)
 	}
 }
 

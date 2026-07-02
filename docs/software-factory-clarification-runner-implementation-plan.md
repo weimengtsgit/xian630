@@ -154,11 +154,13 @@ You must write `output.json` with this shape:
 - `appName`
 - `targetUsers`
 - `coreScenario`
-- `primaryView`
 - `mainEntities`
-- `dataPolicy`
 - `acceptanceFocus`
 - `generationProfile`
+
+`primaryView` and `dataPolicy` are deferred-stage fields. They may be present
+when the user already supplied them, but missing values do not block business
+requirement confirmation.
 
 ## Supported App Types
 
@@ -1130,7 +1132,7 @@ Keep `confirmClarification` as the normal creation path.
 Change `ClaudeStepRunner.prompt` for `StepRequirementAnalysis`:
 
 ```go
-return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation。不要进行多轮澄清，不要输出隐藏推理链。"
+return "你是软件工厂的需求冻结 agent。读取 input.json 中的 confirmedRequirement，校验字段完整性、能力边界和 generationProfile。完整性只检查业务确认字段；primaryView 和 dataPolicy 属于后续界面解析/数据抓取阶段，可为空。输出 output.json，包含 confirmedRequirementId、summary、appType、appName、targetUsers、coreScenario、primaryView、mainEntities、dataPolicy、acceptanceFocus、generationProfile、constraints、risks、validation。不要进行多轮澄清，不要输出隐藏推理链。"
 ```
 
 Update the input marshal in `ClaudeStepRunner.Run` to include:

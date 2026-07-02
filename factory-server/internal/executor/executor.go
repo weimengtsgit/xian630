@@ -39,11 +39,17 @@ type StepResult struct {
 	// FrozenRequirementJSON carries the requirement_analysis step's canonical
 	// output so the job row becomes the source of truth for later steps and UI.
 	FrozenRequirementJSON string
+	// Summary is the human-readable summary extracted from the step's
+	// output.json (the agent's `summary` field). Persisted on the step so the
+	// workbench's agent blocks can surface 思考摘要.
+	Summary string
 	// Questions is the clarifying questions a step raised when pausing for user
 	// input (waiting_user). Persisted on the step so the job detail can surface
 	// them; empty for non-waiting results.
 	Questions []runner.Question
 }
+
+const maxOutputInvalidJSONAttempts = 3
 
 // Executor drives the fixed pipeline forward: it runs up to MaxConcurrentJobs
 // jobs at once across DIFFERENT applications, serializing jobs of the SAME
@@ -335,7 +341,30 @@ func NewExecutor(st *store.Store, runner StepRunner, maxConcurrent int) *Executo
 // all idle workers so a queued batch can fan out across apps. A watcher goroutine
 // Broadcasts on ctx cancellation so idle workers exit promptly at shutdown.
 // Start returns immediately; workers exit when ctx is cancelled.
+// recoverRunningJobs re-queues every job left "running" by a previous process.
+// A running job is orphaned on restart (its worker goroutine is gone), and the
+// drain loop only claims QUEUED jobs — so without this recovery those jobs hang
+// forever. runJobStep does not check step status, so reclaiming a job reruns
+// its current step (IncrementStepAttempt + MarkStepRunning). This closes the
+// startup-recovery gap: restarting the factory-server mid-job no longer strands
+// every running job.
+func (e *Executor) recoverRunningJobs(ctx context.Context) {
+	running, err := e.store.ListJobs(ctx, string(model.JobStatusRunning))
+	if err != nil {
+		log.Printf("executor: recover running jobs: %v", err)
+		return
+	}
+	for _, job := range running {
+		if err := e.store.MarkJobQueued(ctx, job.ID); err != nil {
+			log.Printf("executor: requeue orphaned job %s: %v", job.ID, err)
+			continue
+		}
+		log.Printf("executor: recovered orphaned running job %s (step %s)", job.ID, job.CurrentStepKind)
+	}
+}
+
 func (e *Executor) Start(ctx context.Context) {
+	e.recoverRunningJobs(ctx)
 	// Watcher: Broadcast on ctx cancel so idle workers stuck in Wait wake and
 	// observe ctx.Err(). This is the standard sync.Cond + cancellation pattern.
 	go func() {
@@ -549,7 +578,18 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 				return err
 			}
 		}
-		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
+		if e.shouldAwaitManualStepConfirmation(ctx, jobID) {
+			questionsJSON := manualStepConfirmationQuestionsJSON(stepID)
+			if err := e.store.MarkStepAwaitingManualConfirmation(ctx, stepID, questionsJSON); err != nil {
+				return err
+			}
+			if err := e.store.MarkJobWaitingUser(ctx, jobID); err != nil {
+				return err
+			}
+			e.notify(ctx, jobID, stepID)
+			return nil
+		}
+		if err := e.store.MarkStepSucceeded(ctx, stepID, res.Summary); err != nil {
 			return err
 		}
 		// Find the succeeded step's kind to decide advance vs complete.
@@ -561,6 +601,10 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 	case model.StepStatusFailed:
 		if err := e.store.MarkStepFailed(ctx, stepID, res.ErrorCode, res.ErrorMessage); err != nil {
 			return err
+		}
+		if e.maybeRetryOutputInvalidJSON(ctx, jobID, stepID, res) {
+			e.notify(ctx, jobID, stepID)
+			return nil
 		}
 		// Bounded auto-repair: before failing the job terminally, check whether
 		// this failure is a repairable gate that is still under the policy's
@@ -603,6 +647,50 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 		e.notify(ctx, jobID, stepID)
 		return nil
 	}
+}
+
+func (e *Executor) shouldAwaitManualStepConfirmation(ctx context.Context, jobID string) bool {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil || job == nil || strings.TrimSpace(job.CollaborationPlanJSON) == "" {
+		return false
+	}
+	if job.CurrentStepKind == model.StepRequirementAnalysis && strings.TrimSpace(job.ClarificationSessionID) != "" {
+		child, err := e.store.GetClarificationSession(ctx, job.ClarificationSessionID)
+		if err == nil && child != nil && child.Status == model.ClarificationStatusReadyToConfirm {
+			return true
+		}
+	}
+	if !manualStepConfirmationEnabled(job.CollaborationPlanJSON) {
+		return false
+	}
+	_, ok, err := e.nextPlanStepKind(ctx, jobID, job.CurrentStepKind)
+	return err == nil && ok
+}
+
+func manualStepConfirmationEnabled(planJSON string) bool {
+	var doc struct {
+		ExecutionPolicy struct {
+			ManualStepConfirmation bool `json:"manualStepConfirmation"`
+		} `json:"executionPolicy"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &doc); err != nil {
+		return false
+	}
+	return doc.ExecutionPolicy.ManualStepConfirmation
+}
+
+func manualStepConfirmationQuestionsJSON(stepID string) string {
+	raw, err := json.Marshal([]map[string]any{{
+		"id":      "manual_step_confirmation",
+		"type":    "manual_step_confirmation",
+		"stepId":  stepID,
+		"prompt":  "当前智能体任务已完成，请人工确认后继续执行下一步。",
+		"confirm": true,
+	}})
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 // finalizeCanceled records the canceled terminal state for both step and job.
@@ -662,6 +750,34 @@ func (e *Executor) advanceOrComplete(ctx context.Context, jobID string) error {
 	// Re-queue so the drain loop runs the next step. started_at is preserved
 	// (MarkJobQueued only flips status + updated_at).
 	return e.store.MarkJobQueued(ctx, jobID)
+}
+
+func (e *Executor) maybeRetryOutputInvalidJSON(ctx context.Context, jobID, stepID string, res StepResult) bool {
+	if res.ErrorCode != model.ErrorOutputInvalidJSON {
+		return false
+	}
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil || job == nil {
+		return false
+	}
+	step, err := e.store.GetStepByKind(ctx, jobID, job.CurrentStepKind)
+	if err != nil || step == nil || step.ID != stepID {
+		return false
+	}
+	if step.Attempt >= maxOutputInvalidJSONAttempts {
+		return false
+	}
+	// 无效 JSON 通常是模型输出被说明文字污染；自动重跑当前节点，保留失败 attempt 的审计记录。
+	if err := e.store.ResetStepToPending(ctx, stepID); err != nil {
+		return false
+	}
+	if err := e.store.MarkJobQueued(ctx, jobID); err != nil {
+		return false
+	}
+	emitter := e.newStepEmitter(jobID, stepID, job.DialogueID, step.Attempt, step.AgentKey)
+	emitter.emit(ctx, model.ExecutionRecordSystem, systemRecordRetry)
+	e.Signal()
+	return true
 }
 
 // nextPlanStepKind returns the step kind that follows currentKind in the job's
@@ -765,6 +881,198 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	}
 	e.Signal()
 	return *updated, nil
+}
+
+// ConfirmManualStep releases a collaboration step that finished execution and
+// is paused by executionPolicy.manualStepConfirmation. Ordinary task
+// clarifications still go through answerJob and re-run the waiting step; manual
+// confirmation marks the already-finished step succeeded and advances to the
+// next seeded plan step.
+func (e *Executor) ConfirmManualStep(ctx context.Context, jobID, stepID string, attempt int) (model.Job, error) {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("get job: %w", err)
+	}
+	if job == nil {
+		return model.Job{}, errors.New("job not found")
+	}
+	if job.Status != model.JobStatusWaitingUser {
+		return model.Job{}, fmt.Errorf("job is %s, only waiting_user jobs can be confirmed", job.Status)
+	}
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("list steps: %w", err)
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return model.Job{}, errors.New("step not found")
+	}
+	if step.Status != model.StepStatusWaitingUser || !step.NeedsUserInput {
+		return model.Job{}, fmt.Errorf("step is %s, only waiting_user steps can be confirmed", step.Status)
+	}
+	if attempt > 0 && step.Attempt != attempt {
+		return model.Job{}, errors.New("stale step attempt")
+	}
+	if !isManualStepConfirmationPayload(step.PendingQuestions) {
+		return model.Job{}, errors.New("step is waiting for task clarification, not manual confirmation")
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, step.Kind); err != nil {
+		return model.Job{}, fmt.Errorf("point job to confirmed step: %w", err)
+	}
+	if err := e.store.MarkStepSucceeded(ctx, stepID, ""); err != nil {
+		return model.Job{}, fmt.Errorf("mark step succeeded: %w", err)
+	}
+	if err := e.advanceOrComplete(ctx, jobID); err != nil {
+		return model.Job{}, err
+	}
+	e.notify(ctx, jobID, stepID)
+	e.Signal()
+	updated, err := e.store.GetJob(ctx, jobID)
+	if err != nil || updated == nil {
+		if err == nil {
+			err = fmt.Errorf("job %s vanished after manual confirmation", jobID)
+		}
+		return model.Job{}, err
+	}
+	return *updated, nil
+}
+
+// ConfirmDataAccessStep releases a data_integration step paused on the final
+// data-access summary confirmation. The data-access artifact version is
+// finalized by the server before this method runs; this method only validates
+// that the waiting step is the data-access summary gate and advances the job.
+func (e *Executor) ConfirmDataAccessStep(ctx context.Context, jobID, stepID string, attempt int) (model.Job, error) {
+	if err := e.ValidateDataAccessStepConfirmation(ctx, jobID, stepID, attempt); err != nil {
+		return model.Job{}, err
+	}
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("list steps: %w", err)
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return model.Job{}, errors.New("step not found")
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, step.Kind); err != nil {
+		return model.Job{}, fmt.Errorf("point job to data access step: %w", err)
+	}
+	if err := e.store.MarkStepSucceeded(ctx, stepID, ""); err != nil {
+		return model.Job{}, fmt.Errorf("mark step succeeded: %w", err)
+	}
+	if err := e.advanceOrComplete(ctx, jobID); err != nil {
+		return model.Job{}, err
+	}
+	e.notify(ctx, jobID, stepID)
+	e.Signal()
+	updated, err := e.store.GetJob(ctx, jobID)
+	if err != nil || updated == nil {
+		if err == nil {
+			err = fmt.Errorf("job %s vanished after data access confirmation", jobID)
+		}
+		return model.Job{}, err
+	}
+	return *updated, nil
+}
+
+func (e *Executor) ValidateDataAccessStepConfirmation(ctx context.Context, jobID, stepID string, attempt int) error {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("get job: %w", err)
+	}
+	if job == nil {
+		return errors.New("job not found")
+	}
+	if job.Status != model.JobStatusWaitingUser {
+		return fmt.Errorf("job is %s, only waiting_user jobs can confirm data access", job.Status)
+	}
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("list steps: %w", err)
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return errors.New("step not found")
+	}
+	if step.Kind != model.StepDataIntegration {
+		return fmt.Errorf("step kind is %s, want data_integration", step.Kind)
+	}
+	if step.Status != model.StepStatusWaitingUser || !step.NeedsUserInput {
+		return fmt.Errorf("step is %s, only waiting_user steps can confirm data access", step.Status)
+	}
+	if attempt > 0 && step.Attempt != attempt {
+		return errors.New("stale step attempt")
+	}
+	if !isDataAccessSummaryConfirmationPayload(step.PendingQuestions) {
+		return errors.New("step is not waiting for data access summary confirmation")
+	}
+	return nil
+}
+
+func isManualStepConfirmationPayload(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var items []struct {
+		Type    string `json:"type"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Type == "manual_step_confirmation" && item.Confirm {
+			return true
+		}
+	}
+	return false
+}
+
+func isDataAccessSummaryConfirmationPayload(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var items []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err == nil {
+		for _, item := range items {
+			if item.ID == "data_access_summary_confirmation" {
+				return true
+			}
+		}
+	}
+	var wrapped struct {
+		Questions []struct {
+			ID string `json:"id"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err != nil {
+		return false
+	}
+	for _, item := range wrapped.Questions {
+		if item.ID == "data_access_summary_confirmation" {
+			return true
+		}
+	}
+	return false
 }
 
 // RepairFromFailure rewinds a failed test_verification, image_build, or
@@ -1197,6 +1505,44 @@ func (e *Executor) Cancel(ctx context.Context, jobID string) error {
 		return fmt.Errorf("cancel job: %w", err)
 	}
 	return nil
+}
+
+// RejectRequiredConfirmation fails a job that is paused waiting_user for a
+// required user confirmation (e.g. a deployment port confirmation). The user is
+// declining the requested confirmation, so the job cannot proceed: the waiting
+// step is marked failed with user_rejected_confirmation and the job is marked
+// failed. This is the user-driven counterpart to the auto-repair and retry
+// transitions — repair rewinds a failed gate, retry re-runs the failed command,
+// and reject abandons a waiting gate. Returns the refreshed job.
+func (e *Executor) RejectRequiredConfirmation(ctx context.Context, jobID, reason string) (*model.Job, error) {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, errors.New("job not found")
+	}
+	if job.Status != model.JobStatusWaitingUser {
+		return nil, errors.New("job is not waiting for user confirmation")
+	}
+	msg := strings.TrimSpace(reason)
+	if msg == "" {
+		msg = "用户拒绝必要确认"
+	}
+	step, err := e.store.GetStepByKind(ctx, job.ID, job.CurrentStepKind)
+	if err != nil {
+		return nil, err
+	}
+	if step != nil {
+		if err := e.store.MarkStepFailed(ctx, step.ID, model.ErrorUserRejectedConfirmation, msg); err != nil {
+			return nil, err
+		}
+	}
+	if err := e.store.MarkJobFailed(ctx, job.ID); err != nil {
+		return nil, err
+	}
+	e.notify(ctx, job.ID, "")
+	return e.store.GetJob(ctx, job.ID)
 }
 
 func (e *Executor) notify(ctx context.Context, jobID, stepID string) {

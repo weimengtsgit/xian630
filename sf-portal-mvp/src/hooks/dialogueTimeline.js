@@ -14,6 +14,8 @@
 // ignored. Blueprint refs / internal slugs / catalog availability never appear.
 
 import { buildThinkingByStepAttempt, thinkingKey } from './taskThinkingState.js';
+import { buildCollaborationExecutionGraphView } from './collaborationExecutionGraphState.js';
+import { isPreviewableArtifact } from '../utils/workbenchArtifact.js';
 
 export const initialDialogueState = () => ({
   selectedDialogueId: null,
@@ -68,6 +70,94 @@ export function statusText(status) {
   }
   if (status == null) return ''
   return map[status] || status
+}
+
+// SESSION_ERROR_PATTERNS maps known failure signals (HTTP status embedded in the
+// raw error, timeout, connection, output-contract) to a plain-Chinese
+// {title, detail, hint}. The raw error_message is operator-grade — often
+// `claude exit 1: {…}` wrapping an upstream API error — so describeSessionError
+// MUST NOT surface it verbatim. Order matters: most-specific first.
+const SESSION_ERROR_PATTERNS = [
+  {
+    match: /api_error_status["']?\s*[:=]\s*402|Insufficient Balance|余额不足/i,
+    title: '模型服务余额不足',
+    detail: '调用大模型服务时返回「账户余额不足」(HTTP 402)。',
+    hint: '请到对应模型服务控制台充值，或更换有余额的 API 密钥后重试。',
+  },
+  {
+    match: /api_error_status["']?\s*[:=]\s*401|Unauthorized|invalid[_ -]?key|鉴权失败|未授权/i,
+    title: '模型服务鉴权失败',
+    detail: 'API 密钥无效或已过期 (HTTP 401)。',
+    hint: '请检查 API 密钥（如 ANTHROPIC_AUTH_TOKEN）是否正确且未失效。',
+  },
+  {
+    match: /api_error_status["']?\s*[:=]\s*429|rate[_ -]?limit|Too Many Requests|限流/i,
+    title: '模型服务已限流',
+    detail: '请求频率或配额超出限制 (HTTP 429)。',
+    hint: '请稍后重试；若持续，可降低并发或更换额度更高的密钥。',
+  },
+  {
+    match: /api_error_status["']?\s*[:=]\s*5\d\d|Internal Server Error|Bad Gateway|服务(器)?异常/i,
+    title: '模型服务端异常',
+    detail: '模型服务返回了服务端错误 (5xx)。',
+    hint: '请稍后重试；若持续，请检查模型服务本身的可用性。',
+  },
+  {
+    match: /timeout|deadline exceeded|context deadline|调用超时|超时/i,
+    title: '模型服务调用超时',
+    detail: '调用模型服务未在限定时间内返回。',
+    hint: '请稍后重试；若持续，请检查网络或模型服务的响应速度。',
+  },
+  {
+    match: /dial tcp|no such host|connection refused|ECONN|网络不可达|无法连接/i,
+    title: '无法连接模型服务',
+    detail: '到模型服务的网络连接失败。',
+    hint: '请检查 ANTHROPIC_BASE_URL 是否正确，以及本机网络/代理是否可达。',
+  },
+  {
+    match: /output_invalid_json|output_missing|invalid JSON|无法解析|parse error|unexpected token/i,
+    title: '模型返回内容无法解析',
+    detail: '模型返回的内容不符合预期格式。',
+    hint: '请重试；若持续出现，可能是当前模型不满足所需的输出契约。',
+  },
+]
+
+// cleanSessionErrorMessage strips operator-grade wrappers (a leading
+// `claude exit N:` and trailing `: error_code`) and, when a JSON blob is
+// embedded, extracts its inner `result`/`error` text — so the fallback never
+// pastes `claude exit 1: {…}` verbatim. Output is collapsed + capped.
+function cleanSessionErrorMessage(raw) {
+  let s = String(raw || '')
+    .replace(/^claude exit \d+\s*:\s*/i, '')
+    .replace(/:\s*[a-z_]+$/i, '')
+  const jsonMatch = s.match(/\{[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const obj = JSON.parse(jsonMatch[0])
+      if (obj && typeof obj.result === 'string' && obj.result.trim()) s = obj.result
+      else if (obj && typeof obj.error === 'string' && obj.error.trim()) s = obj.error
+    } catch { /* keep the stripped text */ }
+  }
+  s = s.replace(/\s+/g, ' ').trim()
+  return s.length > 160 ? `${s.slice(0, 160)}…` : s
+}
+
+// describeSessionError translates a session failure (error_code + error_message,
+// as persisted by the backend) into a user-facing {title, detail, hint}. Returns
+// null when there is nothing to describe. This is the ONLY place session error
+// strings are turned into user copy; the workbench imports it (no inline maps).
+export function describeSessionError(errorCode, errorMessage) {
+  const raw = String(errorMessage || '')
+  if (!raw) return null
+  for (const p of SESSION_ERROR_PATTERNS) {
+    if (p.match.test(raw)) return { title: p.title, detail: p.detail, hint: p.hint }
+  }
+  const cleaned = cleanSessionErrorMessage(raw)
+  return {
+    title: '会话处理失败',
+    detail: cleaned ? `原因：${cleaned}` : '发生未知错误。',
+    hint: '可重试本轮；若持续失败，请检查服务配置或联系管理员。',
+  }
 }
 
 // titleForDialogue derives a short, human title from a session. It prefers an
@@ -146,6 +236,7 @@ export function buildTaskBlocks(steps, summary) {
       const latest = sm && (sm.latest_record || sm.latestRecord)
       const summaryText = latest && (latest.content || latest.text || latest.message) || ''
       const attention = STEP_ATTENTION_STATUSES.has(status)
+      const pendingQuestions = safeString(step.pending_questions || step.pendingQuestions)
       return {
         id: `taskblock_${step.job_id || step.jobId || ''}_${step.id}`,
         type: 'task_execution_block',
@@ -157,6 +248,9 @@ export function buildTaskBlocks(steps, summary) {
         status,
         summary: safeString(summaryText),
         error: safeString(step.error_message || step.errorMessage),
+        needsUserInput: !!(step.needs_user_input || step.needsUserInput),
+        pendingQuestions,
+        manualConfirmation: isManualStepConfirmation(pendingQuestions),
         startedAt: step.started_at || step.startedAt || '',
         endedAt: step.ended_at || step.endedAt || '',
         // safeExecution is populated by the builder from persisted work-trace
@@ -174,6 +268,57 @@ export function buildTaskBlocks(steps, summary) {
       if (sa !== sb) return sa - sb
       return a.stepId < b.stepId ? -1 : a.stepId > b.stepId ? 1 : 0
     })
+}
+
+function isManualStepConfirmation(raw) {
+  if (!raw) return false
+  try {
+    const items = JSON.parse(raw)
+    return Array.isArray(items) && items.some(item => item && item.type === 'manual_step_confirmation' && item.confirm)
+  } catch {
+    return false
+  }
+}
+
+// isRequirementConfirmPending decides whether the conversation workbench should
+// surface the 需求确认 card. After the requirement_analysis step finishes,
+// shouldAwaitManualStepConfirmation parks the job at waiting_user with a single
+// manual_step_confirmation (confirm:true, NO options) in pending_questions. The
+// pre-existing 「需求确认」button on the business_logic card relies on the
+// jobs.steps/focusTask/hydrate chain pushing card.state to
+// waiting_user_clarification, which does not reliably happen across the
+// clarification→job transition — so this card instead reads the seededJob the
+// dialogue view already carries (composeDialogueView always fills view.seededJob),
+// bypassing that chain. Returns null when the card should NOT render; otherwise
+// {jobId, stepId, requirement} so the caller can render the summary AND fire
+// confirmStep(jobId, stepId, 0) on click (ConfirmManualStep skips the attempt
+// check when attempt is 0, locating the step by stepId).
+export function isRequirementConfirmPending(view) {
+  const sj = view && view.seededJob
+  if (!sj) return null
+  if (sj.status !== 'waiting_user') return null
+  const stepKind = sj.current_step_kind || sj.currentStepKind
+  if (stepKind !== 'requirement_analysis') return null
+  const pq = Array.isArray(sj.pending_questions)
+    ? sj.pending_questions
+    : Array.isArray(sj.pendingQuestions) ? sj.pendingQuestions : null
+  // pending_questions is OPTIONAL: the job-detail endpoint aggregates it onto
+  // the job, but the dialogue view's seededJob (findJobForDialogue → GetJob)
+  // does not carry it. When present it MUST be a manual_step_confirmation (so a
+  // task clarification is never mistaken for the requirement gate); when absent
+  // stepId is null and the caller resolves it from jobs.steps. requirement is
+  // always surfaced when available so the card can render a summary regardless.
+  let stepId = null
+  if (pq) {
+    const ms = pq.find(q => q && q.type === 'manual_step_confirmation' && q.confirm)
+    if (!ms) return null
+    stepId = ms.stepId || null
+  }
+  return {
+    jobId: sj.id,
+    stepId,
+    requirement: (view.child && view.child.requirement) || null,
+  }
 }
 
 // stepSeq looks up a step's seq by id (dependency/execution order). Returns
@@ -223,6 +368,27 @@ function safeExecutionKey(stepId, attempt) {
     : `${stepId}::legacy`
 }
 
+// attachmentRefsByMessage groups the composed view's attachmentRefs by their
+// message_id (camel- or snake-cased), projecting each ref to the minimal shape
+// the timeline needs to render an attachment chip under a user message:
+// { id, active, name, previewKind }. Refs with no message id are dropped.
+function attachmentRefsByMessage(view) {
+  const refs = Array.isArray(view && view.attachmentRefs) ? view.attachmentRefs : []
+  const grouped = {}
+  for (const ref of refs) {
+    const messageId = safeString(ref.message_id || ref.messageId)
+    if (!messageId) continue
+    if (!grouped[messageId]) grouped[messageId] = []
+    grouped[messageId].push({
+      id: safeString(ref.id),
+      active: ref.active !== false,
+      name: safeString(ref.attachment && (ref.attachment.original_name || ref.attachment.originalName)),
+      previewKind: safeString(ref.attachment && (ref.attachment.preview_kind || ref.attachment.previewKind)),
+    })
+  }
+  return grouped
+}
+
 // buildDialogueTimeline maps a composed DialogueView to an ordered list of
 // semantic UI items. Items are plain objects; the workbench renders them. Every
 // item is built from EXPLICITLY NAMED fields so internal keys cannot leak.
@@ -238,6 +404,37 @@ function safeExecutionKey(stepId, attempt) {
 // the optimistic/persisted user message. It is SUPPRESSED when the persisted view
 // already carries an analysis_work_log for the round it represents — on completion
 // the persisted analysis (rendered FOLDED) is authoritative (D6).
+// appendArtifactLinks surfaces each produced analysis-stage workbench artifact
+// (需求文档 / 界面预览 / 数据方案 / 数据契约) as an `artifact_link` timeline item — a
+// clickable chip opening the same preview the graph card uses (openArtifact →
+// ProjectDocumentPreviewModal / InterfacePreviewModal). One per kind (latest by
+// updatedAt); only previewable artifacts are included, via the shared
+// isPreviewableArtifact predicate (the same one the graph card uses) so the
+// conversation chip and the card cannot diverge.
+const ARTIFACT_LINK_KINDS = ['project_document', 'interface_preview', 'data_access_plan', 'data_contract']
+const ARTIFACT_LINK_LABEL = { project_document: '需求文档', interface_preview: '界面预览', data_access_plan: '数据方案', data_contract: '数据契约' }
+
+function appendArtifactLinks(items, view) {
+  const artifacts = view && Array.isArray(view.workbenchArtifacts) ? view.workbenchArtifacts : []
+  const latest = {}
+  for (const art of artifacts) {
+    if (!art || !ARTIFACT_LINK_KINDS.includes(art.kind)) continue
+    if (!isPreviewableArtifact(art)) continue
+    const prev = latest[art.kind]
+    if (!prev || String(art.updatedAt || art.updated_at || '') > String(prev.updatedAt || prev.updated_at || '')) latest[art.kind] = art
+  }
+  for (const kind of ARTIFACT_LINK_KINDS) {
+    const art = latest[kind]
+    if (!art) continue
+    items.push({
+      id: `artifact_link_${kind}_${art.id || kind}`,
+      type: 'artifact_link',
+      artifact: art,
+      label: art.label || ARTIFACT_LINK_LABEL[kind] || kind,
+    })
+  }
+}
+
 export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAnalysis = null, liveThinking = null, workTraceItems = [], pendingTurn = null, jobStepBlocks = [], taskThinkingItems = []) {
   const items = []
   const parentMessages = view && Array.isArray(view.messages) ? view.messages : []
@@ -303,6 +500,8 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   const hasPersistedAnalysis = parentMessages.some(
     msg => msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output'),
   )
+  const route = view.route || {}
+  let routeThinkingRendered = false
 
   // Task-internal clarification answers are persisted as dialogue user messages
   // (kind=task_clarification_answer) so the answer becomes part of the normal
@@ -330,15 +529,48 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   }
 
   // 1. Parent thread: user messages + analysis work logs, in persisted order.
+  //    The INITIAL prompt (first non-task-clarification user message) renders in
+  //    place so it leads the thread. In the application-generation flow (which
+  //    carries a child clarification session) the first round's agent content
+  //    lives in the child, so the parent's later user messages + agent
+  //    thinking/analysis/reply are ITERATION turns: collect them into
+  //    postConfirmationItems and append AFTER the first-round clarification +
+  //    requirement-confirmation surface, so they never interleave with the first
+  //    round (they used to render right after the initial prompt, wedged before
+  //    the first-round clarification). Flows WITHOUT a child (routing, business)
+  //    keep parent agent content inline in persisted order.
+  const refsByMessage = attachmentRefsByMessage(view)
+  const hasChildClarification = !!(view.child && Array.isArray(view.child.messages) && view.child.messages.length)
+  const postConfirmationItems = []
+  const iterationTarget = hasChildClarification ? postConfirmationItems : items
+  let initialPromptRendered = false
+  const pushUserMessage = (target, msg) => target.push({
+    id: msg.id,
+    type: 'user_message',
+    content: safeString(msg.content),
+    attachments: refsByMessage[msg.id] || [],
+  })
   for (const msg of parentMessages) {
-    if (!msg || msg.role === 'user') {
-      if (msg && msg.role === 'user' && msg.kind !== 'task_clarification_answer') {
-        items.push({
-          id: msg.id,
-          type: 'user_message',
-          content: safeString(msg.content),
-        })
+    if (!msg) continue
+    if (msg.role === 'user') {
+      if (msg.kind === 'task_clarification_answer') continue
+      if (!initialPromptRendered) {
+        pushUserMessage(items, msg)
+        initialPromptRendered = true
+      } else {
+        pushUserMessage(iterationTarget, msg)
       }
+      continue
+    }
+    if (msg.role === 'agent' && msg.kind === 'thinking') {
+      routeThinkingRendered = true
+      iterationTarget.push({
+        id: msg.id,
+        type: 'thinking_summary',
+        content: safeString(msg.content),
+        summary: safeString(route.userFacingReason),
+        label: '思考摘要',
+      })
       continue
     }
     if (msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
@@ -346,7 +578,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       // renders as a collapsible block above the conclusion (`folded`), default
       // EXPANDED so the reasoning is visible without an extra click; the user
       // can collapse it via the toggle.
-      items.push({
+      iterationTarget.push({
         id: msg.id,
         type: 'analysis_stream',
         content: safeString(msg.content),
@@ -356,7 +588,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       continue
     }
     if (msg.role === 'agent' && (msg.kind === 'reply' || msg.kind === 'message')) {
-      items.push({
+      iterationTarget.push({
         id: msg.id,
         type: 'agent_message',
         content: safeString(msg.content),
@@ -370,7 +602,27 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   // content always appears after the latest persisted content — see below.
 
   // 2. Route choice cards when the intent is ambiguous (needs confirmation).
-  const route = view.route
+  if (statusIsRouting(view.session) && !(route && route.intent) && !(liveThinking && liveThinking.content) && !(liveAnalysis && liveAnalysis.content)) {
+    items.push({
+      id: `${view.session.id || 'dlg'}_route_pending_thinking`,
+      type: 'live_thinking',
+      content: '正在识别你的需求，并判断是复用已有应用还是生成新应用。',
+      summary: '',
+      pending: true,
+      kind: 'round',
+    })
+  }
+  if (route && route.needsRouteConfirmation && statusIsRouting(view.session) && route.intent && !routeThinkingRendered) {
+    const summary = safeString(route.userFacingReason)
+    items.push({
+      id: `${view.session.id || 'dlg'}_route_thinking_summary`,
+      type: 'thinking_summary',
+      content: '',
+      summary: summary || '已完成需求识别，等待用户确认下一步处理方式。',
+      label: '思考摘要',
+    })
+    routeThinkingRendered = true
+  }
   if (route && route.needsRouteConfirmation && statusIsRouting(view.session)) {
     items.push({
       id: `${view.session.id || 'dlg'}_route`,
@@ -412,8 +664,17 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
       id: `${view.session.id || 'dlg'}_collaboration_plan_preview`,
       type: 'collaboration_plan_preview',
       preview: collaborationPreview,
+      graph: buildCollaborationExecutionGraphView(collaborationPreview, jobStepBlocks),
     })
   }
+  // Iteration turns (after the initial prompt) append here — below the first
+  // round (clarification + requirement confirmation + collaboration plan) so
+  // they read as a continuation of the conversation, not interleaved with the
+  // first round.
+  if (hasChildClarification && postConfirmationItems.length > 0) {
+    items.push(...postConfirmationItems)
+  }
+  const suppressTaskBlocksInConversation = !!collaborationPreview
 
   // 5. Business-agent drafting surface.
   // 5a. Open business-draft clarifying questions (parent agent question messages
@@ -466,6 +727,9 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   if (Array.isArray(workTraceItems)) {
     const clarifications = workTraceItems
       .filter(it => it && it.type === 'clarification' && it.payload && Array.isArray(it.payload.questions) && it.payload.questions.length > 0)
+      // Skip prototype_confirmation clarifications — the prototype dock in the
+      // conversation workbench handles the design_contract step's confirmation UI.
+      .filter(it => !it.payload.questions.some(q => q && q.id === 'prototype_confirmation'))
       .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
     for (const c of clarifications) {
       const seq = c.sequence || 0
@@ -531,7 +795,7 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
   //      jobStepBlocks comes from hook state and must remain immutable/pure.
   let absorbedStepId = null
   const pushedClarificationIds = new Set()
-  if (taskBlocks.length > 0) {
+  if (taskBlocks.length > 0 && !suppressTaskBlocksInConversation) {
     const safeExecutionByStepAttempt = buildSafeExecutionByStepAttempt(workTraceItems)
     const thinkingByStepAttempt = buildThinkingByStepAttempt(taskThinkingItems)
     const liveStepId = liveAnalysis && liveAnalysis.kind === 'step' && liveAnalysis.key
@@ -617,7 +881,14 @@ export function buildDialogueTimeline(view, optimisticUserMessage = null, liveAn
     })
   }
 
-  // 6. Resolved outcome (application / agent / seeded job).
+  // 6. Workbench artifact links: surface each produced analysis-stage artifact
+  // (需求文档 / 界面预览 / 数据方案 / 数据契约) as a clickable chip that opens the same
+  // preview the graph card uses (openArtifact). One per kind (latest); only
+  // previewable artifacts, matching the card's isPreviewableArtifact filter so
+  // the conversation chip and the card stay consistent.
+  appendArtifactLinks(items, view)
+
+  // 7. Resolved outcome (application / agent / seeded job).
   appendResolvedOutcome(items, view)
 
   // 7. System status for terminal non-resolved states.
@@ -729,6 +1000,7 @@ function appendChildItems(items, child, parentSession) {
         id: `${parentSession.id || 'dlg'}_analysis_round_${bucket.round}`,
         type: 'analysis_stream',
         content: bucket.entries.join('\n\n'),
+        rawThinking: bucket.rawThinking || '',
         folded: true,
         expanded: true,
         label: `分析过程 · 第${bucket.round}轮`,
@@ -745,17 +1017,16 @@ function appendChildItems(items, child, parentSession) {
     if (msg && msg.role === 'agent' && (msg.kind === 'analysis_work_log' || msg.kind === 'model_output')) {
       if (msg.content) {
         const analysis = safeString(msg.content)
-        if (pendingThinking) {
-          items.push({
-            id: pendingThinking.id || `${parentSession.id || 'dlg'}_thinking_round_${pendingThinking.round}`,
-            type: 'thinking_summary',
-            content: pendingThinking.content,
-            summary: analysis,
-            label: `思考摘要 · 第${pendingThinking.round}轮`,
-          })
+        if (!bucket) bucket = { round, entries: [], rawThinking: '' }
+        // The round's raw thinking (kind='thinking') is the 原始思考过程. Attach
+        // it to the 分析过程 block as a collapsible drill-down instead of a
+        // separate 思考摘要 block — that block's summary just restated this same
+        // analysis, so keeping both duplicated the text. Keep the round's first
+        // thinking; flushPendingThinking still handles the rare no-analysis case.
+        if (pendingThinking && !bucket.rawThinking) {
+          bucket.rawThinking = pendingThinking.content
           pendingThinking = null
         }
-        if (!bucket) bucket = { round, entries: [] }
         bucket.entries.push(analysis)
       }
       prevWasUser = false

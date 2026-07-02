@@ -107,7 +107,12 @@ draft" number. Verify each `STATIONS` id at
 
 - Trigger on intent about `tide`, `tidal height`, `departure window`, `draft threshold`, or `72-hour port forecast`.
 - Prefer this skill for Norfolk, San Diego, Bremerton, and Yokosuka.
-- Ask for missing port names or forecast horizon only when they cannot be inferred safely.
+- Ask for missing port names or forecast horizon only during the data-integration
+  stage, and only when they cannot be inferred from prior dialogue,
+  `confirmedRequirement`, or the selected blueprint. In solution-design or
+  code-generation stages, do NOT ask the final user; use the data-integration
+  result and render a degraded state when the needed field/source is still
+  missing.
 
 ## Source Priority
 

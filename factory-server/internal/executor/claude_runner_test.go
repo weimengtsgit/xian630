@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/weimengtsgit/xian630/factory-server/internal/dataaccess"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/runner"
 	"github.com/weimengtsgit/xian630/factory-server/internal/store"
@@ -19,6 +21,35 @@ type fakeClaudeCommand struct {
 	t         *testing.T
 	workspace string
 	output    map[string]any
+}
+
+type captureInputClaudeCommand struct {
+	t      *testing.T
+	output map[string]any
+	input  string
+}
+
+func (f *captureInputClaudeCommand) Run(_ context.Context, dir string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, "", name, args...)
+}
+
+func (f *captureInputClaudeCommand) RunWithInput(_ context.Context, dir, input string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, input, name, args...)
+}
+
+func (f *captureInputClaudeCommand) run(dir, input, name string, args ...string) (runner.CommandResult, error) {
+	if name == "git" {
+		return runner.CommandResult{ExitCode: 0}, nil
+	}
+	f.input = input
+	raw, err := json.MarshalIndent(f.output, "", "  ")
+	if err != nil {
+		f.t.Fatalf("marshal output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "output.json"), raw, 0o644); err != nil {
+		f.t.Fatalf("write output.json: %v", err)
+	}
+	return runner.CommandResult{ExitCode: 0, Stdout: "ok"}, nil
 }
 
 func (f fakeClaudeCommand) Run(_ context.Context, dir string, name string, args ...string) (runner.CommandResult, error) {
@@ -66,6 +97,51 @@ func (f fakeClaudeCommand) run(dir string, name string, args ...string) (runner.
 		if err := os.WriteFile(filepath.Join(appDir, ".factory", "app.json"), []byte(manifest), 0o644); err != nil {
 			f.t.Fatalf("write manifest: %v", err)
 		}
+	}
+	return runner.CommandResult{ExitCode: 0, Stdout: "ok"}, nil
+}
+
+type prototypeClaudeCommand struct {
+	t      *testing.T
+	output map[string]any
+}
+
+func (f prototypeClaudeCommand) Run(_ context.Context, dir string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f prototypeClaudeCommand) RunWithInput(_ context.Context, dir string, _ string, name string, args ...string) (runner.CommandResult, error) {
+	return f.run(dir, name, args...)
+}
+
+func (f prototypeClaudeCommand) run(dir string, name string, args ...string) (runner.CommandResult, error) {
+	if name == "git" {
+		return runner.CommandResult{ExitCode: 0}, nil
+	}
+	raw, err := json.MarshalIndent(f.output, "", "  ")
+	if err != nil {
+		f.t.Fatalf("marshal output: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "output.json"), raw, 0o644); err != nil {
+		f.t.Fatalf("write output.json: %v", err)
+	}
+	protoDir := filepath.Join(dir, "prototype")
+	if err := os.MkdirAll(protoDir, 0o755); err != nil {
+		f.t.Fatalf("mkdir prototype: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(protoDir, "index.html"), []byte("<!doctype html><title>原型</title><main>首页原型</main>"), 0o644); err != nil {
+		f.t.Fatalf("write index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(protoDir, "styles.css"), []byte("body{margin:0}"), 0o644); err != nil {
+		f.t.Fatalf("write css: %v", err)
+	}
+	manifest := `{"mode":"static_prototype","defaultPage":"home","fidelity":"static","pages":[{"id":"home","title":"首页","file":"prototype/index.html","generated":true,"visibleByDefault":true}]}`
+	if err := os.WriteFile(filepath.Join(protoDir, "preview-manifest.json"), []byte(manifest), 0o644); err != nil {
+		f.t.Fatalf("write manifest: %v", err)
+	}
+	contract := `{"prototypeStatus":"unconfirmed_reference","downstreamConstraintLevel":"reference","immutable":false,"prototype":{"style":"ued_review","targetAudience":"ued","targetPlatform":"responsive","fidelity":"static","defaultPage":"home","confirmationPolicy":"unconfirmed_reference","pages":[{"id":"home","title":"首页","generated":true,"visibleByDefault":true}]}}`
+	if err := os.WriteFile(filepath.Join(protoDir, "prototype-contract.json"), []byte(contract), 0o644); err != nil {
+		f.t.Fatalf("write contract: %v", err)
 	}
 	return runner.CommandResult{ExitCode: 0, Stdout: "ok"}, nil
 }
@@ -146,6 +222,493 @@ func TestClaudeStepRunnerRegistersGeneratedAppFromCodeGenerationOutput(t *testin
 	}
 }
 
+func TestClaudeStepRunnerPersistsDataAccessPendingConfirmation(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"summary":        "已完成数据接入探测",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion": 1,
+				"stage":         "data_access",
+				"version":       "v1",
+				"status":        "pending_confirmation",
+				"canFinalize":   true,
+				"credentialRefs": []any{
+					map[string]any{"id": "cred_1", "authType": "bearer", "value": "secret-token", "redactionRequired": true},
+				},
+				"summary": map[string]any{"confirmed": []any{"用户接口可用"}},
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n\nAuthorization: Bearer secret-token\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("result = %+v, want waiting_user summary confirmation", res)
+	}
+	if len(res.Questions) != 1 || res.Questions[0].ID != "data_access_summary_confirmation" {
+		t.Fatalf("questions = %+v, want data access summary confirmation", res.Questions)
+	}
+	versionDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "data-access", "versions", "v1")
+	internalRaw, err := os.ReadFile(filepath.Join(versionDir, "dataAccessResult.internal.json"))
+	if err != nil {
+		t.Fatalf("read internal result: %v", err)
+	}
+	if !bytes.Contains(internalRaw, []byte("secret-token")) {
+		t.Fatalf("internal result should preserve credential: %s", internalRaw)
+	}
+	redactedRaw, err := os.ReadFile(filepath.Join(versionDir, "dataAccessResult.redacted.json"))
+	if err != nil {
+		t.Fatalf("read redacted result: %v", err)
+	}
+	if bytes.Contains(redactedRaw, []byte("secret-token")) {
+		t.Fatalf("redacted result leaked credential: %s", redactedRaw)
+	}
+	refs, err := st.ListWorkbenchArtifactRefsByJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("workbench refs len = %d, want one data access plan ref: %+v", len(refs), refs)
+	}
+	if refs[0].CardKey != "data_capture" || refs[0].Kind != model.WorkbenchArtifactDataAccessPlan || refs[0].Label != "数据方案" {
+		t.Fatalf("data access plan ref = %+v", refs[0])
+	}
+	if refs[0].Path != "jobs/"+job.ID+"/data-access/versions/v1/data-access.redacted.md" {
+		t.Fatalf("data access plan path = %q", refs[0].Path)
+	}
+}
+
+func TestClaudeStepRunnerAcceptsNarrativeDataAccessFields(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion":  1,
+				"stage":          "data_access",
+				"version":        "v1",
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []any{},
+				"sourceInputs": []any{
+					map[string]any{
+						"type": "confirmedRequirement",
+						"ref":  "job_claude_1",
+						"keyFields": map[string]any{
+							"dataPolicy": "mock_data",
+						},
+					},
+				},
+				"dataAccessMode": "mock_data",
+				"dataNeeds": []any{
+					map[string]any{
+						"entity": "TodoTask",
+						"label":  "待办任务",
+						"requiredFields": []any{
+							map[string]any{"field": "id", "type": "string", "required": true},
+							map[string]any{"field": "title", "type": "string", "required": true},
+						},
+					},
+				},
+				"sourceCandidates": []any{
+					map[string]any{
+						"sourceId":   "local_storage",
+						"sourceType": "browser_storage",
+						"label":      "浏览器本地存储",
+						"priority":   1,
+					},
+				},
+				"fieldMappings": []any{
+					map[string]any{
+						"entity":   "TodoTask",
+						"sourceId": "local_storage",
+						"mappings": []any{
+							map[string]any{"targetField": "title", "sourceExpression": "用户输入", "transform": "直接存储"},
+						},
+					},
+				},
+				"codegenConstraints": []any{
+					map[string]any{"id": "mock_label", "description": "界面必须标注演示数据", "severity": "blocking"},
+				},
+				"summary": "本需求使用 mock_data，数据存储在浏览器 localStorage。",
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n\n## 1 输入依据\nmock_data\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("result = %+v, want waiting_user summary confirmation", res)
+	}
+	versionDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "data-access", "versions", "v1")
+	internalRaw, err := os.ReadFile(filepath.Join(versionDir, "dataAccessResult.internal.json"))
+	if err != nil {
+		t.Fatalf("read internal result: %v", err)
+	}
+	if !bytes.Contains(internalRaw, []byte("TodoTask")) || !bytes.Contains(internalRaw, []byte("界面必须标注演示数据")) {
+		t.Fatalf("normalized data access result lost load-bearing fields: %s", internalRaw)
+	}
+}
+
+func TestClaudeStepRunnerAcceptsConvertibleDataAccessVersionFields(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion":  "1.0.0",
+				"stage":          "data_access",
+				"version":        1,
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []any{},
+				"dataAccessMode": "mock_only",
+				"dataNeeds": []any{
+					map[string]any{"entity": "TaskItem", "fields": []any{"id", "content"}},
+				},
+				"sourceCandidates": []any{
+					map[string]any{"id": "mock_client_state", "type": "mock", "label": "客户端 Mock", "priority": 1},
+				},
+				"summary": "mock 数据方案已闭环。",
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n\n## 1 输入依据\n需求文档与原型预览\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("result = %+v, want waiting_user summary confirmation", res)
+	}
+	versionDir := filepath.Join(ws, ".factory-runs", "jobs", job.ID, "data-access", "versions", "1")
+	if _, err := os.Stat(filepath.Join(versionDir, "data-access.redacted.md")); err != nil {
+		t.Fatalf("data access version markdown not written: %v", err)
+	}
+	internalRaw, err := os.ReadFile(filepath.Join(versionDir, "dataAccessResult.internal.json"))
+	if err != nil {
+		t.Fatalf("read internal result: %v", err)
+	}
+	if !bytes.Contains(internalRaw, []byte(`"schemaVersion": 1`)) || !bytes.Contains(internalRaw, []byte(`"version": "1"`)) {
+		t.Fatalf("converted schemaVersion/version not persisted as strong contract fields: %s", internalRaw)
+	}
+}
+
+func TestClaudeStepRunnerRejectsIncompleteDataAccessResult(t *testing.T) {
+	cases := []struct {
+		name   string
+		result map[string]any
+		md     string
+	}{
+		{
+			name: "missing markdown",
+			result: map[string]any{
+				"schemaVersion": 1,
+				"stage":         "data_access",
+				"version":       "v1",
+				"status":        "pending_confirmation",
+				"canFinalize":   true,
+			},
+		},
+		{
+			name: "blocking issues cannot finalize",
+			result: map[string]any{
+				"schemaVersion":  1,
+				"stage":          "data_access",
+				"version":        "v1",
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []string{"缺少鉴权"},
+			},
+			md: "# 数据获取方案\n",
+		},
+		{
+			name: "non confirmation status",
+			result: map[string]any{
+				"schemaVersion": 1,
+				"stage":         "data_access",
+				"version":       "v1",
+				"status":        "unsupported",
+				"canFinalize":   false,
+			},
+			md: "# 数据获取方案\n",
+		},
+		{
+			name: "missing version",
+			result: map[string]any{
+				"schemaVersion": 1,
+				"stage":         "data_access",
+				"status":        "pending_confirmation",
+				"canFinalize":   true,
+			},
+			md: "# 数据获取方案\n",
+		},
+		{
+			name: "missing schema version",
+			result: map[string]any{
+				"stage":       "data_access",
+				"version":     "v1",
+				"status":      "pending_confirmation",
+				"canFinalize": true,
+			},
+			md: "# 数据获取方案\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newClaudeRunnerTestStore(t)
+			ws := t.TempDir()
+			output := map[string]any{
+				"status":           "passed",
+				"needsUserInput":   false,
+				"questions":        []any{},
+				"workLog":          []any{},
+				"warnings":         []any{},
+				"dataAccessResult": tc.result,
+			}
+			if tc.md != "" {
+				output["dataAccessMarkdown"] = tc.md
+			}
+			cmd := fakeClaudeCommand{t: t, workspace: ws, output: output}
+			r := &ClaudeStepRunner{
+				Store:        st,
+				Workspace:    ws,
+				ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+				Claude:       &runner.ClaudeRunner{Runner: cmd},
+				AuditRunner:  cmd,
+			}
+			job, step := claudeJobStep(model.StepDataIntegration)
+			if err := st.CreateJob(context.Background(), job); err != nil {
+				t.Fatalf("create job: %v", err)
+			}
+
+			res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorSchemaValidationFailed {
+				t.Fatalf("result = %+v, want schema validation failure", res)
+			}
+			if _, err := os.Stat(filepath.Join(ws, ".factory-runs", "jobs", job.ID, "data-access", "versions", "v1", "dataAccessResult.internal.json")); !os.IsNotExist(err) {
+				t.Fatalf("invalid data access output should not write a version, stat err=%v", err)
+			}
+		})
+	}
+}
+
+func TestClaudeStepRunnerInjectsFinalDataAccessIntoDownstreamInput(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	artifactRoot := filepath.Join(ws, ".factory-runs")
+	result := dataaccess.Result{
+		SchemaVersion: 1,
+		Stage:         "data_access",
+		Version:       "v1",
+		Status:        dataaccess.StatusPendingConfirmation,
+		CanFinalize:   true,
+		Summary:       dataaccess.Summary{Confirmed: []string{"接口可用"}},
+	}
+	if _, err := dataaccess.WriteVersion(artifactRoot, "job_claude_1", result, "# 数据获取方案\n"); err != nil {
+		t.Fatalf("WriteVersion: %v", err)
+	}
+	if err := dataaccess.FinalizeVersion(artifactRoot, "job_claude_1", "v1", "tester"); err != nil {
+		t.Fatalf("FinalizeVersion: %v", err)
+	}
+	storedJob, _ := claudeJobStep(model.StepSolutionDesign)
+	if err := st.CreateJob(context.Background(), storedJob); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	cases := []struct {
+		kind   model.StepKind
+		output map[string]any
+	}{
+		{
+			kind: model.StepSolutionDesign,
+			output: map[string]any{
+				"needsUserInput": false,
+				"questions":      []any{},
+				"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+				"workLog":        []any{},
+			},
+		},
+		{
+			kind: model.StepCodeGeneration,
+			output: map[string]any{
+				"projectDir":     "generated-apps/demo",
+				"createdFiles":   []string{"generated-apps/demo/.factory/app.json"},
+				"needsUserInput": false,
+				"questions":      []any{},
+				"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+				"warnings":       []string{},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			cmd := &captureInputClaudeCommand{t: t, output: tc.output}
+			r := &ClaudeStepRunner{
+				Store:        st,
+				Workspace:    ws,
+				ArtifactRoot: artifactRoot,
+				Claude:       &runner.ClaudeRunner{Runner: cmd},
+				AuditRunner:  cmd,
+			}
+			job, step := claudeJobStep(tc.kind)
+			job.ConfirmedRequirementJSON = `{"generationProfile":{"base":["software-factory-app"]}}`
+			if tc.kind == model.StepCodeGeneration {
+				appDir := filepath.Join(ws, "generated-apps", "demo")
+				if err := os.MkdirAll(filepath.Join(appDir, ".factory"), 0o755); err != nil {
+					t.Fatalf("mkdir app factory: %v", err)
+				}
+				manifest := `{
+  "schemaVersion": 1,
+  "slug": "demo",
+  "name": "Demo Generated App",
+  "type": "timeline-replay",
+  "source": "generated",
+  "description": "generated by test",
+  "entry": "static-vite",
+  "path": "generated-apps/demo",
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}`
+				if err := os.WriteFile(filepath.Join(appDir, ".factory", "app.json"), []byte(manifest), 0o644); err != nil {
+					t.Fatalf("write manifest: %v", err)
+				}
+			}
+
+			res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.Status != model.StepStatusSucceeded {
+				t.Fatalf("result = %+v, want succeeded", res)
+			}
+			inputRaw, err := os.ReadFile(filepath.Join(artifactRoot, "jobs", job.ID, string(step.Kind), "attempt-1", "input.json"))
+			if err != nil {
+				t.Fatalf("read input.json: %v", err)
+			}
+			if !bytes.Contains(inputRaw, []byte(`"dataAccess"`)) || !bytes.Contains(inputRaw, []byte(`data-access/final/dataAccessResult.internal.json`)) {
+				t.Fatalf("%s input missing final dataAccess paths:\n%s", step.Kind, inputRaw)
+			}
+		})
+	}
+}
+
+func TestClaudeStepRunnerBlocksDownstreamWithoutFinalDataAccess(t *testing.T) {
+	for _, kind := range []model.StepKind{model.StepSolutionDesign, model.StepCodeGeneration} {
+		t.Run(string(kind), func(t *testing.T) {
+			st := newClaudeRunnerTestStore(t)
+			ws := t.TempDir()
+			cmd := &captureInputClaudeCommand{
+				t: t,
+				output: map[string]any{
+					"needsUserInput": false,
+					"questions":      []any{},
+					"usedSkills":     []string{".claude/skills/software-factory-app/SKILL.md"},
+					"workLog":        []any{},
+				},
+			}
+			r := &ClaudeStepRunner{
+				Store:        st,
+				Workspace:    ws,
+				ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+				Claude:       &runner.ClaudeRunner{Runner: cmd},
+				AuditRunner:  cmd,
+			}
+			job, step := claudeJobStep(kind)
+			job.ConfirmedRequirementJSON = `{"generationProfile":{"base":["software-factory-app"]}}`
+			job.CollaborationPlanJSON = `{"schemaVersion":1}`
+			if err := st.CreateJob(context.Background(), job); err != nil {
+				t.Fatalf("create job: %v", err)
+			}
+			if err := st.CreateJobStep(context.Background(), model.JobStep{
+				ID: "step_data", JobID: job.ID, Kind: model.StepDataIntegration, Seq: 1, Status: model.StepStatusSucceeded,
+			}); err != nil {
+				t.Fatalf("create data step: %v", err)
+			}
+			if err := st.CreateJobStep(context.Background(), step); err != nil {
+				t.Fatalf("create downstream step: %v", err)
+			}
+
+			res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if res.Status != model.StepStatusFailed || res.ErrorCode != model.ErrorSchemaValidationFailed {
+				t.Fatalf("result = %+v, want schema failure for missing finalized data access", res)
+			}
+			if cmd.input != "" {
+				t.Fatalf("claude command should not run when data access final is missing")
+			}
+		})
+	}
+}
+
 func TestClaudeStepRunnerPassesRepairContextToCodeGeneration(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
@@ -198,6 +761,205 @@ func TestClaudeStepRunnerPassesRepairContextToCodeGeneration(t *testing.T) {
 	}
 }
 
+func TestDesignContractWaitsForPrototypeConfirmation(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := prototypeClaudeCommand{t: t, output: map[string]any{
+		"status":            "passed",
+		"summary":           "首页静态原型已生成，等待用户确认。",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{"name"},
+		"prototype": map[string]any{
+			"style":              "ued_review",
+			"targetAudience":     "ued",
+			"targetPlatform":     "responsive",
+			"fidelity":           "static",
+			"defaultPage":        "home",
+			"confirmationPolicy": "unconfirmed_reference",
+			"pages": []any{map[string]any{
+				"id": "home", "title": "首页", "generated": true, "visibleByDefault": true,
+			}},
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	}}
+	r := &ClaudeStepRunner{Store: st, Workspace: ws, ArtifactRoot: filepath.Join(ws, ".factory-runs"), Claude: &runner.ClaudeRunner{Runner: cmd}, AuditRunner: cmd}
+	job, step := claudeJobStep(model.StepDesignContract)
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusWaitingUser || !res.NeedsUserInput {
+		t.Fatalf("status = %s needsInput=%v, want waiting_user true", res.Status, res.NeedsUserInput)
+	}
+	if len(res.Questions) == 0 || !strings.Contains(res.Questions[0].Question, "确认原型") {
+		t.Fatalf("questions = %+v, want prototype confirmation", res.Questions)
+	}
+	refs, err := st.ListWorkbenchArtifactRefsByJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListWorkbenchArtifactRefsByJob: %v", err)
+	}
+	if len(refs) != 1 || refs[0].Status != "unconfirmed" {
+		t.Fatalf("prototype refs = %+v, want one unconfirmed ref", refs)
+	}
+}
+
+func TestDataIntegrationPromptReferencesRequirementDocAndPrototype(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	cmd := fakeClaudeCommand{
+		t:         t,
+		workspace: ws,
+		output: map[string]any{
+			"status":         "passed",
+			"needsUserInput": false,
+			"questions":      []any{},
+			"workLog":        []any{},
+			"warnings":       []any{},
+			"dataAccessResult": map[string]any{
+				"schemaVersion":  1,
+				"stage":          "data_access",
+				"version":        "v1",
+				"status":         "pending_confirmation",
+				"canFinalize":    true,
+				"blockingIssues": []any{},
+			},
+			"dataAccessMarkdown": "# 数据获取方案\n",
+		},
+	}
+	r := &ClaudeStepRunner{
+		Store:        st,
+		Workspace:    ws,
+		ArtifactRoot: filepath.Join(ws, ".factory-runs"),
+		Claude:       &runner.ClaudeRunner{Runner: cmd},
+		AuditRunner:  cmd,
+	}
+	job, step := claudeJobStep(model.StepDataIntegration)
+	job.AppSlug = "demo-app"
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	protoPath := "jobs/" + job.ID + "/design_contract/attempt-1/prototype/preview-manifest.json"
+	if err := st.UpsertWorkbenchArtifactRef(context.Background(), model.WorkbenchArtifactRef{
+		ID: "warf_proto", JobID: job.ID, StepID: "step_design", CardKey: "interface_parsing",
+		Kind: model.WorkbenchArtifactInterfacePreview, Label: "原型预览", Path: protoPath,
+		Status: "confirmed", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("UpsertWorkbenchArtifactRef: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), job, step, runner.NopEmitter{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	promptRaw, err := os.ReadFile(filepath.Join(ws, ".factory-runs", "jobs", job.ID, string(model.StepDataIntegration), "attempt-1", "prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	prompt := string(promptRaw)
+	for _, want := range []string{
+		"需求文档",
+		filepath.Join(ws, "generated-apps", "demo-app", "docs", "01-requirements.md"),
+		"原型预览",
+		filepath.Join(ws, ".factory-runs", filepath.FromSlash(protoPath)),
+		filepath.Join(ws, ".factory-runs", "jobs", job.ID, "design_contract", "attempt-1", "prototype", "prototype-contract.json"),
+		"作为数据需求、字段映射和代码生成输入的主要依据",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestDesignContractPromptUsesPrototypeDesignSkill(t *testing.T) {
+	ws := runner.AttemptWorkspace{
+		Root:     t.TempDir(),
+		JobID:    "job_design_contract_prompt",
+		StepKind: model.StepDesignContract,
+		Attempt:  1,
+	}
+	job, step := claudeJobStep(model.StepDesignContract)
+	prompt := collaborationProducerPrompt(job, step, ws)
+
+	for _, want := range []string{
+		"原型设计协作智能体",
+		".claude/skills/prototype-design/SKILL.md",
+		"先 Read 并严格遵循项目本地 skill",
+		"prototype 必须描述静态原型页面方案",
+		"默认 fidelity=static",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("design contract prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "设计契约") {
+		t.Fatalf("design contract prompt should use 原型设计 terminology, got:\n%s", prompt)
+	}
+}
+
+func TestDesignContractBusinessDesignHandoffUsesLatestRequirementAttempt(t *testing.T) {
+	st := newClaudeRunnerTestStore(t)
+	ws := t.TempDir()
+	job, step := claudeJobStep(model.StepDesignContract)
+	job.ID = "job_business_handoff_latest"
+	step.JobID = job.ID
+	if err := st.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := st.CreateJobStep(context.Background(), model.JobStep{
+		ID:      "step_requirement_latest",
+		JobID:   job.ID,
+		Kind:    model.StepRequirementAnalysis,
+		Seq:     1,
+		Status:  model.StepStatusSucceeded,
+		Attempt: 3,
+	}); err != nil {
+		t.Fatalf("create requirement step: %v", err)
+	}
+	artifactRoot := filepath.Join(ws, ".factory-runs")
+	for attempt, summary := range map[int]string{
+		1: "旧业务设计方案",
+		3: "最新业务设计方案",
+	} {
+		dir := filepath.Join(artifactRoot, "jobs", job.ID, string(model.StepRequirementAnalysis), "attempt-"+strconv.Itoa(attempt))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw := []byte(`{"summary":"` + summary + `"}`)
+		if err := os.WriteFile(filepath.Join(dir, "output.json"), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &ClaudeStepRunner{Store: st, ArtifactRoot: artifactRoot}
+
+	handoff, err := r.businessDesignHandoff(job, step)
+	if err != nil {
+		t.Fatalf("businessDesignHandoff: %v", err)
+	}
+	if !strings.Contains(handoff.ArtifactPath, "attempt-3/output.json") {
+		t.Fatalf("artifact path = %q, want latest attempt-3", handoff.ArtifactPath)
+	}
+	if !bytes.Contains(handoff.Content, []byte("最新业务设计方案")) || bytes.Contains(handoff.Content, []byte("旧业务设计方案")) {
+		t.Fatalf("business design content = %s", handoff.Content)
+	}
+}
+func TestGenericCollaborationProducerPromptDoesNotUsePrototypeSkill(t *testing.T) {
+	ws := runner.AttemptWorkspace{Root: t.TempDir(), JobID: "job_domain_prompt", StepKind: model.StepDomainAnalysis, Attempt: 1}
+	job, step := claudeJobStep(model.StepDomainAnalysis)
+	prompt := collaborationProducerPrompt(job, step, ws)
+
+	if strings.Contains(prompt, ".claude/skills/prototype-design/SKILL.md") {
+		t.Fatalf("domain analysis prompt must not load prototype skill:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "领域分析协作智能体") {
+		t.Fatalf("domain analysis prompt lost generic producer wording:\n%s", prompt)
+	}
+}
 func TestCodeGenerationPromptUsesWorkspaceAndAbsoluteArtifactPaths(t *testing.T) {
 	workspace := t.TempDir()
 	artifactRoot := filepath.Join(t.TempDir(), ".factory-runs")
@@ -266,10 +1028,9 @@ func TestCodeGenerationPromptInjectsCarrierOntologyFieldContract(t *testing.T) {
 	}
 }
 
-// TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: as of Task 5 the
-// requirement_analysis step FREEZES the confirmed requirement. It must NEVER
-// return waiting_user (clarification is pre-job now): a frozen output whose
-// validation reports complete=false fails the step with schema_validation_failed.
+// TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected: requirement_analysis
+// may ask structured high-impact questions, but an explicit validation rejection
+// still fails the step with schema_validation_failed.
 func TestClaudeStepRunnerFailsRequirementAnalysisWhenRejected(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
@@ -327,6 +1088,11 @@ func TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen(t *testing.T) {
 			"summary":                "frozen ok",
 			"appType":                "timeline-replay",
 			"appName":                "demo",
+			"coreScenario":           "复盘航迹",
+			"primaryView":            "地图+时间轴",
+			"mainEntities":           []string{"编队", "事件"},
+			"dataPolicy":             "mock_data",
+			"acceptanceFocus":        []string{"轨迹联动"},
 			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
 			"validation": map[string]any{
 				"complete":            true,
@@ -344,6 +1110,11 @@ func TestClaudeStepRunnerSucceedsRequirementAnalysisWhenFrozen(t *testing.T) {
 		AuditRunner:  cmd,
 	}
 	job, step := claudeJobStep(model.StepRequirementAnalysis)
+	// The Task-6 consistency gate compares the frozen output's summary-critical
+	// fields against the job's ConfirmedRequirementJSON. Seed a confirmed
+	// requirement whose picked fields match the fakeClaudeCommand output above
+	// (summary/appType/appName) so the freeze passes the consistency check.
+	job.ConfirmedRequirementJSON = `{"summary":"frozen ok","appType":"timeline-replay","appName":"demo","coreScenario":"复盘航迹","primaryView":"地图+时间轴","mainEntities":["编队","事件"],"dataPolicy":"mock_data","acceptanceFocus":["轨迹联动"]}`
 
 	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
@@ -369,8 +1140,8 @@ func TestRequirementAnalysisPromptForcesRawJSONOnly(t *testing.T) {
 		"Simplified Chinese",
 		"Do not call ExitPlanMode",
 		"Do not use code fences",
-		"Do not add any prose before or after the JSON",
-		"Factory saves stdout as output.json",
+		"only write the final JSON object to output.json",
+		"The output.json file must contain raw JSON only",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("requirement_analysis prompt missing %q:\n%s", want, prompt)
@@ -530,6 +1301,11 @@ func TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies(t *t
 			"summary":                "ok",
 			"appType":                "timeline-replay",
 			"appName":                "demo",
+			"coreScenario":           "复盘航迹",
+			"primaryView":            "地图+时间轴",
+			"mainEntities":           []string{"编队", "事件"},
+			"dataPolicy":             "mock_data",
+			"acceptanceFocus":        []string{"轨迹联动"},
 			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
 			"validation": map[string]any{
 				"complete":            true,
@@ -552,6 +1328,12 @@ func TestClaudeStepRunnerKeepsOperationalFilesIntactAndRegistersAuditCopies(t *t
 	// operational input.json and proves the audit copy redacts it while the
 	// operational file keeps it verbatim.
 	job.UserPrompt = "需求：生成应用。附 DB_PASSWORD=hunter2-leak 用于测试脱敏。"
+	// Seed a confirmed requirement whose picked summary-critical fields match
+	// the fakeClaudeCommand output (summary/appType/appName) so the Task-6
+	// consistency gate passes and the step succeeds. Without this the guard
+	// coerces an empty ConfirmedRequirementJSON to "{}", which mismatches the
+	// frozen output and fails the step before the redaction invariants can run.
+	job.ConfirmedRequirementJSON = `{"summary":"ok","appType":"timeline-replay","appName":"demo","coreScenario":"复盘航迹","primaryView":"地图+时间轴","mainEntities":["编队","事件"],"dataPolicy":"mock_data","acceptanceFocus":["轨迹联动"]}`
 
 	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
 	if err != nil {
@@ -789,12 +1571,12 @@ func TestClaudeStepRunnerEmitsSafeTracesFromStream(t *testing.T) {
 	}
 }
 
-// TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput asserts that
-// when the agent signals NeedsUserInput (high-impact uncertainty), the claude
-// step runner emits a clarification.required trace BEFORE returning the
-// waiting_user status. The trigger is deterministic (NeedsUserInput=true +
-// Questions), testable via a fake output.
-func TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput(t *testing.T) {
+// TestCodeGenerationDowngradesDisallowedClarification asserts that
+// code_generation is not allowed to pause for user clarification. If it asks
+// despite having produced the required files, the runner ignores the question
+// and continues; missing data must be handled by the generated app's degraded
+// state rather than ending the task as waiting_user.
+func TestCodeGenerationDowngradesDisallowedClarification(t *testing.T) {
 	st := newClaudeRunnerTestStore(t)
 	ws := t.TempDir()
 	cmd := fakeStreamCodegenCommand{
@@ -829,15 +1611,67 @@ func TestClaudeStepRunnerEmitsClarificationRequiredOnNeedsUserInput(t *testing.T
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Status != model.StepStatusWaitingUser {
-		t.Fatalf("status = %s, want waiting_user", res.Status)
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s), want succeeded", res.Status, res.ErrorMessage)
 	}
-	if !trace.hasType(string(model.WorkTraceClarification)) {
-		t.Errorf("no clarification trace emitted on NeedsUserInput; events=%#v", trace.events)
+	if trace.hasType(string(model.WorkTraceClarification)) {
+		t.Errorf("clarification trace emitted for disallowed code_generation question; events=%#v", trace.events)
 	}
-	if !trace.payloadContaining("数据源用哪个") {
-		t.Errorf("clarification payload missing the question: %#v", trace.events)
+	if !trace.hasType(string(model.WorkTraceAssumption)) {
+		t.Errorf("no downgrade assumption trace emitted; events=%#v", trace.events)
 	}
+}
+
+func TestCollaborationProducerDowngradesDisallowedQuestion(t *testing.T) {
+	path := writeExecutorOutputJSON(t, `{
+		"status": "needs_input",
+		"needsUserInput": true,
+		"questions": [{"id":"q1","question":"还要确认什么？"}]
+	}`)
+	out, err := validateCollaborationProducer(model.StepDomainAnalysis, path)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if out.NeedsUserInput {
+		t.Fatal("NeedsUserInput = true, want downgraded false")
+	}
+	if len(out.Questions) != 0 {
+		t.Fatalf("questions = %d, want downgraded empty", len(out.Questions))
+	}
+	if len(out.Warnings) == 0 {
+		t.Fatal("Warnings empty, want downgrade warning")
+	}
+}
+
+func TestCollaborationProducerAllowsDesignAndDataQuestions(t *testing.T) {
+	for _, kind := range []model.StepKind{model.StepDesignContract, model.StepDataIntegration} {
+		t.Run(string(kind), func(t *testing.T) {
+			path := writeExecutorOutputJSON(t, `{
+				"status": "needs_input",
+				"needsUserInput": true,
+				"questions": [{"id":"q1","question":"请选择确认项","options":[{"value":"a","label":"选项A"}]}]
+			}`)
+			out, err := validateCollaborationProducer(kind, path)
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if !out.NeedsUserInput {
+				t.Fatal("NeedsUserInput = false, want true")
+			}
+			if len(out.Questions) != 1 {
+				t.Fatalf("questions = %d, want 1", len(out.Questions))
+			}
+		})
+	}
+}
+
+func writeExecutorOutputJSON(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "output.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write output.json: %v", err)
+	}
+	return path
 }
 
 // TestClaudeStepRunnerEmitsWorkLogAsDialogueTrace (Task 4) asserts that the

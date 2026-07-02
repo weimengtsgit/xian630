@@ -5,6 +5,8 @@
 // entries that JobCenter renders instead of the fixed six-step matrix when a
 // plan is present. Framework-free so the Node assertion harness can import it.
 
+import { collaborationAgentName } from './collaborationAgentLabels.js'
+
 export function buildCollaborationCardView(steps = [], summary = [], planResponse = null) {
   const plan = planResponse && planResponse.plan
   const planAgents = plan && Array.isArray(plan.agents) ? plan.agents : []
@@ -29,7 +31,7 @@ export function buildCollaborationCardView(steps = [], summary = [], planRespons
         const stepId = step && step.id ? step.id : null
         return {
           kind: step ? step.kind : agent.role,
-          label: agent.name,
+          label: collaborationAgentName(agent),
           agent,
           stepId,
           step,

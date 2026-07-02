@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { SessionNav } from './components/SessionNav'
@@ -35,6 +35,7 @@ function App() {
   const [sessionNavCollapsed, setSessionNavCollapsed] = useState(false)
   const [drawerEntry, setDrawerEntry] = useState(null)
   const [currentPage, setCurrentPage] = useState('workbench')
+  const [taskStepOpenRequest, setTaskStepOpenRequest] = useState(null)
   const workbenchClass = [
     'workbench',
     sessionNavCollapsed ? 'session-nav-collapsed' : '',
@@ -47,14 +48,6 @@ function App() {
   useEffect(() => {
     dialogue.setJobsForFocus(jobs.jobs)
   }, [jobs.jobs, dialogue.setJobsForFocus])
-
-  // Feed the active task's step/summary state into the dialogue hook so the
-  // conversation timeline can render a task_execution_block per executing step
-  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
-  // low-frequency change (useJobs refresh on SSE step.updated).
-  useEffect(() => {
-    dialogue.setJobStepBlocks(buildTaskBlocks(jobs.steps, jobs.summary))
-  }, [jobs.steps, jobs.summary, dialogue.setJobStepBlocks])
 
   // The 任务执行 drawer shows ALL generation tasks for the selected dialogue,
   // defaulting to the focus task (plan §Task Execution Drawer). The drawer's
@@ -69,6 +62,41 @@ function App() {
   const effectiveTaskId = selectedTaskId || (dialogue.focusTask && dialogue.focusTask.id) || null
   const activeJob =
     dialogueJobs.find(j => j.id === effectiveTaskId) || dialogue.focusTask || null
+  const activeJobId = activeJob && activeJob.id
+  const scopedTraceSteps = useMemo(() => {
+    if (!activeJobId) return []
+    const list = Array.isArray(jobs.steps) ? jobs.steps : []
+    return list.filter(step => {
+      const stepJobId = step && (step.job_id || step.jobId || '')
+      return !stepJobId || stepJobId === activeJobId
+    })
+  }, [jobs.steps, activeJobId])
+
+  // Feed the active task's step/summary state into the dialogue hook so the
+  // conversation timeline can render a task_execution_block per executing step
+  // (Phase 3). buildTaskBlocks is pure; the hook rebuilds the timeline on this
+  // low-frequency change (useJobs refresh on SSE step.updated).
+  useEffect(() => {
+    dialogue.setJobStepBlocks(buildTaskBlocks(scopedTraceSteps, jobs.summary))
+  }, [scopedTraceSteps, jobs.summary, dialogue.setJobStepBlocks])
+
+  // Prototype dock reactivity: when useJobs receives step.updated /
+  // artifact.created SSE it refreshes jobs.artifacts, but the dialogue view
+  // (view.workbenchArtifacts) is only refreshed on dialogue.* events. Bridge
+  // the gap so the cw-prototype-dock appears immediately when a design step
+  // transitions to waiting_user and projects an interface_preview artifact —
+  // without requiring a page refresh.
+  const initialArtifactsLoadedRef = useRef(false)
+  useEffect(() => {
+    if (!initialArtifactsLoadedRef.current) {
+      initialArtifactsLoadedRef.current = true
+      return
+    }
+    if (dialogue.selectedDialogueId && dialogue.refreshSelectedView) {
+      dialogue.refreshSelectedView()
+    }
+  }, [jobs.artifacts, dialogue.selectedDialogueId, dialogue.refreshSelectedView])
+
   const [selectedClarificationScope, setSelectedClarificationScope] = useState(null)
   const openClarifications = useMemo(() => {
     const items = Array.isArray(dialogue.timeline) ? dialogue.timeline : []
@@ -149,13 +177,35 @@ function App() {
     setDrawerEntry(prev => (prev === entry ? null : entry))
   }
 
-  // The 应用项目 entry is disabled until the current dialogue has a concrete
+  const openTaskStepFromGraph = useCallback(card => {
+    const stepId = card && card.stepId
+    if (!stepId) return
+    const sm = (Array.isArray(jobs.summary) ? jobs.summary : []).find(item => item && item.step_id === stepId)
+    const step = (Array.isArray(jobs.steps) ? jobs.steps : []).find(item => item && item.id === stepId)
+    const attempt =
+      (sm && (sm.attempt ?? sm.latest_attempt)) ??
+      (step && (step.attempt ?? step.latest_attempt)) ??
+      (card.step && (card.step.attempt ?? card.step.latest_attempt)) ??
+      1
+    const taskId = (step && (step.job_id || step.jobId)) || (card.step && (card.step.job_id || card.step.jobId)) || ''
+    if (taskId) setSelectedTaskId(taskId)
+    setDrawerEntry('task')
+    jobs.selectStepAttempt(stepId, attempt)
+    setTaskStepOpenRequest({ stepId, attempt, requestedAt: Date.now() })
+  }, [jobs.summary, jobs.steps, jobs.selectStepAttempt])
+
+  // The 工作空间 entry is disabled until the current dialogue has a concrete
   // generated application id. A seeded job alone can exist before code_generation
   // has registered the project, so it is not enough to enable the drawer.
   const view = dialogue.view
+  // applicationProjectId resolves to the registered app ID (post-codegen), the
+  // job's bound app ID, or the bare AppSlug (pre-codegen). The slug is enough
+  // for the workspace backend to resolve generated-apps/<slug>/ and serve the
+  // projected docs (需求文档 etc.) before a full Application record exists.
   const applicationProjectId =
     (view && view.resolvedApplication && view.resolvedApplication.id) ||
     (view && view.seededJob && (view.seededJob.application_id || view.seededJob.created_app_id)) ||
+    (view && view.seededJob && view.seededJob.app_slug) ||
     ''
   const hasBoundApplication = !!applicationProjectId
 
@@ -197,27 +247,70 @@ function App() {
               focusTask={dialogue.focusTask}
               clarificationScope={activeClarification}
               onSelectClarificationScope={onSelectClarificationScope}
-              traceSteps={jobs.steps}
+              traceSteps={scopedTraceSteps}
               drawerEntry={drawerEntry}
               onToggleDrawerEntry={toggleDrawerEntry}
+              onOpenTaskStep={openTaskStepFromGraph}
+              onConfirmTaskStep={jobs.confirmStep}
+              onConfirmDataAccess={jobs.confirmDataAccess}
               hasBoundApplication={hasBoundApplication}
-              onSend={prompt => {
+              onSend={(prompt, options = {}) => {
                 if (activeClarification) {
                   return jobs.answerJob(activeClarification.taskId, prompt, {
                     stepId: activeClarification.stepId,
                     attempt: activeClarification.attempt,
+                    attachmentIds: options.attachmentIds || [],
                   })
                 }
                 if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
-                  return jobs.answerJob(dialogue.focusTask.id, prompt)
+                  return jobs.answerJob(dialogue.focusTask.id, prompt, { attachmentIds: options.attachmentIds || [] })
                 }
-                return dialogue.send(prompt)
+                return dialogue.send(prompt, options)
               }}
               onSelectRoute={dialogue.selectRoute}
               onOpenApp={dialogue.openApp}
               onAnswerBatch={dialogue.answerBatch}
               onAcceptConsolidation={dialogue.acceptConsolidation}
               onConfirm={dialogue.confirm}
+              // 卡片确认要按等待类型分流：需求确认是手工步骤确认，数据方案确认走
+              // 数据专用确认接口，普通澄清/原型兼容回复才走 answerJob。
+              onConfirmCard={cardOrKey => {
+                const card = cardOrKey && typeof cardOrKey === 'object' ? cardOrKey : null
+                const cardKey = card ? card.key : cardOrKey
+                const CONFIRM_ANSWER = {
+                  business_logic: '需求确认',
+                  interface_parsing: '界面确认',
+                  data_capture: '数据确认',
+                  production_delivery: '确认生产交付并继续',
+                }
+                const answer = CONFIRM_ANSWER[cardKey] || '确认并继续'
+                const waitingStep = card && Array.isArray(card.steps)
+                  ? card.steps.find(step => step && step.status === 'waiting_user')
+                  : null
+                const pendingQuestions = parsePendingQuestionsForConfirm(waitingStep)
+                if (waitingStep && pendingQuestions.some(q => q.type === 'manual_step_confirmation' && q.confirm)) {
+                  return jobs.confirmStep(waitingStep.job_id || waitingStep.jobId, waitingStep.id || waitingStep.stepId, waitingStep.attempt)
+                }
+                const dataQuestion = pendingQuestions.find(q => q.id === 'data_access_summary_confirmation')
+                if (waitingStep && dataQuestion) {
+                  return jobs.confirmDataAccess(waitingStep.job_id || waitingStep.jobId, waitingStep.id || waitingStep.stepId, {
+                    version: dataQuestion.defaultAnswer || '',
+                    attempt: waitingStep.attempt,
+                  })
+                }
+                const prototypeQuestion = pendingQuestions.find(q => q.id === 'prototype_confirmation')
+                const reply = prototypeQuestion ? '确定原型并继续' : answer
+                if (activeClarification) {
+                  return jobs.answerJob(activeClarification.taskId, reply, {
+                    stepId: activeClarification.stepId,
+                    attempt: activeClarification.attempt,
+                  })
+                }
+                if (dialogue.focusTask && dialogue.focusTask.status === 'waiting_user') {
+                  return jobs.answerJob(dialogue.focusTask.id, reply, {})
+                }
+                return dialogue.confirm()
+              }}
               onRetry={dialogue.retry}
               onAbandon={dialogue.abandon}
               onCancelTurn={dialogue.cancelTurn}
@@ -258,6 +351,7 @@ function App() {
               selectedStepId: jobs.selectedStepId,
               selectedAttempt: jobs.selectedAttempt,
               selectStepAttempt: jobs.selectStepAttempt,
+              stepOpenRequest: taskStepOpenRequest,
               getRecords: jobs.getRecords,
               getUnreadCount: jobs.getUnreadCount,
               loadStepRecords: jobs.loadStepRecords,
@@ -283,6 +377,7 @@ function App() {
           loading={apps.loading}
           error={apps.error}
           actionById={apps.actionById}
+          generationStats={apps.generationStats}
           refresh={apps.refresh}
           startApplication={apps.startApplication}
           stopApplication={apps.stopApplication}
@@ -293,6 +388,20 @@ function App() {
       ) : null}
     </main>
   )
+}
+
+function parsePendingQuestionsForConfirm(step) {
+  if (!step) return []
+  const raw = step.pending_questions || step.pendingQuestions || ''
+  if (!raw) return []
+  try {
+    const value = JSON.parse(raw)
+    if (Array.isArray(value)) return value
+    if (value && Array.isArray(value.questions)) return value.questions
+  } catch (_) {
+    return []
+  }
+  return []
 }
 
 export default App

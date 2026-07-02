@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -13,6 +13,7 @@ import { StepCard, STAGE_LABELS } from './StepCard'
 import { StepExecutionDrawer } from './StepExecutionDrawer'
 import { buildStepCardView } from '../hooks/executionRecordState'
 import { buildCollaborationCardView } from './../hooks/collaborationPlanState'
+import { collaborationAgentName } from '../hooks/collaborationAgentLabels'
 import './JobCenter.css'
 
 // Fixed ordered step kinds (design §4). Same six stages, fixed order.
@@ -73,6 +74,7 @@ export function JobCenter({
   selectedStepId,
   selectedAttempt,
   selectStepAttempt,
+  stepOpenRequest,
   getRecords,
   getUnreadCount,
   loadStepRecords,
@@ -92,6 +94,12 @@ export function JobCenter({
   const multiTask = dialogueJobs.length > 1
   const [taskView, setTaskView] = useState('list')
   const view = multiTask ? taskView : 'detail'
+
+  useEffect(() => {
+    if (!stepOpenRequest || !stepOpenRequest.stepId) return
+    setTaskView('detail')
+    setDrawerOpen(true)
+  }, [stepOpenRequest])
 
   // Resolve each fixed step kind to its REAL job_steps.id, then join its
   // summary. The backend execution-summary is keyed by step_id (NOT kind), so
@@ -181,6 +189,11 @@ export function JobCenter({
   const selectedSummary = selectedStepId ? summaryByStepId[selectedStepId] : null
   const selectedStageLabel = selectedStepId
     ? (() => {
+        for (const group of collaborationLanes) {
+          const collaborationEntry = group.cards.find(v => v.stepId === selectedStepId)
+          if (collaborationEntry && collaborationEntry.label) return collaborationEntry.label
+          if (collaborationEntry && collaborationEntry.agent) return collaborationAgentName(collaborationEntry.agent)
+        }
         const entry = cardView.find(v => v.stepId === selectedStepId)
         if (entry && entry.label) return entry.label
         if (entry && entry.kind) return STAGE_LABELS[entry.kind] || entry.kind

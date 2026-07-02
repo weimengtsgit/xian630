@@ -13,6 +13,7 @@ type Plan struct {
 	SchemaVersion           int                `json:"schemaVersion"`
 	Mode                    string             `json:"mode"`
 	Lanes                   []Lane             `json:"lanes"`
+	ExecutionPolicy         ExecutionPolicy    `json:"executionPolicy"`
 	RepairPolicy            RepairPolicy       `json:"repairPolicy"`
 	Agents                  []Agent            `json:"agents"`
 	Edges                   []Edge             `json:"edges"`
@@ -28,6 +29,10 @@ type Lane struct {
 type RepairPolicy struct {
 	MaxAutomaticRepairs                  int `json:"maxAutomaticRepairs"`
 	MaxAutomaticRepairsPerBlockingReason int `json:"maxAutomaticRepairsPerBlockingReason"`
+}
+
+type ExecutionPolicy struct {
+	ManualStepConfirmation bool `json:"manualStepConfirmation"`
 }
 
 type Agent struct {
@@ -84,10 +89,8 @@ type AdjustmentRequest struct {
 
 func DefaultPlan(ctx RequirementContext) Plan {
 	agents := []Agent{
-		agent("collaboration-orchestrator", "协作编排", "collaboration_orchestration", "analysis", false, "生成默认协作计划、解释选择依据、记录用户调整。", "根据确认需求摘要生成协作计划，并记录用户调整。", nil),
 		agent("requirement-analyst", "需求分析", "requirement_analysis", "analysis", true, "整理用户需求并形成确认需求摘要。", "校验确认需求摘要完整性和高影响事项。", nil),
-		agent("domain-analyst", "领域分析", "domain_analysis", "analysis", false, "注入领域知识和客户判断口径。", "解释生成能力包、场景蓝本、数据来源边界和客户判断口径。", nil),
-		agent("designer", "设计", "design_contract", "analysis", false, "产出结构化设计契约。", "输出视图、布局、组件、交互状态、数据绑定和响应式约束。", []string{"defense-operations-ui", "command-dashboard"}),
+		agent("designer", "界面设计", "design_contract", "analysis", false, "产出结构化设计契约。", "输出视图、布局、组件、交互状态、数据绑定和响应式约束。", []string{"defense-operations-ui", "command-dashboard"}),
 		agent("data-integration", "数据接入", "data_integration", "analysis", true, "产出真实数据接入计划和演示数据契约。", "区分真实数据来源、运行时连接器、不可用数据行为和演示数据契约。", nil),
 		agent("solution-designer", "方案设计", "solution_design", "generation", false, "形成技术方案、文件计划和实现边界。", "汇总需求、领域、设计和数据契约。", nil),
 		agent("code-generator", "代码生成", "code_generation", "generation", true, "写入应用代码并生成 manifest。", "根据确认需求和契约生成可构建应用。", []string{"software-factory-app"}),
@@ -98,11 +101,8 @@ func DefaultPlan(ctx RequirementContext) Plan {
 		agent("deployer", "部署", "deployment", "delivery", true, "部署容器并完成健康验证。", "部署应用并验证运行时健康。", nil),
 	}
 	edges := []Edge{
-		{"collaboration-orchestrator", "requirement-analyst"},
-		{"requirement-analyst", "domain-analyst"},
 		{"requirement-analyst", "designer"},
 		{"requirement-analyst", "data-integration"},
-		{"domain-analyst", "solution-designer"},
 		{"designer", "solution-designer"},
 		{"data-integration", "solution-designer"},
 		{"solution-designer", "code-generator"},
@@ -124,9 +124,10 @@ func DefaultPlan(ctx RequirementContext) Plan {
 			{"generation", "生成 / 审查 / 修复"},
 			{"delivery", "验证 / 构建 / 部署"},
 		},
-		RepairPolicy: RepairPolicy{MaxAutomaticRepairs: 2, MaxAutomaticRepairsPerBlockingReason: 1},
-		Agents:       agents,
-		Edges:        edges,
+		ExecutionPolicy: executionPolicyFromRequirement(ctx.ConfirmedRequirementJSON),
+		RepairPolicy:    RepairPolicy{MaxAutomaticRepairs: 2, MaxAutomaticRepairsPerBlockingReason: 1},
+		Agents:          agents,
+		Edges:           edges,
 	}
 	return applyAdjustments(plan, adjustmentsFromRequirement(ctx.ConfirmedRequirementJSON))
 }
@@ -178,6 +179,19 @@ func adjustmentsFromRequirement(raw string) []AdjustmentRequest {
 		return nil
 	}
 	return doc.CollaborationAdjustments
+}
+
+func executionPolicyFromRequirement(raw string) ExecutionPolicy {
+	if strings.TrimSpace(raw) == "" {
+		return ExecutionPolicy{}
+	}
+	var doc struct {
+		ExecutionPolicy ExecutionPolicy `json:"executionPolicy"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return ExecutionPolicy{}
+	}
+	return doc.ExecutionPolicy
 }
 
 func applyAdjustments(plan Plan, requests []AdjustmentRequest) Plan {

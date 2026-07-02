@@ -401,3 +401,20 @@ func mapClarificationToDialogueStatus(cs model.ClarificationStatus) model.Dialog
 		return model.DialogueStatusDraftingApplication
 	}
 }
+
+// ReconcileDialogueClarificationFailures repairs already-linked dialogue rows
+// whose child clarification failed before the parent status was synchronized.
+func (s *Store) ReconcileDialogueClarificationFailures(ctx context.Context) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET status = 'failed',
+    error_code = COALESCE((SELECT c.error_code FROM clarification_sessions c WHERE c.id = dialogue_sessions.clarification_session_id), error_code),
+    error_message = COALESCE((SELECT c.error_message FROM clarification_sessions c WHERE c.id = dialogue_sessions.clarification_session_id), error_message),
+    updated_at = ?
+WHERE status = 'drafting_application'
+  AND clarification_session_id IN (
+      SELECT id FROM clarification_sessions WHERE status = 'failed'
+  )`, now)
+	return err
+}

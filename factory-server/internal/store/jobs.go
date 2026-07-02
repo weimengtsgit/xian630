@@ -261,16 +261,6 @@ func (s *Store) GetJob(ctx context.Context, id string) (*model.Job, error) {
 	return j, nil
 }
 
-// UpdateJobConfirmedRequirement stores the latest server-finalized requirement
-// JSON for a job. Requirement-analysis steps may refine the confirmed
-// requirement after the job is created; downstream steps read this frozen value.
-func (s *Store) UpdateJobConfirmedRequirement(ctx context.Context, jobID, confirmedRequirementJSON string) error {
-	_, err := s.db.ExecContext(ctx, `
-UPDATE jobs SET confirmed_requirement_json = ?, updated_at = ? WHERE id = ?`,
-		confirmedRequirementJSON, ms(time.Now()), jobID)
-	return err
-}
-
 // ListJobs returns jobs ordered newest-first. When status is non-empty the
 // result is restricted to jobs in that status.
 func (s *Store) ListJobs(ctx context.Context, status string) ([]model.Job, error) {
@@ -553,6 +543,35 @@ UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
 	return err
 }
 
+// UpdateJobConfirmedRequirement stores the canonical frozen requirement emitted
+// by requirement_analysis. Later steps and the dialogue workbench read this
+// field as the current requirement snapshot for the job.
+func (s *Store) UpdateJobConfirmedRequirement(ctx context.Context, jobID, requirementJSON string) error {
+	now := ms(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE jobs SET confirmed_requirement_json = ?, updated_at = ? WHERE id = ?`,
+		requirementJSON, now, jobID); err != nil {
+		return err
+	}
+	var clarificationID string
+	if err := tx.QueryRowContext(ctx, `SELECT clarification_session_id FROM jobs WHERE id = ?`, jobID).Scan(&clarificationID); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if clarificationID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE clarification_sessions SET requirement_json = ?, updated_at = ? WHERE id = ?`,
+			requirementJSON, now, clarificationID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // SetJobCreatedApp links a job to the application its code_generation step
 // produced: it stamps created_app_id, app_slug and app_name and bumps updated_at.
 // It is called by the fake-claude (and, later, the real claude) runner after it
@@ -585,6 +604,20 @@ WHERE id = ?`, appID, string(model.DialogueStatusTaskRunning), string(model.Dial
 	return tx.Commit()
 }
 
+// DialogueOwnsJobWithSlug reports whether the dialogue owns a generating job
+// whose app_slug matches slug. Used pre-codegen — before SetJobCreatedApp stamps
+// resolved_application_id — to authorize project-file access for a task_running
+// job whose Application row does not exist yet. Slugs carry a random suffix, so
+// cross-dialogue slug collision is not a practical concern.
+func (s *Store) DialogueOwnsJobWithSlug(ctx context.Context, dialogueID, slug string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM jobs WHERE dialogue_id = ? AND app_slug = ?`, dialogueID, slug).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // GetLatestJobForApplication returns the newest job that produced or targets
 // appID. Revision confirmation reuses its server-confirmed requirement rather
 // than accepting a requirement payload from the browser.
@@ -597,6 +630,28 @@ ORDER BY created_at DESC LIMIT 1`, appID, appID)
 		return nil, nil
 	}
 	return j, err
+}
+
+// ListJobsForApplication returns every job that produced or targets appID,
+// ordered by creation time from oldest to newest.
+func (s *Store) ListJobsForApplication(ctx context.Context, appID string) ([]model.Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobSelectCols+`
+FROM jobs WHERE application_id = ? OR created_app_id = ?
+ORDER BY created_at ASC`, appID, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]model.Job, 0)
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *j)
+	}
+	return out, rows.Err()
 }
 
 // MarkStepRunning flips a step to running, bumps attempt, and stamps started_at
@@ -618,12 +673,14 @@ func (s *Store) IncrementStepAttempt(ctx context.Context, stepID string) error {
 	return err
 }
 
-// MarkStepSucceeded flips a step to succeeded with ended_at.
-func (s *Store) MarkStepSucceeded(ctx context.Context, stepID string) error {
+// MarkStepSucceeded flips a step to succeeded with ended_at + the agent's
+// human-readable summary (from output.json) so the workbench's agent blocks
+// can surface 思考摘要.
+func (s *Store) MarkStepSucceeded(ctx context.Context, stepID, summary string) error {
 	now := ms(time.Now())
 	_, err := s.db.ExecContext(ctx, `
-UPDATE job_steps SET status = ?, ended_at = ? WHERE id = ?`,
-		string(model.StepStatusSucceeded), now, stepID)
+UPDATE job_steps SET status = ?, ended_at = ?, needs_user_input = 0, pending_questions = '', summary = ? WHERE id = ?`,
+		string(model.StepStatusSucceeded), now, summary, stepID)
 	return err
 }
 
@@ -643,6 +700,18 @@ func (s *Store) MarkStepWaitingUser(ctx context.Context, stepID, questionsJSON s
 	_, err := s.db.ExecContext(ctx, `
 UPDATE job_steps SET status = ?, needs_user_input = 1, pending_questions = ?, ended_at = NULL WHERE id = ?`,
 		string(model.StepStatusWaitingUser), questionsJSON, stepID)
+	return err
+}
+
+// MarkStepAwaitingManualConfirmation pauses a completed step before downstream
+// execution. The step remains waiting_user because the next transition depends
+// on an explicit operator action, but ended_at is stamped to reflect that the
+// runner finished and only the handoff confirmation is outstanding.
+func (s *Store) MarkStepAwaitingManualConfirmation(ctx context.Context, stepID, questionsJSON string) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE job_steps SET status = ?, needs_user_input = 1, pending_questions = ?, ended_at = ? WHERE id = ?`,
+		string(model.StepStatusWaitingUser), questionsJSON, now, stepID)
 	return err
 }
 

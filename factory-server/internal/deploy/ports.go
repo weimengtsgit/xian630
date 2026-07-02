@@ -1,7 +1,11 @@
 package deploy
 
 import (
+	"context"
 	"errors"
+	"net"
+	"regexp"
+	"strconv"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 )
@@ -48,4 +52,37 @@ func (a Allocator) Choose(isUsed func(int) bool) (int, error) {
 	}
 
 	return 0, ErrPortUnavailable
+}
+
+// HostTCPPortInUse reports whether the host loopback TCP port is already bound.
+// 这里作为数据库部署记录之外的运行时兜底：旧容器或外部进程可能仍占用端口。
+func HostTCPPortInUse(port int) bool {
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return true
+	}
+	_ = ln.Close()
+	return false
+}
+
+var publishedHostPortRe = regexp.MustCompile(`:([0-9]+)->`)
+
+// PublishedHostPorts asks the configured runtime for already published host
+// ports. 这是 Podman machine 场景的兜底：端口可能在运行时内已占用，但 DB 没有记录。
+func PublishedHostPorts(ctx context.Context, runner CommandRunner, runtimeName string) map[int]bool {
+	ports := map[int]bool{}
+	if runner == nil || runtimeName == "" {
+		return ports
+	}
+	res, err := runner.Run(ctx, "", runtimeName, "ps", "--format", "{{.Ports}}")
+	if err != nil || res.ExitCode != 0 {
+		return ports
+	}
+	for _, match := range publishedHostPortRe.FindAllStringSubmatch(res.Stdout, -1) {
+		port, err := strconv.Atoi(match[1])
+		if err == nil {
+			ports[port] = true
+		}
+	}
+	return ports
 }

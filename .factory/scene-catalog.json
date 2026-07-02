@@ -9,6 +9,7 @@
     "carrier-formation-replay": { "surface": "application", "order": 6 },
     "aircraft-carrier-track": { "surface": "application", "order": 7 },
     "east-sea-situation": { "surface": "application", "order": 8 },
+    "seasats-test-craft-monitor": { "surface": "application", "order": 9 },
     "intention-analysis-intelligent-agent": {
       "surface": "managed_agent",
       "order": 1,
