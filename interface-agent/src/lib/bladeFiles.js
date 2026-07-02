@@ -1,4 +1,4 @@
-import { Blob } from 'node:buffer';
+import crypto from 'node:crypto';
 import nodeFetch from 'node-fetch';
 import { createTimeoutSignal } from './deepseek.js';
 
@@ -94,17 +94,24 @@ export function createBladeFileClient(config, fetchImpl = globalThis.fetch || no
         }
       }
 
-      const form = new FormData();
-      const data = new Blob([Buffer.from(String(content), 'utf8')], {
-        type: 'text/html;charset=utf-8',
-      });
-      form.append('files', data, name);
+      // 手动构建 multipart/form-data 请求体（字段名 `files`），避免使用
+      // Node 18+ 才有的全局 FormData。部署环境为 Node 16，没有全局 FormData。
+      const boundary = `----NodeBladeUpload${crypto.randomBytes(8).toString('hex')}`;
+      const preamble = Buffer.from(
+        `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="files"; filename="${name}"\r\n` +
+          `Content-Type: text/html; charset=utf-8\r\n\r\n`,
+        'utf8',
+      );
+      const fileBytes = Buffer.from(String(content), 'utf8');
+      const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+      const body = Buffer.concat([preamble, fileBytes, epilogue]);
 
       const search = new URLSearchParams({ path: directory });
       const response = await fetchImpl(`${url('/upload')}?${search}`, {
         method: 'POST',
-        headers: authHeaders(),
-        body: form,
+        headers: authHeaders({ 'Content-Type': `multipart/form-data; boundary=${boundary}` }),
+        body,
         signal: createTimeoutSignal(timeoutMs),
       });
       const checked = await check(response);
