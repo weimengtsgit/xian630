@@ -136,7 +136,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
 
   return (
     <div className="application-project-panel">
-      <section className="app-project-groups">
+      <section className="app-project-groups sf-scroll">
         <header className="app-project-title">
           <strong>{tree?.app?.name || '工作空间'}</strong>
           {loadingTree ? <Loader2 size={13} className="spin" /> : null}
@@ -155,7 +155,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
         ))}
       </section>
 
-      <section className="app-project-preview">
+      <section className="app-project-preview sf-scroll">
         {loadingPreview ? <p className="app-project-empty"><Loader2 size={13} className="spin" /> 加载预览...</p> : null}
         {previewError ? <p className="app-project-error">{previewError}</p> : null}
         {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} continueDraftFromStaleContent={continueDraftFromStaleContent} draftSaving={draftSaving} /> : null}

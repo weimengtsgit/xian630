@@ -545,7 +545,7 @@ export function ConversationWorkbench({
         />
       ) : null}
 
-      <div ref={cwBodyScrollRef} className="cw-body" onScroll={updateWorkbenchBodyFollowState}>
+      <div ref={cwBodyScrollRef} className="cw-body sf-scroll" onScroll={updateWorkbenchBodyFollowState}>
         {timeline.map(item => (
           <TimelineItem
             key={item.id}
@@ -1236,7 +1236,7 @@ function TaskExecutionBlock({ item }) {
                 <h5>任务思考过程{item.taskThinkingRedacted ? <em className="cw-redacted-note">已脱敏/截断</em> : null}</h5>
                 <pre
                   ref={taskThinkingScrollRef}
-                  className="cw-live-text cw-task-thinking-scroll"
+                  className="cw-live-text cw-task-thinking-scroll sf-scroll"
                   onScroll={updateTaskThinkingFollowState}
                 >{taskThinking}</pre>
               </section>

@@ -16,10 +16,20 @@ assert.doesNotMatch(
   'agent panel must not paint a fake scrollbar because it looks draggable but cannot scroll',
 )
 
+// Task 5: scrollbar styling is no longer duplicated per-file. The .panel-content
+// scroll container now gets its scrollbar from the shared .sf-scroll utility
+// (defined once in App.css, covering both ::-webkit-scrollbar and the Firefox
+// scrollbar-width shorthand). Assert the class is applied in JSX rather than a
+// private CSS rule.
 assert.match(
+  jsx,
+  /className="panel-content sf-scroll"/,
+  'agent panel .panel-content must carry the shared sf-scroll class for scrollbar styling',
+)
+assert.doesNotMatch(
   css,
-  /\.panel-content::-webkit-scrollbar\s*\{[^}]*width:\s*6px/s,
-  'agent panel should restore feat-0622 native scrollbar styling on panel-content',
+  /\.panel-content::-webkit-scrollbar/,
+  'agent panel must not duplicate a ::-webkit-scrollbar rule (use the shared .sf-scroll utility)',
 )
 
 assert.doesNotMatch(

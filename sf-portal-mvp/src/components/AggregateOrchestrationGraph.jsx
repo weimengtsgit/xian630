@@ -135,7 +135,7 @@ export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCo
           ) : null}
         </div>
       </header>
-      <div className="ceg-canvas aog-canvas aog-canvas-expandable">
+      <div className="ceg-canvas aog-canvas aog-canvas-expandable sf-scroll">
         {waves.map((wave, waveIndex) => {
           const nextWave = waves[waveIndex + 1]
           const visibleEdges = (graph.edges || []).filter(edge => {

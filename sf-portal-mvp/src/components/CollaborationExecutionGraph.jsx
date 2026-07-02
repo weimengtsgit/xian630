@@ -248,7 +248,7 @@ export function CollaborationExecutionGraph({ graph, onOpenTask, onConfirmStep, 
           )}
         </div>
       </header>
-      <div className="ceg-canvas">
+      <div className="ceg-canvas sf-scroll">
         {graph.waves.map((wave, waveIndex) => {
           const nextWave = graph.waves[waveIndex + 1]
           const visibleCards = isRevealRunning

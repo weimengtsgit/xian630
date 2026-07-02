@@ -452,17 +452,5 @@
   opacity: 0.62;
 }
 
-.panel-content::-webkit-scrollbar {
-  width: 6px;
-}
-.panel-content::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 999px;
-}
-.panel-content::-webkit-scrollbar-thumb {
-  background: rgba(111, 218, 255, 0.28);
-  border-radius: 999px;
-}
-.panel-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(111, 218, 255, 0.44);
-}
+/* Scrollbar styling for .panel-content is provided by the shared .sf-scroll
+ * utility class in App.css (applied in JSX). */

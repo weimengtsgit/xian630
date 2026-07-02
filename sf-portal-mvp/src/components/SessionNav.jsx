@@ -115,7 +115,7 @@ export function SessionNav({
         </button>
       </div>
 
-      <div className="session-nav-list">
+      <div className="session-nav-list sf-scroll">
         {list.length === 0 ? (
           <div className="session-nav-empty">
             <History size={16} />

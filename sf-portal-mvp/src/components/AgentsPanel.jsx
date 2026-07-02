@@ -166,7 +166,7 @@ export function AgentsPanel({
 
       {error && <div className="panel-error">加载失败：{error}</div>}
 
-      <div className="panel-content">
+      <div className="panel-content sf-scroll">
         {loading && list.length === 0 ? (
           <div className="panel-loading">加载中...</div>
         ) : list.length === 0 ? (

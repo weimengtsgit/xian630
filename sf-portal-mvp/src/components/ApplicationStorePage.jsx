@@ -217,7 +217,7 @@ export function ApplicationStorePage(props) {
     const selectedApp = selectedAppId ? orderedApps.find(app => app.id === selectedAppId) : null
 
     return (
-        <section className="application-store-page" aria-label="应用商店">
+        <section className="application-store-page sf-scroll" aria-label="应用商店">
             <header className="store-hero">
                 <div>
                     <span className="store-kicker">APPLICATION STORE</span>
@@ -348,7 +348,7 @@ function ApplicationDetailModal({app, action, onClose, onRefresh, onStart, onSto
     const features = extractApplicationFeatures(app)
     return (
         <div className="store-detail-backdrop" role="presentation" onClick={onClose}>
-            <article className="store-detail" role="dialog" aria-modal="true" aria-label={`${appTitle(app)}详情`}
+            <article className="store-detail sf-scroll" role="dialog" aria-modal="true" aria-label={`${appTitle(app)}详情`}
                      onClick={event => event.stopPropagation()}>
                 <header className="store-detail-header">
                     <div className="store-detail-identity">

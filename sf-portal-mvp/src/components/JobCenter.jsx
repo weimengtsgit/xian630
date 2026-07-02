@@ -239,7 +239,7 @@ export function JobCenter({
 
   if (!activeJob) {
     return (
-      <section className="job-center job-center-empty">
+      <section className="job-center sf-scroll job-center-empty">
         <div className="jc-placeholder">
           <AlertTriangle size={22} />
           <p>当前会话暂无生成任务</p>
@@ -250,7 +250,7 @@ export function JobCenter({
   }
 
   return (
-    <section className={`job-center job-status-${jobStatus}`}>
+    <section className={`job-center sf-scroll job-status-${jobStatus}`}>
       {view === 'list' ? (
         <div className="jc-task-list">
           <div className="jc-task-list-head">

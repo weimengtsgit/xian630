@@ -50,10 +50,8 @@
 }
 
 /* ——— Scrollbar ——— */
-.application-store-page::-webkit-scrollbar { width: 6px; height: 6px; }
-.application-store-page::-webkit-scrollbar-track { background: var(--asp-bg-secondary); }
-.application-store-page::-webkit-scrollbar-thumb { background: var(--asp-border-light); border-radius: 3px; }
-.application-store-page::-webkit-scrollbar-thumb:hover { background: var(--asp-text-muted); }
+/* Scrollbar styling for .application-store-page and .store-detail is provided
+ * by the shared .sf-scroll utility class in App.css (applied in JSX). */
 
 /* ——— Hero Header ——— */
 .store-hero {
@@ -578,10 +576,7 @@
   animation: asp-slideUp 0.25s ease;
 }
 
-.store-detail::-webkit-scrollbar { width: 6px; }
-.store-detail::-webkit-scrollbar-track { background: var(--asp-bg-secondary); }
-.store-detail::-webkit-scrollbar-thumb { background: var(--asp-border-light); border-radius: 3px; }
-.store-detail::-webkit-scrollbar-thumb:hover { background: var(--asp-text-muted); }
+/* Scrollbar for .store-detail provided by shared .sf-scroll (App.css). */
 
 .store-detail-header {
   display: flex;

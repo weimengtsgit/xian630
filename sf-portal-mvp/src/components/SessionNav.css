@@ -102,14 +102,8 @@
   gap: 6px;
 }
 
-.session-nav-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.session-nav-list::-webkit-scrollbar-thumb {
-  background: rgba(111, 218, 255, 0.28);
-  border-radius: 999px;
-}
+/* Scrollbar styling for .session-nav-list is provided by the shared .sf-scroll
+ * utility class in App.css (applied in JSX). */
 
 .session-nav-empty {
   display: flex;
