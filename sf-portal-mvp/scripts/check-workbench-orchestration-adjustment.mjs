@@ -140,7 +140,24 @@ const analyzingDlg = buildWorkbenchOrchestrationView({
 assert.equal(analyzingDlg.cardsByKey.business_logic.state, 'running', 'business_logic must be running while the dialogue is analyzing')
 
 const graphSource = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.jsx', import.meta.url), 'utf8')
-assert.equal(graphSource.includes('协作编排'), false, 'aggregate graph must not render 协作编排 as a card')
+// ---- Task 4 (wic): unified surface name 协作编排执行图 in BOTH states ----
+// The pinned aggregate overview is named 协作编排执行图 per the glossary. The
+// expanded <h3> AND the collapsed bar must both carry that exact title; the old
+// 编排执行总览 / 协作执行图 drift is gone. The guard against restoring the old
+// detailed collaboration graph as a freestanding card still holds below.
+assert.equal(graphSource.includes('<h3>协作编排执行图</h3>'), true, 'expanded AggregateOrchestrationGraph title must be 协作编排执行图')
+assert.equal(graphSource.includes('aria-label="协作编排执行图"'), true, 'expanded section aria-label must be the unified name')
+assert.equal(graphSource.includes('aria-label="展开协作编排执行图"'), true, 'collapsed bar must expose an expand affordance labelled with the unified name')
+assert.equal(graphSource.includes('className="aog-compact-name">协作编排执行图'), true, 'collapsed bar must render the unified name as its label')
+assert.equal(graphSource.includes('编排执行总览'), false, 'old expanded title 编排执行总览 must be replaced by the unified name')
+assert.equal(graphSource.includes("'协作执行图'"), false, 'old collapsed fallback label 协作执行图 must be replaced by the unified name')
+// Collapsed bar surfaces the same summary chips that today only show expanded:
+// the stage count + the current label/state, and an explicit expand icon.
+assert.equal(graphSource.includes('aog-compact-chips'), true, 'collapsed bar must wrap its summary chips in a dedicated container')
+assert.equal(/aog-compact-chips[\s\S]*aog-summary-total[\s\S]*个阶段/.test(graphSource), true, 'collapsed bar must show the {n} 个阶段 chip')
+assert.equal(graphSource.includes('ChevronDown'), true, 'collapsed bar must import an explicit expand (chevron-down) icon')
+assert.equal(graphSource.includes('aog-expand-btn'), true, 'collapsed bar must render the explicit expand affordance')
+assert.equal(graphSource.includes('aog-canvas-expandable'), true, 'expandable body must carry a transition hook class for the light collapse/expand animation')
 const css = readFileSync(new URL('../src/components/AggregateOrchestrationGraph.css', import.meta.url), 'utf8')
 const collaborationGraphCss = readFileSync(new URL('../src/components/CollaborationExecutionGraph.css', import.meta.url), 'utf8')
 assert.equal(collaborationGraphCss.includes('@media (prefers-reduced-motion: reduce)'), true, 'shared ceg pulse motion must respect reduced motion')
@@ -152,6 +169,13 @@ assert.equal(css.includes('.aog .ceg-canvas'), true, 'aggregate graph must tune 
 assert.equal(css.includes('padding: 10px 2px 10px'), true, 'aggregate graph canvas padding is symmetric 10px so the top and bottom cards sit the same distance from the edges')
 assert.equal(css.includes('.aog .ceg-card-state-running'), true, 'aggregate 执行中 card carries a scoped running tint')
 assert.equal(/\.aog \.ceg-card\b[\s\S]*?transition:/.test(css), true, 'aggregate card state changes animate (transition) instead of snapping')
+// ---- Task 4 (wic): collapsed bar layout + light collapse/expand transition ----
+assert.equal(css.includes('.aog-compact-name'), true, 'collapsed bar name must be styled')
+assert.equal(css.includes('.aog-compact-chips'), true, 'collapsed bar chip cluster must be styled')
+assert.equal(css.includes('.aog-expand-btn'), true, 'collapsed bar expand affordance must be styled')
+assert.equal(/\.aog \.aog-canvas-expandable[\s\S]*?transition:/.test(css), true, 'expandable overview body must declare a transition for the collapse/expand animation')
+assert.equal(/aog-canvas-expandable[\s\S]*?(0\.1[89]|0\.2[01]?)s/.test(css), true, 'collapse/expand transition must be in the 180–220ms band')
+assert.equal(/@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.aog \.aog-canvas-expandable[\s\S]*?transition: none/.test(css), true, 'collapse/expand transition must be disabled under prefers-reduced-motion')
 
 // ---- Task 4: attachment composer + message send-path ----------------------
 const clientSource = readFileSync(new URL('../src/api/client.js', import.meta.url), 'utf8')

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, CheckCircle2, ChevronUp, Clock3, CircleDot, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Clock3, CircleDot, HelpCircle, Loader2, PlayCircle, SkipForward, User } from 'lucide-react'
 import './CollaborationExecutionGraph.css'
 import './AggregateOrchestrationGraph.css'
 
@@ -86,19 +86,33 @@ export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCo
   const summary = summarizeGraph(graph.cards)
 
   if (compact) {
+    const currentText = active
+      ? `当前：${active.label} · ${STATE_LABELS[active.state] || active.state}`
+      : '当前：等待用户输入'
     return (
-      <button type="button" className="aog-compact" onClick={onToggleCompact} aria-label="展开协作执行图">
-        <span>{active ? `${active.label} · ${STATE_LABELS[active.state] || active.state}` : '协作执行图'}</span>
-        {active && active.subStage ? <em>{active.subStage}</em> : null}
+      <button type="button" className="aog-compact" onClick={onToggleCompact} aria-label="展开协作编排执行图">
+        <span className="aog-compact-summary">
+          <span className="aog-compact-name">协作编排执行图</span>
+          <span className="aog-compact-chips">
+            <span className="aog-summary-chip aog-summary-total">{graph.cards.length} 个阶段</span>
+            <span className="aog-summary-chip aog-summary-current">
+              {currentText}
+            </span>
+            {active && active.subStage ? <em>{active.subStage}</em> : null}
+          </span>
+        </span>
+        <span className="aog-expand-btn" aria-hidden="true">
+          <ChevronDown size={14} />
+        </span>
       </button>
     )
   }
 
   return (
-    <section className="ceg aog" aria-label="编排执行总览">
+    <section className="ceg aog" aria-label="协作编排执行图">
       <header className="ceg-head aog-head">
         <div>
-          <h3>编排执行总览</h3>
+          <h3>协作编排执行图</h3>
         </div>
         <div className="aog-head-actions">
           <div className="ceg-summary aog-summary">
@@ -115,13 +129,13 @@ export function AggregateOrchestrationGraph({ graph, compact = false, onToggleCo
             {summary.failed ? <span className="aog-summary-chip aog-summary-failed">{summary.failed} 失败</span> : null}
           </div>
           {onToggleCompact ? (
-            <button type="button" className="aog-collapse-btn" onClick={onToggleCompact} aria-label="收起编排执行总览" title="收起">
+            <button type="button" className="aog-collapse-btn" onClick={onToggleCompact} aria-label="收起协作编排执行图" title="收起">
               <ChevronUp size={14} />
             </button>
           ) : null}
         </div>
       </header>
-      <div className="ceg-canvas aog-canvas">
+      <div className="ceg-canvas aog-canvas aog-canvas-expandable">
         {waves.map((wave, waveIndex) => {
           const nextWave = waves[waveIndex + 1]
           const visibleEdges = (graph.edges || []).filter(edge => {
