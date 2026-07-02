@@ -57,7 +57,7 @@ function inReplay(point, replayEnd) {
   return Number.isFinite(ms) && ms <= replayEnd;
 }
 
-export function buildMapData({ targets = [], areas = [], segments = [], aisGaps = [], alerts = [], replayEnd = Infinity } = {}) {
+export function buildMapData({ targets = [], areas = [], segments = [], aisGaps = [], alerts = [], replayEnd = Infinity, coast = null, selectedTarget = null } = {}) {
   const vesselPoints = targets
     .map((target) =>
       pointFeature(
@@ -89,15 +89,69 @@ export function buildMapData({ targets = [], areas = [], segments = [], aisGaps 
     .map((gap) => pointFeature(gap.id, { targetMmsi: gap.targetMmsi, severity: gap.severity, gapMinutes: Math.round(gap.gapMinutes || 0), fromTime: gap.fromTime, toTime: gap.toTime }, toNumber(gap.lon), toNumber(gap.lat)))
     .filter(Boolean);
   const alertFeatures = alerts
-    .map((alert) => pointFeature(alert.id, { targetMmsi: alert.targetMmsi, title: alert.title, type: alert.type, severity: alert.severity, summary: alert.summary, time: alert.time }, toNumber(alert.lon), toNumber(alert.lat)))
+    .map((alert) => pointFeature(alert.id, { targetMmsi: alert.targetMmsi, title: alert.title, type: alert.type, severity: alert.severity, summary: alert.summary, time: alert.time, level: alert.level }, toNumber(alert.lon), toNumber(alert.lat)))
     .filter(Boolean);
+
+  const selectedPoints = selectedTarget
+    ? (selectedTarget.points || (Array.isArray(selectedTarget.segments) ? selectedTarget.segments.flatMap((s) => s.points || []) : []) || [])
+    : [];
   return {
     vesselPoints: { type: "FeatureCollection", features: vesselPoints },
     monitoredAreas: { type: "FeatureCollection", features: monitoredAreas },
     trackSegments: { type: "FeatureCollection", features: trackSegments },
     aisGaps: { type: "FeatureCollection", features: gapFeatures },
     alertPoints: { type: "FeatureCollection", features: alertFeatures },
+    speedSegments: selectedTarget ? speedColorSegments(selectedPoints, { maxCount: 400 }) : emptyFeatureCollection(),
+    coastLine: coastFeatures(coast),
+    nearestPoint: { type: "FeatureCollection", features: [nearestPointFeature(selectedTarget)].filter(Boolean) },
+    maxSpeedSegment: { type: "FeatureCollection", features: [maxSpeedFeature(selectedTarget)].filter(Boolean) },
   };
+}
+
+export function decimatePoints(points = [], opts = {}) {
+  const maxCount = toNumber(opts.maxCount) || 400;
+  const valid = points.filter((p) => validLonLat(toNumber(p.lon), toNumber(p.lat)));
+  if (valid.length <= maxCount) return valid;
+  const step = Math.ceil(valid.length / maxCount);
+  const out = [];
+  for (let i = 0; i < valid.length; i += step) out.push(valid[i]);
+  if (out[out.length - 1] !== valid[valid.length - 1] && out.length < maxCount) out.push(valid[valid.length - 1]);
+  return out;
+}
+
+export function speedColorSegments(points = [], opts = {}) {
+  const d = decimatePoints(points, opts);
+  const features = [];
+  for (let i = 1; i < d.length; i += 1) {
+    const prev = d[i - 1];
+    const cur = d[i];
+    const speed = toNumber(prev.speedKn);
+    features.push({
+      type: "Feature",
+      properties: { speedKn: speed ?? 0 },
+      geometry: { type: "LineString", coordinates: [[toNumber(prev.lon), toNumber(prev.lat)], [toNumber(cur.lon), toNumber(cur.lat)]] },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+export function coastFeatures(coast) {
+  const features = (coast?.features || []).filter((f) => f?.geometry?.type === "LineString");
+  return { type: "FeatureCollection", features };
+}
+
+export function nearestPointFeature(target) {
+  const np = target?.nearestCoastPoint;
+  if (!np || !validLonLat(toNumber(np.lon), toNumber(np.lat))) return null;
+  return { type: "Feature", properties: { label: "离国土最近" }, geometry: { type: "Point", coordinates: [toNumber(np.lon), toNumber(np.lat)] } };
+}
+
+export function maxSpeedFeature(target) {
+  const seg = target?.maxSpeedSegment;
+  if (!seg?.fromPoint || !seg.toPoint) return null;
+  const a = seg.fromPoint, b = seg.toPoint;
+  if (!validLonLat(toNumber(a.lon), toNumber(a.lat)) || !validLonLat(toNumber(b.lon), toNumber(b.lat))) return null;
+  return { type: "Feature", properties: { speedKn: seg.speedKn ?? 0, label: "最快段" }, geometry: { type: "LineString", coordinates: [[toNumber(a.lon), toNumber(a.lat)], [toNumber(b.lon), toNumber(b.lat)]] } };
 }
 
 function collectGeometryCoordinates(geometry, out) {

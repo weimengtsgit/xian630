@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   analyzePayload,
+  computeTrackMetrics,
   buildAlerts,
   detectAisGaps,
   dimensionMatch,
@@ -91,4 +92,84 @@ test("analyzes payload and keeps tracked target first", () => {
   });
   assert.equal(analysis.targets[0].mmsi, "1");
   assert.equal(analysis.targets[0].status, "异常行为目标");
+});
+
+test("computeTrackMetrics aggregates a small track", () => {
+  const points = [
+    { mmsi: "1", time: "2026-01-01T00:00:00Z", lon: 110.0, lat: 21.0, speedKn: 1 },
+    { mmsi: "1", time: "2026-01-01T01:00:00Z", lon: 110.1, lat: 21.0, speedKn: 5 },
+    { mmsi: "1", time: "2026-01-02T02:00:00Z", lon: 111.0, lat: 22.0, speedKn: 3 },
+  ];
+  const coast = { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { id: "c" }, geometry: { type: "LineString", coordinates: [[109, 20]] } },
+  ] };
+  const m = computeTrackMetrics(points, coast);
+  assert.equal(m.reportCount, 3);
+  assert.equal(m.activeDays, 2);
+  assert.equal(m.maxSpeedSegment.speedKn, 5);
+  assert.deepEqual(m.trackOrigin, { lon: 110.0, lat: 21.0, time: "2026-01-01T00:00:00Z" });
+  assert.ok(m.minCoastDistanceNm > 50, `got ${m.minCoastDistanceNm}`);
+  assert.equal(m.nearestCoastPoint.segmentId, "c");
+  assert.ok(m.avgSpeedKn > 0);
+});
+
+test("computeTrackMetrics empty track returns nulls/zeros", () => {
+  const m = computeTrackMetrics([], { type: "FeatureCollection", features: [] });
+  assert.equal(m.reportCount, 0);
+  assert.equal(m.activeDays, 0);
+  assert.equal(m.maxSpeedSegment, null);
+  assert.equal(m.trackOrigin, null);
+  assert.equal(m.minCoastDistanceNm, null);
+});
+
+test("analyzePayload attaches coast metrics and proximity alert", () => {
+  const payload = {
+    parameters: { coastAlertRangeNm: 200, coastAlertHighNm: 80, coastAlertMediumNm: 140 },
+    monitoredAreas: [],
+    targets: [
+      { mmsi: "X1", name: "SEASATS 55", lon: 109.2, lat: 20.1, length: 4, width: 2, latestTime: "2026-01-02T02:00:00Z" },
+    ],
+    trackPoints: [
+      { mmsi: "X1", time: "2026-01-01T00:00:00Z", lon: 109.2, lat: 20.1, speedKn: 2 },
+      { mmsi: "X1", time: "2026-01-02T02:00:00Z", lon: 109.3, lat: 20.2, speedKn: 2 },
+    ],
+  };
+  const coast = { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { id: "c" }, geometry: { type: "LineString", coordinates: [[109, 20]] } },
+  ] };
+  const analysis = analyzePayload(payload, coast);
+  const t = analysis.targets[0];
+  assert.equal(t.activeDays, 2);
+  assert.ok(t.minCoastDistanceNm < 80, `got ${t.minCoastDistanceNm}`);
+  const co = analysis.alerts.find((a) => a.type === "coast-proximity");
+  assert.ok(co, "expected a coast-proximity alert");
+  assert.equal(co.level, "high");
+  assert.equal(co.severity, "critical");
+});
+
+test("analyzePayload without coast skips coast alerts (back-compat)", () => {
+  const payload = { targets: [{ mmsi: "X2", name: "SEASATS 9", lon: 50.6, lat: 26.2, length: 4, width: 2, latestTime: "2026-01-01T00:00:00Z" }], trackPoints: [] };
+  const analysis = analyzePayload(payload);
+  assert.equal(analysis.alerts.find((a) => a.type === "coast-proximity"), undefined);
+});
+
+test("ais-gap alert carries card fields (speeds, course, origin)", () => {
+  const payload = {
+    parameters: {},
+    monitoredAreas: [],
+    targets: [{ mmsi: "G1", name: "SEASATS 7", lon: 50.6, lat: 26.2, length: 4, width: 2, latestTime: "2026-01-02T05:00:00Z" }],
+    trackPoints: [
+      { mmsi: "G1", time: "2026-01-01T00:00:00Z", lon: 50.6, lat: 26.2, speedKn: 3, courseDeg: 90 },
+      { mmsi: "G1", time: "2026-01-01T01:00:00Z", lon: 50.61, lat: 26.2, speedKn: 4, courseDeg: 95 },
+      { mmsi: "G1", time: "2026-01-02T05:00:00Z", lon: 50.7, lat: 26.3, speedKn: 2, courseDeg: 200 },
+    ],
+  };
+  const analysis = analyzePayload(payload);
+  const gap = analysis.alerts.find((a) => a.type === "ais-gap");
+  assert.ok(gap);
+  assert.equal(gap.preSpeedKn, 4);
+  assert.equal(gap.postSpeedKn, 2);
+  assert.equal(gap.courseDeg, 95);
+  assert.deepEqual(gap.trackOrigin, { lon: 50.6, lat: 26.2, time: "2026-01-01T00:00:00Z" });
+  assert.ok(gap.segmentAvgSpeedKn >= 0);
 });

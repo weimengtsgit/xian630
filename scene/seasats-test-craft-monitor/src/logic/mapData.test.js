@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boundsForMapData, buildMapData, emptyFeatureCollection } from "./mapData.js";
+import { boundsForMapData, buildMapData, emptyFeatureCollection, decimatePoints, speedColorSegments, coastFeatures, nearestPointFeature, maxSpeedFeature } from "./mapData.js";
 
 test("emptyFeatureCollection returns valid empty GeoJSON", () => {
   assert.deepEqual(emptyFeatureCollection(), { type: "FeatureCollection", features: [] });
@@ -36,4 +36,40 @@ test("boundsForMapData encloses points, lines, and polygons", () => {
     alertPoints: emptyFeatureCollection(),
   });
   assert.deepEqual(bounds, [[118, 18], [122, 22]]);
+});
+
+test("decimatePoints reduces by step", () => {
+  const pts = Array.from({ length: 100 }, (_, i) => ({ lon: i, lat: i, time: `2026-01-01T00:${String(i % 60).padStart(2, "0")}:00Z` }));
+  const d = decimatePoints(pts, { maxCount: 10 });
+  assert.ok(d.length <= 10 && d.length >= 2, `got ${d.length}`);
+});
+
+test("speedColorSegments builds one feature per gap with speedKn", () => {
+  const pts = [
+    { lon: 50, lat: 26, time: "2026-01-01T00:00:00Z", speedKn: 2 },
+    { lon: 50.1, lat: 26, time: "2026-01-01T00:10:00Z", speedKn: 8 },
+    { lon: 50.2, lat: 26, time: "2026-01-01T00:20:00Z", speedKn: 3 },
+  ];
+  const fc = speedColorSegments(pts, { maxCount: 50 });
+  assert.equal(fc.features.length, 2);
+  assert.equal(fc.features[0].properties.speedKn, 2);
+});
+
+test("coastFeatures passes through LineStrings", () => {
+  const coast = { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { id: "a" }, geometry: { type: "LineString", coordinates: [[110, 21], [109, 20]] } },
+  ] };
+  const fc = coastFeatures(coast);
+  assert.equal(fc.features.length, 1);
+});
+
+test("nearestPointFeature from target.nearestCoastPoint", () => {
+  const f = nearestPointFeature({ nearestCoastPoint: { lon: 110, lat: 21, time: "t" } });
+  assert.equal(f.geometry.type, "Point");
+  assert.deepEqual(f.geometry.coordinates, [110, 21]);
+});
+
+test("maxSpeedFeature from target.maxSpeedSegment", () => {
+  const f = maxSpeedFeature({ maxSpeedSegment: { fromPoint: { lon: 50, lat: 26 }, toPoint: { lon: 50.1, lat: 26 }, speedKn: 8 } });
+  assert.equal(f.geometry.type, "LineString");
 });
