@@ -130,7 +130,7 @@ export function ApplicationsPanel({
 
       {activeError && <div className="panel-error">加载失败：{activeError}</div>}
 
-      <div className="panel-content">
+      <div className="panel-content sf-scroll">
         {activeLoading && activeCount === 0 ? (
           <div className="panel-loading">加载中...</div>
         ) : isManaged ? (

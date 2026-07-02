@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight, FileText, Folder, Loader2 } from 'lucide-react'
+import { ChevronRight, FileText, Folder, Loader2, Maximize2 } from 'lucide-react'
 import { factoryApi } from '../api/client'
+import { WorkbenchPreviewModal, SharedRichContent } from './WorkbenchPreviewModal'
 import './ApplicationProjectPanel.css'
 
 export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftApplied }) {
@@ -16,6 +17,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
   const [editing, setEditing] = useState(false)
   const [draftText, setDraftText] = useState('')
   const [draftSaving, setDraftSaving] = useState(false)
+  const [maximized, setMaximized] = useState(false)
 
   useEffect(() => {
     setTree(null)
@@ -44,6 +46,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
     setPreview(null)
     setPreviewError('')
     setMode('preview')
+    setMaximized(false)
     if (!applicationId || !selectedPath) return undefined
     let canceled = false
     setLoadingPreview(true)
@@ -136,7 +139,7 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
 
   return (
     <div className="application-project-panel">
-      <section className="app-project-groups">
+      <section className="app-project-groups sf-scroll">
         <header className="app-project-title">
           <strong>{tree?.app?.name || '工作空间'}</strong>
           {loadingTree ? <Loader2 size={13} className="spin" /> : null}
@@ -155,11 +158,14 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
         ))}
       </section>
 
-      <section className="app-project-preview">
+      <section className="app-project-preview sf-scroll">
         {loadingPreview ? <p className="app-project-empty"><Loader2 size={13} className="spin" /> 加载预览...</p> : null}
         {previewError ? <p className="app-project-error">{previewError}</p> : null}
-        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} continueDraftFromStaleContent={continueDraftFromStaleContent} draftSaving={draftSaving} /> : null}
+        {preview && !loadingPreview ? <Preview preview={preview} mode={mode} setMode={setMode} canEditDraft={canEditDraft} editing={editing} draftText={draftText} setDraftText={setDraftText} startDraft={startDraft} saveDraft={saveDraft} discardDraft={discardDraft} applyDraft={applyDraft} restartDraftFromCurrentSource={restartDraftFromCurrentSource} continueDraftFromStaleContent={continueDraftFromStaleContent} draftSaving={draftSaving} onMaximize={() => setMaximized(true)} /> : null}
         {!preview && !loadingPreview && !previewError ? <p className="app-project-empty">选择文件查看预览。</p> : null}
+        {preview && maximized ? (
+          <WorkspacePreviewMaximize preview={preview} onClose={() => setMaximized(false)} />
+        ) : null}
       </section>
     </div>
   )
@@ -201,7 +207,7 @@ function ProjectNode({ node, expanded, setExpanded, selectedPath, onSelect }) {
   )
 }
 
-function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, restartDraftFromCurrentSource, continueDraftFromStaleContent, draftSaving }) {
+function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, setDraftText, startDraft, saveDraft, discardDraft, applyDraft, restartDraftFromCurrentSource, continueDraftFromStaleContent, draftSaving, onMaximize }) {
   const sourceModes = preview.kind === 'markdown'
     ? [['preview', '预览'], ['source', '源码']]
     : preview.kind === 'json'
@@ -210,8 +216,19 @@ function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, set
   return (
     <div className="app-project-preview-card">
       <header className="app-project-preview-head">
-        <strong>{preview.path}</strong>
-        <small>{formatBytes(preview.size)} · {preview.kind}</small>
+        <span className="app-project-preview-path">
+          <strong>{preview.path}</strong>
+          <small>{formatBytes(preview.size)} · {preview.kind}</small>
+        </span>
+        <button
+          type="button"
+          className="app-project-preview-maximize"
+          onClick={onMaximize}
+          aria-label="放大预览"
+          title="在工作台预览弹窗中打开"
+        >
+          <Maximize2 size={14} />
+        </button>
       </header>
       {sourceModes.length > 0 ? (
         <div className="app-project-preview-tabs">
@@ -248,6 +265,56 @@ function Preview({ preview, mode, setMode, canEditDraft, editing, draftText, set
       {preview.kind === 'text' && !editing ? <pre className="app-project-source">{preview.content}</pre> : null}
     </div>
   )
+}
+
+// WorkspacePreviewMaximize — the 工作台预览弹窗 for a workspace file. Opened by
+// the maximize icon on the Preview header. Uses the shared WorkbenchPreviewModal
+// shell so it has the SAME sizing/z-index as the other preview modals (no 4th
+// divergent style). Content is READ-ONLY (no edit surface) per glossary _Avoid_
+// 直接修改产物 — the draft/edit flow lives in the drawer, not here.
+//
+// Markdown renders rich via SharedRichContent; code/text/json render in a
+// language-aware highlighted <pre> (rehype-highlight only operates inside
+// react-markdown, so for raw source we wrap it as a fenced ```lang block and
+// run it through the same renderer to get syntax tokens).
+function WorkspacePreviewMaximize({ preview, onClose }) {
+  const body = renderMaximizedBody(preview)
+  return (
+    <WorkbenchPreviewModal
+      title={preview.path}
+      icon={<FileText size={15} />}
+      onClose={onClose}
+    >
+      {body}
+    </WorkbenchPreviewModal>
+  )
+}
+
+function renderMaximizedBody(preview) {
+  if (preview.kind === 'large') {
+    return <Metadata preview={preview} message={`文件超过 ${formatBytes(preview.limit)}，本阶段仅显示元数据。`} />
+  }
+  if (preview.kind === 'binary') {
+    return <Metadata preview={preview} message="二进制或未知文件，本阶段仅显示元数据。" />
+  }
+  if (preview.kind === 'markdown') {
+    return <SharedRichContent content={preview.content || ''} />
+  }
+  if (preview.kind === 'json') {
+    const text = preview.formatted || preview.content || ''
+    return <SharedRichContent content={fenced(text, 'json')} />
+  }
+  if (preview.kind === 'text') {
+    return <SharedRichContent content={fenced(preview.content || '', '')} />
+  }
+  return <p className="app-project-empty">暂不支持在预览弹窗中展示该类型。</p>
+}
+
+// Wrap raw source as a fenced code block so rehype-highlight applies language-
+// aware tokens. Empty lang leaves highlight.js auto-detection on.
+function fenced(text, lang) {
+  const fence = '```'
+  return `${fence}${lang}\n${text}\n${fence}`
 }
 
 function Metadata({ preview, message }) {

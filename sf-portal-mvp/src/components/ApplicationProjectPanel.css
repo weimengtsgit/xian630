@@ -32,6 +32,27 @@
 .app-project-preview-head strong { color: #edfaff; font-size: 13px; }
 .app-project-preview-head small { color: #8fb0bf; font-size: 11px; }
 
+.app-project-preview-path { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+.app-project-preview-path strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Maximize icon (Task 7): opens the file in the shared 工作台预览弹窗.
+ * Reuses the existing cyan border/bg tokens so no new visual style. */
+.app-project-preview-maximize {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(111, 218, 255, 0.24);
+  border-radius: 5px;
+  background: rgba(11, 29, 44, 0.72);
+  color: #d7eef8;
+  cursor: pointer;
+}
+.app-project-preview-maximize:hover { border-color: #68ddff; color: #edfaff; background: rgba(104, 221, 255, 0.16); }
+
 .app-project-group + .app-project-group { margin-top: 6px; }
 .app-project-group-toggle,
 .app-project-tree-node {

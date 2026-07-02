@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Loader2, X } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { factoryApi } from '../api/client'
+import { WorkbenchPreviewModal, SharedRichContent } from './WorkbenchPreviewModal'
 
 // InterfacePreviewModal renders the retained interface-preview manifest (F4) the
 // design_contract step produces. The manifest holds the design contract's
@@ -55,34 +56,24 @@ export function InterfacePreviewModal({ artifact, jobId, onClose }) {
   const { status, data, error } = state
 
   return (
-    <div className="cw-doc-modal-layer" role="presentation" onMouseDown={onClose}>
-      <section
-        className="cw-doc-modal cw-interface-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onMouseDown={event => event.stopPropagation()}
-      >
-        <header>
-          <strong>{title}</strong>
-          <button type="button" onClick={onClose} aria-label="关闭预览">
-            <X size={16} />
-          </button>
-        </header>
-        {status === 'loading' ? (
-          <div className="cw-doc-rich cw-interface-loading">
-            <Loader2 size={16} className="spin" />
-            <span>加载中…</span>
-          </div>
-        ) : status === 'error' ? (
-          <div className="cw-doc-rich cw-interface-error">
-            <p>{error}</p>
-          </div>
-        ) : (
-          <InterfacePreviewContent data={data} />
-        )}
-      </section>
-    </div>
+    <WorkbenchPreviewModal
+      title={title}
+      onClose={onClose}
+      panelClassName="cw-interface-modal"
+    >
+      {status === 'loading' ? (
+        <div className="cw-interface-loading">
+          <Loader2 size={16} className="spin" />
+          <span>加载中…</span>
+        </div>
+      ) : status === 'error' ? (
+        <div className="cw-interface-error">
+          <p>{error}</p>
+        </div>
+      ) : (
+        <InterfacePreviewContent data={data} />
+      )}
+    </WorkbenchPreviewModal>
   )
 }
 
@@ -124,7 +115,7 @@ function DesignDocumentView({ value }) {
     return (
       <div className="cw-interface-section">
         <h3>设计说明</h3>
-        <pre className="cw-interface-text">{value}</pre>
+        <SharedRichContent content={value} />
       </div>
     )
   }
