@@ -497,7 +497,24 @@ func draftInfo(d model.ProjectDocumentDraft, currentChecksum string) *appProject
 
 func (s *Server) dialogueOwnsApplication(ctx context.Context, dialogueID, appID string) bool {
 	dlg, err := s.store.GetDialogueSession(ctx, dialogueID)
-	return err == nil && dlg != nil && dlg.ResolvedApplicationID == appID
+	if err != nil || dlg == nil {
+		return false
+	}
+	if dlg.ResolvedApplicationID == appID {
+		return true
+	}
+	// Pre-codegen: resolved_application_id is empty (SetJobCreatedApp sets it
+	// only after code_generation registers the app). But the workspace serves
+	// project files from requirement_analysis onward via the synthetic app id
+	// "app-<slug>", and the dialogue's generating job carries app_slug at seed
+	// time. Accept that job linkage so doc preview/draft lookup does not 403
+	// for task_running jobs whose application row does not exist yet.
+	slug := strings.TrimPrefix(appID, "app-")
+	if slug == "" || slug == appID {
+		return false
+	}
+	owned, _ := s.store.DialogueOwnsJobWithSlug(ctx, dialogueID, slug)
+	return owned
 }
 
 func classifyProjectPreview(path string, data []byte) string {
