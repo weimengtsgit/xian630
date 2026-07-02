@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -196,6 +198,7 @@ func (a claudeCommandAdapter) RunStreamWithInput(ctx context.Context, dir, input
 func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	runLogger := runlog.New(cfg.LogPath, cfg.LogMaxBytes, cfg.LogMaxBackups)
 	osRunner := &deploy.OSRunner{}
+	claudeBinary := resolveClaudeBinary()
 
 	// Select container runtime based on configuration
 	var runtime deploy.ContainerRuntime
@@ -247,6 +250,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// ClaudeStepRunner slot is. Tests override s.clarifier directly.
 	s.clarifier = clarification.Runner{
 		Cmd:           claudeCmd,
+		Binary:        claudeBinary,
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		ArtifactRoot:  cfg.ArtifactRoot,
 	}
@@ -255,6 +259,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	// s.dialogueRouter directly.
 	s.dialogueRouter = dialogue.Runner{
 		Cmd:           claudeCmd,
+		Binary:        claudeBinary,
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		ArtifactRoot:  cfg.ArtifactRoot,
 	}
@@ -277,7 +282,7 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 		Store:              st,
 		Workspace:          cfg.WorkspaceRoot,
 		ArtifactRoot:       cfg.ArtifactRoot,
-		Claude:             &runner.ClaudeRunner{Runner: claudeCmd, WorkDir: cfg.WorkspaceRoot},
+		Claude:             &runner.ClaudeRunner{Runner: claudeCmd, Binary: claudeBinary, WorkDir: cfg.WorkspaceRoot},
 		AuditRunner:        claudeCmd,
 		CredentialResolver: s,
 	}
@@ -343,6 +348,38 @@ func New(cfg config.Config, st *store.Store, sc scanner.Scanner) *Server {
 	}
 	s.async = async
 	return s
+}
+
+func resolveClaudeBinary() string {
+	return resolveClaudeBinaryWith(os.Getenv, exec.LookPath, os.Stat, runtime.GOOS)
+}
+
+func resolveClaudeBinaryWith(
+	getenv func(string) string,
+	lookPath func(string) (string, error),
+	stat func(string) (os.FileInfo, error),
+	goos string,
+) string {
+	if getenv != nil {
+		if value := strings.TrimSpace(getenv("FACTORY_CLAUDE_BINARY")); value != "" {
+			return value
+		}
+	}
+	if goos != "windows" || lookPath == nil || stat == nil {
+		return "claude"
+	}
+
+	wrapper, err := lookPath("claude.cmd")
+	if err != nil || strings.TrimSpace(wrapper) == "" {
+		if wrapper, err = lookPath("claude"); err != nil || strings.TrimSpace(wrapper) == "" {
+			return "claude"
+		}
+	}
+	exe := filepath.Join(filepath.Dir(wrapper), "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe")
+	if _, err := stat(exe); err == nil {
+		return exe
+	}
+	return "claude"
 }
 
 // truthy reports whether an env value selects an enabled boolean flag. It treats
