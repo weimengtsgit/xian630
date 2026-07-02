@@ -42,29 +42,43 @@ const AGENT_META = {
   }
 }
 
-function AgentNode({ id, status, url }) {
+function AgentNode({ id, status, url, onActivate }) {
   const meta = AGENT_META[id] || { icon: Bot, name: id, type: '', desc: '' }
   const Icon = meta.icon
-  const completed = status === 'completed'
-  const clickable = !!url
-  const Tag = clickable ? 'a' : 'div'
-  const tagProps = clickable ? { href: url, target: '_blank', rel: 'noopener' } : {}
-  const accent = completed ? '#7feb9b' : '#68ddff'
+  const st = status || 'pending'
+  const hasUrl = !!url
+  const completed = st === 'completed'
+  const working = st === 'working'
+  // working 中不可点；无 url 不可点；其余（pending/completed 有 url）可点
+  const clickable = hasUrl && !working
+  const accent = completed ? '#7feb9b' : working ? '#68ddff' : hasUrl ? '#9ecbf0' : '#6b8693'
+  const statusText = completed ? '已完成' : working ? '进行中' : '待处理'
+
+  function handleClick() {
+    if (!clickable) return
+    if (st === 'pending') onActivate(id)   // 启动 → 进行中
+    window.open(url, '_blank', 'noopener') // 跳转到对应系统
+  }
 
   return (
-    <Tag
-      className={`agent-node${completed ? ' is-completed' : ''}${clickable ? ' is-clickable' : ' no-url'}`}
+    <div
+      className={`agent-node is-${st}${clickable ? ' is-clickable' : ''}${!hasUrl ? ' no-url' : ''}`}
       data-agent-id={id}
-      data-status={completed ? 'completed' : 'pending'}
-      tabIndex={meta.detail ? 0 : undefined}
-      {...tagProps}
+      data-status={st}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={handleClick}
+      onKeyDown={clickable ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick() }
+      } : undefined}
     >
       {meta.detail && (
         <div className="agent-node-tooltip" role="tooltip">{meta.detail}</div>
       )}
       <div className="agent-node-head">
-        <div className="agent-node-icon" style={{ borderColor: `${accent}55` }}>
+        <div className="agent-node-icon" style={{ borderColor: `${accent}55`, background: `${accent}1a` }}>
           <Icon size={30} style={{ color: accent }} />
+          {working && <span className="agent-node-pulse" style={{ borderColor: accent }} />}
         </div>
         <div className="agent-node-titles">
           <div className="agent-node-name">{meta.name}</div>
@@ -76,13 +90,12 @@ function AgentNode({ id, status, url }) {
 
       <div className="agent-node-status">
         {completed ? <CheckCircle size={17} color={accent} /> : <Clock size={17} color={accent} />}
-        <span style={{ color: accent }}>{completed ? '已完成' : '待开始'}</span>
+        <span style={{ color: accent }}>{statusText}</span>
       </div>
 
-      {completed
-        ? <div className="agent-node-done">产出就绪 ✓</div>
-        : (clickable ? null : <div className="agent-node-wait">未配置跳转</div>)}
-    </Tag>
+      {completed && <div className="agent-node-done">产出就绪 ✓</div>}
+      {!hasUrl && <div className="agent-node-wait">未配置跳转</div>}
+    </div>
   )
 }
 
@@ -160,7 +173,7 @@ function MergeConnector() {
 }
 
 export function AgentsPanel({ userInput }) {
-  const { stages, loading } = useStages()
+  const { stages, loading, activate } = useStages()
   const find = (key) => stages.find(s => s.key === key)
 
   if (loading) {
@@ -174,7 +187,7 @@ export function AgentsPanel({ userInput }) {
 
   const node = (key) => {
     const s = find(key)
-    return <AgentNode id={key} status={s?.status} url={s?.url} />
+    return <AgentNode id={key} status={s?.status} url={s?.url} onActivate={activate} />
   }
 
   return (

@@ -12,6 +12,11 @@ export function createApp(storeOverride) {
     res.json({ stages: store.read() })
   })
 
+  // 必须在 /:key 之前注册，否则 "reset" 会被当成 :key
+  app.post('/api/stages/reset', (_req, res) => {
+    res.json({ stages: store.reset() })
+  })
+
   app.post('/api/stages/:key', (req, res) => {
     try {
       const stages = store.update(req.params.key, req.body?.status)

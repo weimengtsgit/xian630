@@ -277,18 +277,21 @@
   box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.22), 0 8px 28px rgba(104, 221, 255, 0.16);
 }
 
-.agent-node[data-status="completed"],
+.agent-node.is-working {
+  border-color: rgba(104, 221, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(104, 221, 255, 0.22), 0 8px 28px rgba(104, 221, 255, 0.16);
+}
 .agent-node.is-completed {
   border-color: rgba(127, 235, 155, 0.55);
   box-shadow: 0 0 0 1px rgba(127, 235, 155, 0.22), 0 8px 28px rgba(127, 235, 155, 0.14);
 }
-
-a.agent-node {
-  text-decoration: none;
-  color: inherit;
-}
 .agent-node.is-clickable {
   cursor: pointer;
+}
+.agent-node.is-clickable:hover {
+  transform: translateY(-3px);
+  border-color: rgba(111, 218, 255, 0.5);
+  box-shadow: 0 10px 30px rgba(104, 221, 255, 0.18);
 }
 .agent-node.no-url {
   opacity: 0.6;

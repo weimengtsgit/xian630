@@ -4,7 +4,7 @@ import http from 'node:http'
 import { createApp } from './app.js'
 import { createStageStore, STAGE_KEYS } from './stages.js'
 
-const INITIAL = STAGE_KEYS.map(k => ({ key: k, name: k, status: 'pending', url: '' }))
+const CONFIG = STAGE_KEYS.map(k => ({ key: k, name: k, url: '' }))
 
 async function withServer(handler, fn) {
   const server = http.createServer(handler)
@@ -24,26 +24,38 @@ async function req(base, method, path, body) {
   return { status: res.status, json }
 }
 
-test('GET /api/stages returns stages', async () => {
-  const store = createStageStore('/tmp/sf-portal-app-test-1.json', INITIAL)
+test('GET /api/stages 初始全 pending', async () => {
+  const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
     const { status, json } = await req(base, 'GET', '/api/stages')
     assert.equal(status, 200)
     assert.equal(json.stages.length, 4)
+    assert.ok(json.stages.every(s => s.status === 'pending'))
   })
 })
 
-test('POST /api/stages/:key updates and returns stages', async () => {
-  const store = createStageStore('/tmp/sf-portal-app-test-2.json', INITIAL)
+test('POST /api/stages/:key working → completed 流转', async () => {
+  const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
-    const { status, json } = await req(base, 'POST', '/api/stages/agent-data', { status: 'completed' })
-    assert.equal(status, 200)
-    assert.equal(json.stages.find(s => s.key === 'agent-data').status, 'completed')
+    let r = await req(base, 'POST', '/api/stages/agent-data', { status: 'working' })
+    assert.equal(r.status, 200)
+    assert.equal(r.json.stages.find(s => s.key === 'agent-data').status, 'working')
+    r = await req(base, 'POST', '/api/stages/agent-data', { status: 'completed' })
+    assert.equal(r.json.stages.find(s => s.key === 'agent-data').status, 'completed')
+  })
+})
+
+test('POST /api/stages/reset 全回 pending', async () => {
+  const store = createStageStore(CONFIG)
+  await withServer(createApp(store), async base => {
+    await req(base, 'POST', '/api/stages/agent-data', { status: 'completed' })
+    const { json } = await req(base, 'POST', '/api/stages/reset')
+    assert.ok(json.stages.every(s => s.status === 'pending'))
   })
 })
 
 test('POST unknown key → 400', async () => {
-  const store = createStageStore('/tmp/sf-portal-app-test-3.json', INITIAL)
+  const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
     const { status } = await req(base, 'POST', '/api/stages/agent-nope', { status: 'completed' })
     assert.equal(status, 400)
@@ -51,9 +63,9 @@ test('POST unknown key → 400', async () => {
 })
 
 test('POST invalid status → 400', async () => {
-  const store = createStageStore('/tmp/sf-portal-app-test-4.json', INITIAL)
+  const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
-    const { status } = await req(base, 'POST', '/api/stages/agent-business', { status: 'working' })
+    const { status } = await req(base, 'POST', '/api/stages/agent-business', { status: 'idle' })
     assert.equal(status, 400)
   })
 })
