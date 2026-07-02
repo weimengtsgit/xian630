@@ -424,16 +424,11 @@
 .cw-attach-chip-inactive { opacity: 0.55; }
 .cw-attach-chip-inactive .cw-attach-name { text-decoration: line-through; }
 .cw-attach-deactivated { font-style: normal; font-size: 10px; color: rgba(255, 173, 122, 0.85); }
-/* preview modal overlay (gap-fill component; no backend /content route ships
-   in this task, so text/pdf bodies degrade to metadata + note) */
-.cw-preview-modal-layer { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.62); }
-.cw-preview-modal { width: min(720px, 92vw); max-height: 86vh; display: flex; flex-direction: column; border: 1px solid rgba(111, 218, 255, 0.28); border-radius: 10px; background: #03111d; color: #d7eef8; overflow: hidden; }
-.cw-preview-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(111, 218, 255, 0.18); }
-.cw-preview-modal-title { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
-.cw-preview-modal-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cw-preview-modal-close { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: rgba(215, 238, 248, 0.7); cursor: pointer; border-radius: 6px; }
-.cw-preview-modal-close:hover { background: rgba(111, 218, 255, 0.12); color: #d7eef8; }
-.cw-preview-modal-body { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+/* preview modal CONTENT classes (Task 7): the modal SHELL (layer/panel/header/
+   close/body) moved to WorkbenchPreviewModal.css — .wpm-*. These .cw-preview-*
+   classes style the attachment CONTENT rendered inside the shared shell
+   (image / pre text / pdf iframe / note / metadata grid). Kept here because they
+   are attachment-content specific, not shell specific. */
 .cw-preview-image { max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 6px; align-self: center; }
 .cw-preview-text { margin: 0; padding: 10px 12px; max-height: 56vh; overflow: auto; border: 1px solid rgba(111, 218, 255, 0.16); border-radius: 6px; background: rgba(0, 0, 0, 0.25); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .cw-preview-pdf { width: 100%; height: 56vh; border: 1px solid rgba(111, 218, 255, 0.16); border-radius: 6px; background: #fff; }
@@ -442,17 +437,12 @@
 .cw-preview-meta dt { color: rgba(215, 238, 248, 0.6); }
 .cw-preview-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
-/* Task 5: read-only rich Markdown preview for task-owned project documents. */
-.cw-doc-modal-layer { position: absolute; inset: 0; z-index: 32; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(3, 11, 18, 0.64); }
-.cw-doc-modal { width: min(760px, 100%); max-height: min(78vh, 760px); display: flex; flex-direction: column; border: 1px solid rgba(111, 218, 255, 0.26); border-radius: 8px; background: rgba(4, 18, 30, 0.98); }
-.cw-doc-modal header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid rgba(111, 218, 255, 0.18); color: #edfaff; }
-.cw-doc-modal header button { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: rgba(11, 29, 44, 0.72); color: #d7eef8; cursor: pointer; }
-.cw-doc-rich { overflow: auto; padding: 16px 18px; color: #d7eef8; line-height: 1.62; }
-.cw-doc-rich h1 { margin: 0 0 14px; font-size: 20px; color: #edfaff; }
-.cw-doc-rich h2 { margin: 18px 0 8px; font-size: 16px; color: #edfaff; }
-.cw-doc-rich h3 { margin: 14px 0 6px; font-size: 14px; color: #68ddff; }
-.cw-doc-rich p { margin: 0 0 8px; }
-.cw-doc-li::before { content: '• '; color: #68ddff; }
+/* Task 5/7: rich Markdown content body for project documents (now rendered via
+   the shared WorkbenchPreviewModal shell + SharedRichContent). The content
+   typography now lives in WorkbenchPreviewModal.css (.wpm-rich h1/h2/h3/...);
+   .cw-doc-rich is kept only as a body-class hook for callers that need the
+   scrollable rich area without re-styling. */
+.cw-doc-rich { color: #d7eef8; line-height: 1.62; }
 
 /* ---- Task 7: workbench agent blocks + responsibility tracks ---------------- */
 .cw-agent-block { border: 1px solid rgba(111, 218, 255, 0.18); border-radius: 8px; background: rgba(11, 29, 44, 0.55); overflow: hidden; }

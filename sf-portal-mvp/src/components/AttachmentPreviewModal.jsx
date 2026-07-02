@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { FileText, Image as ImageIcon, X } from 'lucide-react'
+import { FileText, Image as ImageIcon } from 'lucide-react'
 import { factoryApi } from '../api/client'
+import { WorkbenchPreviewModal, SharedRichContent } from './WorkbenchPreviewModal'
 
 // AttachmentPreviewModal renders a full-overlay preview of a single dialogue
 // attachment. PLAN-GAP FILL: the Task 4 brief lists this file in its commit set
@@ -45,46 +46,39 @@ export function AttachmentPreviewModal({ attachment, onClose }) {
       : null
 
   return (
-    <div className="cw-preview-modal-layer" onClick={onClose}>
-      <div className="cw-preview-modal" onClick={event => event.stopPropagation()}>
-        <div className="cw-preview-modal-head">
-          <span className="cw-preview-modal-title">
-            {mime.startsWith('image/') ? <ImageIcon size={15} /> : <FileText size={15} />}
-            <span>{name}</span>
-          </span>
-          <button type="button" className="cw-preview-modal-close" onClick={onClose} aria-label="关闭预览">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="cw-preview-modal-body">
-          {kind === 'image' ? (
-            <img className="cw-preview-image" src={contentURL(attachment)} alt={name} />
-          ) : isTextKind(kind) ? (
-            textError ? (
-              <p className="cw-preview-note">该附件暂无可预览的文本内容（仅显示元数据）。</p>
-            ) : text == null ? (
-              <p className="cw-preview-note">加载中…</p>
-            ) : (
-              <pre className="cw-preview-text">{text}</pre>
-            )
-          ) : kind === 'pdf' ? (
-            contentURL(attachment) ? (
-              <iframe className="cw-preview-pdf" src={contentURL(attachment)} title={name} />
-            ) : (
-              <p className="cw-preview-note">PDF 预览暂不可用。</p>
-            )
-          ) : (
-            <p className="cw-preview-note">该类型附件暂不支持内联预览，仅显示元数据。</p>
-          )}
-          <dl className="cw-preview-meta">
-            <dt>类型</dt><dd>{mime || kind || '未知'}</dd>
-            {size != null ? (<><dt>大小</dt><dd>{formatBytes(size)}</dd></>) : null}
-            {attachment.extension || attachment.extension === '' ? (<><dt>扩展名</dt><dd>{attachment.extension || '—'}</dd></>) : null}
-            {attachment.focusKey || attachment.focus_key ? (<><dt>聚焦</dt><dd>{attachment.focusKey || attachment.focus_key}</dd></>) : null}
-          </dl>
-        </div>
-      </div>
-    </div>
+    <WorkbenchPreviewModal
+      title={name}
+      icon={mime.startsWith('image/') ? <ImageIcon size={15} /> : <FileText size={15} />}
+      onClose={onClose}
+    >
+      {kind === 'image' ? (
+        <img className="cw-preview-image" src={contentURL(attachment)} alt={name} />
+      ) : isTextKind(kind) ? (
+        textError ? (
+          <p className="cw-preview-note">该附件暂无可预览的文本内容（仅显示元数据）。</p>
+        ) : text == null ? (
+          <p className="cw-preview-note">加载中…</p>
+        ) : kind === 'markdown' ? (
+          <SharedRichContent content={text} />
+        ) : (
+          <pre className="cw-preview-text">{text}</pre>
+        )
+      ) : kind === 'pdf' ? (
+        contentURL(attachment) ? (
+          <iframe className="cw-preview-pdf" src={contentURL(attachment)} title={name} />
+        ) : (
+          <p className="cw-preview-note">PDF 预览暂不可用。</p>
+        )
+      ) : (
+        <p className="cw-preview-note">该类型附件暂不支持内联预览，仅显示元数据。</p>
+      )}
+      <dl className="cw-preview-meta">
+        <dt>类型</dt><dd>{mime || kind || '未知'}</dd>
+        {size != null ? (<><dt>大小</dt><dd>{formatBytes(size)}</dd></>) : null}
+        {attachment.extension || attachment.extension === '' ? (<><dt>扩展名</dt><dd>{attachment.extension || '—'}</dd></>) : null}
+        {attachment.focusKey || attachment.focus_key ? (<><dt>聚焦</dt><dd>{attachment.focusKey || attachment.focus_key}</dd></>) : null}
+      </dl>
+    </WorkbenchPreviewModal>
   )
 }
 
