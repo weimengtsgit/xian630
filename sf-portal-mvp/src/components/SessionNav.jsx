@@ -14,8 +14,11 @@ import './SessionNav.css'
 
 // Conservative height budget for the delete-confirm popover (~150–170px card
 // + padding + shadow). Used to decide whether opening the popover BELOW the
-// clicked row would overflow the viewport; if so the popover flips to sit
-// ABOVE the row so it stays fully visible (会话删除确认浮层: clamped to rail).
+// clicked row would overflow either the viewport OR the .session-nav-list
+// scroll container's visible area; if so the popover flips to sit ABOVE the
+// row so it stays fully visible (会话删除确认浮层: clamped to rail, never
+// clipped by the list's scroll box — overflow-y:auto makes overflow-x compute
+// to auto too, so anything past the list's visible bottom is clipped).
 const POPOVER_FLIP_BUDGET = 200
 
 // SessionNav is the left 会话导航栏: a collapsible rail that owns the new-session
@@ -38,8 +41,9 @@ export function SessionNav({
 }) {
   const list = Array.isArray(sessions) ? sessions : []
   const [pendingDelete, setPendingDelete] = useState(null)
-  // `flipUp` is set when the clicked row sits near the bottom of the viewport —
-  // the popover then opens ABOVE the row instead of below so it never overflows.
+  // `flipUp` is set when the clicked row sits near the bottom of the viewport OR
+  // the .session-nav-list scroll container's visible area — the popover then opens
+  // ABOVE the row instead of below so it is never clipped by the list's scroll box.
   const [flipUp, setFlipUp] = useState(false)
   const pendingTitle = pendingDelete ? titleForDialogue(pendingDelete.session || pendingDelete) : ''
   const confirmingDelete = pendingDelete && deletingDialogueId === (pendingDelete.session && pendingDelete.session.id)
@@ -55,15 +59,30 @@ export function SessionNav({
   const requestDelete = (entry, clickEvent) => {
     const sess = entry && entry.session
     if (!sess) return
-    // Decide whether the popover would overflow the viewport bottom if it
-    // opened below the clicked row. The card is ~150–170px tall; we measure
-    // against the click target's bottom + a conservative budget so it never
-    // spills past the viewport. If so, flip the popover to sit ABOVE the row.
+    // Decide whether the popover would overflow the viewport OR the
+    // .session-nav-list scroll container's visible bottom if it opened below
+    // the clicked row. The card is ~150–170px tall; we measure the space
+    // below the click target against BOTH constraints and take the binding one
+    // (min). The list scroll box (overflow-y:auto → overflow-x:auto too) clips
+    // anything past its visible bottom, so a row that is fine relative to the
+    // viewport can still have its popover clipped by a short / non-full-height
+    // list — the container-aware check fixes that. If it would be clipped, flip
+    // the popover to sit ABOVE the row.
     const target = clickEvent && clickEvent.currentTarget
     let flip = false
     if (target && typeof target.getBoundingClientRect === 'function') {
       const rect = target.getBoundingClientRect()
-      const spaceBelow = (window.innerHeight || document.documentElement.clientHeight) - rect.bottom
+      const viewportSpaceBelow = (window.innerHeight || document.documentElement.clientHeight) - rect.bottom
+      let spaceBelow = viewportSpaceBelow
+      // The popover renders inside .session-nav-row inside .session-nav-list;
+      // the list's visible bottom is the real clipping edge when the rail is
+      // shorter than the viewport.
+      const listEl = target.closest && target.closest('.session-nav-list')
+      if (listEl && typeof listEl.getBoundingClientRect === 'function') {
+        const listRect = listEl.getBoundingClientRect()
+        const listSpaceBelow = listRect.bottom - rect.bottom
+        if (listSpaceBelow < spaceBelow) spaceBelow = listSpaceBelow
+      }
       if (spaceBelow < POPOVER_FLIP_BUDGET) flip = true
     }
     setFlipUp(flip)

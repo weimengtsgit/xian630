@@ -73,6 +73,37 @@ assert.match(sessionJsx, /requestDelete\(entry, e\)|requestDelete\(entry, clickE
 assert.match(sessionJsx, /getBoundingClientRect/, 'requestDelete must measure the click target via getBoundingClientRect for viewport-clamp decision')
 assert.match(sessionJsx, /flipUp|flip-up/, 'SessionNav must track a flip direction for the popover (flip-up when near viewport bottom)')
 
+// 6b. The flip decision is container/list-aware: the popover renders inside
+//     .session-nav-row inside .session-nav-list (overflow-y:auto → overflow-x
+//     computes to auto too), so it is clipped by the LIST's scroll box, not
+//     only the viewport. The flip logic MUST measure the .session-nav-list
+//     container's visible bottom, not only window.innerHeight — otherwise a
+//     short / non-full-height rail clips the popover on a low row even though
+//     viewport-relative spaceBelow is still large (the flip never fires).
+assert.match(
+  sessionJsx,
+  /\.session-nav-list/,
+  'requestDelete must reference the .session-nav-list scroll container (the popover is clipped by the list, not the viewport)'
+)
+assert.match(
+  sessionJsx,
+  /closest\s*\(\s*['"]\.session-nav-list['"]\s*\)/,
+  'requestDelete must find the .session-nav-list scroll container via closest() from the clicked row (container-aware flip)'
+)
+assert.match(
+  sessionJsx,
+  /listRect\.bottom\s*-\s*rect\.bottom|listSpaceBelow\s*=\s*listRect\.bottom/,
+  'requestDelete must compute the space below the row relative to the list container bottom (container-aware flip), not only the viewport'
+)
+// The binding constraint is the SMALLER of viewport and list space — assert
+// the measurement takes the min so a list that is shorter than the viewport
+// still triggers the flip.
+assert.match(
+  sessionJsx,
+  /if\s*\(\s*listSpaceBelow\s*<\s*spaceBelow\s*\)\s*spaceBelow\s*=\s*listSpaceBelow/,
+  'requestDelete must clamp spaceBelow to the smaller of viewport/list space below (Math.min of the two constraints)'
+)
+
 // 7. No window.confirm anywhere in SessionNav (glossary hard negative).
 assert.doesNotMatch(sessionJsx, /window\.confirm\s*\(/, 'SessionNav must NOT use window.confirm (glossary 会话删除确认浮层 _Avoid_)')
 
@@ -81,4 +112,4 @@ assert.doesNotMatch(sessionJsx, /window\.confirm\s*\(/, 'SessionNav must NOT use
 assert.match(sessionJsx, /session-nav-delete-cancel/, 'popover must keep a cancel action (two-step interaction)')
 assert.match(sessionJsx, /session-nav-delete-danger/, 'popover must keep a confirm-delete action (two-step interaction)')
 
-console.log('check-session-nav-delete-popover: confirm is a row-anchored popover (no rail-bottom bar); flip-up clamps to viewport; no window.confirm; two-step interaction kept.')
+console.log('check-session-nav-delete-popover: confirm is a row-anchored popover (no rail-bottom bar); flip-up clamps to BOTH viewport and .session-nav-list container; no window.confirm; two-step interaction kept.')
