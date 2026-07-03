@@ -2,20 +2,37 @@ package collaboration
 
 import "testing"
 
+func TestDefaultPlanTemporarilyDisablesGates(t *testing.T) {
+	plan := DefaultPlan(RequirementContext{ConfirmedRequirementJSON: `{"appName":"demo"}`})
+	keys := plan.AgentKeys()
+	for _, disabled := range disabledGates {
+		if keys[disabled] {
+			t.Fatalf("%s should be temporarily disabled but is present: %+v", disabled, plan.Agents)
+		}
+	}
+	// Connectivity must be preserved around each removed gate.
+	if !plan.HasEdge("designer", "code-generator") || !plan.HasEdge("data-integration", "code-generator") {
+		t.Fatalf("removed solution-designer must bridge designer/data-integration -> code-generator: %+v", plan.Edges)
+	}
+	if !plan.HasEdge("code-generator", "tester") {
+		t.Fatalf("removed code-reviewer must bridge code-generator -> tester: %+v", plan.Edges)
+	}
+	if !plan.HasEdge("tester", "image-builder") {
+		t.Fatalf("removed product-acceptance must bridge tester -> image-builder: %+v", plan.Edges)
+	}
+}
+
 func TestDefaultPlanIncludesRequiredAgentsAndEdges(t *testing.T) {
 	plan := DefaultPlan(RequirementContext{
-		ConfirmedRequirementJSON: `{"appName":"航母复盘","judgementBoundary":{"dataSources":["ontology","public_web_search"]}}`,
+		ConfirmedRequirementJSON: `{"appName":"航母复盘","judgementBoundary":{"dataSources":["ontology"]}}`,
 	})
 	keys := plan.AgentKeys()
 	for _, want := range []string{
 		"requirement-analyst",
 		"designer",
 		"data-integration",
-		"solution-designer",
 		"code-generator",
-		"code-reviewer",
 		"tester",
-		"product-acceptance",
 		"image-builder",
 		"deployer",
 	} {
@@ -23,11 +40,13 @@ func TestDefaultPlanIncludesRequiredAgentsAndEdges(t *testing.T) {
 			t.Fatalf("missing agent %s in plan: %+v", want, plan.Agents)
 		}
 	}
-	if !plan.HasEdge("code-generator", "code-reviewer") {
-		t.Fatalf("missing code-generator -> code-reviewer edge: %+v", plan.Edges)
+	// The disabled gates (solution-designer/code-reviewer/product-acceptance)
+	// are bridged: code-generator flows straight into tester, tester into image-builder.
+	if !plan.HasEdge("code-generator", "tester") {
+		t.Fatalf("missing code-generator -> tester edge: %+v", plan.Edges)
 	}
-	if !plan.HasEdge("tester", "product-acceptance") {
-		t.Fatalf("missing tester -> product-acceptance edge: %+v", plan.Edges)
+	if !plan.HasEdge("tester", "image-builder") {
+		t.Fatalf("missing tester -> image-builder edge: %+v", plan.Edges)
 	}
 	for _, agent := range plan.Agents {
 		if agent.Key == "designer" && agent.Name != "界面设计" {
@@ -45,25 +64,25 @@ func TestDefaultPlanAddsSecurityReviewConditionally(t *testing.T) {
 	if !secured.AgentKeys()["security-reviewer"] {
 		t.Fatalf("public web plan should include security-reviewer: %+v", secured.Agents)
 	}
-	if !secured.HasEdge("code-reviewer", "security-reviewer") {
-		t.Fatalf("security reviewer must follow code reviewer: %+v", secured.Edges)
+	if !secured.HasEdge("code-generator", "security-reviewer") {
+		t.Fatalf("security reviewer must follow code-generator (code-reviewer is disabled): %+v", secured.Edges)
 	}
 	assertAgentBefore(t, secured, "security-reviewer", "tester")
 }
 
 func TestDefaultPlanAppliesRemoveAgentAdjustment(t *testing.T) {
 	plan := DefaultPlan(RequirementContext{ConfirmedRequirementJSON: `{
-		"appName":"跳过代码审查演示",
-		"collaborationAdjustments":[{"action":"remove_agent","agentKey":"code-reviewer","warning":"用户确认跳过代码审查"}]
+		"appName":"跳过测试验证演示",
+		"collaborationAdjustments":[{"action":"remove_agent","agentKey":"tester","warning":"用户确认跳过测试验证"}]
 	}`})
-	if plan.AgentKeys()["code-reviewer"] {
-		t.Fatalf("code-reviewer should be removed by adjustment: %+v", plan.Agents)
+	if plan.AgentKeys()["tester"] {
+		t.Fatalf("tester should be removed by adjustment: %+v", plan.Agents)
 	}
-	if plan.HasEdge("code-generator", "code-reviewer") || plan.HasEdge("code-reviewer", "tester") {
-		t.Fatalf("removed code-reviewer must not remain in edges: %+v", plan.Edges)
+	if plan.HasEdge("code-generator", "tester") || plan.HasEdge("tester", "image-builder") {
+		t.Fatalf("removed tester must not remain in edges: %+v", plan.Edges)
 	}
-	if !plan.HasEdge("code-generator", "tester") {
-		t.Fatalf("remove adjustment should bridge code-generator -> tester: %+v", plan.Edges)
+	if !plan.HasEdge("code-generator", "image-builder") {
+		t.Fatalf("remove adjustment should bridge code-generator -> image-builder: %+v", plan.Edges)
 	}
 }
 
@@ -75,8 +94,8 @@ func TestDefaultPlanAppliesAddSecurityReviewerAdjustment(t *testing.T) {
 	if !plan.AgentKeys()["security-reviewer"] {
 		t.Fatalf("security-reviewer should be added by adjustment: %+v", plan.Agents)
 	}
-	if !plan.HasEdge("code-reviewer", "security-reviewer") || !plan.HasEdge("security-reviewer", "tester") {
-		t.Fatalf("added security reviewer should sit between code-reviewer and tester: %+v", plan.Edges)
+	if !plan.HasEdge("code-generator", "security-reviewer") || !plan.HasEdge("security-reviewer", "tester") {
+		t.Fatalf("added security reviewer should sit between code-generator and tester (code-reviewer is disabled): %+v", plan.Edges)
 	}
 	assertAgentBefore(t, plan, "security-reviewer", "tester")
 }
