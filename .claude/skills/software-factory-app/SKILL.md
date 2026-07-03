@@ -82,11 +82,25 @@ failure, even if it "makes the build pass"):
 
 ## Output Checklist
 
-- Buildable with `npm install` or `npm ci`.
+- Buildable with `npm install` (the factory never ships a `package-lock.json`, so NEVER use `npm ci`).
 - Deployable by Podman with the generated Dockerfile.
 - All external API calls go through nginx reverse proxy, NEVER directly from browser JS.
 - Runtime page has meaningful non-empty content.
 - Buttons and controls have visible feedback.
+
+## Dockerfile Rule (CRITICAL — build fails otherwise)
+
+The factory does **NOT** generate `package-lock.json` in the generated-app build context — `npm install` (run inside the image) creates it there. Therefore the generated `Dockerfile` MUST follow this pattern:
+
+```dockerfile
+COPY package.json ./
+RUN npm install
+```
+
+- **Never reference `package-lock.json` in a `COPY` source.** Do NOT write `COPY package.json package-lock.json* ./` or `COPY package-lock.json ./`. A `COPY` source (literal or `*` wildcard) that matches no file in the build context makes BuildKit's COPY step fail and the image build exits.
+- **Install with `npm install`, never `npm ci`.** `npm ci` requires a lockfile already in the context, which the factory never provides.
+
+This is enforced by a code-generation audit: a Dockerfile that COPYs `package-lock.json` is rejected at `code_generation` (the bounded-repair budget then fixes it before review gates run).
 
 ## API Proxy Rule (nginx reverse proxy)
 

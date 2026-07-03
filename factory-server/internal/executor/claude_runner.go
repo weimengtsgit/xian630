@@ -1163,6 +1163,15 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 		return StepResult{Status: model.StepStatusWaitingUser, NeedsUserInput: true, Questions: out.Questions}
 	}
 
+	// Dockerfile audit: reject a COPY that reads a package-lock.json the factory
+	// never generates (`COPY package.json package-lock.json* ./` fails BuildKit
+	// with no match). Caught here at code_generation so the bounded-repair rewind
+	// has budget to fix it — product_acceptance finds the same bug but runs after
+	// code_review, which often exhausts the task-level repair budget first.
+	if err := runner.AuditDockerfile(projectDir); err != nil {
+		return c.failureFromError(err)
+	}
+
 	// Honest-data audit: when the confirmed requirement is a real-data policy
 	// (live_api / mock_then_api), the generated app must not ship mock or
 	// synthetic data. dataPolicy and the declared data skills are parsed from the
