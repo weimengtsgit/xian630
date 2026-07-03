@@ -55,12 +55,13 @@ type ClaudeStepRunner struct {
 // lenient runner.ReadAndDecode, so extra audit fields and prose/```json-wrapped
 // output are tolerated — same path the validators use.
 type codeGenerationStepOutput struct {
-	ProjectDir     string            `json:"projectDir"`
-	CreatedFiles   []string          `json:"createdFiles"`
-	NeedsUserInput bool              `json:"needsUserInput"`
-	Questions      []runner.Question `json:"questions"`
-	UsedSkills     runner.SkillPaths `json:"usedSkills"`
-	Warnings       []string          `json:"warnings,omitempty"`
+	ProjectDir              string            `json:"projectDir"`
+	CreatedFiles            []string          `json:"createdFiles"`
+	NeedsUserInput          bool              `json:"needsUserInput"`
+	Questions               []runner.Question `json:"questions"`
+	UsedSkills              runner.SkillPaths `json:"usedSkills"`
+	Warnings                []string          `json:"warnings,omitempty"`
+	AcknowledgedConstraints []string          `json:"acknowledgedConstraints,omitempty"`
 }
 
 type collaborationStepSnapshot struct {
@@ -1172,6 +1173,21 @@ func (c *ClaudeStepRunner) finishCodeGeneration(ctx context.Context, trace runne
 		return c.failureFromError(err)
 	}
 
+	// Prototype hard-constraint acknowledgment: a confirmed prototype contract is
+	// now inlined into the prompt (prototypeContextPromptBlock), and code_gen
+	// must echo each constraint/responsiveRule into output.json's
+	// acknowledgedConstraints. Empty ack when a confirmed contract exists means
+	// the agent skip-read the contract (the original cause of the mobile
+	// bottom-tab rule being dropped) — fail at code_gen so repair can fix it.
+	if ref := c.latestInterfacePreviewRef(ctx, job.ID); ref != nil && ref.Status == "confirmed" {
+		contractPath := strings.TrimSuffix(ref.Path, "/preview-manifest.json") + "/prototype-contract.json"
+		if contractBytes, err := os.ReadFile(filepath.Join(c.artifactRoot(), filepath.FromSlash(contractPath))); err == nil {
+			if err := runner.ValidatePrototypeAck(runner.PrototypeHardConstraints(contractBytes), raw.AcknowledgedConstraints); err != nil {
+				return c.failureFromError(err)
+			}
+		}
+	}
+
 	// Honest-data audit: when the confirmed requirement is a real-data policy
 	// (live_api / mock_then_api), the generated app must not ship mock or
 	// synthetic data. dataPolicy and the declared data skills are parsed from the
@@ -1422,7 +1438,8 @@ func (c *ClaudeStepRunner) prompt(job model.Job, step model.JobStep, ws runner.A
 		return "你是软件工厂的代码生成 agent。你的工作目录就是软件工厂仓库根目录。只能在 generated-apps/<slug>/ 下生成静态 Vite 应用和 .factory/app.json，禁止在 factory-server/generated-apps/ 或其他目录生成文件。" +
 			"工作区根目录：" + c.workspace() + "。读取输入文件：input.json 路径：" + absolutePath(ws.InputPath()) + "。" +
 			"output.json 必须写入：output.json 路径：" + absolutePath(ws.OutputPath()) + "；可选生成摘要写入：output.md 路径：" + absolutePath(ws.OutputMDPath()) + "。" +
-			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			"output.json 必须包含 projectDir、createdFiles、needsUserInput、questions、usedSkills（可含 warnings）、acknowledgedConstraints；projectDir 和 createdFiles 必须使用仓库相对路径。" +
+			"若输入含 [prototype 原型硬约束] 块，acknowledgedConstraints 必须逐条复述该块列出的每条约束（每条一行、顺序对应），缺失即 schema_validation_failed；且生成代码必须真正落实这些约束（如移动端底部 Tab 导航、地图首屏 60%）。" +
 			"代码生成阶段不允许向用户提问，必须输出 needsUserInput=false 且 questions=[]；缺失字段或数据只能生成降级态，不得等待用户澄清。" +
 			".factory/app.json 必须是以下 Factory manifest 契约：schemaVersion 为 1，slug 为 <slug>，name 非空，source 为 generated，entry 为 static-vite，path 为 generated-apps/<slug>，并包含 build{command:npm run build,outputDir:dist}、runtime{devCommand:npm run dev,defaultPort:5173}、docker{enabled:true,dockerfile:Dockerfile,context:.,runtimePort:80}。" +
 			"manifest JSON 字段必须包含 \"schemaVersion\": 1、\"entry\": \"static-vite\"、\"path\": \"generated-apps/<slug>\"；不要使用 deployment 或 ports 代替 build/runtime/docker。" +
@@ -1882,13 +1899,20 @@ func (c *ClaudeStepRunner) prototypeContextPromptBlock(ctx context.Context, jobI
 		level = "hard_constraint"
 	}
 	contractPath := strings.TrimSuffix(ref.Path, "/preview-manifest.json") + "/prototype-contract.json"
-	return "\n\n[prototype 原型设计约束]\n" +
+	block := "\n\n[prototype 原型设计约束]\n" +
 		"本任务已有界面解析/原型设计产物，必须读取并遵循：\n" +
 		"- preview-manifest: " + ref.Path + "\n" +
 		"- prototype-contract: " + contractPath + "\n" +
 		"- prototypeStatus: " + ref.Status + "\n" +
 		"- downstreamConstraintLevel: " + level + "\n" +
 		"当 downstreamConstraintLevel=hard_constraint 时，不得自由改变首页结构、核心组件、主要交互和响应式约束；当为 reference 时，只能作为参考，不能声称用户已确认原型。"
+	// Inline the hard constraints so code_generation cannot skip the Read —
+	// delivering only the file path let the generating LLM skip-read it and
+	// omit contract rules (observed: mobile bottom-tab nav never generated).
+	if contractBytes, err := os.ReadFile(filepath.Join(c.artifactRoot(), filepath.FromSlash(contractPath))); err == nil {
+		block += runner.FormatPrototypeConstraintBlock(runner.PrototypeHardConstraints(contractBytes), level)
+	}
+	return block
 }
 
 func (c *ClaudeStepRunner) dataIntegrationUpstreamPromptBlock(ctx context.Context, job model.Job, kind model.StepKind) string {
