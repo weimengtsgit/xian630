@@ -1,0 +1,25 @@
+/* ===== 卡片网格 ===== */
+
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--gap-md);
+  overflow-y: auto;
+  align-content: start;
+}
+
+.app-grid__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-md);
+  padding: var(--gap-xl);
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.app-grid__empty-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}

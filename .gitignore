@@ -23,6 +23,10 @@ build/
 .DS_Store
 Thumbs.db
 
+# Understand-anything scratch (intermediate batch files moved to .trash during analysis)
+.understand-anything/.trash-*/
+.understand-anything/tmp/
+
 # Logs
 logs/
 *.log

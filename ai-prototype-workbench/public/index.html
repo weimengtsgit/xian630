@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>界面解析智能体</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="c2-clsf-banner"><span class="dot"></span>UNCLASSIFIED // PROTOTYPE WORKBENCH<span class="dot"></span></div>
+
+  <main class="workbench">
+    <section class="preview-panel" aria-label="原型预览">
+      <header class="topbar">
+        <div class="topbar-title">
+          <p class="eyebrow">AI Prototype Workbench</p>
+          <h1>界面解析智能体</h1>
+        </div>
+        <div class="topbar-actions">
+          <div class="preview-toolbar" aria-label="预览工具">
+            <button type="button" class="icon-button" id="fullscreen" title="全屏预览" aria-label="全屏预览">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="status-pill" id="status">待输入</div>
+        </div>
+      </header>
+      <div class="preview-stage">
+        <iframe id="preview" title="生成的原型预览"></iframe>
+        <div class="preview-loading" id="preview-loading" hidden>
+          <div class="loader" aria-hidden="true"></div>
+          <strong>模型正在生成原型</strong>
+          <span data-loading-text>正在生成，已等待 0 秒...</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="chat-panel" aria-label="多轮对话">
+      <div class="chat-session">
+        <div class="chat-session-header">
+          <span>会话区</span>
+          <span class="session-code">SESSION LOG</span>
+        </div>
+        <div class="messages" id="messages"></div>
+      </div>
+      <form class="composer" id="chat-form">
+        <label class="composer-label" for="prompt">需求输入</label>
+        <textarea id="prompt" rows="3" placeholder="描述要生成的界面，或输入修改意见，例如：改成深色指挥风、减少圆角、增加态势面板。"></textarea>
+        <div class="composer-actions">
+          <button type="button" class="secondary" id="reset">重置</button>
+          <button type="button" class="secondary" id="share">确认</button>
+          <button type="submit" class="primary" id="submit">生成 / 调整</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

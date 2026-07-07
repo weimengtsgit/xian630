@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C2 UI System — 军事指挥态势感知设计系统</title>
+<style>
+/* ============================================================
+   C2 UI SYSTEM — 军事指挥/态势感知（Command & Control）深色设计系统
+   单文件自包含 · 无外部依赖 · 令牌驱动 · CSS-only 交互
+   ============================================================ */
+
+/* ---------- 0. Reset ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+img, svg { display: block; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+
+/* ============================================================
+   1. DESIGN TOKENS —— 全站唯一取值来源
+   ============================================================ */
+:root {
+  /* 背景分层：越靠近用户操作面越亮一档 */
+  --bg-base:      #0a0e14;   /* 最底：应用背景 */
+  --bg-panel:     #111823;   /* 面板：栏/卡容器 */
+  --bg-elevated:  #18212e;   /* 抬升：卡内区块、选中态底 */
+  --bg-inset:     #0c1119;   /* 凹陷：输入框、时间轴槽 */
+
+  /* 描边（低饱和冷灰蓝，靠透明度分级） */
+  --border-subtle:  rgba(120,150,180,0.10);
+  --border-default: rgba(130,160,190,0.16);
+  --border-strong:  rgba(140,170,200,0.30);
+
+  /* 品牌强调：科技青蓝，唯一辉光色 */
+  --accent-cyan:        #38b6e6;
+  --accent-cyan-bright: #63d2f7;
+  --accent-cyan-dim:    rgba(56,182,230,0.14);
+  --glow-cyan:          0 0 0 1px rgba(56,182,230,0.45), 0 0 16px rgba(56,182,230,0.28);
+
+  /* 文字三级灰阶 */
+  --text-primary:   #e8eef5;
+  --text-secondary: #9fb2c6;
+  --text-muted:     #647689;
+  --text-disabled:  #44546a;
+
+  /* 语义状态色 */
+  --critical: #e5484d;  --critical-bg: rgba(229,72,77,0.13);
+  --approve:  #3fbd6b;  --approve-bg:  rgba(63,189,107,0.13);
+  --reject:   #e5484d;  --reject-bg:   rgba(229,72,77,0.13);
+  --warning:  #e0a339;  --warning-bg:  rgba(224,163,57,0.13);
+  --info:     #4a90d9;  --info-bg:     rgba(74,144,217,0.13);
+
+  /* 评分色阶 LOW / MED / HIGH */
+  --score-low:  #3fbd6b;
+  --score-med:  #e0a339;
+  --score-high: #e5484d;
+
+  /* 密级色（UNCLASSIFIED=绿；预留更高密级注释） */
+  --clsf-unclass: #4a9e57;   /* CONFIDENTIAL 建议 #2f6fb0 蓝 / SECRET 建议 #c8543a 红 */
+
+  /* 字体 */
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Code", "Consolas", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* 字号 */
+  --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px;
+  --fs-lg: 16px; --fs-xl: 20px; --fs-2xl: 24px;
+
+  /* 间距（4px 基数） */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+
+  /* 圆角 */
+  --r-sm: 3px; --r-md: 5px; --r-lg: 8px; --r-pill: 999px;
+
+  /* 效果 */
+  --focus-ring: 0 0 0 2px var(--bg-base), 0 0 0 4px rgba(56,182,230,0.55);
+  --shadow-panel: 0 8px 24px rgba(0,0,0,0.45);
+}
+
+/* ============================================================
+   2. 展示页文档骨架（非组件本体，仅用于陈列）
+   ============================================================ */
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  /* 极淡网格纹理，营造战术底图氛围 */
+  background-image:
+    linear-gradient(rgba(56,182,230,0.020) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56,182,230,0.020) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.doc { max-width: 1180px; margin: 0 auto; padding: 0 var(--sp-6) var(--sp-8); }
+.doc-hero {
+  padding: var(--sp-8) var(--sp-6) var(--sp-6);
+  max-width: 1180px; margin: 0 auto;
+}
+.doc-hero h1 {
+  font-size: var(--fs-2xl); font-weight: 600; margin: 0 0 var(--sp-2);
+  letter-spacing: 0.5px;
+}
+.doc-hero p { color: var(--text-secondary); margin: 0; max-width: 60ch; }
+.doc-section { margin-top: var(--sp-8); }
+.doc-section > h2 {
+  font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--accent-cyan);
+  margin: 0 0 var(--sp-4); padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border-default);
+}
+.doc-block { margin-bottom: var(--sp-6); }
+.doc-block-title {
+  font-size: var(--fs-md); font-weight: 600; margin: 0 0 var(--sp-1);
+}
+.doc-note {
+  font-size: var(--fs-sm); color: var(--text-muted); margin: 0 0 var(--sp-3);
+  max-width: 70ch;
+}
+.canvas {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-lg);
+  padding: var(--sp-5);
+  display: flex; flex-wrap: wrap; gap: var(--sp-4); align-items: flex-start;
+}
+.canvas.stack { flex-direction: column; }
+.canvas.tight { padding: 0; overflow: hidden; }
+
+/* ---------- 令牌陈列 ---------- */
+.swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-3); width: 100%; }
+.swatch { border: 1px solid var(--border-subtle); border-radius: var(--r-md); overflow: hidden; background: var(--bg-elevated); }
+.swatch-chip { height: 52px; }
+.swatch-meta { padding: var(--sp-2) var(--sp-3); }
+.swatch-name { font-size: var(--fs-sm); font-weight: 600; }
+.swatch-val { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+
+.type-row { display: flex; align-items: baseline; gap: var(--sp-4); width: 100%; padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-subtle); }
+.type-row:last-child { border-bottom: none; }
+.type-tag { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); width: 120px; flex: none; }
+
+.metric-scale { display: flex; gap: var(--sp-2); align-items: flex-end; width: 100%; flex-wrap: wrap; }
+.scale-box { background: var(--accent-cyan-dim); border: 1px solid var(--accent-cyan); border-radius: var(--r-sm); }
+.scale-cap { text-align: center; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); margin-top: var(--sp-1); }
+
+/* ============================================================
+   3. 组件：密级横幅  ClassificationBanner
+   ============================================================ */
+.c2-clsf-banner {
+  display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  height: 22px; width: 100%;
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #d6f0da;
+  background: var(--clsf-unclass);
+  border-bottom: 1px solid rgba(0,0,0,0.3);
+}
+.c2-clsf-banner .dot { width: 6px; height: 6px; border-radius: 50%; background: #d6f0da; }
+
+/* ============================================================
+   4. 组件：应用顶栏 + 工具条 + 图标按钮
+   ============================================================ */
+.c2-topbar {
+  display: flex; align-items: center; gap: var(--sp-3);
+  height: 40px; padding: 0 var(--sp-3); width: 100%;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border-default);
+}
+.c2-toolbar { display: flex; align-items: center; gap: var(--sp-1); }
+.c2-toolbar-sep { width: 1px; height: 20px; background: var(--border-default); margin: 0 var(--sp-1); }
+.c2-iconbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--r-md);
+  color: var(--text-secondary); transition: background .12s, color .12s;
+}
+.c2-iconbtn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.c2-iconbtn.is-active { background: var(--accent-cyan-dim); color: var(--accent-cyan-bright); }
+.c2-iconbtn svg { width: 17px; height: 17px; }
+.c2-iconbtn.accent-red { color: var(--critical); }
+.c2-iconbtn.accent-green { color: var(--approve); }
+.c2-iconbtn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* 顶栏搜索框 */
+.c2-search {
+  display: flex; align-items: center; gap: var(--sp-2);
+  height: 28px; padding: 0 var(--sp-3); min-width: 200px;
+  background: var(--bg-inset); border: 1px solid var(--border-default);
+  border-radius: var(--r-md); color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.c2-search svg { width: 14px; height: 14px; flex: none; }
+.c2-search input {
+  background: none; border: none; outline: none; color: var(--text-primary);
+  font: inherit; width: 100%;
+}
+.c2-search input::placeholder { color: var(--text-muted); }
+.c2-search kbd {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
+  border: 1px solid var(--border-default); border-radius: var(--r-sm);
+  padding: 1px 5px; flex: none;
+}
+
+/* ============================================================
+   5. 组件：分段标签页  Tabs（CSS-only via radio）
+   ============================================================ */
+.c2-tabs { display: inline-flex; background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--r-md); padding: 3px; gap: 2px; }
+.c2-tabs input { position: absolute; opacity: 0; pointer-events: none; }
+.c2-tabs label {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-4); border-radius: var(--r-sm);
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted);
+  cursor: pointer; transition: color .12s, background .12s;
+}
+.c2-tabs label svg { width: 14px; height: 14px; }
+.c2-tabs label:hover { color: var(--text-secondary); }
+.c2-tabs input:checked + label {
+  background: var(--accent-cyan-dim); color: var(--accent-cyan-bright);
+  box-shadow: inset 0 0 0 1px rgba(56,182,230,0.35);
+}
+
+/* ============================================================
+   6. 组件：面板 / 卡片容器  Panel
+   ============================================================ */
+.c2-panel {
+  background: var(--bg-panel); border: 1px solid var(--border-default);
+  border-radius: var(--r-lg); overflow: hidden;
+  box-shadow: var(--shadow-panel);
+}
+.c2-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-default);
+  background: linear-gradient(180deg, rgba(56,182,230,0.05), transparent);
+}
+.c2-panel-head .title { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; }
+.c2-panel-head .title svg { width: 16px; height: 16px; color: var(--accent-cyan); }
+.c2-panel-body { padding: var(--sp-4); }
+
+/* ============================================================
+   7. 组件：严重度徽章 / 状态徽章 / 芯片  Badge · Chip
+   ============================================================ */
+.c2-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: 1px;
+  text-transform: uppercase; padding: 2px 8px; border-radius: var(--r-sm);
+  line-height: 1.4;
+}
+.c2-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.c2-badge.critical { color: var(--critical); background: var(--critical-bg); box-shadow: inset 0 0 0 1px rgba(229,72,77,0.35); }
+.c2-badge.warning  { color: var(--warning);  background: var(--warning-bg);  box-shadow: inset 0 0 0 1px rgba(224,163,57,0.35); }
+.c2-badge.info     { color: var(--info);     background: var(--info-bg);     box-shadow: inset 0 0 0 1px rgba(74,144,217,0.35); }
+.c2-badge.approve  { color: var(--approve);  background: var(--approve-bg);  box-shadow: inset 0 0 0 1px rgba(63,189,107,0.35); }
+
+.c2-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-xs); color: var(--text-secondary);
+  background: var(--bg-elevated); border: 1px solid var(--border-default);
+  border-radius: var(--r-pill); padding: 2px 10px;
+}
+.c2-tag-feasible {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-xs); font-weight: 600; color: var(--approve);
+  background: var(--approve-bg); border-radius: var(--r-sm); padding: 2px 8px;
+}
+
+/* ============================================================
+   8. 组件：态势卡  SituationCard
+   ============================================================ */
+.c2-situation {
+  background: var(--bg-elevated); border: 1px solid var(--border-default);
+  border-left: 3px solid var(--critical); border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+}
+.c2-situation .row1 { display: flex; align-items: center; gap: var(--sp-2); }
+.c2-situation .name { font-weight: 600; font-size: var(--fs-md); }
+.c2-situation .meta { font-size: var(--fs-xs); color: var(--text-muted); margin-top: 3px; }
+.c2-situation .meta b { color: var(--text-secondary); font-weight: 600; }
+
+/* ============================================================
+   9. 组件：可折叠分节  CollapsibleSection（native <details>）
+   ============================================================ */
+.c2-collapse { border-top: 1px solid var(--border-subtle); }
+.c2-collapse summary {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-1); font-size: var(--fs-sm); font-weight: 600;
+  color: var(--text-secondary);
+}
+.c2-collapse summary:hover { color: var(--text-primary); }
+.c2-collapse summary .chev { width: 12px; height: 12px; color: var(--text-muted); transition: transform .15s; }
+.c2-collapse[open] summary .chev { transform: rotate(90deg); }
+.c2-collapse summary .count { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+.c2-collapse .body { padding: 0 var(--sp-1) var(--sp-3) 20px; font-size: var(--fs-sm); color: var(--text-secondary); }
+
+/* ============================================================
+   10. 组件：方案列表项  PlanListItem
+   ============================================================ */
+.c2-plan {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3); border: 1px solid var(--border-default);
+  border-radius: var(--r-md); background: var(--bg-panel);
+  cursor: pointer; transition: border-color .12s, background .12s;
+}
+.c2-plan:hover { border-color: var(--border-strong); background: var(--bg-elevated); }
+.c2-plan.is-selected { border-color: var(--accent-cyan); box-shadow: var(--glow-cyan); background: var(--accent-cyan-dim); }
+.c2-plan .p-title { font-weight: 600; font-size: var(--fs-base); }
+.c2-plan .p-sub { font-size: var(--fs-xs); color: var(--text-muted); margin-top: 2px; }
+.c2-plan .p-sub b { color: var(--text-secondary); font-weight: 600; }
+
+/* ============================================================
+   11. 组件：审批操作行  ApprovalActions + 按钮族 Button
+   ============================================================ */
+.c2-approval { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.c2-btn {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  height: 30px; padding: 0 var(--sp-3); border-radius: var(--r-md);
+  font-size: var(--fs-sm); font-weight: 600; color: var(--text-secondary);
+  border: 1px solid var(--border-default); background: var(--bg-elevated);
+  transition: background .12s, border-color .12s, color .12s;
+}
+.c2-btn svg { width: 14px; height: 14px; }
+.c2-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.c2-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.c2-btn.primary { background: var(--accent-cyan-dim); border-color: var(--accent-cyan); color: var(--accent-cyan-bright); }
+.c2-btn.primary:hover { background: rgba(56,182,230,0.22); }
+.c2-btn.approve { color: var(--approve); border-color: rgba(63,189,107,0.4); }
+.c2-btn.approve:hover { background: var(--approve-bg); }
+.c2-btn.reject { color: var(--reject); border-color: rgba(229,72,77,0.4); }
+.c2-btn.reject:hover { background: var(--reject-bg); }
+.c2-btn.ghost { background: none; border-color: transparent; }
+.c2-btn.ghost:hover { background: var(--bg-elevated); }
+.c2-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ============================================================
+   12. 组件：指标磁贴  MetricTile + 评分徽章 ScoreBadge
+   ============================================================ */
+.c2-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2); width: 100%; }
+.c2-metric {
+  background: var(--bg-inset); border: 1px solid var(--border-default);
+  border-radius: var(--r-md); padding: var(--sp-3);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.c2-metric .label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); }
+.c2-metric .value { font-family: var(--font-mono); font-size: var(--fs-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.c2-metric .value small { font-size: var(--fs-sm); color: var(--text-muted); font-weight: 400; }
+
+.c2-score {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  padding: 2px 7px; border-radius: var(--r-sm); align-self: flex-start;
+}
+.c2-score.low  { color: #071810; background: var(--score-low); }
+.c2-score.med  { color: #1a1305; background: var(--score-med); }
+.c2-score.high { color: #1c0708; background: var(--score-high); }
+
+/* ============================================================
+   13. 组件：需求行  RequirementRow
+   ============================================================ */
+.c2-req { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border-subtle); }
+.c2-req:last-child { border-bottom: none; }
+.c2-req .r-icon { width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center; background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--r-md); color: var(--accent-cyan); }
+.c2-req .r-icon svg { width: 18px; height: 18px; }
+.c2-req .r-main { flex: 1; }
+.c2-req .r-qty { font-weight: 600; font-size: var(--fs-base); }
+.c2-req .r-status { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--approve); margin-top: 2px; }
+.c2-req .r-status svg { width: 12px; height: 12px; }
+.c2-req .r-status.pending { color: var(--warning); }
+
+/* ============================================================
+   14. 组件：甘特时间轴  GanttTimeline（CSS grid，无 JS）
+   ============================================================ */
+.c2-gantt { width: 100%; background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--r-md); padding: var(--sp-3) 0 0; position: relative; overflow: hidden; }
+.c2-gantt-rows { position: relative; }
+.c2-gantt-row { position: relative; height: 30px; display: flex; align-items: center; }
+.c2-gantt-bar {
+  position: absolute; height: 18px; border-radius: var(--r-sm);
+  background: linear-gradient(180deg, rgba(56,182,230,0.5), rgba(56,182,230,0.28));
+  border: 1px solid var(--accent-cyan);
+  display: flex; align-items: center; padding: 0 var(--sp-2);
+  font-size: var(--fs-xs); color: var(--text-primary); white-space: nowrap;
+  box-shadow: 0 0 10px rgba(56,182,230,0.25);
+}
+.c2-gantt-bar.pending { background: linear-gradient(180deg, rgba(120,140,160,0.28), rgba(120,140,160,0.14)); border-color: var(--border-strong); color: var(--text-secondary); box-shadow: none; }
+.c2-gantt-axis { display: flex; border-top: 1px solid var(--border-default); margin-top: var(--sp-2); }
+.c2-gantt-tick { flex: 1; text-align: center; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); padding: 4px 0; border-left: 1px solid var(--border-subtle); }
+.c2-gantt-tick:first-child { border-left: none; }
+.c2-gantt-now { position: absolute; top: 0; bottom: 22px; width: 2px; background: var(--accent-cyan-bright); box-shadow: 0 0 8px rgba(99,210,247,0.7); z-index: 3; }
+.c2-gantt-now::after { content: "NOW"; position: absolute; top: -2px; left: 50%; transform: translateX(-50%); font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--bg-base); background: var(--accent-cyan-bright); padding: 1px 4px; border-radius: 2px; letter-spacing: 1px; }
+
+/* ============================================================
+   15. 综合示例：三栏工作台缩略骨架
+   ============================================================ */
+.c2-shell { width: 100%; border: 1px solid var(--border-default); border-radius: var(--r-lg); overflow: hidden; }
+.c2-shell-body { display: grid; grid-template-columns: 260px 1fr 300px; min-height: 260px; }
+.c2-shell-col { padding: var(--sp-3); border-right: 1px solid var(--border-default); background: var(--bg-panel); display: flex; flex-direction: column; gap: var(--sp-2); }
+.c2-shell-col:last-child { border-right: none; }
+.c2-shell-map {
+  background: radial-gradient(circle at 50% 45%, rgba(56,182,230,0.10), transparent 60%), var(--bg-inset);
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+.c2-shell-map .ring { position: absolute; border: 1px solid rgba(56,182,230,0.25); border-radius: 50%; }
+.c2-shell-map .ring.r1 { width: 180px; height: 180px; }
+.c2-shell-map .ring.r2 { width: 120px; height: 120px; border-style: dashed; }
+.c2-shell-map .globe { width: 8px; height: 8px; background: var(--accent-cyan-bright); border-radius: 50%; box-shadow: var(--glow-cyan); }
+.c2-shell-map .cap { position: absolute; bottom: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+
+.col-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-muted); margin-bottom: 2px; }
+
+/* 页脚 */
+.doc-foot { margin-top: var(--sp-8); padding-top: var(--sp-4); border-top: 1px solid var(--border-default); font-size: var(--fs-xs); color: var(--text-muted); text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- ===== 顶部密级横幅（真实系统置于最顶） ===== -->
+<div class="c2-clsf-banner"><span class="dot"></span>UNCLASSIFIED // NOTIONAL DATA<span class="dot"></span></div>
+
+<header class="doc-hero">
+  <h1>C2 UI System</h1>
+  <p>军事指挥 / 态势感知（Command &amp; Control）深色设计系统。令牌驱动、单文件自包含、CSS-only 交互。本页既是活的组件展示墙，也是令牌与用法文档。</p>
+</header>
+
+<main class="doc">
+
+  <!-- ========== 令牌：色彩 ========== -->
+  <section class="doc-section">
+    <h2>01 · 设计令牌 — 色彩</h2>
+
+    <div class="doc-block">
+      <p class="doc-block-title">背景分层</p>
+      <p class="doc-note">四档背景，越靠近用户操作面越亮一档，靠亮度差而非描边建立层级。</p>
+      <div class="canvas"><div class="swatch-grid">
+        <div class="swatch"><div class="swatch-chip" style="background:var(--bg-base)"></div><div class="swatch-meta"><div class="swatch-name">bg-base</div><div class="swatch-val">#0a0e14</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--bg-panel)"></div><div class="swatch-meta"><div class="swatch-name">bg-panel</div><div class="swatch-val">#111823</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--bg-elevated)"></div><div class="swatch-meta"><div class="swatch-name">bg-elevated</div><div class="swatch-val">#18212e</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--bg-inset)"></div><div class="swatch-meta"><div class="swatch-name">bg-inset</div><div class="swatch-val">#0c1119</div></div></div>
+      </div></div>
+    </div>
+
+    <div class="doc-block">
+      <p class="doc-block-title">品牌强调 · 语义状态 · 评分色阶</p>
+      <p class="doc-note">青蓝为唯一辉光色，只用于选中态与地图类元素；语义色承载 CRITICAL/审批/警示；评分色阶专用于 LOW/MED/HIGH。</p>
+      <div class="canvas"><div class="swatch-grid">
+        <div class="swatch"><div class="swatch-chip" style="background:var(--accent-cyan)"></div><div class="swatch-meta"><div class="swatch-name">accent-cyan</div><div class="swatch-val">#38b6e6</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--critical)"></div><div class="swatch-meta"><div class="swatch-name">critical</div><div class="swatch-val">#e5484d</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--approve)"></div><div class="swatch-meta"><div class="swatch-name">approve</div><div class="swatch-val">#3fbd6b</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--warning)"></div><div class="swatch-meta"><div class="swatch-name">warning</div><div class="swatch-val">#e0a339</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--info)"></div><div class="swatch-meta"><div class="swatch-name">info</div><div class="swatch-val">#4a90d9</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--clsf-unclass)"></div><div class="swatch-meta"><div class="swatch-name">clsf-unclass</div><div class="swatch-val">#4a9e57</div></div></div>
+      </div></div>
+    </div>
+
+    <div class="doc-block">
+      <p class="doc-block-title">文字灰阶</p>
+      <div class="canvas"><div class="swatch-grid">
+        <div class="swatch"><div class="swatch-chip" style="background:var(--text-primary)"></div><div class="swatch-meta"><div class="swatch-name">text-primary</div><div class="swatch-val">#e8eef5</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--text-secondary)"></div><div class="swatch-meta"><div class="swatch-name">text-secondary</div><div class="swatch-val">#9fb2c6</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--text-muted)"></div><div class="swatch-meta"><div class="swatch-name">text-muted</div><div class="swatch-val">#647689</div></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:var(--text-disabled)"></div><div class="swatch-meta"><div class="swatch-name">text-disabled</div><div class="swatch-val">#44546a</div></div></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ========== 令牌：字体 ========== -->
+  <section class="doc-section">
+    <h2>02 · 设计令牌 — 字体</h2>
+    <p class="doc-note">无衬线系统栈承载界面文字；等宽字体承载指标、坐标、编号等数据（tabular-nums 对齐）。微标签一律大写 + 字距，塑造 C2 技术感。</p>
+    <div class="canvas stack">
+      <div class="type-row"><span class="type-tag">2xl / 24 · 600</span><span style="font-size:var(--fs-2xl);font-weight:600">2 Phase Air Evacuation</span></div>
+      <div class="type-row"><span class="type-tag">xl / 20 · mono</span><span style="font-size:var(--fs-xl);font-family:var(--font-mono);font-variant-numeric:tabular-nums">7.5 hrs</span></div>
+      <div class="type-row"><span class="type-tag">lg / 16 · 600</span><span style="font-size:var(--fs-lg);font-weight:600">Response Plans</span></div>
+      <div class="type-row"><span class="type-tag">base / 13</span><span style="font-size:var(--fs-base)">Crowds and equipment reported gathering outside the embassy.</span></div>
+      <div class="type-row"><span class="type-tag">sm / 12</span><span style="font-size:var(--fs-sm);color:var(--text-secondary)">Status · Proposed by J3</span></div>
+      <div class="type-row"><span class="type-tag">xs / 11 · 大写</span><span style="font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:2px;color:var(--text-muted)">Requirements</span></div>
+    </div>
+  </section>
+
+  <!-- ========== 令牌：间距 / 圆角 / 效果 ========== -->
+  <section class="doc-section">
+    <h2>03 · 设计令牌 — 间距 · 圆角 · 效果</h2>
+    <div class="doc-block">
+      <p class="doc-block-title">间距（4px 基数）</p>
+      <div class="canvas">
+        <div class="metric-scale">
+          <div><div class="scale-box" style="width:4px;height:32px"></div><div class="scale-cap">4</div></div>
+          <div><div class="scale-box" style="width:8px;height:32px"></div><div class="scale-cap">8</div></div>
+          <div><div class="scale-box" style="width:12px;height:32px"></div><div class="scale-cap">12</div></div>
+          <div><div class="scale-box" style="width:16px;height:32px"></div><div class="scale-cap">16</div></div>
+          <div><div class="scale-box" style="width:20px;height:32px"></div><div class="scale-cap">20</div></div>
+          <div><div class="scale-box" style="width:24px;height:32px"></div><div class="scale-cap">24</div></div>
+          <div><div class="scale-box" style="width:32px;height:32px"></div><div class="scale-cap">32</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="doc-block">
+      <p class="doc-block-title">圆角 &amp; 辉光效果</p>
+      <div class="canvas">
+        <div style="text-align:center"><div style="width:64px;height:44px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:var(--r-sm)"></div><div class="scale-cap">sm 3</div></div>
+        <div style="text-align:center"><div style="width:64px;height:44px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:var(--r-md)"></div><div class="scale-cap">md 5</div></div>
+        <div style="text-align:center"><div style="width:64px;height:44px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:var(--r-lg)"></div><div class="scale-cap">lg 8</div></div>
+        <div style="text-align:center"><div style="width:64px;height:44px;background:var(--accent-cyan-dim);border-radius:var(--r-md);box-shadow:var(--glow-cyan)"></div><div class="scale-cap">glow-cyan</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 组件：顶栏 / 密级 / 工具条 ========== -->
+  <section class="doc-section">
+    <h2>04 · 组件 — 顶栏 · 密级横幅 · 工具条</h2>
+    <p class="doc-note">密级横幅置于应用最顶，颜色随密级切换（UNCLASSIFIED 绿）。工具条为无状态图标按钮组，选中态用青蓝底。</p>
+    <div class="canvas tight stack" style="gap:0">
+      <div class="c2-clsf-banner"><span class="dot"></span>UNCLASSIFIED // NOTIONAL DATA<span class="dot"></span></div>
+      <div class="c2-topbar">
+        <div class="c2-toolbar">
+          <button class="c2-iconbtn accent-red" title="标记"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V4h13l-2 4 2 4H4"/></svg></button>
+          <button class="c2-iconbtn accent-green" title="播放"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l11-7z"/></svg></button>
+          <button class="c2-iconbtn is-active" title="图层"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+          <span class="c2-toolbar-sep"></span>
+          <button class="c2-iconbtn" title="测量"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17L17 3l4 4L7 21z"/><path d="M8 12l2 2M12 8l2 2"/></svg></button>
+          <button class="c2-iconbtn" title="标注"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16 4l4 4L8 20l-5 1 1-5z"/></svg></button>
+          <button class="c2-iconbtn" title="定位"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></button>
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:var(--sp-3)">
+          <span style="font-size:var(--fs-sm);color:var(--text-secondary)">Global Overview</span>
+          <label class="c2-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+            <input type="text" placeholder="Search…">
+            <kbd>Ctrl Space</kbd>
+          </label>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 组件：标签页 ========== -->
+  <section class="doc-section">
+    <h2>05 · 组件 — 分段标签页 Tabs</h2>
+    <p class="doc-note">CSS-only（radio 驱动），选中态青蓝底 + 内描边。用于左栏 Situations / Ops / Data 切换。</p>
+    <div class="canvas">
+      <div class="c2-tabs">
+        <input type="radio" name="tabs-demo" id="td1" checked><label for="td1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>Situations</label>
+        <input type="radio" name="tabs-demo" id="td2"><label for="td2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/></svg>Ops</label>
+        <input type="radio" name="tabs-demo" id="td3"><label for="td3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Data</label>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 组件：态势卡 + 折叠分节 + 方案项 ========== -->
+  <section class="doc-section">
+    <h2>06 · 组件 — 态势卡 · 折叠分节 · 方案列表项</h2>
+    <p class="doc-note">态势卡左侧色条表严重度；折叠分节用原生 details；方案项支持选中态（青蓝辉光）与警示徽章。</p>
+    <div class="canvas stack">
+      <div style="width:100%;max-width:420px">
+        <div class="c2-situation">
+          <div class="row1"><span class="name">Threats to US Embassy in Zlarovo</span></div>
+          <div class="meta">Created <b>2 hours ago</b> by CPT Harrison, Michelle</div>
+          <div style="margin-top:var(--sp-2)"><span class="c2-badge critical"><span class="dot"></span>Critical</span></div>
+        </div>
+
+        <details class="c2-collapse" open>
+          <summary><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>Details</summary>
+          <div class="body">Crowds and equipment have been reported gathering outside the US Embassy in Zlarovo. The ongoing coup is resulting in widespread violence.</div>
+        </details>
+        <details class="c2-collapse">
+          <summary><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>Intelligence<span class="count">3</span></summary>
+          <div class="body">3 related intelligence reports available.</div>
+        </details>
+        <details class="c2-collapse">
+          <summary><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>Response Plans<span class="count">3</span></summary>
+          <div class="body">3 proposed courses of action.</div>
+        </details>
+      </div>
+
+      <div style="width:100%;max-width:420px;display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="c2-plan is-selected">
+          <div><div class="p-title">2 Phase Air Evacuation</div><div class="p-sub">Status · Proposed by <b>J3</b></div></div>
+        </div>
+        <div class="c2-plan">
+          <div><div class="p-title">Deploy Team from USS Edwardson</div><div class="p-sub">Status · Proposed by <b>J35</b></div></div>
+          <span class="c2-badge warning"><span class="dot"></span>Requires 16 hrs</span>
+        </div>
+        <div class="c2-plan">
+          <div><div class="p-title">Evacuation via C-17 from Germany</div><div class="p-sub">Status · Proposed by <b>J35</b></div></div>
+          <span class="c2-badge critical"><span class="dot"></span>Equip failure</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 组件：方案详情 + 审批 + 指标 + 需求 ========== -->
+  <section class="doc-section">
+    <h2>07 · 组件 — 方案详情卡（审批 · 指标磁贴 · 评分 · 需求行）</h2>
+    <p class="doc-note">右栏方案审批工作面：头部审批操作行，中部三指标磁贴（等宽数字 + 评分色块），底部需求清单（图标 + 数量 + FMC 就绪）。</p>
+    <div class="canvas">
+      <div class="c2-panel" style="width:100%;max-width:440px">
+        <div class="c2-panel-head">
+          <div class="title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg>2 Phase Air Evacuation</div>
+          <span class="c2-tag-feasible"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>Feasible</span>
+        </div>
+        <div class="c2-panel-body">
+          <div style="font-size:var(--fs-xs);color:var(--text-muted);margin-bottom:var(--sp-3)">Course of Action · Created 22 Mar 2021 14:30 · Proposed by J35</div>
+
+          <div class="c2-approval" style="margin-bottom:var(--sp-4)">
+            <button class="c2-btn approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>Approve</button>
+            <button class="c2-btn reject"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>Reject</button>
+            <button class="c2-btn ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Comment</button>
+          </div>
+
+          <div class="c2-metrics" style="margin-bottom:var(--sp-4)">
+            <div class="c2-metric"><span class="label">Time Score</span><span class="value">7.5<small> hrs</small></span><span class="c2-score low">Low</span></div>
+            <div class="c2-metric"><span class="label">Assets</span><span class="value">8<small>×</small></span><span class="c2-score med">Med</span></div>
+            <div class="c2-metric"><span class="label">Steps</span><span class="value">4<small>×</small></span><span class="c2-score med">Med</span></div>
+          </div>
+
+          <div style="font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:2px;color:var(--text-muted);margin-bottom:var(--sp-2)">Requirements</div>
+          <div class="c2-req">
+            <div class="r-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg></div>
+            <div class="r-main"><div class="r-qty">2× C-130</div><div class="r-status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>8 FMC at Aarons AFB</div></div>
+          </div>
+          <div class="c2-req">
+            <div class="r-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15h16M6 15l-2-5h14l2 5M9 10V6h6v4"/><circle cx="8" cy="18" r="1.5"/><circle cx="16" cy="18" r="1.5"/></svg></div>
+            <div class="r-main"><div class="r-qty">2× Chinook</div><div class="r-status"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>6 FMC at McDaniels AFB</div></div>
+          </div>
+          <div class="c2-req">
+            <div class="r-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="14" height="8" rx="1"/><path d="M17 11h3l1 3v2h-4"/><circle cx="7" cy="18" r="1.5"/><circle cx="17" cy="18" r="1.5"/></svg></div>
+            <div class="r-main"><div class="r-qty">4× JLTV</div><div class="r-status pending"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 8v5M12 16h.01"/><circle cx="12" cy="12" r="9"/></svg>16 FMC at Aarons AFB</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 组件：按钮族 ========== ==== -->
+  <section class="doc-section">
+    <h2>08 · 组件 — 按钮族 · 徽章 · 芯片</h2>
+    <div class="canvas">
+      <button class="c2-btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>Primary</button>
+      <button class="c2-btn approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>Approve</button>
+      <button class="c2-btn reject"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>Reject</button>
+      <button class="c2-btn">Default</button>
+      <button class="c2-btn ghost">Ghost</button>
+      <button class="c2-btn" disabled>Disabled</button>
+    </div>
+    <div class="canvas" style="margin-top:var(--sp-3)">
+      <span class="c2-badge critical"><span class="dot"></span>Critical</span>
+      <span class="c2-badge warning"><span class="dot"></span>Warning</span>
+      <span class="c2-badge info"><span class="dot"></span>Info</span>
+      <span class="c2-badge approve"><span class="dot"></span>Approved</span>
+      <span class="c2-score low">Low</span>
+      <span class="c2-score med">Med</span>
+      <span class="c2-score high">High</span>
+      <span class="c2-chip">8 assets</span>
+      <span class="c2-tag-feasible"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>Feasible</span>
+    </div>
+  </section>
+
+  <!-- ========== 组件：甘特时间轴 ========== -->
+  <section class="doc-section">
+    <h2>09 · 组件 — 甘特时间轴 GanttTimeline</h2>
+    <p class="doc-note">纯 CSS grid + 百分比定位，无 JS 库。任务条青蓝辉光，未执行段灰化；NOW 游标高亮当前时刻，底部等宽刻度。</p>
+    <div class="canvas">
+      <div class="c2-gantt">
+        <div class="c2-gantt-now" style="left:23%"></div>
+        <div class="c2-gantt-rows" style="padding:0 var(--sp-3)">
+          <div class="c2-gantt-row"><div class="c2-gantt-bar" style="left:0%;width:15%">Load Aircraft</div></div>
+          <div class="c2-gantt-row"><div class="c2-gantt-bar" style="left:8%;width:22%">Flight to Zlarovo</div></div>
+          <div class="c2-gantt-row"><div class="c2-gantt-bar pending" style="left:30%;width:20%">Establish Safehouse</div></div>
+          <div class="c2-gantt-row"><div class="c2-gantt-bar pending" style="left:38%;width:26%">Data uplink</div></div>
+        </div>
+        <div class="c2-gantt-axis">
+          <span class="c2-gantt-tick">0</span><span class="c2-gantt-tick">1</span><span class="c2-gantt-tick">2</span><span class="c2-gantt-tick">3</span><span class="c2-gantt-tick">4</span><span class="c2-gantt-tick">5</span><span class="c2-gantt-tick">6</span><span class="c2-gantt-tick">7</span><span class="c2-gantt-tick">8</span><span class="c2-gantt-tick">9</span><span class="c2-gantt-tick">10</span><span class="c2-gantt-tick">11</span><span class="c2-gantt-tick">12</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 综合示例：三栏工作台 ========== -->
+  <section class="doc-section">
+    <h2>10 · 综合示例 — 三栏态势工作台骨架</h2>
+    <p class="doc-note">将上述组件按参考图布局组合：左态势/方案栏、中态势地图（占位表意，射程环 + 单位点）、右方案详情栏。地图为占位，不含真实渲染。</p>
+    <div class="canvas tight stack" style="gap:0">
+      <div class="c2-clsf-banner"><span class="dot"></span>UNCLASSIFIED // NOTIONAL DATA<span class="dot"></span></div>
+      <div class="c2-shell">
+        <div class="c2-shell-body">
+          <div class="c2-shell-col">
+            <div class="c2-tabs" style="margin-bottom:var(--sp-2)">
+              <input type="radio" name="shell-tabs" id="st1" checked><label for="st1">Situations</label>
+              <input type="radio" name="shell-tabs" id="st2"><label for="st2">Ops</label>
+              <input type="radio" name="shell-tabs" id="st3"><label for="st3">Data</label>
+            </div>
+            <div class="c2-situation">
+              <div class="row1"><span class="name" style="font-size:var(--fs-base)">Threats to US Embassy</span></div>
+              <div class="meta">2 hours ago · CPT Harrison</div>
+              <div style="margin-top:6px"><span class="c2-badge critical"><span class="dot"></span>Critical</span></div>
+            </div>
+            <div class="col-label" style="margin-top:var(--sp-2)">Response Plans</div>
+            <div class="c2-plan is-selected" style="padding:var(--sp-2)"><div><div class="p-title" style="font-size:var(--fs-sm)">2 Phase Air Evacuation</div><div class="p-sub">Proposed by J3</div></div></div>
+            <div class="c2-plan" style="padding:var(--sp-2)"><div><div class="p-title" style="font-size:var(--fs-sm)">Deploy from USS Edwardson</div><div class="p-sub">Proposed by J35</div></div></div>
+          </div>
+
+          <div class="c2-shell-map">
+            <div class="ring r1"></div><div class="ring r2"></div><div class="globe"></div>
+            <span class="cap">GLOBAL OVERVIEW · NOTIONAL</span>
+          </div>
+
+          <div class="c2-shell-col" style="border-right:none">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-weight:600;font-size:var(--fs-sm)">2 Phase Air Evacuation</span>
+              <span class="c2-tag-feasible"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>Feasible</span>
+            </div>
+            <div class="c2-approval" style="margin:var(--sp-1) 0">
+              <button class="c2-btn approve" style="height:26px;padding:0 var(--sp-2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>Approve</button>
+              <button class="c2-btn reject" style="height:26px;padding:0 var(--sp-2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>Reject</button>
+            </div>
+            <div class="c2-metrics">
+              <div class="c2-metric" style="padding:var(--sp-2)"><span class="label">Time</span><span class="value" style="font-size:var(--fs-lg)">7.5<small>h</small></span><span class="c2-score low">Low</span></div>
+              <div class="c2-metric" style="padding:var(--sp-2)"><span class="label">Assets</span><span class="value" style="font-size:var(--fs-lg)">8<small>×</small></span><span class="c2-score med">Med</span></div>
+              <div class="c2-metric" style="padding:var(--sp-2)"><span class="label">Steps</span><span class="value" style="font-size:var(--fs-lg)">4<small>×</small></span><span class="c2-score med">Med</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="c2-gantt" style="border-radius:0;border-left:none;border-right:none;border-bottom:none">
+          <div class="c2-gantt-now" style="left:23%"></div>
+          <div class="c2-gantt-rows" style="padding:0 var(--sp-3)">
+            <div class="c2-gantt-row" style="height:24px"><div class="c2-gantt-bar" style="left:0%;width:15%">Load Aircraft</div></div>
+            <div class="c2-gantt-row" style="height:24px"><div class="c2-gantt-bar pending" style="left:30%;width:20%">Establish Safehouse</div></div>
+          </div>
+          <div class="c2-gantt-axis">
+            <span class="c2-gantt-tick">0</span><span class="c2-gantt-tick">2</span><span class="c2-gantt-tick">4</span><span class="c2-gantt-tick">6</span><span class="c2-gantt-tick">8</span><span class="c2-gantt-tick">10</span><span class="c2-gantt-tick">12</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="doc-foot">C2 UI System · 令牌驱动 · 单文件自包含 · CSS-only · 图标全内联 SVG</div>
+
+</main>
+</body>
+</html>
