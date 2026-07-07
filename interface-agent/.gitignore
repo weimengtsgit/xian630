@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+coverage/
+.superpowers/
+.worktrees/
+dist/
+npm-debug.log*
+
+# local generation scratch — request-body dumps, temp files, generated previews
+gen-body.json
+gen*-tmp.json
+prev-body.json
+generated-preview.html
+pending.md

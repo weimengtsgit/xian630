@@ -92,6 +92,16 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.kind: %w", err)
 	}
+	// jobs.collaboration_plan_json: persisted collaboration-plan snapshot for the
+	// job (agent collaboration connector states). It lives in schema.sql's
+	// CREATE TABLE, so brand-new DBs have it, but DBs created before the column
+	// shipped need this backfill — otherwise ListJobs (whose jobSelectCols
+	// references it) fails with "no such column: collaboration_plan_json".
+	if err := s.ensureColumn(ctx, "jobs", "collaboration_plan_json",
+		`ALTER TABLE jobs ADD COLUMN collaboration_plan_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.collaboration_plan_json: %w", err)
+	}
 	if err := s.ensureColumn(ctx, "applications", "display_order",
 		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
 		db.Close()
@@ -135,6 +145,38 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE job_steps ADD COLUMN pending_questions TEXT NOT NULL DEFAULT ''`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate job_steps.pending_questions: %w", err)
+	}
+	// job_steps.snapshot_json: 每个任务步骤的可编辑快照。旧库缺少该列时，
+	// 确认澄清会在写入固定步骤计划时失败，因此必须随 Open 做幂等补列。
+	if err := s.ensureColumn(ctx, "job_steps", "snapshot_json",
+		`ALTER TABLE job_steps ADD COLUMN snapshot_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job_steps.snapshot_json: %w", err)
+	}
+	// job_steps.summary: the human-readable summary a step's agent produced (from
+	// output.json), surfaced in the workbench's agent blocks so a confirmed/
+	// delivered card shows content instead of an empty placeholder. It lives in
+	// schema.sql's CREATE TABLE, so brand-new DBs have it, but DBs created before
+	// the column shipped need this backfill — otherwise MarkStepSucceeded (which
+	// sets summary = ?) fails with "no such column: summary" on every successful
+	// step and the summary never persists.
+	if err := s.ensureColumn(ctx, "job_steps", "summary",
+		`ALTER TABLE job_steps ADD COLUMN summary TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate job_steps.summary: %w", err)
+	}
+	// workbench_artifact_refs.metadata: producer-authored JSON the orchestration
+	// view projects onto a card (e.g. the data_capture card's data-verification
+	// summary — sourceBoundary + per-boundary verdicts + fallback history + sample/
+	// field counts — so the data-flow track renders real states, not a static
+	// label list). It lives in schema.sql's CREATE TABLE, so brand-new DBs have
+	// it, but DBs created before the column shipped need this backfill —
+	// otherwise the upsert/list scans (which reference metadata) fail with
+	// "no such column: metadata".
+	if err := s.ensureColumn(ctx, "workbench_artifact_refs", "metadata",
+		`ALTER TABLE workbench_artifact_refs ADD COLUMN metadata TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate workbench_artifact_refs.metadata: %w", err)
 	}
 	return s, nil
 }

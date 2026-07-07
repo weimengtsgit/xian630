@@ -81,6 +81,11 @@ func TestCaptureAuditArtifactsHidesClaudeReasoning(t *testing.T) {
 			"summary":                "frozen",
 			"appType":                "timeline-replay",
 			"appName":                "demo",
+			"coreScenario":           "复盘航迹",
+			"primaryView":            "地图+时间轴",
+			"mainEntities":           []string{"编队", "事件"},
+			"dataPolicy":             "mock_data",
+			"acceptanceFocus":        []string{"轨迹联动"},
 			"generationProfile":      map[string][]string{"base": {"software-factory-app"}},
 			"validation": map[string]any{
 				"complete":            true,
@@ -99,6 +104,11 @@ func TestCaptureAuditArtifactsHidesClaudeReasoning(t *testing.T) {
 		AuditRunner:  cmd,
 	}
 	job, step := claudeJobStep(model.StepRequirementAnalysis)
+	// Seed a confirmed requirement whose summary-critical fields match the
+	// frozen output above so the Task-6 consistency gate passes; without it the
+	// executor coerces an empty ConfirmedRequirementJSON to "{}" and the step
+	// fails before the audit/redaction invariants under test can run.
+	job.ConfirmedRequirementJSON = `{"summary":"frozen","appType":"timeline-replay","appName":"demo","coreScenario":"复盘航迹","primaryView":"地图+时间轴","mainEntities":["编队","事件"],"dataPolicy":"mock_data","acceptanceFocus":["轨迹联动"]}`
 	if err := st.CreateJob(context.Background(), job); err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -146,4 +156,32 @@ func jsonStr(s string) string {
 		panic(err)
 	}
 	return string(b)
+}
+
+// TestSlugFromProjectDir covers the AuditFiles allowed-root derivation. The
+// versioned-dir case (generated-apps/<slug>/versions/ver_<id>, used when code
+// generation re-runs after a review block) must yield the app slug, NOT the
+// trailing ver_<id> — otherwise the allowed root becomes generated-apps/ver_<id>/
+// and every declared file under the real app tree is rejected with
+// file_constraint_violated.
+func TestSlugFromProjectDir(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  string
+		want string
+	}{
+		{"plain", "generated-apps/command-dashboard-1993", "command-dashboard-1993"},
+		{"versioned", "generated-apps/command-dashboard-1993/versions/ver_19eee49b14fc391da7596c85", "command-dashboard-1993"},
+		{"absolute versioned", "/Users/x/ws/generated-apps/operations-management-8rua/versions/ver_abc", "operations-management-8rua"},
+		{"trailing slash", "generated-apps/foo/", "foo"},
+		{"empty", "", ""},
+		{"not under generated-apps (fallback last segment)", "some/where/else", "else"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := slugFromProjectDir(c.dir); got != c.want {
+				t.Fatalf("slugFromProjectDir(%q) = %q, want %q", c.dir, got, c.want)
+			}
+		})
+	}
 }

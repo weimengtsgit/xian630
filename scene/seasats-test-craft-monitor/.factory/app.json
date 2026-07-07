@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "slug": "seasats-test-craft-monitor",
+  "name": "SEASATS测试艇活动监测",
+  "type": "command-dashboard",
+  "source": "preset",
+  "description": "结合 SEASATS 目标清单、AIS 轨迹、重点区域、低速往返活动和疑似 AIS 中断的测试艇活动监测看板。",
+  "entry": "static-vite",
+  "path": "scene/seasats-test-craft-monitor",
+  "tags": ["maritime", "ais", "seasats", "track", "alert", "dashboard"],
+  "build": {
+    "command": "npm run build",
+    "outputDir": "dist"
+  },
+  "runtime": {
+    "devCommand": "npm run dev",
+    "defaultPort": 5179
+  },
+  "docker": {
+    "enabled": true,
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "runtimePort": 80
+  }
+}

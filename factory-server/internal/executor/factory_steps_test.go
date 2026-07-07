@@ -2,9 +2,11 @@ package executor
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -941,6 +943,88 @@ func TestDeploymentSkipsPortsUsedByOtherRunningApps(t *testing.T) {
 	}
 }
 
+func TestDeploymentSkipsPortsAlreadyBoundOnHost(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+
+	// 模拟数据库没有记录、但宿主/容器运行时已经占用端口的真实部署场景。
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen occupied port: %v", err)
+	}
+	defer listener.Close()
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	occupiedPort, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse listener port: %v", err)
+	}
+
+	r, _ := newFactoryRunner(st, ws, true)
+	r.Alloc = deploy.Allocator{Start: occupiedPort, End: occupiedPort + 1}
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	dep, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || dep == nil {
+		t.Fatalf("get active deployment: %#v %v", dep, err)
+	}
+	if dep.HostPort != occupiedPort+1 {
+		t.Fatalf("host port = %d, want %d because %d is already bound", dep.HostPort, occupiedPort+1, occupiedPort)
+	}
+}
+
+func TestDeploymentSkipsPortsReportedByContainerRuntime(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen free port probe: %v", err)
+	}
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener addr: %v", err)
+	}
+	runtimePort, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse listener port: %v", err)
+	}
+	_ = listener.Close()
+
+	r, cmds := newFactoryRunner(st, ws, true)
+	r.Alloc = deploy.Allocator{Start: runtimePort, End: runtimePort + 1}
+	// 模拟 Podman machine 内已有发布端口，但本地数据库没有对应 deployment 行。
+	cmds.setRes("podman ps", deploy.CommandResult{
+		ExitCode: 0,
+		Stdout:   "0.0.0.0:" + strconv.Itoa(runtimePort) + "->80/tcp\n",
+	})
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+	dep, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || dep == nil {
+		t.Fatalf("get active deployment: %#v %v", dep, err)
+	}
+	if dep.HostPort != runtimePort+1 {
+		t.Fatalf("host port = %d, want %d because runtime reports %d as published", dep.HostPort, runtimePort+1, runtimePort)
+	}
+}
+
 func TestDeploymentStopsPreviousRunningDeploymentForSameAppAfterSuccess(t *testing.T) {
 	st := newFactoryTestStore(t)
 	ws := seedFactoryWorkspace(t, true)
@@ -1849,5 +1933,93 @@ func TestFactoryImageBuildStreamsPodmanStdout(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("command_stdout missing %q; got:\n%s", want, joined)
 		}
+	}
+}
+
+// TestReconcileStaleDeployments locks in the fix for the recurring
+// port_unavailable: a `running` deployment record whose container was
+// stopped/removed outside the factory (podman stop, crash, external prune) must
+// be re-marked `stopped` so it no longer reserves its host port. Deployment
+// records are created only after a container is healthy, so any `running` record
+// whose port is not currently published at runtime is stale.
+func TestReconcileStaleDeployments(t *testing.T) {
+	st := newFactoryTestStore(t)
+	now := time.Now()
+	app := model.Application{
+		ID: "app-stale", Slug: "stale", Name: "Stale", Type: "static",
+		Source: model.AppSourcePreset, Path: "scene/stale", Status: model.AppStatusRunning,
+		RuntimeURL: "http://127.0.0.1:18000", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("upsert app: %v", err)
+	}
+	if err := st.CreateDeployment(context.Background(), model.Deployment{
+		ID:            "dep_stale",
+		AppID:         app.ID,
+		ImageName:     "localhost/software-factory/stale",
+		ImageTag:      "preset",
+		ContainerName: "sf-stale-gone",
+		HostPort:      18000,
+		ContainerPort: 80,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}); err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+
+	// runtime reports NO published ports → the `running` record is stale.
+	r := &FactoryRunner{Store: st}
+	r.reconcileStaleDeployments(context.Background(), map[int]bool{})
+
+	dep, err := st.GetDeployment(context.Background(), "dep_stale")
+	if err != nil || dep == nil {
+		t.Fatalf("GetDeployment: %#v %v", dep, err)
+	}
+	if dep.Status != "stopped" {
+		t.Fatalf("stale deployment status = %q, want stopped (container gone, port no longer published)", dep.Status)
+	}
+}
+
+// TestReconcileStaleDeploymentsKeepsLiveRecords ensures a genuinely-running
+// deployment (its port IS published at runtime) is NOT touched.
+func TestReconcileStaleDeploymentsKeepsLiveRecords(t *testing.T) {
+	st := newFactoryTestStore(t)
+	now := time.Now()
+	app := model.Application{
+		ID: "app-live", Slug: "live", Name: "Live", Type: "static",
+		Source: model.AppSourcePreset, Path: "scene/live", Status: model.AppStatusRunning,
+		RuntimeURL: "http://127.0.0.1:18000", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.UpsertApplication(context.Background(), app); err != nil {
+		t.Fatalf("upsert app: %v", err)
+	}
+	if err := st.CreateDeployment(context.Background(), model.Deployment{
+		ID:            "dep_live",
+		AppID:         app.ID,
+		ImageName:     "localhost/software-factory/live",
+		ImageTag:      "preset",
+		ContainerName: "sf-live-real",
+		HostPort:      18000,
+		ContainerPort: 80,
+		URL:           "http://127.0.0.1:18000",
+		Status:        "running",
+		CreatedAt:     now,
+		StartedAt:     &now,
+	}); err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+
+	// runtime reports 18000 as published → the record is live, must stay running.
+	r := &FactoryRunner{Store: st}
+	r.reconcileStaleDeployments(context.Background(), map[int]bool{18000: true})
+
+	dep, err := st.GetDeployment(context.Background(), "dep_live")
+	if err != nil || dep == nil {
+		t.Fatalf("GetDeployment: %#v %v", dep, err)
+	}
+	if dep.Status != "running" {
+		t.Fatalf("live deployment status = %q, want running (port still published)", dep.Status)
 	}
 }

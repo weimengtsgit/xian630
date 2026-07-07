@@ -12,6 +12,15 @@ import {
 import { statusText, titleForDialogue } from '../hooks/dialogueTimeline'
 import './SessionNav.css'
 
+// Conservative height budget for the delete-confirm popover (~150–170px card
+// + padding + shadow). Used to decide whether opening the popover BELOW the
+// clicked row would overflow either the viewport OR the .session-nav-list
+// scroll container's visible area; if so the popover flips to sit ABOVE the
+// row so it stays fully visible (会话删除确认浮层: clamped to rail, never
+// clipped by the list's scroll box — overflow-y:auto makes overflow-x compute
+// to auto too, so anything past the list's visible bottom is clipped).
+const POPOVER_FLIP_BUDGET = 200
+
 // SessionNav is the left 会话导航栏: a collapsible rail that owns the new-session
 // action and the historical-dialogue list (moved here from ConversationWorkbench's
 // top header buttons + its DialogueHistoryDrawer in Phase 1 of the workbench-drawer
@@ -32,6 +41,10 @@ export function SessionNav({
 }) {
   const list = Array.isArray(sessions) ? sessions : []
   const [pendingDelete, setPendingDelete] = useState(null)
+  // `flipUp` is set when the clicked row sits near the bottom of the viewport OR
+  // the .session-nav-list scroll container's visible area — the popover then opens
+  // ABOVE the row instead of below so it is never clipped by the list's scroll box.
+  const [flipUp, setFlipUp] = useState(false)
   const pendingTitle = pendingDelete ? titleForDialogue(pendingDelete.session || pendingDelete) : ''
   const confirmingDelete = pendingDelete && deletingDialogueId === (pendingDelete.session && pendingDelete.session.id)
 
@@ -43,9 +56,36 @@ export function SessionNav({
     if (!list.some(v => v.session && v.session.id === pid)) setPendingDelete(null)
   }, [pendingDelete, list.map(v => v.session && v.session.id).join('|')])
 
-  const requestDelete = entry => {
+  const requestDelete = (entry, clickEvent) => {
     const sess = entry && entry.session
     if (!sess) return
+    // Decide whether the popover would overflow the viewport OR the
+    // .session-nav-list scroll container's visible bottom if it opened below
+    // the clicked row. The card is ~150–170px tall; we measure the space
+    // below the click target against BOTH constraints and take the binding one
+    // (min). The list scroll box (overflow-y:auto → overflow-x:auto too) clips
+    // anything past its visible bottom, so a row that is fine relative to the
+    // viewport can still have its popover clipped by a short / non-full-height
+    // list — the container-aware check fixes that. If it would be clipped, flip
+    // the popover to sit ABOVE the row.
+    const target = clickEvent && clickEvent.currentTarget
+    let flip = false
+    if (target && typeof target.getBoundingClientRect === 'function') {
+      const rect = target.getBoundingClientRect()
+      const viewportSpaceBelow = (window.innerHeight || document.documentElement.clientHeight) - rect.bottom
+      let spaceBelow = viewportSpaceBelow
+      // The popover renders inside .session-nav-row inside .session-nav-list;
+      // the list's visible bottom is the real clipping edge when the rail is
+      // shorter than the viewport.
+      const listEl = target.closest && target.closest('.session-nav-list')
+      if (listEl && typeof listEl.getBoundingClientRect === 'function') {
+        const listRect = listEl.getBoundingClientRect()
+        const listSpaceBelow = listRect.bottom - rect.bottom
+        if (listSpaceBelow < spaceBelow) spaceBelow = listSpaceBelow
+      }
+      if (spaceBelow < POPOVER_FLIP_BUDGET) flip = true
+    }
+    setFlipUp(flip)
     setPendingDelete(entry)
   }
 
@@ -56,9 +96,15 @@ export function SessionNav({
     try {
       await onDeleteSession(sess.id)
       setPendingDelete(null)
+      setFlipUp(false)
     } catch (_) {
       // The dialogue hook surfaces the error in the workbench error bar.
     }
+  }
+
+  const cancelDelete = () => {
+    setPendingDelete(null)
+    setFlipUp(false)
   }
 
   if (collapsed) {
@@ -115,7 +161,7 @@ export function SessionNav({
         </button>
       </div>
 
-      <div className="session-nav-list">
+      <div className="session-nav-list sf-scroll">
         {list.length === 0 ? (
           <div className="session-nav-empty">
             <History size={16} />
@@ -145,38 +191,41 @@ export function SessionNav({
                   type="button"
                   className="session-nav-delete"
                   disabled={deletingDialogueId === sess.id}
-                  onClick={() => requestDelete(entry)}
+                  onClick={e => requestDelete(entry, e)}
                   title="删除历史会话"
                   aria-label="删除历史会话"
                 >
                   {deletingDialogueId === sess.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                 </button>
+                {pendingDelete && (pendingDelete.session && pendingDelete.session.id) === sess.id ? (
+                  <div
+                    className={`session-nav-delete-confirm${flipUp ? ' flip-up' : ''}`}
+                    role="dialog"
+                    aria-labelledby="session-nav-delete-title"
+                  >
+                    <div className="session-nav-delete-card">
+                      <span className="session-nav-delete-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
+                      <div className="session-nav-delete-copy">
+                        <strong id="session-nav-delete-title">删除历史会话</strong>
+                        <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
+                      </div>
+                      <div className="session-nav-delete-actions">
+                        <button type="button" className="session-nav-delete-cancel" onClick={cancelDelete} disabled={confirmingDelete}>
+                          <X size={12} /> 取消
+                        </button>
+                        <button type="button" className="session-nav-delete-danger" onClick={confirmDelete} disabled={confirmingDelete}>
+                          {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )
           })
         )}
       </div>
-
-      {pendingDelete ? (
-        <div className="session-nav-delete-confirm" role="dialog" aria-labelledby="session-nav-delete-title">
-          <div className="session-nav-delete-card">
-            <span className="session-nav-delete-icon" aria-hidden="true"><AlertTriangle size={16} /></span>
-            <div className="session-nav-delete-copy">
-              <strong id="session-nav-delete-title">删除历史会话</strong>
-              <p>将删除「{pendingTitle}」的会话记录，不会删除已生成的智能体或 Agent。</p>
-            </div>
-            <div className="session-nav-delete-actions">
-              <button type="button" className="session-nav-delete-cancel" onClick={() => setPendingDelete(null)} disabled={confirmingDelete}>
-                <X size={12} /> 取消
-              </button>
-              <button type="button" className="session-nav-delete-danger" onClick={confirmDelete} disabled={confirmingDelete}>
-                {confirmingDelete ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </aside>
   )
 }

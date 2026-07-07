@@ -57,6 +57,41 @@ func (f *fakeCommandRunner) Run(ctx context.Context, dir, name string, args ...s
 	return runner.CommandResult{Stdout: stdout, ExitCode: 0}, nil
 }
 
+type fileOutputCommandRunner struct {
+	outputPath string
+	output     string
+	outputs    []string
+	stdout     string
+	stdouts    []string
+	args       []string
+	calls      int
+}
+
+func (f *fileOutputCommandRunner) Run(ctx context.Context, dir, name string, args ...string) (runner.CommandResult, error) {
+	f.args = args
+	f.calls++
+	output := f.output
+	if len(f.outputs) > 0 {
+		idx := f.calls - 1
+		if idx >= len(f.outputs) {
+			idx = len(f.outputs) - 1
+		}
+		output = f.outputs[idx]
+	}
+	if err := os.WriteFile(f.outputPath, []byte(output), 0o644); err != nil {
+		return runner.CommandResult{}, err
+	}
+	stdout := f.stdout
+	if len(f.stdouts) > 0 {
+		idx := f.calls - 1
+		if idx >= len(f.stdouts) {
+			idx = len(f.stdouts) - 1
+		}
+		stdout = f.stdouts[idx]
+	}
+	return runner.CommandResult{Stdout: stdout, ExitCode: 0}, nil
+}
+
 type fakeStreamCommandRunner struct {
 	dir      string
 	name     string
@@ -78,6 +113,16 @@ func (f *fakeStreamCommandRunner) RunStream(ctx context.Context, dir, name strin
 		onStdoutLine(line)
 	}
 	return runner.CommandResult{Stdout: stdout.String(), ExitCode: f.exitCode}, nil
+}
+
+func waitingUserRoundOutput() string {
+	return `{
+  "status": "waiting_user",
+  "round": 1,
+  "workLog": [{"type":"analysis","content":"需要明确目标用户"}],
+  "questions": [{"id":"q1","question":"面向哪类用户?","options":[{"value":"ops","label":"运营人员"}]}],
+  "requirement": {"appType":"todo","appName":"Todo 应用","generationProfile":{"base":["software-factory-app"]}}
+}`
 }
 
 func TestRunnerWritesArtifactsAndNormalizesEvents(t *testing.T) {
@@ -136,6 +181,55 @@ func TestRunnerWritesArtifactsAndNormalizesEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerPrefersOutputJSONFileOverStdout(t *testing.T) {
+	root := t.TempDir()
+	outputPath := filepath.Join(root, ".factory-runs", "clarifications", "clar_file", "round-1", "output.json")
+	fr := &fileOutputCommandRunner{
+		outputPath: outputPath,
+		output:     waitingUserRoundOutput(),
+		stdout:     "我已经把结构化结果写入 output.json。",
+	}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_file", Round: 1, MaxRounds: 3, InitialPrompt: "生成一个 todo",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if out.Status != "waiting_user" || len(out.Questions) != 1 {
+		t.Fatalf("output = %+v, want decoded file output", out)
+	}
+}
+
+func TestRunnerRepairsInvalidOutputJSONBeforeFullRetry(t *testing.T) {
+	root := t.TempDir()
+	outputPath := filepath.Join(root, ".factory-runs", "clarifications", "clar_repair", "round-1", "output.json")
+	fr := &fileOutputCommandRunner{
+		outputPath: outputPath,
+		outputs: []string{
+			`{"status":"waiting_user","round":1,`,
+			waitingUserRoundOutput(),
+		},
+		stdouts: []string{"已写入 output.json", "已修复 output.json"},
+	}
+	r := Runner{Cmd: fr, WorkspaceRoot: root, ArtifactRoot: filepath.Join(root, ".factory-runs")}
+	out, err := r.RunRound(context.Background(), RoundInput{
+		SessionID: "clar_repair", Round: 1, MaxRounds: 3, InitialPrompt: "生成一个 todo",
+	}, func(ev StreamEvent) {})
+	if err != nil {
+		t.Fatalf("RunRound: %v", err)
+	}
+	if fr.calls != 2 {
+		t.Fatalf("calls = %d, want initial run + JSON repair", fr.calls)
+	}
+	if !strings.Contains(strings.Join(fr.args, " "), "Repair malformed JSON") {
+		t.Fatalf("second call must be JSON repair, args=%v", fr.args)
+	}
+	if out.Status != "waiting_user" || len(out.Questions) != 1 {
+		t.Fatalf("output = %+v, want repaired file output", out)
+	}
+}
+
 func TestRunnerTreatsConfirmedOutputAsReadyToConfirm(t *testing.T) {
 	root := t.TempDir()
 	fr := &fakeCommandRunner{rawStdout: `{
@@ -182,7 +276,7 @@ func TestRunnerTreatsConfirmedOutputAsReadyToConfirm(t *testing.T) {
 
 func TestPromptTextForcesSimplifiedChinese(t *testing.T) {
 	r := Runner{}
-	prompt := r.promptText(`C:\tmp\input.json`)
+	prompt := r.promptText(`C:\tmp\input.json`, `C:\tmp\output.json`)
 	for _, want := range []string{
 		"Simplified Chinese",
 		"workLog content",
@@ -672,6 +766,25 @@ func TestApplyConsolidationAdjustment(t *testing.T) {
 	}
 	if len(merged.JudgementBoundary.DataSources) != 1 || merged.JudgementBoundary.DataSources[0] != "ontology" {
 		t.Fatalf("judgementBoundary dataSources should be merged: %+v", merged.JudgementBoundary.DataSources)
+	}
+}
+
+func TestApplyConsolidationAdjustmentAllowsDeferredInterfaceAndDataFields(t *testing.T) {
+	base := Requirement{
+		AppType: "operations_tool", AppName: "请假审批",
+		TargetUsers: []string{"员工"}, CoreScenario: "提交和审批请假",
+		GenerationProfile: map[string][]string{"base": {"software-factory-app"}},
+	}
+	consolidation := []ConsolidationEntry{
+		{Field: "mainEntities", RecommendedValue: json.RawMessage(`["请假单"]`), Reason: "业务对象"},
+		{Field: "acceptanceFocus", RecommendedValue: json.RawMessage(`["可提交审批"]`), Reason: "验收重点"},
+	}
+	merged, err := ApplyConsolidationAdjustment(base, consolidation, "", nil)
+	if err != nil {
+		t.Fatalf("ApplyConsolidationAdjustment should allow deferred primaryView/dataPolicy: %v", err)
+	}
+	if merged.PrimaryView != "" || merged.DataPolicy != "" {
+		t.Fatalf("deferred fields should stay empty, got primaryView=%q dataPolicy=%q", merged.PrimaryView, merged.DataPolicy)
 	}
 }
 

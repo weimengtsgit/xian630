@@ -324,13 +324,8 @@
   text-align: right;
 }
 
-.job-center::-webkit-scrollbar {
-  width: 6px;
-}
-.job-center::-webkit-scrollbar-thumb {
-  background: rgba(111, 218, 255, 0.24);
-  border-radius: 3px;
-}
+/* Scrollbar styling for .job-center is provided by the shared .sf-scroll
+ * utility class in App.css (applied in JSX). */
 
 /* =========================================================================
    StepCard styling. The cards now live inside vertical 执行波次 (.jc-waves /

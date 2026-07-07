@@ -370,23 +370,8 @@
   border-color: rgba(243, 199, 97, 0.86);
 }
 
-.panel-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.panel-content::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
-}
-
-.panel-content::-webkit-scrollbar-thumb {
-  background: rgba(111, 218, 255, 0.24);
-  border-radius: 3px;
-}
-
-.panel-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(111, 218, 255, 0.4);
-}
+/* Scrollbar styling for .panel-content is provided by the shared .sf-scroll
+ * utility class in App.css (applied in JSX). */
 
 .applications-panel .panel-actions {
   display: flex;

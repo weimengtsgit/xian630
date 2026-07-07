@@ -106,10 +106,19 @@ type Requirement struct {
 	MainEntities             []string                  `json:"mainEntities"`
 	DataPolicy               string                    `json:"dataPolicy"`
 	AcceptanceFocus          []string                  `json:"acceptanceFocus"`
+	// Description is an OPTIONAL plain-Chinese paragraph detailing the confirmed
+	// requirement (目标、范围、关键能力) for prominent display in the 确认需求摘要.
+	// omitempty keeps existing requirement JSON (without this field) validating.
+	Description              string                    `json:"description,omitempty"`
 	JudgementBoundary        JudgementBoundary         `json:"judgementBoundary,omitempty"`
 	GenerationProfile        map[string][]string       `json:"generationProfile"`
 	BlueprintRefs            []string                  `json:"blueprintRefs"`
 	CollaborationAdjustments []CollaborationAdjustment `json:"collaborationAdjustments,omitempty"`
+	ExecutionPolicy          ExecutionPolicy           `json:"executionPolicy,omitempty"`
+}
+
+type ExecutionPolicy struct {
+	ManualStepConfirmation bool `json:"manualStepConfirmation"`
 }
 
 // JudgementBoundary captures the business judgement frame for military/naval
@@ -135,6 +144,7 @@ type requirementView struct {
 	MainEntities      []string            `json:"mainEntities"`
 	DataPolicy        string              `json:"dataPolicy"`
 	AcceptanceFocus   []string            `json:"acceptanceFocus"`
+	Description       string              `json:"description,omitempty"`
 	JudgementBoundary JudgementBoundary   `json:"judgementBoundary,omitempty"`
 	GenerationProfile map[string][]string `json:"generationProfile"`
 }

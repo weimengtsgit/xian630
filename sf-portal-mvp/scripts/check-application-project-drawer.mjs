@@ -8,7 +8,7 @@ const panelJsx = readFileSync(new URL('../src/components/ApplicationProjectPanel
 const panelCss = readFileSync(new URL('../src/components/ApplicationProjectPanel.css', import.meta.url), 'utf8')
 const backendProjectHandlers = readFileSync(new URL('../../factory-server/internal/server/app_project_handlers.go', import.meta.url), 'utf8')
 
-assert.match(appJsx, /applicationProjectId/, 'App must derive an applicationProjectId for the 应用项目 drawer')
+assert.match(appJsx, /applicationProjectId/, 'App must derive an applicationProjectId for the 工作空间 drawer')
 assert.match(appJsx, /resolvedApplication[\s\S]*\.id/, 'applicationProjectId must prefer resolvedApplication.id')
 assert.match(appJsx, /seededJob[\s\S]*application_id[\s\S]*created_app_id/, 'applicationProjectId must fall back to seededJob application ids')
 assert.match(appJsx, /hasBoundApplication\s*=\s*!!applicationProjectId/, 'hasBoundApplication must require a concrete project application id, not only a seeded job')
@@ -24,11 +24,17 @@ assert.match(clientJs, /encodeURIComponent\(path\)/, 'project-file preview path 
 
 assert.match(drawerJsx, /ApplicationProjectPanel/, 'WorkbenchDrawer must import/render ApplicationProjectPanel')
 assert.doesNotMatch(drawerJsx, /activeEntry === 'application' \? <ApplicationProjectPlaceholder/, 'application drawer must not render the old placeholder directly')
+assert.match(drawerJsx, /application:\s*'工作空间'/, 'WorkbenchDrawer must title the application entry as 工作空间')
+assert.doesNotMatch(drawerJsx, /application:\s*'应用项目'/, 'WorkbenchDrawer must not expose the old 应用项目 drawer title')
 
 for (const token of ['loadingTree', 'treeError', 'app-project-empty', 'app-project-tree', 'app-project-preview']) {
   assert.match(panelJsx, new RegExp(token), `ApplicationProjectPanel must include ${token} state/markup`)
 }
 assert.match(panelJsx, /MarkdownPreview/, 'ApplicationProjectPanel must support Markdown preview')
+assert.match(panelJsx, /'工作空间'/, 'ApplicationProjectPanel fallback title should use 工作空间')
+assert.match(panelJsx, /工作空间尚未准备好/, 'ApplicationProjectPanel empty state should say 工作空间尚未准备好')
+assert.match(panelJsx, /暂无工作空间文件/, 'ApplicationProjectPanel empty file list should say 暂无工作空间文件')
+assert.doesNotMatch(panelJsx, /应用项目|项目尚未准备好|暂无项目文件/, 'ApplicationProjectPanel should not expose old application project copy')
 assert.match(backendProjectHandlers, /project-docs\.json/, 'project tree backend must surface .factory/project-docs.json in factory metadata')
 assert.match(panelJsx, /'源码'/, 'Markdown preview must expose source mode')
 assert.match(panelJsx, /'格式化'/, 'JSON preview must expose formatted mode')

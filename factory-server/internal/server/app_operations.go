@@ -804,9 +804,22 @@ func (s *Server) containerRuntime() deploy.ContainerRuntime {
 }
 
 // portInUse returns an isUsed predicate for the port Allocator that reports a
-// port as taken when any running deployment already binds it.
+// port as taken when any running deployment or runtime-published container
+// already binds it. 这里同时看运行时端口表，避免 DB 丢失旧容器记录时撞端口。
 func (s *Server) portInUse(ctx context.Context) func(int) bool {
+	var runtimePorts map[int]bool
+	runtimePortsLoaded := false
 	return func(port int) bool {
+		if !runtimePortsLoaded {
+			runtimePorts = deploy.PublishedHostPorts(ctx, s.runner, s.containerRuntime().Name())
+			runtimePortsLoaded = true
+		}
+		if runtimePorts[port] {
+			return true
+		}
+		if deploy.HostTCPPortInUse(port) {
+			return true
+		}
 		apps, err := s.store.ListApplications(ctx)
 		if err != nil {
 			return false

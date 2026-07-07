@@ -37,6 +37,8 @@ type createClarificationBody struct {
 	AbandonActive bool   `json:"abandonActive"`
 }
 
+const maxClarificationInvalidJSONAttempts = 3
+
 type addClarificationMessageBody struct {
 	Content string `json:"content"`
 }
@@ -55,7 +57,10 @@ type patchRequirementBody struct {
 }
 
 type confirmClarificationBody struct {
-	Requirement json.RawMessage `json:"requirement"`
+	Requirement     json.RawMessage `json:"requirement"`
+	ExecutionPolicy struct {
+		ManualStepConfirmation bool `json:"manualStepConfirmation"`
+	} `json:"executionPolicy"`
 }
 
 // clarificationView is the enriched GET shape: the session plus its parsed
@@ -594,6 +599,9 @@ func (s *Server) patchClarificationRequirement(w http.ResponseWriter, r *http.Re
 	current.MainEntities = incoming.MainEntities
 	current.DataPolicy = incoming.DataPolicy
 	current.AcceptanceFocus = incoming.AcceptanceFocus
+	if incoming.Description != "" {
+		current.Description = incoming.Description
+	}
 	current.JudgementBoundary = mergeJudgementBoundaryDefaults(incoming.JudgementBoundary, current.JudgementBoundary)
 	current.BlueprintRefs = s.sanitizeBlueprintRefs(incoming.BlueprintRefs)
 	// Always (re)compute the profile from the application type and internal
@@ -777,6 +785,7 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	req.ExecutionPolicy.ManualStepConfirmation = body.ExecutionPolicy.ManualStepConfirmation
 
 	// Persist the finalized requirement before creating the job.
 	reqBytes, _ := json.Marshal(req)
@@ -940,7 +949,7 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 
 	cfg := s.loadSceneCatalog(ctx)
 	roundThinking := ""
-	out, err := s.clarifier.RunRound(ctx, input, func(ev clarification.StreamEvent) {
+	out, err := s.runClarificationRoundWithInvalidJSONRetry(ctx, input, func(ev clarification.StreamEvent) {
 		filtered := s.filterClarificationEvent(cfg, ev)
 		s.publishClarificationEvent(filtered)
 		// D2: in the dialogue flow, mirror the live analysis delta AND the raw
@@ -978,6 +987,13 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 		_ = s.store.UpdateClarificationRound(ctx, sessID, round)
 		errorCode := clarificationFailureCode(err)
 		_ = s.store.SetClarificationStatus(ctx, sessID, model.ClarificationStatusFailed, string(errorCode), err.Error())
+		if dialogueID != "" {
+			// 子澄清失败必须同步父会话，否则工作台会继续显示“需求澄清中”。
+			_ = s.store.UpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusFailed, string(errorCode), err.Error())
+			s.publishDialogueSimple("dialogue.failed", dialogueID, map[string]any{
+				"code": string(errorCode), "message": err.Error(),
+			})
+		}
 		s.publishClarificationEvent(clarification.StreamEvent{
 			Type:      "clarification.failed",
 			SessionID: sessID,
@@ -1032,6 +1048,20 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 			return sess, roundN, false
 		}
 		analysisAt = now.Add(time.Millisecond)
+	}
+	// Item 1 — surface low-impact auto-defaulted clarifications. The model may
+	// fill low-impact requirement fields directly (without surfacing them as
+	// high-impact questions). Those decisions are implicit assumptions; surface
+	// them as a concise Chinese work-log entry so the user can perceive the
+	// auto-applied defaults in the 分析过程 and adjust before confirming. Only
+	// fields that were empty before this round AND were not asked as an
+	// open-high-impact question count as auto-defaults — high-impact items stay
+	// in the user-facing question flow unchanged.
+	if entry := summarizeLowImpactAutoDefaults(input.CurrentRequirement, out); entry != "" {
+		out.WorkLog = append(out.WorkLog, clarification.WorkLog{
+			Type:    "analysis_work_log",
+			Content: entry,
+		})
 	}
 	for _, wl := range out.WorkLog {
 		if err := s.store.AddClarificationMessage(ctx, model.ClarificationMessage{
@@ -1131,7 +1161,28 @@ func (s *Server) runRoundAndPersistForDialogue(ctx context.Context, sessID strin
 	if err != nil || refreshed == nil {
 		return sess, roundN, true
 	}
+	if dialogueID != "" && refreshed.Status == model.ClarificationStatusReadyToConfirm {
+		// 对话工作台的新流程不在澄清结束处等待用户确认；需求分析任务自动启动，
+		// 并由 requirement_analysis 完成后的人工确认门承接“需求确认”。
+		_, _, _ = s.ensureDialogueRequirementAnalysisJob(ctx, dialogueID, sessID)
+	}
 	return refreshed, roundN, true
+}
+
+func (s *Server) runClarificationRoundWithInvalidJSONRetry(ctx context.Context, input clarification.RoundInput, emit func(clarification.StreamEvent)) (clarification.RoundOutput, error) {
+	var out clarification.RoundOutput
+	var err error
+	for attempt := 1; attempt <= maxClarificationInvalidJSONAttempts; attempt++ {
+		out, err = s.clarifier.RunRound(ctx, input, emit)
+		if !errors.Is(err, runner.ErrOutputInvalidJSON) {
+			return out, err
+		}
+		if attempt < maxClarificationInvalidJSONAttempts {
+			// 无效 JSON 多数来自模型额外输出说明文字，直接重试同一轮比让用户手动恢复更合适。
+			continue
+		}
+	}
+	return out, err
 }
 
 func clarificationFailureCode(err error) model.ErrorCode {
@@ -1182,6 +1233,10 @@ func (s *Server) advanceAfterUserTurnForDialogue(ctx context.Context, sessID str
 		updated, err := s.store.GetClarificationSession(ctx, sessID)
 		if err != nil || updated == nil {
 			return sess, false
+		}
+		if dialogueID != "" && updated.Status == model.ClarificationStatusReadyToConfirm {
+			// 达到轮次上限且字段已齐时同样自动进入需求分析，避免回到旧的“确认并生成”。
+			_, _, _ = s.ensureDialogueRequirementAnalysisJob(ctx, dialogueID, sessID)
 		}
 		return updated, true
 	}
@@ -1339,6 +1394,9 @@ func mergeRequirementDefaults(next, current clarification.Requirement) clarifica
 	if len(next.AcceptanceFocus) == 0 {
 		next.AcceptanceFocus = append([]string(nil), current.AcceptanceFocus...)
 	}
+	if next.Description == "" {
+		next.Description = current.Description
+	}
 	next.JudgementBoundary = mergeJudgementBoundaryDefaults(next.JudgementBoundary, current.JudgementBoundary)
 	if len(next.GenerationProfile) == 0 {
 		next.GenerationProfile = cloneStringListMap(current.GenerationProfile)
@@ -1361,6 +1419,146 @@ func cloneStringListMap(in map[string][]string) map[string][]string {
 		out[key] = append([]string(nil), values...)
 	}
 	return out
+}
+
+// lowImpactFieldLabel maps a requirement JSON field name to a concise Chinese
+// label + the chosen value for the Item-1 auto-default work-log entry. Returns
+// ("", false) for fields we deliberately do not surface (e.g. internal
+// blueprintRefs / generationProfile / collaborationAdjustments, which are
+// Factory-derived, not user decisions). Order mirrors the Requirement struct so
+// the rendered list is stable.
+func lowImpactFieldDisplay(field string, req clarification.Requirement) (string, bool) {
+	switch field {
+	case "appType":
+		if req.AppType == "" {
+			return "", false
+		}
+		return "应用类型 = " + req.AppType, true
+	case "appName":
+		if req.AppName == "" {
+			return "", false
+		}
+		return "应用名称 = " + req.AppName, true
+	case "targetUsers":
+		if len(req.TargetUsers) == 0 {
+			return "", false
+		}
+		return "主要使用角色 = " + strings.Join(req.TargetUsers, "、"), true
+	case "coreScenario":
+		if req.CoreScenario == "" {
+			return "", false
+		}
+		return "核心场景 = " + req.CoreScenario, true
+	case "primaryView":
+		if req.PrimaryView == "" {
+			return "", false
+		}
+		return "主视图 = " + req.PrimaryView, true
+	case "mainEntities":
+		if len(req.MainEntities) == 0 {
+			return "", false
+		}
+		return "主要对象 = " + strings.Join(req.MainEntities, "、"), true
+	case "dataPolicy":
+		if req.DataPolicy == "" {
+			return "", false
+		}
+		return "数据策略 = " + req.DataPolicy, true
+	case "acceptanceFocus":
+		if len(req.AcceptanceFocus) == 0 {
+			return "", false
+		}
+		return "验收重点 = " + strings.Join(req.AcceptanceFocus, "、"), true
+	case "judgementBoundary":
+		summary := strings.TrimSpace(req.JudgementBoundary.Summary)
+		if summary == "" {
+			return "", false
+		}
+		return "研判边界 = " + summary, true
+	}
+	return "", false
+}
+
+// openHighImpactFieldNames returns the set of requirement fields the round's
+// open-high-impact questions are confirming, so summarizeLowImpactAutoDefaults
+// can exclude them from the auto-default list (those are user decisions, not
+// auto-applied). The high-impact item carries a plain-language `id`/`label`,
+// not a JSON field name, so this is a best-effort keyword match. Unknown ids
+// simply do not exclude anything, which keeps the surfacing conservative.
+func openHighImpactFieldNames(items []clarification.HighImpactItem) map[string]bool {
+	out := make(map[string]bool)
+	for _, it := range items {
+		text := strings.ToLower(it.ID + " " + it.Label)
+		switch {
+		case strings.Contains(text, "数据策略") || strings.Contains(text, "datapolicy"):
+			out["dataPolicy"] = true
+		case strings.Contains(text, "应用类型") || strings.Contains(text, "apptype"):
+			out["appType"] = true
+		case strings.Contains(text, "应用名称") || strings.Contains(text, "appname"):
+			out["appName"] = true
+		case strings.Contains(text, "核心场景") || strings.Contains(text, "corescenario"):
+			out["coreScenario"] = true
+		case strings.Contains(text, "主视图") || strings.Contains(text, "primaryview"):
+			out["primaryView"] = true
+		case strings.Contains(text, "主要对象") || strings.Contains(text, "mainentities"):
+			out["mainEntities"] = true
+		case strings.Contains(text, "角色") || strings.Contains(text, "targetusers"):
+			out["targetUsers"] = true
+		case strings.Contains(text, "验收") || strings.Contains(text, "acceptancefocus"):
+			out["acceptanceFocus"] = true
+		case strings.Contains(text, "研判") || strings.Contains(text, "judgementboundary"):
+			out["judgementBoundary"] = true
+		}
+	}
+	return out
+}
+
+// summarizeLowImpactAutoDefaults builds a concise Chinese work-log entry naming
+// the low-impact requirement fields the model auto-decided this round (filled
+// directly, not asked as a high-impact question), so the assumptions surface in
+// the 分析过程. Returns "" when nothing was auto-defaulted this round.
+//
+// A field counts as auto-defaulted when it was empty in `prev` and is now
+// populated in `out.Requirement`, AND it is not one of this round's open
+// high-impact items. Internal Factory-derived fields (blueprintRefs /
+// generationProfile / collaborationAdjustments / description) are deliberately
+// not surfaced: they are not user decisions. Only the first round that fills a
+// field reports it (subsequent rounds carry the prior value via
+// mergeRequirementDefaults, so prev is non-empty and the field is skipped).
+func summarizeLowImpactAutoDefaults(prev clarification.Requirement, out clarification.RoundOutput) string {
+	type delta struct{ empty, filled bool }
+	states := map[string]delta{
+		"appType":           {prev.AppType == "", out.Requirement.AppType != ""},
+		"appName":           {prev.AppName == "", out.Requirement.AppName != ""},
+		"targetUsers":       {len(prev.TargetUsers) == 0, len(out.Requirement.TargetUsers) > 0},
+		"coreScenario":      {prev.CoreScenario == "", out.Requirement.CoreScenario != ""},
+		"primaryView":       {prev.PrimaryView == "", out.Requirement.PrimaryView != ""},
+		"mainEntities":      {len(prev.MainEntities) == 0, len(out.Requirement.MainEntities) > 0},
+		"dataPolicy":        {prev.DataPolicy == "", out.Requirement.DataPolicy != ""},
+		"acceptanceFocus":   {len(prev.AcceptanceFocus) == 0, len(out.Requirement.AcceptanceFocus) > 0},
+		"judgementBoundary": {strings.TrimSpace(prev.JudgementBoundary.Summary) == "", strings.TrimSpace(out.Requirement.JudgementBoundary.Summary) != ""},
+	}
+	excluded := openHighImpactFieldNames(out.OpenHighImpact)
+	order := []string{
+		"appType", "appName", "targetUsers", "coreScenario", "primaryView",
+		"mainEntities", "dataPolicy", "acceptanceFocus", "judgementBoundary",
+	}
+	var parts []string
+	for _, field := range order {
+		d := states[field]
+		if !d.empty || !d.filled || excluded[field] {
+			continue
+		}
+		label, ok := lowImpactFieldDisplay(field, out.Requirement)
+		if !ok {
+			continue
+		}
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "已按默认设定（低影响，可在确认前调整）：" + strings.Join(parts, "；") + "。"
 }
 
 func cloneJudgementBoundary(in clarification.JudgementBoundary) clarification.JudgementBoundary {
@@ -1541,14 +1739,13 @@ func compactAnswerList(values []string) []string {
 	return out
 }
 
-// missingRequiredFields reports the required confirmation fields that are absent
-// on the given Requirement. The required set (per the implementation plan's
-// "Required Confirmed Requirement Fields") is: non-empty strings (appType,
-// appName, coreScenario, primaryView, dataPolicy), non-empty slices
-// (targetUsers, mainEntities, acceptanceFocus), and a non-empty
-// generationProfile map. Returns the list of camelCase field names that are
-// missing (empty slice if all present). This is the verdict confirmClarification
-// uses for its 422 body.
+// missingRequiredFields lists the BUSINESS-LOGIC fields the 业务逻辑 clarification
+// must settle before ready_to_confirm. Interface (primaryView) and data-source
+// (dataPolicy) details are intentionally NOT required here — they are clarified
+// in later stages (界面解析 / 数据抓取), so the requirement may carry them empty
+// and the requirement_analysis freeze step + downstream contracts fill them.
+// mainEntities (the business domain objects) stays required — it is business
+// logic, not a data-source detail.
 func missingRequiredFields(req clarification.Requirement) []string {
 	var missing []string
 	if req.AppType == "" {
@@ -1563,14 +1760,8 @@ func missingRequiredFields(req clarification.Requirement) []string {
 	if req.CoreScenario == "" {
 		missing = append(missing, "coreScenario")
 	}
-	if req.PrimaryView == "" {
-		missing = append(missing, "primaryView")
-	}
 	if len(req.MainEntities) == 0 {
 		missing = append(missing, "mainEntities")
-	}
-	if req.DataPolicy == "" {
-		missing = append(missing, "dataPolicy")
 	}
 	if len(req.AcceptanceFocus) == 0 {
 		missing = append(missing, "acceptanceFocus")

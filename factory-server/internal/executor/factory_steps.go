@@ -621,7 +621,37 @@ func copyDir(src, dst string) error {
 }
 
 func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
+	var runtimePorts map[int]bool
+	runtimeReliable := false
+	loaded := false
 	return func(port int) bool {
+		if !loaded {
+			runtimePorts = deploy.PublishedHostPorts(ctx, f.Cmds, f.runtime().Name())
+			// Treat the runtime view as authoritative only when it actually
+			// reported something — an empty result may mean "no containers" OR a
+			// failed/unavailable runtime, so fall back to DB records below
+			// instead of trusting silence. When reliable, reconcile stale
+			// `running` records (containers stopped/removed outside the factory)
+			// so they don't permanently reserve ports.
+			runtimeReliable = len(runtimePorts) > 0
+			if runtimeReliable {
+				f.reconcileStaleDeployments(ctx, runtimePorts)
+			}
+			loaded = true
+		}
+		if runtimePorts[port] {
+			return true
+		}
+		if deploy.HostTCPPortInUse(port) {
+			return true
+		}
+		if runtimeReliable {
+			// Runtime reported real data → it is authoritative: a port it does
+			// not list is free, regardless of stale DB records.
+			return false
+		}
+		// Runtime reported nothing → fall back to DB running deployment records
+		// so we don't hand out a port the runtime simply couldn't see.
 		apps, err := f.Store.ListApplications(ctx)
 		if err != nil {
 			return false
@@ -638,6 +668,34 @@ func (f *FactoryRunner) portInUse(ctx context.Context) func(int) bool {
 			}
 		}
 		return false
+	}
+}
+
+// reconcileStaleDeployments marks `running` deployment records whose host port
+// is no longer published at runtime as `stopped`. A deployment record is
+// created only after its container is up + healthy, so a `running` record whose
+// port is not currently published means the container was stopped or removed
+// outside the factory (podman stop, crash, external prune). Without this
+// reconcile, stale records permanently reserve their port and later deployments
+// exhaust the candidate pool with port_unavailable.
+func (f *FactoryRunner) reconcileStaleDeployments(ctx context.Context, runtimePorts map[int]bool) {
+	if f.Store == nil {
+		return
+	}
+	apps, err := f.Store.ListApplications(ctx)
+	if err != nil {
+		return
+	}
+	for _, app := range apps {
+		deps, derr := f.Store.ListDeploymentsByApp(ctx, app.ID)
+		if derr != nil {
+			continue
+		}
+		for _, dep := range deps {
+			if dep.Status == "running" && dep.HostPort != 0 && !runtimePorts[dep.HostPort] {
+				_ = f.Store.UpdateDeploymentStatus(ctx, dep.ID, "stopped")
+			}
+		}
 	}
 }
 

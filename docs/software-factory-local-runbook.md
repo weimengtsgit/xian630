@@ -566,6 +566,34 @@ curl http://127.0.0.1:8787/api/dialogues      # backfilled dialogues present
 # restart factory-server, re-run the same call — ids and statuses unchanged
 ```
 
+## 界面解析 / 原型设计兼容键
+
+Factory 仍使用内部 step kind `design_contract` 表示界面解析阶段，避免历史 job 和数据库迁移断裂。用户界面将该阶段展示为"界面解析/原型设计"。
+
+执行输入以业务智能体完整设计方案为主：
+
+- `businessDesign`
+- `businessDesignArtifact`
+- `confirmedRequirement`
+- `generationProfile`
+- `skills`
+- `blueprintDocs`
+- `collaborationSnapshot`
+
+该步骤必须读取 `.claude/skills/prototype-design/SKILL.md`，默认生成静态首页原型，并在缺少原型风格、目标用户、目标平台或保真度时进入 `waiting_user`。
+
+原型产物位于：
+
+```text
+.factory-runs/jobs/<job-id>/design_contract/attempt-<n>/prototype/
+  index.html
+  styles.css
+  preview-manifest.json
+  prototype-contract.json
+```
+
+确认原型后，下游步骤按 `hard_constraint` 使用；直接继续但不确认时，下游只能按 `reference` 使用。
+
 ## Notes / known constraints
 
 - Podman must be running for `image_build` and `deployment` to succeed.

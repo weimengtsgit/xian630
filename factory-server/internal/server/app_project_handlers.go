@@ -366,19 +366,6 @@ func (s *Server) applyApplicationProjectDraft(w http.ResponseWriter, r *http.Req
 
 func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Request) (model.Application, string, bool) {
 	id := Param(r, "id")
-	app, err := s.store.GetApplication(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get app")
-		return model.Application{}, "", false
-	}
-	if app == nil {
-		writeError(w, http.StatusNotFound, "not found")
-		return model.Application{}, "", false
-	}
-	if app.Source != model.AppSourceGenerated || app.Path == "" || filepath.IsAbs(app.Path) || strings.Contains(filepath.ToSlash(app.Path), "..") || !strings.HasPrefix(filepath.ToSlash(app.Path), "generated-apps/") {
-		writeError(w, http.StatusForbidden, "application project unavailable")
-		return model.Application{}, "", false
-	}
 	generatedRoot := filepath.Join(s.cfg.WorkspaceRoot, "generated-apps")
 	absGeneratedRoot, err := filepath.Abs(generatedRoot)
 	if err != nil {
@@ -388,20 +375,58 @@ func (s *Server) resolveGeneratedAppProject(w http.ResponseWriter, r *http.Reque
 	if real, err := filepath.EvalSymlinks(absGeneratedRoot); err == nil {
 		absGeneratedRoot = real
 	}
-	root := filepath.Join(s.cfg.WorkspaceRoot, filepath.FromSlash(app.Path))
-	abs, err := filepath.Abs(root)
-	if err != nil {
+	// Path 1: registered Application record (post-codegen).
+	if app, gErr := s.store.GetApplication(r.Context(), id); gErr == nil && app != nil {
+		if app.Source != model.AppSourceGenerated || app.Path == "" || filepath.IsAbs(app.Path) || strings.Contains(filepath.ToSlash(app.Path), "..") || !strings.HasPrefix(filepath.ToSlash(app.Path), "generated-apps/") {
+			writeError(w, http.StatusForbidden, "application project unavailable")
+			return model.Application{}, "", false
+		}
+		root := filepath.Join(s.cfg.WorkspaceRoot, filepath.FromSlash(app.Path))
+		abs, absErr := filepath.Abs(root)
+		if absErr != nil {
+			writeError(w, http.StatusInternalServerError, "resolve project root")
+			return model.Application{}, "", false
+		}
+		if real, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
+			abs = real
+		}
+		if !pathWithinRoot(absGeneratedRoot, abs) {
+			writeError(w, http.StatusForbidden, "application project unavailable")
+			return model.Application{}, "", false
+		}
+		return *app, abs, true
+	}
+	// Path 2: no Application record yet (pre-codegen). Resolve by slug — the id
+	// might be a bare slug or an app-<slug> that isn't registered yet. The
+	// generated-apps/<slug>/ directory exists from requirement_analysis onward
+	// (projectDocsAfterStep writes docs/01-requirements.md there), so the
+	// workspace can serve the 需求文档 before code_generation runs.
+	slug := strings.TrimPrefix(strings.TrimSpace(id), "app-")
+	if slug == "" || strings.Contains(slug, "..") || filepath.IsAbs(slug) {
+		writeError(w, http.StatusNotFound, "not found")
+		return model.Application{}, "", false
+	}
+	root := filepath.Join(generatedRoot, filepath.FromSlash(slug))
+	abs, absErr := filepath.Abs(root)
+	if absErr != nil {
 		writeError(w, http.StatusInternalServerError, "resolve project root")
 		return model.Application{}, "", false
 	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
+	// Check the directory exists BEFORE the symlink-evaluated pathWithinRoot
+	// check (EvalSymlinks fails for non-existent paths, causing a false 403
+	// when the root is symlink-resolved but the target isn't).
+	if info, statErr := os.Stat(abs); statErr != nil || !info.IsDir() {
+		writeError(w, http.StatusNotFound, "workspace not yet created")
+		return model.Application{}, "", false
+	}
+	if real, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
 		abs = real
 	}
 	if !pathWithinRoot(absGeneratedRoot, abs) {
 		writeError(w, http.StatusForbidden, "application project unavailable")
 		return model.Application{}, "", false
 	}
-	return *app, abs, true
+	return model.Application{ID: "app-" + slug, Slug: slug, Name: slug, Source: model.AppSourceGenerated, Path: filepath.ToSlash(filepath.Join("generated-apps", slug))}, abs, true
 }
 
 func pathWithinRoot(root, path string) bool {
@@ -472,7 +497,24 @@ func draftInfo(d model.ProjectDocumentDraft, currentChecksum string) *appProject
 
 func (s *Server) dialogueOwnsApplication(ctx context.Context, dialogueID, appID string) bool {
 	dlg, err := s.store.GetDialogueSession(ctx, dialogueID)
-	return err == nil && dlg != nil && dlg.ResolvedApplicationID == appID
+	if err != nil || dlg == nil {
+		return false
+	}
+	if dlg.ResolvedApplicationID == appID {
+		return true
+	}
+	// Pre-codegen: resolved_application_id is empty (SetJobCreatedApp sets it
+	// only after code_generation registers the app). But the workspace serves
+	// project files from requirement_analysis onward via the synthetic app id
+	// "app-<slug>", and the dialogue's generating job carries app_slug at seed
+	// time. Accept that job linkage so doc preview/draft lookup does not 403
+	// for task_running jobs whose application row does not exist yet.
+	slug := strings.TrimPrefix(appID, "app-")
+	if slug == "" || slug == appID {
+		return false
+	}
+	owned, _ := s.store.DialogueOwnsJobWithSlug(ctx, dialogueID, slug)
+	return owned
 }
 
 func classifyProjectPreview(path string, data []byte) string {
