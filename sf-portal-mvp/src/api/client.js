@@ -4,6 +4,20 @@
 // var is unset, so the local factory address is used as before.
 const API_BASE_URL = import.meta.env.VITE_FACTORY_API_BASE_URL ?? 'http://127.0.0.1:8787'
 
+// absoluteApiUrl prefixes a relative /api path with the API origin when the
+// portal and the API are on DIFFERENT origins (npm run dev: the SPA is served
+// by Vite on :3001, the API on :8787, with no proxy). In production
+// API_BASE_URL is "" (same-origin behind a reverse proxy), so the path is
+// returned unchanged. Use this for any URL handed to <iframe src>/<img
+// src>/window.open that the server emitted as a relative path — otherwise the
+// browser resolves it against the SPA origin and (in dev) Vite serves its
+// index.html shell, booting a nested copy of the app inside the iframe.
+export function absoluteApiUrl(path) {
+  if (!path) return path
+  if (/^(https?:)?\/\//.test(path)) return path
+  return `${API_BASE_URL}${path}`
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -59,6 +73,26 @@ async function requestWithStatus(path, options = {}) {
   return { status: response.status, body }
 }
 
+// requestMultipart POSTs a FormData body (multipart/form-data) WITHOUT a
+// JSON content-type header — the browser sets the multipart boundary. Used for
+// attachment uploads. Errors share the SAME typed-error shape as `request`.
+async function requestMultipart(path, formData) {
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: 'POST', body: formData })
+  if (!response.ok) {
+    const body = await response.text()
+    const err = new Error(`${response.status} ${body}`)
+    err.status = response.status
+    err.bodyText = body
+    try {
+      err.data = JSON.parse(body)
+    } catch {
+      err.data = null
+    }
+    throw err
+  }
+  return response.json()
+}
+
 // requestText mirrors `request` but resolves the body as TEXT (used for
 // artifact content, which the backend serves as plain text). On failure it
 // produces the SAME typed-error shape as `request` (status / message / bodyText
@@ -85,6 +119,7 @@ async function requestText(path, options = {}) {
 
 export const factoryApi = {
   listApps: () => request('/api/apps'),
+  getAppGenerationStats: () => request('/api/apps/generationstats'),
   getApplicationProjectTree: (appId, dialogueId = '') => request(`/api/apps/${appId}/project-tree${dialogueId ? `?dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
   getApplicationProjectFile: (appId, path, dialogueId = '') => request(`/api/apps/${appId}/project-file?path=${encodeURIComponent(path)}${dialogueId ? `&dialogueId=${encodeURIComponent(dialogueId)}` : ''}`),
   saveApplicationProjectDraft: (appId, body) => request(`/api/apps/${appId}/project-drafts`, { method: 'PUT', body: JSON.stringify(body) }),
@@ -117,6 +152,7 @@ export const factoryApi = {
       answer,
       ...(scope.stepId ? { stepId: scope.stepId } : {}),
       ...(scope.attempt ? { attempt: scope.attempt } : {}),
+      ...(scope.attachmentIds && scope.attachmentIds.length ? { attachmentIds: scope.attachmentIds } : {}),
     }),
   }),
   retryCurrentStep: id => request(`/api/jobs/${id}/retry-current-step`, { method: 'POST' }),
@@ -133,6 +169,33 @@ export const factoryApi = {
       }&limit=200`,
     ),
   getJobArtifacts: id => request(`/api/jobs/${id}/artifacts`),
+  getJobProjectDocument: (jobId, path) =>
+    request(`/api/jobs/${jobId}/project-docs/file?path=${encodeURIComponent(path)}`),
+  getJobWorkbenchArtifactContent: (jobId, artifactId) =>
+    request(`/api/jobs/${jobId}/workbench-artifacts/${encodeURIComponent(artifactId)}/content`),
+  // getJobInterfacePreview fetches the retained interface-preview manifest (F4)
+  // the design_contract step wrote. The backend resolves the interface_preview
+  // workbench artifact ref by artifactId under ArtifactRoot and returns its
+  // decoded manifest: { summary, designDocument, assumedDataFields, snapshotHash,
+  // path }. The modal renders this readably instead of the prior "快照已保留"
+  // placeholder (spec #7: the proposed interface must be inspectable).
+  getJobInterfacePreview: (jobId, artifactId) =>
+    request(`/api/jobs/${jobId}/interface-preview?artifactId=${encodeURIComponent(artifactId)}`),
+  getJobPrototype: (jobId, stepId) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/prototype`),
+  getJobPrototypePreviewUrl: (jobId, stepId) =>
+    `${API_BASE_URL}/api/jobs/${jobId}/steps/${stepId}/prototype/preview`,
+  getJobPrototypePreviewPath: jobId =>
+    request(`/api/jobs/${jobId}/prototype/preview`),
+  sendPrototypeFeedback: (jobId, stepId, feedback) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/prototype/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback }),
+    }),
+  confirmPrototype: (jobId, stepId) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/prototype/confirm`, { method: 'POST' }),
+  continuePrototypeWithoutConfirmation: (jobId, stepId) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/prototype/continue-without-confirmation`, { method: 'POST' }),
   getArtifactContent: async id => requestText(`/api/artifacts/${id}/content`),
   createClarification: prompt => request('/api/clarifications', { method: 'POST', body: JSON.stringify({ prompt }) }),
   getActiveClarification: () => request('/api/clarifications/active'),
@@ -143,7 +206,7 @@ export const factoryApi = {
   answerClarificationBatch: (id, answers) => request(`/api/clarifications/${id}/answers/batch`, { method: 'POST', body: JSON.stringify({ answers }) }),
   patchClarificationRequirement: (id, requirement) => request(`/api/clarifications/${id}/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
   retryClarificationRound: id => request(`/api/clarifications/${id}/retry-current-round`, { method: 'POST' }),
-  confirmClarification: id => request(`/api/clarifications/${id}/confirm`, { method: 'POST' }),
+  confirmClarification: (id, options = {}) => request(`/api/clarifications/${id}/confirm`, { method: 'POST', body: JSON.stringify(options) }),
   abandonClarification: id => request(`/api/clarifications/${id}/abandon`, { method: 'POST' }),
   listClarifications: limit => request(`/api/clarifications?limit=${limit || 50}`),
   deleteClarification: id => request(`/api/clarifications/${id}`, { method: 'DELETE' }),
@@ -154,8 +217,23 @@ export const factoryApi = {
   // (or a list of them). Path/methods mirror the backend routes exactly.
   listDialogues: () => request('/api/dialogues'),
   getDialogue: id => request(`/api/dialogues/${id}`),
-  createDialogue: ({ initialPrompt }) =>
-    request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) }),
+  // createDialogue creates a brand-new dialogue from the user's first prompt.
+  // It accepts EITHER a plain JSON body ({initialPrompt}) OR, when one or more
+  // files are attached to that very first message, a multipart/form-data body
+  // (prompt field + files parts). The multipart path is required because before
+  // the dialogue exists there is no attachment.id to thread into attachmentIds —
+  // the composer stages such files locally, so the only way to deliver them is
+  // to upload them as part of the dialogue creation. The backend shares the
+  // same credential/classification/10MiB boundary as the follow-up upload.
+  createDialogue: ({ initialPrompt, files }) => {
+    if (Array.isArray(files) && files.length) {
+      const form = new FormData()
+      form.append('prompt', initialPrompt)
+      for (const file of files) form.append('files', file)
+      return requestMultipart('/api/dialogues', form)
+    }
+    return request('/api/dialogues', { method: 'POST', body: JSON.stringify({ prompt: initialPrompt }) })
+  },
   deleteDialogue: id => request(`/api/dialogues/${id}`, { method: 'DELETE' }),
   // archiveDialogue sets a dialogue's status to `archived`. The backend endpoint
   // is idempotent and emits `dialogue.archived`; it returns 200 with no required
@@ -171,10 +249,11 @@ export const factoryApi = {
   // A locked session still 409s and surfaces via the typed error (preserved).
   // The hook inspects `.status` to decide whether to poll the trace stream
   // (202) or apply the returned view immediately (200).
-  async sendDialogueMessage(id, content) {
+  async sendDialogueMessage(id, content, options = {}) {
+    const attachmentIds = Array.isArray(options.attachmentIds) ? options.attachmentIds : []
     const { status, body } = await requestWithStatus(
       `/api/dialogues/${id}/messages`,
-      { method: 'POST', body: JSON.stringify({ content }) },
+      { method: 'POST', body: JSON.stringify({ content, attachmentIds }) },
     )
     if (status === 202) {
       if (body && body.view) return body.view
@@ -185,6 +264,32 @@ export const factoryApi = {
     }
     // 200: the composed view. Keep returning the view for the existing flow.
     return body
+  },
+  // uploadDialogueAttachment POSTs a multipart/form-data file to the dialogue
+  // attachment store. The backend writes the file under the artifact root,
+  // persists metadata to dialogue_attachments, and rejects credential-like
+  // payloads (400). Returns { attachment: {...} }.
+  uploadDialogueAttachment(id, { file, focusKey }) {
+    const form = new FormData()
+    form.append('file', file)
+    if (focusKey) form.append('focusKey', focusKey)
+    return requestMultipart(`/api/dialogues/${id}/attachments`, form)
+  },
+  // getDialogueAttachmentContent fetches the text preview body of a stored
+  // attachment (markdown/text/json/csv). The backend serves it as plain text;
+  // used by the attachment preview modal. May 404 if no preview body exists.
+  getDialogueAttachmentContent(id, attachmentId) {
+    return requestText(`/api/dialogues/${id}/attachments/${attachmentId}/content`)
+  },
+  // getDialogueAttachmentContentURL returns the FULL URL for a stored
+  // attachment's bytes — the click-to-preview content route (F3). It is the
+  // absolute URL (<api base>/api/dialogues/:id/attachments/:attachmentId/content)
+  // because <img src> / <iframe src> need an absolute origin, unlike the JSON
+  // request() helpers which compose the base at fetch time. Used by the preview
+  // modal for image and pdf kinds; text kinds still go through the text fetch
+  // (getDialogueAttachmentContent) so the body can be rendered into a <pre>.
+  getDialogueAttachmentContentURL(id, attachmentId) {
+    return `${API_BASE_URL}/api/dialogues/${id}/attachments/${attachmentId}/content`
   },
   // cancelDialogueTurn cancels the currently-processing turn of a continuing
   // session. Returns the cancel status (202 accepted / 200 already-terminal).
@@ -231,8 +336,18 @@ export const factoryApi = {
     request(`/api/dialogues/${id}/clarification/requirement`, { method: 'PATCH', body: JSON.stringify({ requirement }) }),
   retryDialogueRound: id =>
     request(`/api/dialogues/${id}/clarification/retry-current-round`, { method: 'POST' }),
-  confirmDialogueClarification: id =>
-    request(`/api/dialogues/${id}/clarification/confirm`, { method: 'POST' }),
+  confirmDialogueClarification: (id, options = {}) =>
+    request(`/api/dialogues/${id}/clarification/confirm`, { method: 'POST', body: JSON.stringify(options) }),
+  confirmJobStep: (jobId, stepId, attempt) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ ...(attempt ? { attempt } : {}) }),
+    }),
+  confirmJobDataAccess: (jobId, stepId, { version = '', attempt = 0 } = {}) =>
+    request(`/api/jobs/${jobId}/steps/${stepId}/data-access/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ version, ...(attempt ? { attempt } : {}) }),
+    }),
   abandonDialogueClarification: id =>
     request(`/api/dialogues/${id}/clarification/abandon`, { method: 'POST' }),
   confirmDialogueBusinessAgent: id =>
@@ -250,5 +365,13 @@ export const factoryApi = {
         accept ? { consolidationAccept: true } : { consolidationField: field, consolidationValue: value },
       ),
     }),
+  // submitDialogueCredential is the controlled credential input boundary (Task 12).
+  // The plaintext value is sent ONLY over this POST to the dialogue credential
+  // endpoint; the server swaps it for an opaque handle and responds with metadata
+  // + redacted:true — it NEVER echoes the value. The resolved credentialRef is
+  // later surfaced to the data_integration agent via input.json's
+  // controlledCredentialRefs (handle-only). body: { focusKey, label, scope, value }.
+  submitDialogueCredential: (id, body) =>
+    request(`/api/dialogues/${id}/credentials`, { method: 'POST', body: JSON.stringify(body) }),
   deleteApp: id => request(`/api/apps/${id}`, { method: 'DELETE' }),
 }

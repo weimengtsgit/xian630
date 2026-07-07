@@ -68,7 +68,7 @@ export function ChatDialog({ activeJob, jobError, onSubmit }) {
   return (
     <div className={`chat-dock ${history.length === 0 ? 'chat-dock-empty-mode' : 'chat-dock-has-history'}`}>
       <div
-        className={`chat-dock-messages ${
+        className={`chat-dock-messages sf-scroll ${
           history.length === 0 ? 'chat-dock-messages-empty' : 'chat-dock-messages-has-history'
         }`}
         ref={scrollRef}

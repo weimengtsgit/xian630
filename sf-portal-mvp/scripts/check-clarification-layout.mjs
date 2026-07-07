@@ -7,6 +7,11 @@ const chatCss = readFileSync(new URL('../src/components/ChatDialog.css', import.
 const chatJsx = readFileSync(new URL('../src/components/ChatDialog.jsx', import.meta.url), 'utf8')
 const clarJsx = readFileSync(new URL('../src/components/ClarificationPanel.jsx', import.meta.url), 'utf8')
 
+assert.match(clarJsx, /handleAbandonRequirement/, 'ClarificationPanel abandon action should route through a confirmation handler')
+assert.match(clarJsx, /window\.confirm\('确定放弃本次需求吗？/, 'ClarificationPanel abandon action should ask for confirmation')
+assert.match(clarJsx, /放弃本次需求/, 'ClarificationPanel abandon action should use explicit wording')
+assert.match(clarCss, /\.clar-abandon\s*\{[\s\S]*background:\s*transparent/, 'ClarificationPanel abandon action should be visually secondary')
+
 assert.match(
   appCss,
   /\.wb-center\s*>\s*\.conversation-workbench\s*\{[^}]*flex:\s*1\s+1\s+0[^}]*min-height:\s*360px/s,
@@ -95,6 +100,35 @@ assert.match(
   clarCss,
   /\.clar-option-selected/,
   'multi-select options must expose a selected visual state',
+)
+
+// ---------------------------------------------------------------------------
+// Task 3: the ConversationWorkbench job-step ClarificationPromptCard must
+// answer IN-CARD (no composer refill). The pre-job ClarificationPanel keeps its
+// own in-card round submit; the workbench card must have its own in-card submit
+// affordance too (澄清交互卡片 _Avoid_: 输入框回填选项, 卡片外提交).
+// ---------------------------------------------------------------------------
+const workbenchJsx = readFileSync(new URL('../src/components/ConversationWorkbench.jsx', import.meta.url), 'utf8')
+const workbenchCss = readFileSync(new URL('../src/components/ConversationWorkbench.css', import.meta.url), 'utf8')
+assert.match(
+  workbenchJsx,
+  /cw-clarification-submit/,
+  'the workbench ClarificationPromptCard must have an in-card submit affordance (cw-clarification-submit)',
+)
+assert.match(
+  workbenchJsx,
+  /cw-clarification-custom/,
+  'the workbench ClarificationPromptCard must offer an in-card custom-answer input (not the composer)',
+)
+assert.doesNotMatch(
+  workbenchJsx,
+  /onPickClarification/,
+  'the workbench must NOT keep the onPickClarification composer-refill path',
+)
+assert.match(
+  workbenchCss,
+  /\.cw-clarification-submit\s*\{/,
+  'the in-card submit affordance must have its own style (cw-clarification-submit)',
 )
 
 console.log('check-clarification-layout: OK')

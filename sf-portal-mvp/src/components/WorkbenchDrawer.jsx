@@ -7,7 +7,7 @@ import './WorkbenchDrawer.css'
 // WorkbenchDrawer is the unified right-side 工作台抽屉 host (Phase 1 of the
 // workbench-drawer migration). It is a single overlay that renders content for
 // the active entry chosen by the 3 top-right workbench header buttons
-// (任务执行 / 协作智能体 / 应用项目).
+// (任务执行 / 协作智能体 / 工作空间).
 //
 // The three entries are mutually exclusive: the active one is passed in as
 // `activeEntry`; passing null closes the drawer. The host itself is a presentational
@@ -25,7 +25,7 @@ import './WorkbenchDrawer.css'
 //   - 'agents'     (协作智能体): renders the existing AgentsPanel CONTENT (agents
 //                   list + create/delete/detail) by reusing AgentsPanel without its
 //                   hide button (no onHidePanel prop => the button stays hidden).
-//   - 'application' (应用项目): disabled upstream when no application is bound; when
+//   - 'application' (工作空间): disabled upstream when no application is bound; when
 //                   forced open renders a placeholder (Phase 5 fills the project tree).
 export function WorkbenchDrawer({
   activeEntry,
@@ -41,20 +41,29 @@ export function WorkbenchDrawer({
 }) {
   if (!activeEntry) return null
   const title = ENTRY_TITLES[activeEntry] || ''
+  // Task 6 (header dedup): the 'agents' entry reuses AgentsPanel, which renders
+  // its OWN <h2>协作智能体</h2> header (with count + create). To avoid two
+  // stacked 协作智能体 titles, the drawer OMITS its outer header for the agents
+  // entry and instead threads `onClose` into AgentsPanel so the close (X) lives
+  // inside that single panel header. The other entries (task / application) keep
+  // the drawer's outer header because their content has no title of its own.
+  const agentsHosted = activeEntry === 'agents'
   return (
     <aside className={`workbench-drawer workbench-drawer-open`} role="dialog" aria-label={title}>
-      <header className="workbench-drawer-header">
-        <strong>{title}</strong>
-        <button
-          type="button"
-          className="workbench-drawer-close"
-          onClick={onClose}
-          title="关闭"
-          aria-label="关闭"
-        >
-          <X size={16} />
-        </button>
-      </header>
+      {!agentsHosted ? (
+        <header className="workbench-drawer-header">
+          <strong>{title}</strong>
+          <button
+            type="button"
+            className="workbench-drawer-close"
+            onClick={onClose}
+            title="关闭"
+            aria-label="关闭"
+          >
+            <X size={16} />
+          </button>
+        </header>
+      ) : null}
 
       <div className="workbench-drawer-body">
         {activeEntry === 'task' ? (
@@ -65,7 +74,9 @@ export function WorkbenchDrawer({
             {...(agentsProps || {})}
             // AgentsPanel renders its hide button only when onHidePanel is passed,
             // so omitting it keeps the drawer-hosted list free of the old column
-            // hide affordance.
+            // hide affordance. We pass onClose so the drawer close (X) lives in
+            // the single AgentsPanel header (header-dedup, Task 6).
+            onClose={onClose}
           />
         ) : null}
         {activeEntry === 'application' ? <ApplicationProjectPanel {...(applicationProps || {})} /> : null}
@@ -77,5 +88,5 @@ export function WorkbenchDrawer({
 const ENTRY_TITLES = {
   task: '任务执行',
   agents: '协作智能体',
-  application: '应用项目',
+  application: '工作空间',
 }

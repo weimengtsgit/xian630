@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { TopBar } from './components/TopBar'
 import { LeftToolbar } from './components/LeftToolbar'
 import { AgentsPanel } from './components/AgentsPanel'
-import { FloatingAIButton } from './components/FloatingAIButton'
 import { ChatDialog } from './components/ChatDialog'
 import { extractKeywords } from './utils/keywordExtractor'
 import './App.css'
@@ -44,10 +43,6 @@ function App() {
       <div className="portal-content">
         <AgentsPanel userInput={userInput} />
       </div>
-      <FloatingAIButton
-        onClick={toggleChat}
-        isActive={isChatOpen || isChatMinimized}
-      />
       <ChatDialog
         isOpen={isChatOpen}
         onClose={closeChat}

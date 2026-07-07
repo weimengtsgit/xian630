@@ -1,8 +1,7 @@
-import { useAgents } from '../hooks/useAgents'
+import { useStages } from '../hooks/useStages'
 import {
   CheckCircle,
   Clock,
-  StopCircle,
   Bot,
   User,
   Briefcase,
@@ -12,80 +11,90 @@ import {
 } from 'lucide-react'
 import './AgentsPanel.css'
 
-// 流水线节点元信息：图标与职责描述
+// 流水线节点元信息：图标 / 名称 / 类型 / 职责描述
 const AGENT_META = {
-  'agent-business': { icon: Briefcase, desc: '业务流程建模 · 逻辑拆解' },
-  'agent-prototype': { icon: Figma, desc: '界面结构 · 元素解析' },
-  'agent-data': { icon: BarChart3, desc: '数据采集 · 字段抽取' },
-  'agent-production': { icon: Code2, desc: '代码生成 · 工程交付' }
-}
-
-function getStatusInfo(status) {
-  switch (status) {
-    case 'working':
-      return { color: '#68ddff', icon: Clock, text: '工作中', bgColor: 'rgba(104, 221, 255, 0.12)' }
-    case 'completed':
-      return { color: '#7feb9b', icon: CheckCircle, text: '已完成', bgColor: 'rgba(127, 235, 155, 0.12)' }
-    case 'idle':
-      return { color: '#8fb0bf', icon: StopCircle, text: '等待中', bgColor: 'rgba(143, 176, 191, 0.12)' }
-    case 'error':
-      return { color: '#ff665e', icon: null, text: '异常', bgColor: 'rgba(255, 102, 94, 0.12)' }
-    default:
-      return { color: '#a5bdca', icon: null, text: '未知', bgColor: 'rgba(165, 189, 202, 0.12)' }
+  'agent-business': {
+    icon: Briefcase,
+    name: '业务逻辑智能体',
+    type: '业务逻辑',
+    desc: '业务流程建模 · 逻辑拆解',
+    detail: '业务逻辑智能体重点是理解指挥员意图、分析业务逻辑，形成智能体生成方案。'
+  },
+  'agent-prototype': {
+    icon: Figma,
+    name: '界面解析智能体',
+    type: '界面解析',
+    desc: '界面结构 · 元素解析',
+    detail: '界面解析智能体重点是回应指挥员关切，按要求调整配置界面。'
+  },
+  'agent-data': {
+    icon: BarChart3,
+    name: '数据抓取智能体',
+    type: '数据抓取',
+    desc: '数据采集 · 字段抽取',
+    detail: '数据抓取智能体重点是深入动态数据对象进行数据抓取、接口对接，共同完成各类智能体的快速生成。'
+  },
+  'agent-production': {
+    icon: Code2,
+    name: '生产交付智能体',
+    type: '生产交付',
+    desc: '代码生成 · 工程交付'
   }
 }
 
-function AgentNode({ agent }) {
-  const meta = AGENT_META[agent.id] || { icon: Bot, desc: '' }
+function AgentNode({ id, status, url, onActivate }) {
+  const meta = AGENT_META[id] || { icon: Bot, name: id, type: '', desc: '' }
   const Icon = meta.icon
-  const statusInfo = getStatusInfo(agent.status)
-  const StatusIcon = statusInfo.icon
+  const st = status || 'pending'
+  const hasUrl = !!url
+  const completed = st === 'completed'
+  const working = st === 'working'
+  // working 中不可点；无 url 不可点；其余（pending/completed 有 url）可点
+  const clickable = hasUrl && !working
+  const accent = completed ? '#7feb9b' : working ? '#68ddff' : hasUrl ? '#9ecbf0' : '#6b8693'
+  const statusText = completed ? '已完成' : working ? '进行中' : '待处理'
+
+  function handleClick() {
+    if (!clickable) return
+    if (st === 'pending') onActivate(id)   // 启动 → 进行中
+    window.open(url, '_blank', 'noopener') // 跳转到对应系统
+  }
 
   return (
-    <div className="agent-node" data-agent-id={agent.id} data-status={agent.status}>
+    <div
+      className={`agent-node is-${st}${clickable ? ' is-clickable' : ''}${!hasUrl ? ' no-url' : ''}`}
+      data-agent-id={id}
+      data-status={st}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={handleClick}
+      onKeyDown={clickable ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick() }
+      } : undefined}
+    >
+      {meta.detail && (
+        <div className="agent-node-tooltip" role="tooltip">{meta.detail}</div>
+      )}
       <div className="agent-node-head">
-        <div className="agent-node-icon" style={{ background: statusInfo.bgColor }}>
-          <Icon size={30} style={{ color: statusInfo.color }} />
-          {agent.status === 'working' && (
-            <span className="agent-node-pulse" style={{ borderColor: statusInfo.color }} />
-          )}
+        <div className="agent-node-icon" style={{ borderColor: `${accent}55`, background: `${accent}1a` }}>
+          <Icon size={30} style={{ color: accent }} />
+          {working && <span className="agent-node-pulse" style={{ borderColor: accent }} />}
         </div>
         <div className="agent-node-titles">
-          <div className="agent-node-name">{agent.name}</div>
-          <div className="agent-node-type">{agent.type}</div>
+          <div className="agent-node-name">{meta.name}</div>
+          <div className="agent-node-type">{meta.type}</div>
         </div>
       </div>
 
       <div className="agent-node-desc">{meta.desc}</div>
 
       <div className="agent-node-status">
-        {StatusIcon ? (
-          <StatusIcon size={17} style={{ color: statusInfo.color }} />
-        ) : (
-          <span className="status-dot" style={{ background: statusInfo.color }} />
-        )}
-        <span style={{ color: statusInfo.color }}>{statusInfo.text}</span>
+        {completed ? <CheckCircle size={17} color={accent} /> : <Clock size={17} color={accent} />}
+        <span style={{ color: accent }}>{statusText}</span>
       </div>
 
-      {agent.status === 'working' && (
-        <div className="agent-node-task">
-          <div className="agent-node-task-name">{agent.currentTask}</div>
-          <div className="agent-node-progress">
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${agent.progress}%` }} />
-            </div>
-            <span className="progress-percent">{agent.progress}%</span>
-          </div>
-        </div>
-      )}
-
-      {agent.status === 'idle' && (
-        <div className="agent-node-wait">等待上游产出…</div>
-      )}
-
-      {agent.status === 'completed' && (
-        <div className="agent-node-done">产出就绪 ✓</div>
-      )}
+      {completed && <div className="agent-node-done">产出就绪 ✓</div>}
+      {!hasUrl && <div className="agent-node-wait">未配置跳转</div>}
     </div>
   )
 }
@@ -164,18 +173,21 @@ function MergeConnector() {
 }
 
 export function AgentsPanel({ userInput }) {
-  const { agents, loading } = useAgents()
-  const byId = (id) => agents.find((a) => a.id === id)
+  const { stages, loading, activate } = useStages()
+  const find = (key) => stages.find(s => s.key === key)
 
   if (loading) {
     return (
       <div className="agents-panel">
-        <div className="panel-header">
-          <h2>智能体流水线</h2>
-        </div>
+        <div className="panel-header"><h2>智能体流水线</h2></div>
         <div className="panel-loading">加载中...</div>
       </div>
     )
+  }
+
+  const node = (key) => {
+    const s = find(key)
+    return <AgentNode id={key} status={s?.status} url={s?.url} onActivate={activate} />
   }
 
   return (
@@ -185,7 +197,7 @@ export function AgentsPanel({ userInput }) {
           <h2>智能体流水线</h2>
           <span className="panel-subtitle">用户输入 → 业务逻辑 → 并行(界面解析 / 数据抓取) → 生产交付</span>
         </div>
-        <span className="panel-count">{agents.length} 个智能体</span>
+        <span className="panel-count">{stages.length} 个智能体</span>
       </div>
 
       <div className="panel-content">
@@ -196,22 +208,18 @@ export function AgentsPanel({ userInput }) {
 
           <LinearConnector />
 
-          <div className="flow-stage flow-stage--single">
-            <AgentNode agent={byId('agent-business')} />
-          </div>
+          <div className="flow-stage flow-stage--single">{node('agent-business')}</div>
 
           <SplitConnector />
 
           <div className="flow-stage flow-stage--parallel">
-            <AgentNode agent={byId('agent-prototype')} />
-            <AgentNode agent={byId('agent-data')} />
+            {node('agent-prototype')}
+            {node('agent-data')}
           </div>
 
           <MergeConnector />
 
-          <div className="flow-stage flow-stage--single">
-            <AgentNode agent={byId('agent-production')} />
-          </div>
+          <div className="flow-stage flow-stage--single">{node('agent-production')}</div>
         </div>
       </div>
     </div>

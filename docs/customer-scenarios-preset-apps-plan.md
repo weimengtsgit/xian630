@@ -16,6 +16,7 @@
 - 应用界面显示客户原始刷新频率；本地演示可以使用较短 tick 推进“最近刷新时间”、倒计时或曲线变化。
 - 客户前四个场景均归为 `指挥看板类应用`，生成能力画像使用 `software-factory-app`、`defense-operations-ui`、`command-dashboard`、`maritime-alert-dashboard`。
 - 客户第五个场景归为 `指挥看板类应用` 的 `归属研判类应用` 子型，生成能力画像增加 `affiliation-inference-dashboard`。
+- SEASATS 测试艇监测场景进入预置应用列表，使用 `application` 表面，不作为隐藏蓝本；应用显示名为「SEASATS测试艇活动监测」，slug 为 `seasats-test-craft-monitor`。
 
 ## 预置应用清单
 
@@ -26,6 +27,7 @@
 | 客户场景三 | 海域网格商船密度异常告警器 | `merchant-density-grid-alert` | AIS 商船密度网格异常告警 | 隐藏场景蓝本 | `command-dashboard` |
 | 客户场景四 | 开源社区异常监测 | `social-sighting-cluster-alert` | 社媒海上目击聚合告警地图 | 隐藏场景蓝本 | `command-dashboard` |
 | 客户场景五 | 航母舰载机归属推断工具 | `carrier-air-wing-affiliation-inference` | ADS-B 海上起降与航母位置的舰载机归属研判 | 隐藏场景蓝本 | `command-dashboard` / `归属研判类应用` |
+| 客户补充场景 | SEASATS测试艇活动监测 | `seasats-test-craft-monitor` | SEASATS 目标清单、单艇 AIS 轨迹、低速往返和疑似 AIS 中断告警 | 预置应用 | `command-dashboard` |
 
 ## 场景一：航母母港潮汐窗口计算器
 

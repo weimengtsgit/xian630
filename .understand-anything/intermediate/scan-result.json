@@ -1,0 +1,3916 @@
+{
+  "name": "xian630",
+  "description": "xian630 智能软件工厂 polyrepo：前端门户 sf-portal-mvp（React + Vite）经 REST/SSE 与编排核心 factory-server（Go + SQLite，唯一 Claude Code CLI 调用者与任务编排者）交互，由 interface-agent 将对话收敛为界面契约，cc-status 经 Claude Code hooks 观测 session/subagent/skill 生命周期；通过 Podman/Docker 镜像化与 nginx 反代完成构建部署。项目含 614 个源文件，建议聚焦单个子目录（如 sf-portal-mvp 或 factory-server）以加速分析。",
+  "languages": [
+    "conf",
+    "config",
+    "css",
+    "dockerfile",
+    "go",
+    "html",
+    "javascript",
+    "json",
+    "makefile",
+    "markdown",
+    "mod",
+    "python",
+    "shell",
+    "sql",
+    "sum",
+    "typescript",
+    "unknown",
+    "xlsx",
+    "yaml"
+  ],
+  "frameworks": [
+    "React",
+    "Vite",
+    "Vitest",
+    "Express",
+    "Docker",
+    "Docker Compose",
+    "SQLite"
+  ],
+  "files": [
+    {
+      "path": "cc-status/cmd/cc-status/main.go",
+      "language": "go",
+      "sizeLines": 19,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/examples/query.sh",
+      "language": "shell",
+      "sizeLines": 26,
+      "fileCategory": "script"
+    },
+    {
+      "path": "cc-status/go.mod",
+      "language": "mod",
+      "sizeLines": 21,
+      "fileCategory": "config"
+    },
+    {
+      "path": "cc-status/go.sum",
+      "language": "sum",
+      "sizeLines": 49,
+      "fileCategory": "config"
+    },
+    {
+      "path": "cc-status/internal/cli/cli.go",
+      "language": "go",
+      "sizeLines": 196,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/config/config_test.go",
+      "language": "go",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/config/config.go",
+      "language": "go",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/hook/parse_test.go",
+      "language": "go",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/hook/parse.go",
+      "language": "go",
+      "sizeLines": 103,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/hook/report.go",
+      "language": "go",
+      "sizeLines": 41,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/ingest/ingest.go",
+      "language": "go",
+      "sizeLines": 156,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/install/daemon.go",
+      "language": "go",
+      "sizeLines": 121,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/install/install_test.go",
+      "language": "go",
+      "sizeLines": 68,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/install/install.go",
+      "language": "go",
+      "sizeLines": 220,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/model/model.go",
+      "language": "go",
+      "sizeLines": 117,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/runlog/runlog_test.go",
+      "language": "go",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/runlog/runlog.go",
+      "language": "go",
+      "sizeLines": 80,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/server/hub.go",
+      "language": "go",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/server/router.go",
+      "language": "go",
+      "sizeLines": 77,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/server/server.go",
+      "language": "go",
+      "sizeLines": 362,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/skills/scan_test.go",
+      "language": "go",
+      "sizeLines": 55,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/skills/scan.go",
+      "language": "go",
+      "sizeLines": 158,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/store/entities.go",
+      "language": "go",
+      "sizeLines": 557,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/internal/store/schema.sql",
+      "language": "sql",
+      "sizeLines": 77,
+      "fileCategory": "data"
+    },
+    {
+      "path": "cc-status/internal/store/store.go",
+      "language": "go",
+      "sizeLines": 174,
+      "fileCategory": "code"
+    },
+    {
+      "path": "cc-status/Makefile",
+      "language": "makefile",
+      "sizeLines": 56,
+      "fileCategory": "infra"
+    },
+    {
+      "path": "cc-status/README.md",
+      "language": "markdown",
+      "sizeLines": 140,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "factory-server/cmd/factory-server/main.go",
+      "language": "go",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/go.mod",
+      "language": "mod",
+      "sizeLines": 21,
+      "fileCategory": "config"
+    },
+    {
+      "path": "factory-server/go.sum",
+      "language": "sum",
+      "sizeLines": 49,
+      "fileCategory": "config"
+    },
+    {
+      "path": "factory-server/internal/agents/registry_test.go",
+      "language": "go",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/agents/registry.go",
+      "language": "go",
+      "sizeLines": 102,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/ccstatus/client_test.go",
+      "language": "go",
+      "sizeLines": 223,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/ccstatus/client.go",
+      "language": "go",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/clarification/contracts.go",
+      "language": "go",
+      "sizeLines": 244,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/clarification/runner_test.go",
+      "language": "go",
+      "sizeLines": 1089,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/clarification/runner.go",
+      "language": "go",
+      "sizeLines": 1185,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/collaboration/plan_test.go",
+      "language": "go",
+      "sizeLines": 125,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/collaboration/plan.go",
+      "language": "go",
+      "sizeLines": 339,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/config/config_test.go",
+      "language": "go",
+      "sizeLines": 117,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/config/config.go",
+      "language": "go",
+      "sizeLines": 125,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dataaccess/dataaccess_test.go",
+      "language": "go",
+      "sizeLines": 136,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dataaccess/dataaccess.go",
+      "language": "go",
+      "sizeLines": 341,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/docker_runtime_test.go",
+      "language": "go",
+      "sizeLines": 157,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/docker_runtime.go",
+      "language": "go",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/health_test.go",
+      "language": "go",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/health.go",
+      "language": "go",
+      "sizeLines": 129,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/host_test.go",
+      "language": "go",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/host.go",
+      "language": "go",
+      "sizeLines": 60,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/podman_test.go",
+      "language": "go",
+      "sizeLines": 414,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/podman.go",
+      "language": "go",
+      "sizeLines": 410,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/ports_test.go",
+      "language": "go",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/ports.go",
+      "language": "go",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/runtime.go",
+      "language": "go",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/deploy/util.go",
+      "language": "go",
+      "sizeLines": 16,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dialogue/contracts.go",
+      "language": "go",
+      "sizeLines": 210,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "language": "go",
+      "sizeLines": 107,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dialogue/document_draft_converter.go",
+      "language": "go",
+      "sizeLines": 212,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dialogue/runner_test.go",
+      "language": "go",
+      "sizeLines": 763,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dialogue/runner.go",
+      "language": "go",
+      "sizeLines": 677,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/dialogue/turn.go",
+      "language": "go",
+      "sizeLines": 131,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/claude_audit_test.go",
+      "language": "go",
+      "sizeLines": 187,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/claude_runner_test.go",
+      "language": "go",
+      "sizeLines": 1803,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/claude_runner.go",
+      "language": "go",
+      "sizeLines": 2137,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/data_contract_projection_test.go",
+      "language": "go",
+      "sizeLines": 93,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/execution_records_test.go",
+      "language": "go",
+      "sizeLines": 485,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/execution_records.go",
+      "language": "go",
+      "sizeLines": 275,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/executor_test.go",
+      "language": "go",
+      "sizeLines": 1341,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/executor.go",
+      "language": "go",
+      "sizeLines": 1606,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/factory_steps_test.go",
+      "language": "go",
+      "sizeLines": 1937,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/factory_steps.go",
+      "language": "go",
+      "sizeLines": 1042,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/factory_stream.go",
+      "language": "go",
+      "sizeLines": 203,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/fake_claude_test.go",
+      "language": "go",
+      "sizeLines": 609,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/fake_claude.go",
+      "language": "go",
+      "sizeLines": 903,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/profile_skills_test.go",
+      "language": "go",
+      "sizeLines": 242,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/prototype_contract_test.go",
+      "language": "go",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/prototype_contract.go",
+      "language": "go",
+      "sizeLines": 70,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/steps_test.go",
+      "language": "go",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/executor/steps.go",
+      "language": "go",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/id/id_test.go",
+      "language": "go",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/id/id.go",
+      "language": "go",
+      "sizeLines": 68,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/model/model.go",
+      "language": "go",
+      "sizeLines": 832,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/model/prototype.go",
+      "language": "go",
+      "sizeLines": 126,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/projectdocs/generator_test.go",
+      "language": "go",
+      "sizeLines": 106,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/projectdocs/generator.go",
+      "language": "go",
+      "sizeLines": 270,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runlog/runlog_test.go",
+      "language": "go",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runlog/runlog.go",
+      "language": "go",
+      "sizeLines": 80,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/artifacts_test.go",
+      "language": "go",
+      "sizeLines": 50,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/artifacts.go",
+      "language": "go",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/claude_test.go",
+      "language": "go",
+      "sizeLines": 411,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/claude.go",
+      "language": "go",
+      "sizeLines": 409,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/contracts_test.go",
+      "language": "go",
+      "sizeLines": 939,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/contracts.go",
+      "language": "go",
+      "sizeLines": 1005,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/execution_records.go",
+      "language": "go",
+      "sizeLines": 108,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/honest_data_audit_test.go",
+      "language": "go",
+      "sizeLines": 275,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/honest_data_audit.go",
+      "language": "go",
+      "sizeLines": 423,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/llmtrace.go",
+      "language": "go",
+      "sizeLines": 150,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/repair_real_test.go",
+      "language": "go",
+      "sizeLines": 72,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/stream_test.go",
+      "language": "go",
+      "sizeLines": 481,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/runner/stream.go",
+      "language": "go",
+      "sizeLines": 561,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/scanner/manifest_test.go",
+      "language": "go",
+      "sizeLines": 34,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/scanner/manifest.go",
+      "language": "go",
+      "sizeLines": 119,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/scanner/scanner_test.go",
+      "language": "go",
+      "sizeLines": 231,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/scanner/scanner.go",
+      "language": "go",
+      "sizeLines": 157,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/scanner/scene_catalog_test.go",
+      "language": "go",
+      "sizeLines": 376,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/scanner/scene_catalog.go",
+      "language": "go",
+      "sizeLines": 317,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/security/redaction_test.go",
+      "language": "go",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/security/redaction.go",
+      "language": "go",
+      "sizeLines": 37,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/agent_handlers_test.go",
+      "language": "go",
+      "sizeLines": 500,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/agent_handlers.go",
+      "language": "go",
+      "sizeLines": 301,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/app_handlers_test.go",
+      "language": "go",
+      "sizeLines": 254,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/app_handlers.go",
+      "language": "go",
+      "sizeLines": 169,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/app_operations_test.go",
+      "language": "go",
+      "sizeLines": 1047,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/app_operations.go",
+      "language": "go",
+      "sizeLines": 1058,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/app_project_handlers_test.go",
+      "language": "go",
+      "sizeLines": 632,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/app_project_handlers.go",
+      "language": "go",
+      "sizeLines": 639,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/artifact_handlers.go",
+      "language": "go",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/attachment_handlers_test.go",
+      "language": "go",
+      "sizeLines": 177,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/attachment_handlers.go",
+      "language": "go",
+      "sizeLines": 281,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/clarification_handlers_test.go",
+      "language": "go",
+      "sizeLines": 2239,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/clarification_handlers.go",
+      "language": "go",
+      "sizeLines": 2019,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/credential_secrets_test.go",
+      "language": "go",
+      "sizeLines": 78,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/credential_secrets.go",
+      "language": "go",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/dialogue_handlers_test.go",
+      "language": "go",
+      "sizeLines": 3746,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/dialogue_handlers.go",
+      "language": "go",
+      "sizeLines": 2624,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/events_test.go",
+      "language": "go",
+      "sizeLines": 485,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/events.go",
+      "language": "go",
+      "sizeLines": 587,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/generation_profile_data_test.go",
+      "language": "go",
+      "sizeLines": 260,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/job_handlers_test.go",
+      "language": "go",
+      "sizeLines": 1623,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/job_handlers.go",
+      "language": "go",
+      "sizeLines": 1066,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/prototype_handlers_test.go",
+      "language": "go",
+      "sizeLines": 325,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/prototype_handlers.go",
+      "language": "go",
+      "sizeLines": 391,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/router_test.go",
+      "language": "go",
+      "sizeLines": 59,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/router.go",
+      "language": "go",
+      "sizeLines": 91,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/server.go",
+      "language": "go",
+      "sizeLines": 610,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/test_helpers_test.go",
+      "language": "go",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/turn_worker.go",
+      "language": "go",
+      "sizeLines": 490,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/workbench_artifact_handlers_test.go",
+      "language": "go",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/server/workbench_artifact_handlers.go",
+      "language": "go",
+      "sizeLines": 206,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/agents_test.go",
+      "language": "go",
+      "sizeLines": 89,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/agents.go",
+      "language": "go",
+      "sizeLines": 128,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/application_versions_test.go",
+      "language": "go",
+      "sizeLines": 113,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/application_versions.go",
+      "language": "go",
+      "sizeLines": 205,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/applications_sync_test.go",
+      "language": "go",
+      "sizeLines": 212,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/applications.go",
+      "language": "go",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/clarifications_test.go",
+      "language": "go",
+      "sizeLines": 168,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/clarifications.go",
+      "language": "go",
+      "sizeLines": 250,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/collaboration_plans_test.go",
+      "language": "go",
+      "sizeLines": 96,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/collaboration_plans.go",
+      "language": "go",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/credential_refs_test.go",
+      "language": "go",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/credential_refs.go",
+      "language": "go",
+      "sizeLines": 55,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/deployments.go",
+      "language": "go",
+      "sizeLines": 133,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/dialogue_attachments_test.go",
+      "language": "go",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/dialogue_attachments.go",
+      "language": "go",
+      "sizeLines": 102,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/dialogue_turns.go",
+      "language": "go",
+      "sizeLines": 200,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/dialogues_test.go",
+      "language": "go",
+      "sizeLines": 425,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/dialogues.go",
+      "language": "go",
+      "sizeLines": 420,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/execution_records_test.go",
+      "language": "go",
+      "sizeLines": 110,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/execution_records.go",
+      "language": "go",
+      "sizeLines": 177,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/jobs_test.go",
+      "language": "go",
+      "sizeLines": 244,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/jobs.go",
+      "language": "go",
+      "sizeLines": 866,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/project_document_drafts_test.go",
+      "language": "go",
+      "sizeLines": 126,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/project_document_drafts.go",
+      "language": "go",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/schema.sql",
+      "language": "sql",
+      "sizeLines": 410,
+      "fileCategory": "data"
+    },
+    {
+      "path": "factory-server/internal/store/store_test.go",
+      "language": "go",
+      "sizeLines": 407,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/store.go",
+      "language": "go",
+      "sizeLines": 253,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/task_thinking_test.go",
+      "language": "go",
+      "sizeLines": 98,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/task_thinking.go",
+      "language": "go",
+      "sizeLines": 157,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/work_traces_test.go",
+      "language": "go",
+      "sizeLines": 229,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/work_traces.go",
+      "language": "go",
+      "sizeLines": 421,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/workbench_artifacts_test.go",
+      "language": "go",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/internal/store/workbench_artifacts.go",
+      "language": "go",
+      "sizeLines": 98,
+      "fileCategory": "code"
+    },
+    {
+      "path": "factory-server/Makefile",
+      "language": "makefile",
+      "sizeLines": 16,
+      "fileCategory": "infra"
+    },
+    {
+      "path": "factory-server/README.md",
+      "language": "markdown",
+      "sizeLines": 75,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "sf-portal-mvp/index.html",
+      "language": "html",
+      "sizeLines": 13,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/package.json",
+      "language": "json",
+      "sizeLines": 25,
+      "fileCategory": "config"
+    },
+    {
+      "path": "sf-portal-mvp/README.md",
+      "language": "markdown",
+      "sizeLines": 72,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-agent-creation.mjs",
+      "language": "javascript",
+      "sizeLines": 16,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-agent-panel-layout.mjs",
+      "language": "javascript",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-application-ordering.mjs",
+      "language": "javascript",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-application-project-drawer.mjs",
+      "language": "javascript",
+      "sizeLines": 73,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-application-store-page.mjs",
+      "language": "javascript",
+      "sizeLines": 80,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-application-wording.mjs",
+      "language": "javascript",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-chat-input-sizing.mjs",
+      "language": "javascript",
+      "sizeLines": 23,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-clarification-layout.mjs",
+      "language": "javascript",
+      "sizeLines": 134,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-clarification.mjs",
+      "language": "javascript",
+      "sizeLines": 284,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-collaboration-plan.mjs",
+      "language": "javascript",
+      "sizeLines": 341,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-conversation-agent-streaming.mjs",
+      "language": "javascript",
+      "sizeLines": 502,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-conversation-workbench.mjs",
+      "language": "javascript",
+      "sizeLines": 197,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-dialogue-workbench.mjs",
+      "language": "javascript",
+      "sizeLines": 679,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-execution-record-state.mjs",
+      "language": "javascript",
+      "sizeLines": 151,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-focus-task.mjs",
+      "language": "javascript",
+      "sizeLines": 109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-folded-clarification-summary.mjs",
+      "language": "javascript",
+      "sizeLines": 169,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-iteration-order.mjs",
+      "language": "javascript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-job-selection.mjs",
+      "language": "javascript",
+      "sizeLines": 19,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-managed-agents.mjs",
+      "language": "javascript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-prototype-confirmation.mjs",
+      "language": "javascript",
+      "sizeLines": 169,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-prototype-handoff.mjs",
+      "language": "javascript",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-requirement-confirm-card.mjs",
+      "language": "javascript",
+      "sizeLines": 136,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-shared-scrollbar.mjs",
+      "language": "javascript",
+      "sizeLines": 89,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-side-panel-toggle.mjs",
+      "language": "javascript",
+      "sizeLines": 76,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-task-observability-layout.mjs",
+      "language": "javascript",
+      "sizeLines": 198,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-task-thinking-state.mjs",
+      "language": "javascript",
+      "sizeLines": 130,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-visible-work-trace.mjs",
+      "language": "javascript",
+      "sizeLines": 190,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-workbench-drawer.mjs",
+      "language": "javascript",
+      "sizeLines": 151,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-workbench-orchestration-adjustment.mjs",
+      "language": "javascript",
+      "sizeLines": 456,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/scripts/check-workspace-preview-modal.mjs",
+      "language": "javascript",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/api/client.js",
+      "language": "javascript",
+      "sizeLines": 377,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/api/events.js",
+      "language": "javascript",
+      "sizeLines": 285,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/App.css",
+      "language": "css",
+      "sizeLines": 312,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/App.jsx",
+      "language": "javascript",
+      "sizeLines": 407,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AgentsPanel.css",
+      "language": "css",
+      "sizeLines": 456,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AgentsPanel.jsx",
+      "language": "javascript",
+      "sizeLines": 406,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AgentStatus.css",
+      "language": "css",
+      "sizeLines": 27,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AgentStatus.jsx",
+      "language": "javascript",
+      "sizeLines": 21,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AggregateOrchestrationGraph.css",
+      "language": "css",
+      "sizeLines": 353,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AggregateOrchestrationGraph.jsx",
+      "language": "javascript",
+      "sizeLines": 517,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ApplicationProjectPanel.css",
+      "language": "css",
+      "sizeLines": 204,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ApplicationProjectPanel.jsx",
+      "language": "javascript",
+      "sizeLines": 443,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ApplicationsPanel.css",
+      "language": "css",
+      "sizeLines": 427,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ApplicationsPanel.jsx",
+      "language": "javascript",
+      "sizeLines": 289,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ApplicationStorePage.css",
+      "language": "css",
+      "sizeLines": 998,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ApplicationStorePage.jsx",
+      "language": "javascript",
+      "sizeLines": 448,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AttachmentComposer.jsx",
+      "language": "javascript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/AttachmentPreviewModal.jsx",
+      "language": "javascript",
+      "sizeLines": 113,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ChatDialog.css",
+      "language": "css",
+      "sizeLines": 153,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ChatDialog.jsx",
+      "language": "javascript",
+      "sizeLines": 117,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/chatTextareaAutosize.js",
+      "language": "javascript",
+      "sizeLines": 26,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ClarificationPanel.css",
+      "language": "css",
+      "sizeLines": 409,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ClarificationPanel.jsx",
+      "language": "javascript",
+      "sizeLines": 401,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/CollaborationExecutionGraph.css",
+      "language": "css",
+      "sizeLines": 317,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/CollaborationExecutionGraph.jsx",
+      "language": "javascript",
+      "sizeLines": 544,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ConversationWorkbench.css",
+      "language": "css",
+      "sizeLines": 672,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ConversationWorkbench.jsx",
+      "language": "javascript",
+      "sizeLines": 2269,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/FloatingAIButton.css",
+      "language": "css",
+      "sizeLines": 71,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/FloatingAIButton.jsx",
+      "language": "javascript",
+      "sizeLines": 15,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/InterfacePreviewModal.jsx",
+      "language": "javascript",
+      "sizeLines": 215,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/JobCenter.css",
+      "language": "css",
+      "sizeLines": 1148,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/JobCenter.jsx",
+      "language": "javascript",
+      "sizeLines": 481,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/LeftToolbar.jsx",
+      "language": "javascript",
+      "sizeLines": 47,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/ProjectDocumentPreviewModal.jsx",
+      "language": "javascript",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/SessionNav.css",
+      "language": "css",
+      "sizeLines": 344,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/SessionNav.jsx",
+      "language": "javascript",
+      "sizeLines": 208,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/StepCard.jsx",
+      "language": "javascript",
+      "sizeLines": 168,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/StepExecutionDrawer.jsx",
+      "language": "javascript",
+      "sizeLines": 793,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/TopBar.jsx",
+      "language": "javascript",
+      "sizeLines": 67,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/WorkbenchAgentBlock.jsx",
+      "language": "javascript",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/WorkbenchDrawer.css",
+      "language": "css",
+      "sizeLines": 108,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/WorkbenchDrawer.jsx",
+      "language": "javascript",
+      "sizeLines": 92,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/WorkbenchPreviewModal.css",
+      "language": "css",
+      "sizeLines": 223,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/components/WorkbenchPreviewModal.jsx",
+      "language": "javascript",
+      "sizeLines": 92,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/data/mockData.js",
+      "language": "javascript",
+      "sizeLines": 88,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/agentList.js",
+      "language": "javascript",
+      "sizeLines": 5,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/applicationOrdering.js",
+      "language": "javascript",
+      "sizeLines": 76,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/clarificationLogic.js",
+      "language": "javascript",
+      "sizeLines": 167,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/collaborationAgentLabels.js",
+      "language": "javascript",
+      "sizeLines": 7,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/collaborationExecutionGraphState.js",
+      "language": "javascript",
+      "sizeLines": 283,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/collaborationPlanState.js",
+      "language": "javascript",
+      "sizeLines": 43,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/conversationTimeline.js",
+      "language": "javascript",
+      "sizeLines": 205,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "language": "javascript",
+      "sizeLines": 1602,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/executionRecordState.js",
+      "language": "javascript",
+      "sizeLines": 108,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/focusTask.js",
+      "language": "javascript",
+      "sizeLines": 97,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/jobSelection.js",
+      "language": "javascript",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/prototypeState.js",
+      "language": "javascript",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/taskThinkingState.js",
+      "language": "javascript",
+      "sizeLines": 101,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useAgents.js",
+      "language": "javascript",
+      "sizeLines": 75,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useApplications.js",
+      "language": "javascript",
+      "sizeLines": 86,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useClarification.js",
+      "language": "javascript",
+      "sizeLines": 268,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useConversationSessions.js",
+      "language": "javascript",
+      "sizeLines": 236,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useDialogueSessions.js",
+      "language": "javascript",
+      "sizeLines": 821,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useJobs.js",
+      "language": "javascript",
+      "sizeLines": 439,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useManagedAgents.js",
+      "language": "javascript",
+      "sizeLines": 32,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/useSessionAttachments.js",
+      "language": "javascript",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/workbenchOrchestrationState.js",
+      "language": "javascript",
+      "sizeLines": 304,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/hooks/workTraceState.js",
+      "language": "javascript",
+      "sizeLines": 163,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/index.css",
+      "language": "css",
+      "sizeLines": 1,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "sf-portal-mvp/src/main.jsx",
+      "language": "javascript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/utils/formatLabels.js",
+      "language": "javascript",
+      "sizeLines": 109,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/src/utils/workbenchArtifact.js",
+      "language": "javascript",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "sf-portal-mvp/vite.config.js",
+      "language": "javascript",
+      "sizeLines": 11,
+      "fileCategory": "code"
+    }
+  ],
+  "totalFiles": 614,
+  "filteredByIgnore": 358,
+  "estimatedComplexity": "very-large",
+  "importMap": {
+    "cc-status/cmd/cc-status/main.go": [
+      "cc-status/internal/cli/cli.go"
+    ],
+    "cc-status/examples/query.sh": [],
+    "cc-status/go.mod": [],
+    "cc-status/go.sum": [],
+    "cc-status/internal/cli/cli.go": [
+      "cc-status/internal/config/config_test.go",
+      "cc-status/internal/config/config.go",
+      "cc-status/internal/hook/parse_test.go",
+      "cc-status/internal/hook/parse.go",
+      "cc-status/internal/hook/report.go",
+      "cc-status/internal/ingest/ingest.go",
+      "cc-status/internal/install/daemon.go",
+      "cc-status/internal/install/install_test.go",
+      "cc-status/internal/install/install.go",
+      "cc-status/internal/server/hub.go",
+      "cc-status/internal/server/router.go",
+      "cc-status/internal/server/server.go",
+      "cc-status/internal/skills/scan_test.go",
+      "cc-status/internal/skills/scan.go",
+      "cc-status/internal/store/entities.go",
+      "cc-status/internal/store/store.go"
+    ],
+    "cc-status/internal/config/config_test.go": [],
+    "cc-status/internal/config/config.go": [],
+    "cc-status/internal/hook/parse_test.go": [],
+    "cc-status/internal/hook/parse.go": [],
+    "cc-status/internal/hook/report.go": [],
+    "cc-status/internal/ingest/ingest.go": [
+      "cc-status/internal/hook/parse_test.go",
+      "cc-status/internal/hook/parse.go",
+      "cc-status/internal/hook/report.go",
+      "cc-status/internal/model/model.go",
+      "cc-status/internal/skills/scan_test.go",
+      "cc-status/internal/skills/scan.go",
+      "cc-status/internal/store/entities.go",
+      "cc-status/internal/store/store.go"
+    ],
+    "cc-status/internal/install/daemon.go": [],
+    "cc-status/internal/install/install_test.go": [],
+    "cc-status/internal/install/install.go": [],
+    "cc-status/internal/model/model.go": [],
+    "cc-status/internal/runlog/runlog_test.go": [],
+    "cc-status/internal/runlog/runlog.go": [],
+    "cc-status/internal/server/hub.go": [
+      "cc-status/internal/hook/parse_test.go",
+      "cc-status/internal/hook/parse.go",
+      "cc-status/internal/hook/report.go",
+      "cc-status/internal/model/model.go"
+    ],
+    "cc-status/internal/server/router.go": [],
+    "cc-status/internal/server/server.go": [
+      "cc-status/internal/config/config_test.go",
+      "cc-status/internal/config/config.go",
+      "cc-status/internal/hook/parse_test.go",
+      "cc-status/internal/hook/parse.go",
+      "cc-status/internal/hook/report.go",
+      "cc-status/internal/ingest/ingest.go",
+      "cc-status/internal/model/model.go",
+      "cc-status/internal/runlog/runlog_test.go",
+      "cc-status/internal/runlog/runlog.go",
+      "cc-status/internal/skills/scan_test.go",
+      "cc-status/internal/skills/scan.go",
+      "cc-status/internal/store/entities.go",
+      "cc-status/internal/store/store.go"
+    ],
+    "cc-status/internal/skills/scan_test.go": [],
+    "cc-status/internal/skills/scan.go": [],
+    "cc-status/internal/store/entities.go": [
+      "cc-status/internal/model/model.go"
+    ],
+    "cc-status/internal/store/schema.sql": [],
+    "cc-status/internal/store/store.go": [
+      "cc-status/internal/model/model.go"
+    ],
+    "cc-status/Makefile": [],
+    "cc-status/README.md": [],
+    "factory-server/cmd/factory-server/main.go": [
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/server/agent_handlers_test.go",
+      "factory-server/internal/server/agent_handlers.go",
+      "factory-server/internal/server/app_handlers_test.go",
+      "factory-server/internal/server/app_handlers.go",
+      "factory-server/internal/server/app_operations_test.go",
+      "factory-server/internal/server/app_operations.go",
+      "factory-server/internal/server/app_project_handlers_test.go",
+      "factory-server/internal/server/app_project_handlers.go",
+      "factory-server/internal/server/artifact_handlers.go",
+      "factory-server/internal/server/attachment_handlers_test.go",
+      "factory-server/internal/server/attachment_handlers.go",
+      "factory-server/internal/server/clarification_handlers_test.go",
+      "factory-server/internal/server/clarification_handlers.go",
+      "factory-server/internal/server/credential_secrets_test.go",
+      "factory-server/internal/server/credential_secrets.go",
+      "factory-server/internal/server/dialogue_handlers_test.go",
+      "factory-server/internal/server/dialogue_handlers.go",
+      "factory-server/internal/server/events_test.go",
+      "factory-server/internal/server/events.go",
+      "factory-server/internal/server/generation_profile_data_test.go",
+      "factory-server/internal/server/job_handlers_test.go",
+      "factory-server/internal/server/job_handlers.go",
+      "factory-server/internal/server/prototype_handlers_test.go",
+      "factory-server/internal/server/prototype_handlers.go",
+      "factory-server/internal/server/router_test.go",
+      "factory-server/internal/server/router.go",
+      "factory-server/internal/server/server.go",
+      "factory-server/internal/server/test_helpers_test.go",
+      "factory-server/internal/server/turn_worker.go",
+      "factory-server/internal/server/workbench_artifact_handlers_test.go",
+      "factory-server/internal/server/workbench_artifact_handlers.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/go.mod": [],
+    "factory-server/go.sum": [],
+    "factory-server/internal/agents/registry_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/agents/registry.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/ccstatus/client_test.go": [],
+    "factory-server/internal/ccstatus/client.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/clarification/contracts.go": [],
+    "factory-server/internal/clarification/runner_test.go": [
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/clarification/runner.go": [
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/collaboration/plan_test.go": [],
+    "factory-server/internal/collaboration/plan.go": [],
+    "factory-server/internal/config/config_test.go": [],
+    "factory-server/internal/config/config.go": [],
+    "factory-server/internal/dataaccess/dataaccess_test.go": [],
+    "factory-server/internal/dataaccess/dataaccess.go": [],
+    "factory-server/internal/deploy/docker_runtime_test.go": [],
+    "factory-server/internal/deploy/docker_runtime.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/deploy/health_test.go": [],
+    "factory-server/internal/deploy/health.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/deploy/host_test.go": [],
+    "factory-server/internal/deploy/host.go": [],
+    "factory-server/internal/deploy/podman_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/deploy/podman.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/deploy/ports_test.go": [],
+    "factory-server/internal/deploy/ports.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/deploy/runtime.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/deploy/util.go": [],
+    "factory-server/internal/dialogue/contracts.go": [],
+    "factory-server/internal/dialogue/document_draft_converter_test.go": [],
+    "factory-server/internal/dialogue/document_draft_converter.go": [
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/dialogue/runner_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/dialogue/runner.go": [
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/dialogue/turn.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/executor/claude_audit_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/executor/claude_runner_test.go": [
+      "factory-server/internal/dataaccess/dataaccess_test.go",
+      "factory-server/internal/dataaccess/dataaccess.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/claude_runner.go": [
+      "factory-server/internal/dataaccess/dataaccess_test.go",
+      "factory-server/internal/dataaccess/dataaccess.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/projectdocs/generator_test.go",
+      "factory-server/internal/projectdocs/generator.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/data_contract_projection_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/executor/execution_records_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/execution_records.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/executor_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/executor.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runlog/runlog_test.go",
+      "factory-server/internal/runlog/runlog.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/factory_steps_test.go": [
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/factory_steps.go": [
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/projectdocs/generator_test.go",
+      "factory-server/internal/projectdocs/generator.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/factory_stream.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/executor/fake_claude_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/fake_claude.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/executor/profile_skills_test.go": [],
+    "factory-server/internal/executor/prototype_contract_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/executor/prototype_contract.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go"
+    ],
+    "factory-server/internal/executor/steps_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/executor/steps.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/id/id_test.go": [],
+    "factory-server/internal/id/id.go": [],
+    "factory-server/internal/model/model.go": [],
+    "factory-server/internal/model/prototype.go": [],
+    "factory-server/internal/projectdocs/generator_test.go": [],
+    "factory-server/internal/projectdocs/generator.go": [],
+    "factory-server/internal/runlog/runlog_test.go": [],
+    "factory-server/internal/runlog/runlog.go": [],
+    "factory-server/internal/runner/artifacts_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/artifacts.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/claude_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/claude.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/contracts_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/contracts.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go"
+    ],
+    "factory-server/internal/runner/execution_records.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/honest_data_audit_test.go": [],
+    "factory-server/internal/runner/honest_data_audit.go": [],
+    "factory-server/internal/runner/llmtrace.go": [],
+    "factory-server/internal/runner/repair_real_test.go": [],
+    "factory-server/internal/runner/stream_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/runner/stream.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/scanner/manifest_test.go": [],
+    "factory-server/internal/scanner/manifest.go": [],
+    "factory-server/internal/scanner/scanner_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/scanner/scanner.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/scanner/scene_catalog_test.go": [],
+    "factory-server/internal/scanner/scene_catalog.go": [],
+    "factory-server/internal/security/redaction_test.go": [],
+    "factory-server/internal/security/redaction.go": [],
+    "factory-server/internal/server/agent_handlers_test.go": [
+      "factory-server/internal/agents/registry_test.go",
+      "factory-server/internal/agents/registry.go",
+      "factory-server/internal/ccstatus/client_test.go",
+      "factory-server/internal/ccstatus/client.go",
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/agent_handlers.go": [
+      "factory-server/internal/ccstatus/client_test.go",
+      "factory-server/internal/ccstatus/client.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/app_handlers_test.go": [
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/app_handlers.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go"
+    ],
+    "factory-server/internal/server/app_operations_test.go": [
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/app_operations.go": [
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go"
+    ],
+    "factory-server/internal/server/app_project_handlers_test.go": [
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/app_project_handlers.go": [
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/artifact_handlers.go": [],
+    "factory-server/internal/server/attachment_handlers_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/attachment_handlers.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/clarification_handlers_test.go": [
+      "factory-server/internal/clarification/contracts.go",
+      "factory-server/internal/clarification/runner_test.go",
+      "factory-server/internal/clarification/runner.go",
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/clarification_handlers.go": [
+      "factory-server/internal/clarification/contracts.go",
+      "factory-server/internal/clarification/runner_test.go",
+      "factory-server/internal/clarification/runner.go",
+      "factory-server/internal/collaboration/plan_test.go",
+      "factory-server/internal/collaboration/plan.go",
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/executor/claude_audit_test.go",
+      "factory-server/internal/executor/claude_runner_test.go",
+      "factory-server/internal/executor/claude_runner.go",
+      "factory-server/internal/executor/data_contract_projection_test.go",
+      "factory-server/internal/executor/execution_records_test.go",
+      "factory-server/internal/executor/execution_records.go",
+      "factory-server/internal/executor/executor_test.go",
+      "factory-server/internal/executor/executor.go",
+      "factory-server/internal/executor/factory_steps_test.go",
+      "factory-server/internal/executor/factory_steps.go",
+      "factory-server/internal/executor/factory_stream.go",
+      "factory-server/internal/executor/fake_claude_test.go",
+      "factory-server/internal/executor/fake_claude.go",
+      "factory-server/internal/executor/profile_skills_test.go",
+      "factory-server/internal/executor/prototype_contract_test.go",
+      "factory-server/internal/executor/prototype_contract.go",
+      "factory-server/internal/executor/steps_test.go",
+      "factory-server/internal/executor/steps.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go"
+    ],
+    "factory-server/internal/server/credential_secrets_test.go": [],
+    "factory-server/internal/server/credential_secrets.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go"
+    ],
+    "factory-server/internal/server/dialogue_handlers_test.go": [
+      "factory-server/internal/clarification/contracts.go",
+      "factory-server/internal/clarification/runner_test.go",
+      "factory-server/internal/clarification/runner.go",
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/dialogue_handlers.go": [
+      "factory-server/internal/clarification/contracts.go",
+      "factory-server/internal/clarification/runner_test.go",
+      "factory-server/internal/clarification/runner.go",
+      "factory-server/internal/collaboration/plan_test.go",
+      "factory-server/internal/collaboration/plan.go",
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go"
+    ],
+    "factory-server/internal/server/events_test.go": [
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/events.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/generation_profile_data_test.go": [
+      "factory-server/internal/clarification/contracts.go",
+      "factory-server/internal/clarification/runner_test.go",
+      "factory-server/internal/clarification/runner.go"
+    ],
+    "factory-server/internal/server/job_handlers_test.go": [
+      "factory-server/internal/ccstatus/client_test.go",
+      "factory-server/internal/ccstatus/client.go",
+      "factory-server/internal/collaboration/plan_test.go",
+      "factory-server/internal/collaboration/plan.go",
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/dataaccess/dataaccess_test.go",
+      "factory-server/internal/dataaccess/dataaccess.go",
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/job_handlers.go": [
+      "factory-server/internal/collaboration/plan_test.go",
+      "factory-server/internal/collaboration/plan.go",
+      "factory-server/internal/dataaccess/dataaccess_test.go",
+      "factory-server/internal/dataaccess/dataaccess.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/prototype_handlers_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/prototype_handlers.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/router_test.go": [],
+    "factory-server/internal/server/router.go": [],
+    "factory-server/internal/server/server.go": [
+      "factory-server/internal/agents/registry_test.go",
+      "factory-server/internal/agents/registry.go",
+      "factory-server/internal/ccstatus/client_test.go",
+      "factory-server/internal/ccstatus/client.go",
+      "factory-server/internal/clarification/contracts.go",
+      "factory-server/internal/clarification/runner_test.go",
+      "factory-server/internal/clarification/runner.go",
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/deploy/docker_runtime_test.go",
+      "factory-server/internal/deploy/docker_runtime.go",
+      "factory-server/internal/deploy/health_test.go",
+      "factory-server/internal/deploy/health.go",
+      "factory-server/internal/deploy/host_test.go",
+      "factory-server/internal/deploy/host.go",
+      "factory-server/internal/deploy/podman_test.go",
+      "factory-server/internal/deploy/podman.go",
+      "factory-server/internal/deploy/ports_test.go",
+      "factory-server/internal/deploy/ports.go",
+      "factory-server/internal/deploy/runtime.go",
+      "factory-server/internal/deploy/util.go",
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/executor/claude_audit_test.go",
+      "factory-server/internal/executor/claude_runner_test.go",
+      "factory-server/internal/executor/claude_runner.go",
+      "factory-server/internal/executor/data_contract_projection_test.go",
+      "factory-server/internal/executor/execution_records_test.go",
+      "factory-server/internal/executor/execution_records.go",
+      "factory-server/internal/executor/executor_test.go",
+      "factory-server/internal/executor/executor.go",
+      "factory-server/internal/executor/factory_steps_test.go",
+      "factory-server/internal/executor/factory_steps.go",
+      "factory-server/internal/executor/factory_stream.go",
+      "factory-server/internal/executor/fake_claude_test.go",
+      "factory-server/internal/executor/fake_claude.go",
+      "factory-server/internal/executor/profile_skills_test.go",
+      "factory-server/internal/executor/prototype_contract_test.go",
+      "factory-server/internal/executor/prototype_contract.go",
+      "factory-server/internal/executor/steps_test.go",
+      "factory-server/internal/executor/steps.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go",
+      "factory-server/internal/runlog/runlog_test.go",
+      "factory-server/internal/runlog/runlog.go",
+      "factory-server/internal/runner/artifacts_test.go",
+      "factory-server/internal/runner/artifacts.go",
+      "factory-server/internal/runner/claude_test.go",
+      "factory-server/internal/runner/claude.go",
+      "factory-server/internal/runner/contracts_test.go",
+      "factory-server/internal/runner/contracts.go",
+      "factory-server/internal/runner/execution_records.go",
+      "factory-server/internal/runner/honest_data_audit_test.go",
+      "factory-server/internal/runner/honest_data_audit.go",
+      "factory-server/internal/runner/llmtrace.go",
+      "factory-server/internal/runner/repair_real_test.go",
+      "factory-server/internal/runner/stream_test.go",
+      "factory-server/internal/runner/stream.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/test_helpers_test.go": [
+      "factory-server/internal/config/config_test.go",
+      "factory-server/internal/config/config.go",
+      "factory-server/internal/scanner/manifest_test.go",
+      "factory-server/internal/scanner/manifest.go",
+      "factory-server/internal/scanner/scanner_test.go",
+      "factory-server/internal/scanner/scanner.go",
+      "factory-server/internal/scanner/scene_catalog_test.go",
+      "factory-server/internal/scanner/scene_catalog.go",
+      "factory-server/internal/store/agents_test.go",
+      "factory-server/internal/store/agents.go",
+      "factory-server/internal/store/application_versions_test.go",
+      "factory-server/internal/store/application_versions.go",
+      "factory-server/internal/store/applications_sync_test.go",
+      "factory-server/internal/store/applications.go",
+      "factory-server/internal/store/clarifications_test.go",
+      "factory-server/internal/store/clarifications.go",
+      "factory-server/internal/store/collaboration_plans_test.go",
+      "factory-server/internal/store/collaboration_plans.go",
+      "factory-server/internal/store/credential_refs_test.go",
+      "factory-server/internal/store/credential_refs.go",
+      "factory-server/internal/store/deployments.go",
+      "factory-server/internal/store/dialogue_attachments_test.go",
+      "factory-server/internal/store/dialogue_attachments.go",
+      "factory-server/internal/store/dialogue_turns.go",
+      "factory-server/internal/store/dialogues_test.go",
+      "factory-server/internal/store/dialogues.go",
+      "factory-server/internal/store/execution_records_test.go",
+      "factory-server/internal/store/execution_records.go",
+      "factory-server/internal/store/jobs_test.go",
+      "factory-server/internal/store/jobs.go",
+      "factory-server/internal/store/project_document_drafts_test.go",
+      "factory-server/internal/store/project_document_drafts.go",
+      "factory-server/internal/store/store_test.go",
+      "factory-server/internal/store/store.go",
+      "factory-server/internal/store/task_thinking_test.go",
+      "factory-server/internal/store/task_thinking.go",
+      "factory-server/internal/store/work_traces_test.go",
+      "factory-server/internal/store/work_traces.go",
+      "factory-server/internal/store/workbench_artifacts_test.go",
+      "factory-server/internal/store/workbench_artifacts.go"
+    ],
+    "factory-server/internal/server/turn_worker.go": [
+      "factory-server/internal/dialogue/contracts.go",
+      "factory-server/internal/dialogue/document_draft_converter_test.go",
+      "factory-server/internal/dialogue/document_draft_converter.go",
+      "factory-server/internal/dialogue/runner_test.go",
+      "factory-server/internal/dialogue/runner.go",
+      "factory-server/internal/dialogue/turn.go",
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/workbench_artifact_handlers_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/server/workbench_artifact_handlers.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/agents_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/agents.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/application_versions_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/application_versions.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/applications_sync_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/applications.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/clarifications_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/clarifications.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/collaboration_plans_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/collaboration_plans.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/credential_refs_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/credential_refs.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/deployments.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/dialogue_attachments_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/dialogue_attachments.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/dialogue_turns.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/dialogues_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/dialogues.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/execution_records_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/execution_records.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/jobs_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/jobs.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/project_document_drafts_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/project_document_drafts.go": [
+      "factory-server/internal/id/id_test.go",
+      "factory-server/internal/id/id.go",
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/schema.sql": [],
+    "factory-server/internal/store/store_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/store.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/task_thinking_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/task_thinking.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/work_traces_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/work_traces.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/workbench_artifacts_test.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/internal/store/workbench_artifacts.go": [
+      "factory-server/internal/model/model.go",
+      "factory-server/internal/model/prototype.go"
+    ],
+    "factory-server/Makefile": [],
+    "factory-server/README.md": [],
+    "sf-portal-mvp/index.html": [],
+    "sf-portal-mvp/package.json": [],
+    "sf-portal-mvp/README.md": [],
+    "sf-portal-mvp/scripts/check-agent-creation.mjs": [
+      "sf-portal-mvp/src/hooks/agentList.js"
+    ],
+    "sf-portal-mvp/scripts/check-agent-panel-layout.mjs": [],
+    "sf-portal-mvp/scripts/check-application-ordering.mjs": [
+      "sf-portal-mvp/src/hooks/applicationOrdering.js"
+    ],
+    "sf-portal-mvp/scripts/check-application-project-drawer.mjs": [],
+    "sf-portal-mvp/scripts/check-application-store-page.mjs": [],
+    "sf-portal-mvp/scripts/check-application-wording.mjs": [],
+    "sf-portal-mvp/scripts/check-chat-input-sizing.mjs": [
+      "sf-portal-mvp/src/components/chatTextareaAutosize.js"
+    ],
+    "sf-portal-mvp/scripts/check-clarification-layout.mjs": [],
+    "sf-portal-mvp/scripts/check-clarification.mjs": [
+      "sf-portal-mvp/src/hooks/clarificationLogic.js"
+    ],
+    "sf-portal-mvp/scripts/check-collaboration-plan.mjs": [
+      "sf-portal-mvp/src/hooks/collaborationExecutionGraphState.js",
+      "sf-portal-mvp/src/hooks/collaborationPlanState.js",
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js"
+    ],
+    "sf-portal-mvp/scripts/check-conversation-agent-streaming.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/hooks/workTraceState.js"
+    ],
+    "sf-portal-mvp/scripts/check-conversation-workbench.mjs": [
+      "sf-portal-mvp/src/hooks/conversationTimeline.js"
+    ],
+    "sf-portal-mvp/scripts/check-dialogue-workbench.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/utils/formatLabels.js"
+    ],
+    "sf-portal-mvp/scripts/check-execution-record-state.mjs": [
+      "sf-portal-mvp/src/hooks/executionRecordState.js"
+    ],
+    "sf-portal-mvp/scripts/check-focus-task.mjs": [
+      "sf-portal-mvp/src/hooks/focusTask.js"
+    ],
+    "sf-portal-mvp/scripts/check-folded-clarification-summary.mjs": [],
+    "sf-portal-mvp/scripts/check-iteration-order.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js"
+    ],
+    "sf-portal-mvp/scripts/check-job-selection.mjs": [
+      "sf-portal-mvp/src/hooks/jobSelection.js"
+    ],
+    "sf-portal-mvp/scripts/check-managed-agents.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js"
+    ],
+    "sf-portal-mvp/scripts/check-prototype-confirmation.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js"
+    ],
+    "sf-portal-mvp/scripts/check-prototype-handoff.mjs": [],
+    "sf-portal-mvp/scripts/check-requirement-confirm-card.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js"
+    ],
+    "sf-portal-mvp/scripts/check-shared-scrollbar.mjs": [],
+    "sf-portal-mvp/scripts/check-side-panel-toggle.mjs": [],
+    "sf-portal-mvp/scripts/check-task-observability-layout.mjs": [],
+    "sf-portal-mvp/scripts/check-task-thinking-state.mjs": [
+      "sf-portal-mvp/src/hooks/taskThinkingState.js"
+    ],
+    "sf-portal-mvp/scripts/check-visible-work-trace.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/hooks/jobSelection.js",
+      "sf-portal-mvp/src/hooks/workTraceState.js"
+    ],
+    "sf-portal-mvp/scripts/check-workbench-drawer.mjs": [],
+    "sf-portal-mvp/scripts/check-workbench-orchestration-adjustment.mjs": [
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/hooks/workbenchOrchestrationState.js"
+    ],
+    "sf-portal-mvp/scripts/check-workspace-preview-modal.mjs": [],
+    "sf-portal-mvp/src/api/client.js": [],
+    "sf-portal-mvp/src/api/events.js": [],
+    "sf-portal-mvp/src/App.css": [],
+    "sf-portal-mvp/src/App.jsx": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/App.css",
+      "sf-portal-mvp/src/components/ApplicationStorePage.jsx",
+      "sf-portal-mvp/src/components/ConversationWorkbench.jsx",
+      "sf-portal-mvp/src/components/LeftToolbar.jsx",
+      "sf-portal-mvp/src/components/SessionNav.jsx",
+      "sf-portal-mvp/src/components/TopBar.jsx",
+      "sf-portal-mvp/src/components/WorkbenchDrawer.jsx",
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/hooks/focusTask.js",
+      "sf-portal-mvp/src/hooks/useAgents.js",
+      "sf-portal-mvp/src/hooks/useApplications.js",
+      "sf-portal-mvp/src/hooks/useDialogueSessions.js",
+      "sf-portal-mvp/src/hooks/useJobs.js"
+    ],
+    "sf-portal-mvp/src/components/AgentsPanel.css": [],
+    "sf-portal-mvp/src/components/AgentsPanel.jsx": [
+      "sf-portal-mvp/src/components/AgentsPanel.css"
+    ],
+    "sf-portal-mvp/src/components/AgentStatus.css": [],
+    "sf-portal-mvp/src/components/AgentStatus.jsx": [
+      "sf-portal-mvp/src/components/AgentStatus.css",
+      "sf-portal-mvp/src/hooks/useAgents.js"
+    ],
+    "sf-portal-mvp/src/components/AggregateOrchestrationGraph.css": [],
+    "sf-portal-mvp/src/components/AggregateOrchestrationGraph.jsx": [
+      "sf-portal-mvp/src/components/AggregateOrchestrationGraph.css",
+      "sf-portal-mvp/src/components/CollaborationExecutionGraph.css"
+    ],
+    "sf-portal-mvp/src/components/ApplicationProjectPanel.css": [],
+    "sf-portal-mvp/src/components/ApplicationProjectPanel.jsx": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/components/ApplicationProjectPanel.css",
+      "sf-portal-mvp/src/components/WorkbenchPreviewModal.jsx"
+    ],
+    "sf-portal-mvp/src/components/ApplicationsPanel.css": [],
+    "sf-portal-mvp/src/components/ApplicationsPanel.jsx": [
+      "sf-portal-mvp/src/components/ApplicationsPanel.css",
+      "sf-portal-mvp/src/hooks/applicationOrdering.js",
+      "sf-portal-mvp/src/utils/formatLabels.js"
+    ],
+    "sf-portal-mvp/src/components/ApplicationStorePage.css": [],
+    "sf-portal-mvp/src/components/ApplicationStorePage.jsx": [
+      "sf-portal-mvp/src/components/ApplicationStorePage.css",
+      "sf-portal-mvp/src/hooks/applicationOrdering.js",
+      "sf-portal-mvp/src/utils/formatLabels.js"
+    ],
+    "sf-portal-mvp/src/components/AttachmentComposer.jsx": [],
+    "sf-portal-mvp/src/components/AttachmentPreviewModal.jsx": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/components/WorkbenchPreviewModal.jsx"
+    ],
+    "sf-portal-mvp/src/components/ChatDialog.css": [],
+    "sf-portal-mvp/src/components/ChatDialog.jsx": [
+      "sf-portal-mvp/src/components/ChatDialog.css",
+      "sf-portal-mvp/src/components/chatTextareaAutosize.js"
+    ],
+    "sf-portal-mvp/src/components/chatTextareaAutosize.js": [],
+    "sf-portal-mvp/src/components/ClarificationPanel.css": [],
+    "sf-portal-mvp/src/components/ClarificationPanel.jsx": [
+      "sf-portal-mvp/src/components/ClarificationPanel.css",
+      "sf-portal-mvp/src/hooks/clarificationLogic.js",
+      "sf-portal-mvp/src/utils/formatLabels.js"
+    ],
+    "sf-portal-mvp/src/components/CollaborationExecutionGraph.css": [],
+    "sf-portal-mvp/src/components/CollaborationExecutionGraph.jsx": [
+      "sf-portal-mvp/src/components/CollaborationExecutionGraph.css"
+    ],
+    "sf-portal-mvp/src/components/ConversationWorkbench.css": [],
+    "sf-portal-mvp/src/components/ConversationWorkbench.jsx": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/components/AggregateOrchestrationGraph.jsx",
+      "sf-portal-mvp/src/components/AttachmentComposer.jsx",
+      "sf-portal-mvp/src/components/AttachmentPreviewModal.jsx",
+      "sf-portal-mvp/src/components/ConversationWorkbench.css",
+      "sf-portal-mvp/src/components/InterfacePreviewModal.jsx",
+      "sf-portal-mvp/src/components/ProjectDocumentPreviewModal.jsx",
+      "sf-portal-mvp/src/components/StepCard.jsx",
+      "sf-portal-mvp/src/components/WorkbenchAgentBlock.jsx",
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/hooks/prototypeState.js",
+      "sf-portal-mvp/src/hooks/useSessionAttachments.js",
+      "sf-portal-mvp/src/hooks/workbenchOrchestrationState.js",
+      "sf-portal-mvp/src/utils/formatLabels.js"
+    ],
+    "sf-portal-mvp/src/components/FloatingAIButton.css": [],
+    "sf-portal-mvp/src/components/FloatingAIButton.jsx": [
+      "sf-portal-mvp/src/components/FloatingAIButton.css"
+    ],
+    "sf-portal-mvp/src/components/InterfacePreviewModal.jsx": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/components/WorkbenchPreviewModal.jsx"
+    ],
+    "sf-portal-mvp/src/components/JobCenter.css": [],
+    "sf-portal-mvp/src/components/JobCenter.jsx": [
+      "sf-portal-mvp/src/components/JobCenter.css",
+      "sf-portal-mvp/src/components/StepCard.jsx",
+      "sf-portal-mvp/src/components/StepExecutionDrawer.jsx",
+      "sf-portal-mvp/src/hooks/collaborationAgentLabels.js",
+      "sf-portal-mvp/src/hooks/collaborationPlanState.js",
+      "sf-portal-mvp/src/hooks/executionRecordState.js"
+    ],
+    "sf-portal-mvp/src/components/LeftToolbar.jsx": [],
+    "sf-portal-mvp/src/components/ProjectDocumentPreviewModal.jsx": [
+      "sf-portal-mvp/src/components/WorkbenchPreviewModal.jsx"
+    ],
+    "sf-portal-mvp/src/components/SessionNav.css": [],
+    "sf-portal-mvp/src/components/SessionNav.jsx": [
+      "sf-portal-mvp/src/components/SessionNav.css",
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js"
+    ],
+    "sf-portal-mvp/src/components/StepCard.jsx": [],
+    "sf-portal-mvp/src/components/StepExecutionDrawer.jsx": [
+      "sf-portal-mvp/src/hooks/collaborationAgentLabels.js"
+    ],
+    "sf-portal-mvp/src/components/TopBar.jsx": [
+      "sf-portal-mvp/src/components/AgentStatus.jsx"
+    ],
+    "sf-portal-mvp/src/components/WorkbenchAgentBlock.jsx": [
+      "sf-portal-mvp/src/utils/workbenchArtifact.js"
+    ],
+    "sf-portal-mvp/src/components/WorkbenchDrawer.css": [],
+    "sf-portal-mvp/src/components/WorkbenchDrawer.jsx": [
+      "sf-portal-mvp/src/components/AgentsPanel.jsx",
+      "sf-portal-mvp/src/components/ApplicationProjectPanel.jsx",
+      "sf-portal-mvp/src/components/JobCenter.jsx",
+      "sf-portal-mvp/src/components/WorkbenchDrawer.css"
+    ],
+    "sf-portal-mvp/src/components/WorkbenchPreviewModal.css": [],
+    "sf-portal-mvp/src/components/WorkbenchPreviewModal.jsx": [
+      "sf-portal-mvp/src/components/WorkbenchPreviewModal.css"
+    ],
+    "sf-portal-mvp/src/data/mockData.js": [],
+    "sf-portal-mvp/src/hooks/agentList.js": [],
+    "sf-portal-mvp/src/hooks/applicationOrdering.js": [],
+    "sf-portal-mvp/src/hooks/clarificationLogic.js": [],
+    "sf-portal-mvp/src/hooks/collaborationAgentLabels.js": [],
+    "sf-portal-mvp/src/hooks/collaborationExecutionGraphState.js": [
+      "sf-portal-mvp/src/hooks/collaborationAgentLabels.js"
+    ],
+    "sf-portal-mvp/src/hooks/collaborationPlanState.js": [
+      "sf-portal-mvp/src/hooks/collaborationAgentLabels.js"
+    ],
+    "sf-portal-mvp/src/hooks/conversationTimeline.js": [],
+    "sf-portal-mvp/src/hooks/dialogueTimeline.js": [
+      "sf-portal-mvp/src/hooks/collaborationExecutionGraphState.js",
+      "sf-portal-mvp/src/hooks/taskThinkingState.js",
+      "sf-portal-mvp/src/utils/workbenchArtifact.js"
+    ],
+    "sf-portal-mvp/src/hooks/executionRecordState.js": [],
+    "sf-portal-mvp/src/hooks/focusTask.js": [],
+    "sf-portal-mvp/src/hooks/jobSelection.js": [],
+    "sf-portal-mvp/src/hooks/prototypeState.js": [],
+    "sf-portal-mvp/src/hooks/taskThinkingState.js": [],
+    "sf-portal-mvp/src/hooks/useAgents.js": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/hooks/agentList.js"
+    ],
+    "sf-portal-mvp/src/hooks/useApplications.js": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/api/events.js"
+    ],
+    "sf-portal-mvp/src/hooks/useClarification.js": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/api/events.js",
+      "sf-portal-mvp/src/hooks/clarificationLogic.js"
+    ],
+    "sf-portal-mvp/src/hooks/useConversationSessions.js": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/api/events.js",
+      "sf-portal-mvp/src/hooks/conversationTimeline.js"
+    ],
+    "sf-portal-mvp/src/hooks/useDialogueSessions.js": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/api/events.js",
+      "sf-portal-mvp/src/hooks/dialogueTimeline.js",
+      "sf-portal-mvp/src/hooks/focusTask.js",
+      "sf-portal-mvp/src/hooks/taskThinkingState.js",
+      "sf-portal-mvp/src/hooks/workTraceState.js"
+    ],
+    "sf-portal-mvp/src/hooks/useJobs.js": [
+      "sf-portal-mvp/src/api/client.js",
+      "sf-portal-mvp/src/api/events.js",
+      "sf-portal-mvp/src/hooks/executionRecordState.js",
+      "sf-portal-mvp/src/hooks/jobSelection.js"
+    ],
+    "sf-portal-mvp/src/hooks/useManagedAgents.js": [
+      "sf-portal-mvp/src/api/client.js"
+    ],
+    "sf-portal-mvp/src/hooks/useSessionAttachments.js": [
+      "sf-portal-mvp/src/api/client.js"
+    ],
+    "sf-portal-mvp/src/hooks/workbenchOrchestrationState.js": [],
+    "sf-portal-mvp/src/hooks/workTraceState.js": [],
+    "sf-portal-mvp/src/index.css": [],
+    "sf-portal-mvp/src/main.jsx": [
+      "sf-portal-mvp/src/App.css",
+      "sf-portal-mvp/src/App.jsx"
+    ],
+    "sf-portal-mvp/src/utils/formatLabels.js": [],
+    "sf-portal-mvp/src/utils/workbenchArtifact.js": [],
+    "sf-portal-mvp/vite.config.js": []
+  }
+}

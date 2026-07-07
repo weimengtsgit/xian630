@@ -28,6 +28,29 @@ type fakeRunner struct {
 	ctxCh      chan context.Context // if non-nil, receives every Run ctx
 }
 
+type sequenceStepRunner struct {
+	mu      sync.Mutex
+	results []StepResult
+	calls   int
+}
+
+func (f *sequenceStepRunner) Run(ctx context.Context, _ model.Job, _ model.JobStep, _ runner.StepRecordEmitter) (StepResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	idx := f.calls - 1
+	if idx >= len(f.results) {
+		idx = len(f.results) - 1
+	}
+	return f.results[idx], nil
+}
+
+func (f *sequenceStepRunner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
 func (f *fakeRunner) Run(ctx context.Context, _ model.Job, step model.JobStep, _ runner.StepRecordEmitter) (StepResult, error) {
 	f.mu.Lock()
 	f.lastCtx = ctx
@@ -276,6 +299,34 @@ func TestExecutorFailureMarksJobFailed(t *testing.T) {
 	}
 }
 
+func TestExecutorRetriesOutputInvalidJSONBeforeFailingStep(t *testing.T) {
+	runner := &sequenceStepRunner{results: []StepResult{
+		{Status: model.StepStatusFailed, ErrorCode: model.ErrorOutputInvalidJSON, ErrorMessage: "bad json"},
+		{Status: model.StepStatusSucceeded},
+	}}
+	e, st := newTestExecutor(t, runner)
+	id := seedJob(t, st)
+
+	drain(t, context.Background(), e)
+	if runner.callCount() != len(FixedSteps())+1 {
+		t.Fatalf("runner calls = %d, want %d", runner.callCount(), len(FixedSteps())+1)
+	}
+	job := mustJob(t, st, id)
+	if job.Status != model.JobStatusCompleted {
+		t.Fatalf("job status = %s, want completed after automatic retry", job.Status)
+	}
+	if job.CurrentStepKind != model.StepDeployment {
+		t.Fatalf("current step = %s, want deployment", job.CurrentStepKind)
+	}
+	step := stepByKind(t, mustSteps(t, st, id), model.StepRequirementAnalysis)
+	if step.Status != model.StepStatusSucceeded {
+		t.Fatalf("requirement step status = %s, want succeeded", step.Status)
+	}
+	if step.Attempt != 2 {
+		t.Fatalf("requirement step attempt = %d, want 2", step.Attempt)
+	}
+}
+
 // TestExecutorWaitingUser asserts a waiting_user result pauses job + step.
 func TestExecutorWaitingUser(t *testing.T) {
 	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
@@ -298,6 +349,136 @@ func TestExecutorWaitingUser(t *testing.T) {
 	}
 	if !ra.NeedsUserInput {
 		t.Fatalf("needs_user_input = false, want true")
+	}
+}
+
+func TestExecutorManualStepConfirmationPausesAndResumesPlan(t *testing.T) {
+	runner := &fakeRunner{}
+	e, st := newTestExecutor(t, runner)
+	now := time.Now()
+	jobID := "job_manual_confirm"
+	job := model.Job{
+		ID:                    jobID,
+		UserPrompt:            "build me a thing",
+		Status:                model.JobStatusQueued,
+		CurrentStepKind:       model.StepRequirementAnalysis,
+		CollaborationPlanJSON: `{"executionPolicy":{"manualStepConfirmation":true}}`,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+	}
+	steps := []model.JobStep{
+		{ID: "step_manual_req", JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1, AgentKey: "requirement-analyst", Status: model.StepStatusPending},
+		{ID: "step_manual_solution", JobID: jobID, Kind: model.StepSolutionDesign, Seq: 2, AgentKey: "solution-designer", Status: model.StepStatusPending},
+	}
+	if err := st.SeedJobWithEdges(context.Background(), job, steps, nil); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	paused := mustJob(t, st, jobID)
+	if paused.Status != model.JobStatusWaitingUser {
+		t.Fatalf("job status = %s, want waiting_user", paused.Status)
+	}
+	req := stepByKind(t, mustSteps(t, st, jobID), model.StepRequirementAnalysis)
+	if req.Status != model.StepStatusWaitingUser || !req.NeedsUserInput {
+		t.Fatalf("step status/input = %s/%v, want waiting_user/true", req.Status, req.NeedsUserInput)
+	}
+	if !strings.Contains(req.PendingQuestions, "manual_step_confirmation") {
+		t.Fatalf("pending questions = %q, want manual confirmation payload", req.PendingQuestions)
+	}
+
+	resumed, err := e.ConfirmManualStep(context.Background(), jobID, req.ID, req.Attempt)
+	if err != nil {
+		t.Fatalf("confirm manual step: %v", err)
+	}
+	if resumed.Status != model.JobStatusQueued {
+		t.Fatalf("job status after confirm = %s, want queued", resumed.Status)
+	}
+	if resumed.CurrentStepKind != model.StepSolutionDesign {
+		t.Fatalf("current step after confirm = %s, want solution_design", resumed.CurrentStepKind)
+	}
+	req = stepByKind(t, mustSteps(t, st, jobID), model.StepRequirementAnalysis)
+	if req.Status != model.StepStatusSucceeded || req.NeedsUserInput || req.PendingQuestions != "" {
+		t.Fatalf("confirmed step = %s input=%v pending=%q, want succeeded/false/empty", req.Status, req.NeedsUserInput, req.PendingQuestions)
+	}
+
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce final step: %v", err)
+	}
+	done := mustJob(t, st, jobID)
+	if done.Status != model.JobStatusCompleted {
+		t.Fatalf("final job status = %s, want completed", done.Status)
+	}
+}
+
+func TestExecutorAutoSeededRequirementAnalysisPausesForDemandConfirmationOnly(t *testing.T) {
+	runner := &fakeRunner{byKind: map[model.StepKind]StepResult{
+		model.StepRequirementAnalysis: {Status: model.StepStatusSucceeded},
+		model.StepSolutionDesign:      {Status: model.StepStatusSucceeded},
+	}}
+	e, st := newTestExecutor(t, runner)
+	now := time.Now()
+	const jobID = "job_auto_req_confirm"
+	const childID = "clar_auto_req_confirm"
+	if err := st.CreateClarificationSession(context.Background(), model.ClarificationSession{
+		ID:            childID,
+		Status:        model.ClarificationStatusReadyToConfirm,
+		InitialPrompt: "做一个复盘应用",
+		Round:         5,
+		MaxRounds:     6,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("seed clarification: %v", err)
+	}
+	job := model.Job{
+		ID:                       jobID,
+		UserPrompt:               "做一个复盘应用",
+		Status:                   model.JobStatusQueued,
+		CurrentStepKind:          model.StepRequirementAnalysis,
+		ClarificationSessionID:   childID,
+		CollaborationPlanJSON:    `{"executionPolicy":{"manualStepConfirmation":false}}`,
+		ConfirmedRequirementJSON: `{}`,
+		CreatedAt:                now,
+		UpdatedAt:                now,
+	}
+	steps := []model.JobStep{
+		{ID: "step_auto_req", JobID: jobID, Kind: model.StepRequirementAnalysis, Seq: 1, AgentKey: "requirement-analyst", Status: model.StepStatusPending},
+		{ID: "step_auto_solution", JobID: jobID, Kind: model.StepSolutionDesign, Seq: 2, AgentKey: "solution-designer", Status: model.StepStatusPending},
+	}
+	if err := st.SeedClarificationJobWithEdges(context.Background(), job, steps, nil, childID); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce requirement: %v", err)
+	}
+	paused := mustJob(t, st, jobID)
+	if paused.Status != model.JobStatusWaitingUser {
+		t.Fatalf("job status = %s, want waiting_user", paused.Status)
+	}
+	req := stepByKind(t, mustSteps(t, st, jobID), model.StepRequirementAnalysis)
+	if req.Status != model.StepStatusWaitingUser || !req.NeedsUserInput {
+		t.Fatalf("requirement step = %s input=%v, want waiting_user/true", req.Status, req.NeedsUserInput)
+	}
+	if !strings.Contains(req.PendingQuestions, "manual_step_confirmation") {
+		t.Fatalf("pending questions = %q, want demand confirmation payload", req.PendingQuestions)
+	}
+
+	if _, err := e.ConfirmManualStep(context.Background(), jobID, req.ID, req.Attempt); err != nil {
+		t.Fatalf("confirm demand step: %v", err)
+	}
+	if err := st.SetClarificationStatus(context.Background(), childID, model.ClarificationStatusConfirmed, "", ""); err != nil {
+		t.Fatalf("mark clarification confirmed: %v", err)
+	}
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce solution: %v", err)
+	}
+	done := mustJob(t, st, jobID)
+	if done.Status != model.JobStatusCompleted {
+		t.Fatalf("final job status = %s, want completed without extra manual pauses", done.Status)
 	}
 }
 
@@ -1130,4 +1311,31 @@ func (c *capturingAppender) AppendStepExecutionRecord(_ context.Context, rec mod
 	c.records = append(c.records, rec)
 	c.mu.Unlock()
 	return nil
+}
+
+// TestRejectRequiredProductionConfirmationFailsJob is the Task-10 user-rejection
+// transition: a production-delivery step paused waiting_user for a required
+// confirmation (e.g. a deployment port confirmation) must fail the job when the
+// user rejects it. RejectRequiredConfirmation marks the waiting step failed with
+// user_rejected_confirmation, then marks the job failed. Deterministic: the seed
+// sets the job straight into waiting_user with a deployment step, so the only
+// observable transition is waiting_user → failed.
+func TestRejectRequiredProductionConfirmationFailsJob(t *testing.T) {
+	e, st := newTestExecutor(t, &fakeRunner{})
+	ctx := context.Background()
+	job := model.Job{ID: "job_confirm", Status: model.JobStatusWaitingUser, CurrentStepKind: model.StepDeployment, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := st.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	step := model.JobStep{ID: "step_deploy", JobID: job.ID, Kind: model.StepDeployment, Status: model.StepStatusWaitingUser, Attempt: 1, NeedsUserInput: true}
+	if err := st.CreateJobStep(ctx, step); err != nil {
+		t.Fatalf("CreateJobStep: %v", err)
+	}
+	got, err := e.RejectRequiredConfirmation(ctx, job.ID, "用户拒绝部署端口确认")
+	if err != nil {
+		t.Fatalf("RejectRequiredConfirmation: %v", err)
+	}
+	if got.Status != model.JobStatusFailed {
+		t.Fatalf("status = %s, want failed", got.Status)
+	}
 }

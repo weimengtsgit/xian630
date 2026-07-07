@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import {
+  AlertCircle,
   AlertTriangle,
   Archive,
   ArrowRight,
@@ -12,10 +13,14 @@ import {
   Edit3,
   ExternalLink,
   FileCode,
+  FileText,
   GitCommit,
   HelpCircle,
+  Image as ImageIcon,
   Loader2,
   MessageSquare,
+  MonitorCheck,
+  MoreHorizontal,
   PlayCircle,
   RefreshCw,
   RotateCcw,
@@ -23,14 +28,28 @@ import {
   X,
   XCircle,
 } from 'lucide-react'
-import { resolveWorkbenchTitle, statusText } from '../hooks/dialogueTimeline'
+import { AggregateOrchestrationGraph } from './AggregateOrchestrationGraph'
+import { WorkbenchAgentBlock } from './WorkbenchAgentBlock'
+import { AttachmentComposer } from './AttachmentComposer'
+import { AttachmentPreviewModal } from './AttachmentPreviewModal'
+import { ProjectDocumentPreviewModal } from './ProjectDocumentPreviewModal'
+import { InterfacePreviewModal } from './InterfacePreviewModal'
+import { useSessionAttachments } from '../hooks/useSessionAttachments'
+import { buildWorkbenchOrchestrationView } from '../hooks/workbenchOrchestrationState'
+import { normalizePrototypeSummary } from '../hooks/prototypeState'
+import { resolveWorkbenchTitle, statusText, describeSessionError, isRequirementConfirmPending } from '../hooks/dialogueTimeline'
+import { deriveCardAnalysisLog, deriveCardThinking } from '../hooks/cardStageContent'
 import { STAGE_LABELS } from './StepCard'
-import { formatDataPolicy } from '../utils/formatLabels'
+import { formatDataPolicy, formatAppType, translateAnalysisText } from '../utils/formatLabels'
+import { factoryApi, absoluteApiUrl } from '../api/client'
 import './ConversationWorkbench.css'
 
 // Temporary switch: the dialogue work-trace surface (执行轨迹) is hidden while
 // its business-facing content is being reworked. Flip to true to bring it back.
 const SHOW_WORK_TRACE = false
+const WORKBENCH_BODY_FOLLOW_BOTTOM_THRESHOLD = 24
+const LIVE_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
+const TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD = 24
 
 export function ConversationWorkbench({
   session,
@@ -46,9 +65,11 @@ export function ConversationWorkbench({
   onAnswerBatch,
   onAcceptConsolidation,
   onConfirm,
+  onConfirmCard,
   onRetry,
   onAbandon,
   workTrace,
+  taskThinking,
   pendingTurn,
   focusTask,
   clarificationScope,
@@ -56,6 +77,9 @@ export function ConversationWorkbench({
   traceSteps,
   drawerEntry,
   onToggleDrawerEntry,
+  onOpenTaskStep,
+  onConfirmTaskStep,
+  onConfirmDataAccess,
   hasBoundApplication,
   onCancelTurn,
   onConfirmChange,
@@ -65,7 +89,28 @@ export function ConversationWorkbench({
 }) {
   const [input, setInput] = useState('')
   const [draftAnswers, setDraftAnswers] = useState({})
+  // userInputFlashSeq bumps on each composer submit so the 用户输入 card in the
+  // orchestration graph replays a one-shot activation flash (keyed overlay span
+  // → the CSS animation restarts on every send). Pure UI signal; no semantic state.
+  const [userInputFlashSeq, bumpUserInputFlash] = useReducer(n => n + 1, 0)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
+  const [manualStepConfirmation, setManualStepConfirmation] = useState(false)
+  const [aggregateGraphCompactOverride, setAggregateGraphCompactOverride] = useState(null)
   const textareaRef = useRef(null)
+  const cwBodyScrollRef = useRef(null)
+  const cwBodyShouldFollowRef = useRef(true)
+  const previousHasSubmittedRequirementRef = useRef(false)
+  const requestAbandonRequirement = () => {
+    if (!onAbandon || submitting) return
+    setMoreMenuOpen(false)
+    setAbandonConfirmOpen(true)
+  }
+  const confirmAbandonRequirement = () => {
+    if (!onAbandon || submitting) return
+    setAbandonConfirmOpen(false)
+    onAbandon()
+  }
   // Auto-grow the composer textarea with its content (capped by the CSS
   // max-height). Keeps multi-line input visible instead of stuck at ~2 rows.
   const resizeTextarea = () => {
@@ -75,15 +120,28 @@ export function ConversationWorkbench({
     el.style.height = `${el.scrollHeight}px`
   }
   useEffect(resizeTextarea, [input])
+  useEffect(() => {
+    if (!moreMenuOpen && !abandonConfirmOpen) return undefined
+    const onKeyDown = event => {
+      if (event.key !== 'Escape') return
+      setMoreMenuOpen(false)
+      setAbandonConfirmOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [moreMenuOpen, abandonConfirmOpen])
+  useEffect(() => {
+    setManualStepConfirmation(false)
+    setAggregateGraphCompactOverride(null)
+    cwBodyShouldFollowRef.current = true
+    previousHasSubmittedRequirementRef.current = false
+  }, [session && session.id])
   const status = session && session.status
   const activeQuestions = Array.isArray(questions) ? questions : []
   const completedAnswers = activeQuestions.filter(q => hasAnswer(draftAnswers[q.id])).length
   const canSubmitAnswers = activeQuestions.length > 0 && completedAnswers === activeQuestions.length && !submitting
   const intent = session && session.intent
   const isBusiness = intent === 'business_processing_agent'
-  const isClarification = intent === 'application_generation' && view && view.child
-  const childStatus = isClarification ? view.child.status : null
-  const canConfirmClarification = childStatus === 'ready_to_confirm'
   const canConfirmBusiness = isBusiness &&
     view &&
     view.agentDraftStatus === 'ready_to_confirm' &&
@@ -91,9 +149,13 @@ export function ConversationWorkbench({
     view.agentDraft.name &&
     view.agentDraft.description &&
     view.agentDraft.prompt
-  const canConfirm = (canConfirmClarification || canConfirmBusiness) && !submitting
+  const canConfirm = canConfirmBusiness && !submitting
   const canRetry = status === 'failed'
   const canAbandon = status && status !== 'resolved' && status !== 'abandoned'
+  // Surface WHY a session failed (e.g. 模型服务余额不足), not just "已失败". The
+  // raw error_message is operator-grade; describeSessionError maps it to a
+  // plain-Chinese {title, detail, hint} and never leaks the raw blob.
+  const sessionError = status === 'failed' ? describeSessionError(session && session.error_code, session && session.error_message) : null
 
   // ---- continuous-workbench derived state (Task 7) ------------------------
   const traceItems = Array.isArray(workTrace) ? workTrace : []
@@ -131,7 +193,221 @@ export function ConversationWorkbench({
       .filter(Boolean)
       .join(' / ')
     : ''
+  const taskBadge = taskDrawerBadgeInfo(focusTask)
+  const timelineFollowSignature = useMemo(() => {
+    const items = Array.isArray(timeline) ? timeline : []
+    return items.map(item => [
+      item.id,
+      item.type,
+      item.content || '',
+      item.summary || '',
+      item.taskThinking || '',
+      item.safeExecution || '',
+      item.error || '',
+      item.rawThinking || '',
+      item.pending ? 'pending' : '',
+      item.expanded ? 'expanded' : '',
+    ].join(':')).join('|')
+  }, [timeline])
+  const updateWorkbenchBodyFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    cwBodyShouldFollowRef.current = distanceToBottom <= WORKBENCH_BODY_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = cwBodyScrollRef.current
+    if (!el || !cwBodyShouldFollowRef.current) return
+    // 只有用户停在底部时才跟随新增思考内容；上滑查看历史时不打断。
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [timelineFollowSignature])
 
+  // Aggregate orchestration graph (Task 2): a fixed five-card overview of the
+  // whole pipeline (用户输入/业务逻辑/界面解析/数据抓取/生产交付) that stays pinned
+  // above the conversation body and reflects the latest view + trace state.
+  const aggregateGraph = useMemo(() => buildWorkbenchOrchestrationView({
+    view,
+    workTraceItems: traceItems,
+    jobStepBlocks: traceSteps,
+  }), [view, traceItems, traceSteps])
+  // 需求确认闸：requirement_analysis 步完成后被 shouldAwaitManualStepConfirmation
+  // 拉成 waiting_user + 无选项的 manual_step_confirmation。既有的 business_logic 卡
+  // 「需求确认」按钮依赖 jobs.steps 链路把 card.state 推到 waiting_user_clarification，
+  // 该链路在 clarification→job 过渡时不可靠，故这里直接读 view.seededJob 判定。
+  // dialogue view 的 seededJob 不带 pending_questions，stepId 从已 hydrate 的
+  // jobs.steps (traceSteps) 兜底。返回 null → 不渲染；否则 {jobId, stepId, requirement}。
+  const requirementConfirm = useMemo(() => {
+    const r = isRequirementConfirmPending(view)
+    if (!r) return null
+    if (r.stepId) return r
+    const step = (Array.isArray(traceSteps) ? traceSteps : [])
+      .find(s => s && s.kind === 'requirement_analysis' && s.status === 'waiting_user')
+    const stepId = step && (step.id || step.stepId)
+    return stepId ? { ...r, stepId } : null
+  }, [view, traceSteps])
+  const hasSubmittedRequirement = aggregateGraph.cardsByKey &&
+    aggregateGraph.cardsByKey.user_input &&
+    aggregateGraph.cardsByKey.user_input.state === 'confirmed'
+  useEffect(() => {
+    if (hasSubmittedRequirement && !previousHasSubmittedRequirementRef.current) {
+      setAggregateGraphCompactOverride(false)
+    }
+    previousHasSubmittedRequirementRef.current = hasSubmittedRequirement
+  }, [hasSubmittedRequirement])
+  const aggregateGraphCompact = aggregateGraphCompactOverride == null ? !hasSubmittedRequirement : aggregateGraphCompactOverride
+  const toggleAggregateGraphCompact = () => {
+    setAggregateGraphCompactOverride(current => {
+      const compactNow = current == null ? !hasSubmittedRequirement : current
+      return !compactNow
+    })
+  }
+
+  // Session attachments (Task 4): pending composer attachments for the current
+  // message. focusKey mirrors the aggregate graph's active card so uploaded
+  // files are tagged with the workbench region the user is working in.
+  const attachmentState = useSessionAttachments({
+    dialogueId: session && session.id,
+    focusKey: aggregateGraph.activeCardKey || 'business_logic',
+  })
+  const [previewAttachment, setPreviewAttachment] = useState(null)
+  const [previewDocument, setPreviewDocument] = useState(null)
+  const [previewInterface, setPreviewInterface] = useState(null)
+  async function handleOpenPrototype(proto) {
+    if (!proto || !proto.jobId || !proto.stepId) return
+    const previewUrl = factoryApi.getJobPrototypePreviewUrl(proto.jobId, proto.stepId)
+    window.open(previewUrl, '_blank', 'noopener')
+  }
+  // openProjectDocument fetches a task-owned docs/*.md file for read-only rich
+  // preview. Early in the pipeline (before code generation registers an
+  // application) the job already carries an AppSlug, so the backend can resolve
+  // the project root and serve the projected document.
+  const openProjectDocument = async artifact => {
+    if (!artifact || !artifact.path) return
+    const jobId = artifact.jobId || artifact.job_id || (focusTask && focusTask.id)
+    if (!jobId) return
+    try {
+      const doc = await factoryApi.getJobProjectDocument(jobId, artifact.path)
+      setPreviewDocument(doc)
+    } catch {
+      setPreviewDocument(null)
+    }
+  }
+
+  const openWorkbenchMarkdownArtifact = async artifact => {
+    if (!artifact || !artifact.id) return
+    const jobId = artifact.jobId || artifact.job_id || (focusTask && focusTask.id)
+    if (!jobId) return
+    try {
+      const doc = await factoryApi.getJobWorkbenchArtifactContent(jobId, artifact.id)
+      setPreviewDocument(doc)
+    } catch {
+      setPreviewDocument(null)
+    }
+  }
+
+  // openArtifact 按产物类型选择读取边界：需求文档来自项目 docs，数据方案来自
+  // artifact-root 脱敏 Markdown，原型预览走专用预览接口。
+  const openArtifact = artifact => {
+    if (!artifact) return
+    if (artifact.kind === 'interface_preview') {
+      setPreviewInterface(artifact)
+      return
+    }
+    if (artifact.kind === 'data_access_plan') {
+      openWorkbenchMarkdownArtifact(artifact)
+      return
+    }
+    openProjectDocument(artifact)
+  }
+
+  // submitCredential is the controlled credential input boundary (Task 12). The
+  // plaintext value the user typed is sent ONLY via factoryApi.submitDialogueCredential,
+  // which swaps it for an opaque handle server-side and responds with metadata
+  // + redacted:true (never the value). The value is never rendered, logged, or
+  // persisted client-side beyond the transient password input draft. The
+  // question carries focusKey/label/scope metadata describing WHICH credential
+  // the handle refers to; we forward them so the data_integration step's
+  // input.json controlledCredentialRefs can label the handle without the value.
+  const submitCredential = async (question, value) => {
+    const dialogueId = session && session.id
+    if (!dialogueId || !value || submitting) return
+    try {
+      await factoryApi.submitDialogueCredential(dialogueId, {
+        focusKey: question.focusKey || aggregateGraph.activeCardKey || 'data_capture',
+        label: question.label || question.question || '凭证',
+        scope: question.scope || 'data_capture',
+        value,
+      })
+      // Credential handle persisted server-side (durable). The data_integration
+      // step reads controlledCredentialRefs from the store on its next run;
+      // resuming the waiting step after a credential submit is deferred wiring.
+    } catch {
+      // Surface failure via the existing submitting/error UX implicitly; the
+      // boundary's own 4xx (e.g. empty value) is guarded before this call.
+    }
+  }
+
+  function prototypeFromCard(c) {
+    const artifact = (c.artifacts || []).find(item => item.kind === 'interface_preview')
+    if (!artifact) return null
+    return normalizePrototypeSummary({
+      artifactId: artifact.id,
+      status: artifact.status,
+      label: artifact.label,
+      previewUrl: artifact.previewUrl,
+      jobId: artifact.jobId,
+      stepId: artifact.stepId,
+      manifest: artifact.metadata && artifact.metadata.manifest ? artifact.metadata.manifest : {},
+      contract: artifact.metadata && artifact.metadata.contract ? artifact.metadata.contract : {},
+    })
+  }
+
+  async function handlePrototypeFeedback(proto, feedback) {
+    if (!proto || !feedback || !feedback.trim()) return
+    await factoryApi.sendPrototypeFeedback(proto.jobId, proto.stepId, feedback.trim())
+  }
+  async function handleConfirmPrototype(proto) {
+    await factoryApi.confirmPrototype(proto.jobId, proto.stepId)
+  }
+
+  async function handleContinuePrototype(proto) {
+    await factoryApi.continuePrototypeWithoutConfirmation(proto.jobId, proto.stepId)
+  }
+
+  function thinkingForCard(card) {
+    return deriveCardThinking({
+      card,
+      timeline,
+      taskThinkingItems: taskThinking,
+    })
+  }
+  // analysisLogForCard surfaces each step's safe analysis work-log (执行过程)
+  // for the agent block's "模型分析过程" section, paralleling thinkingForCard
+  // (which is the raw 思考过程). Without it the section rendered empty for every
+  // stage including interface/data.
+  function analysisLogForCard(card) {
+    return deriveCardAnalysisLog({
+      card,
+      timeline,
+      workTraceItems: traceItems,
+    })
+  }
+
+  function questionsForCard(card) {
+    const parsed = []
+    for (const step of card.steps || []) {
+      parsed.push(...parseStepPendingQuestions(step && (step.pending_questions || step.pendingQuestions)))
+    }
+    if (parsed.length) return parsed
+    return card.key === aggregateGraph.activeCardKey ? activeQuestions : []
+  }
+
+  const activePrototype = useMemo(() => {
+    const card = (aggregateGraph.cards || []).find(item => item.key === 'interface_parsing')
+    const proto = card ? prototypeFromCard(card) : null
+    return proto && proto.status !== 'confirmed' ? proto : null
+  }, [aggregateGraph.cards])
   useEffect(() => {
     const ids = new Set(activeQuestions.map(q => q.id))
     setDraftAnswers(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))))
@@ -140,8 +416,10 @@ export function ConversationWorkbench({
   const submitText = async () => {
     const value = input.trim()
     if (!value || submitting || (locked && !composerActive)) return
+    bumpUserInputFlash()
     setInput('')
-    await onSend(value)
+    await onSend(value, { attachmentIds: attachmentState.attachmentIds, pendingAttachments: attachmentState.pending })
+    attachmentState.clearPending()
   }
 
   const submitAnswers = async () => {
@@ -164,20 +442,19 @@ export function ConversationWorkbench({
         <div className="cw-actions">
           {session ? <span className={`cw-status cw-status-${status}`}>{statusText(status)}</span> : null}
           {/* Phase 1: the 3 top-right drawer-entry buttons. Mutually exclusive —
-              clicking the active one closes the drawer; 应用项目 is disabled until
-              the current dialogue has a bound application project. 任务执行 keeps a
-              presence-dot badge while a focus task exists, even when another entry
-              is open (full agent-chip strip is later). */}
+              clicking the active one closes the drawer; 工作空间 is disabled until
+              the current dialogue has a bound generated application. 任务执行 keeps a
+              state badge while a focus task exists, even when another entry is open. */}
           <button
             type="button"
             className={`cw-drawer-btn${drawerEntry === 'task' ? ' is-active' : ''}`}
             onClick={() => onToggleDrawerEntry('task')}
-            title="任务执行"
+            title={taskBadge ? `任务执行：${taskBadge.label}` : '任务执行'}
             aria-label="任务执行"
             aria-pressed={drawerEntry === 'task'}
           >
             <span className="cw-drawer-btn-label">任务执行</span>
-            {focusTask ? <span className="cw-drawer-badge" aria-label="有进行中的任务" /> : null}
+            {taskBadge ? <span className={`cw-drawer-badge cw-drawer-badge-state-${taskBadge.state}`} aria-label={`任务执行：${taskBadge.label}`} /> : null}
           </button>
           <button
             type="button"
@@ -193,12 +470,12 @@ export function ConversationWorkbench({
             type="button"
             className={`cw-drawer-btn${drawerEntry === 'application' ? ' is-active' : ''}`}
             onClick={() => onToggleDrawerEntry('application')}
-            title={hasBoundApplication ? '应用项目' : '当前会话未绑定应用项目'}
-            aria-label="应用项目"
+            title={hasBoundApplication ? '工作空间' : '当前会话未绑定工作空间'}
+            aria-label="工作空间"
             aria-pressed={drawerEntry === 'application'}
             disabled={!hasBoundApplication}
           >
-            <span className="cw-drawer-btn-label">应用项目</span>
+            <span className="cw-drawer-btn-label">工作空间</span>
           </button>
           <button
             type="button"
@@ -209,17 +486,62 @@ export function ConversationWorkbench({
           >
             <span className="cw-drawer-btn-label">应用商店</span>
           </button>
+          {canAbandon ? (
+            <div className="cw-more">
+              <button
+                type="button"
+                className="cw-more-btn"
+                onClick={() => setMoreMenuOpen(open => !open)}
+                title="更多操作"
+                aria-label="更多操作"
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                disabled={submitting}
+              >
+                <MoreHorizontal size={16} />
+              </button>
+              {moreMenuOpen ? (
+                <div className="cw-more-menu" role="menu">
+                  <button
+                    type="button"
+                    className="cw-more-danger"
+                    role="menuitem"
+                    onClick={requestAbandonRequirement}
+                    disabled={submitting}
+                  >
+                    放弃本次需求
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </header>
+
+      {moreMenuOpen ? <button type="button" className="cw-menu-backdrop" aria-label="关闭更多操作" onClick={() => setMoreMenuOpen(false)} /> : null}
 
       {/* Phase 1: the inline focus-task panel has been REMOVED from the center.
           Task execution now lives behind the 任务执行 drawer entry (Phase 2 fills
           it). The center keeps only the conversation timeline + composer. */}
 
-      <div className="cw-body">
-        {timeline.length === 0 && traceItems.length === 0 ? (
-          <div className="cw-empty">输入需求后，将自动识别是复用已有智能体，还是生成新智能体。</div>
-        ) : null}
+      <AggregateOrchestrationGraph
+        graph={aggregateGraph}
+        compact={aggregateGraphCompact}
+        onToggleCompact={toggleAggregateGraphCompact}
+        userInputFlashSeq={userInputFlashSeq}
+        onOpenArtifact={openArtifact}
+        onOpenTaskStep={onOpenTaskStep}
+      />
+
+      {requirementConfirm ? (
+        <RequirementConfirmCard
+          requirementConfirm={requirementConfirm}
+          submitting={submitting}
+          onConfirm={onConfirmTaskStep}
+        />
+      ) : null}
+
+      <div ref={cwBodyScrollRef} className="cw-body sf-scroll" onScroll={updateWorkbenchBodyFollowState}>
         {timeline.map(item => (
           <TimelineItem
             key={item.id}
@@ -228,25 +550,56 @@ export function ConversationWorkbench({
             setDraftAnswers={setDraftAnswers}
             submitting={submitting}
             focusRequirement={focusRequirement}
+            dialogueId={session && session.id}
             onSelectRoute={onSelectRoute}
             onOpenApp={onOpenApp}
+            onOpenArtifact={openArtifact}
             onAcceptConsolidation={onAcceptConsolidation}
             onSend={onSend}
             onSelectClarificationScope={onSelectClarificationScope}
-            onPickClarification={(scope, value) => {
-              if (!value) return
+            onOpenPreviewAttachment={setPreviewAttachment}
+            onOpenTaskStep={onOpenTaskStep}
+            onConfirmTaskStep={onConfirmTaskStep}
+            onConfirmDataAccess={onConfirmDataAccess}
+            manualStepConfirmation={manualStepConfirmation}
+            onToggleManualStepConfirmation={setManualStepConfirmation}
+            activePrototype={activePrototype}
+            onOpenPrototype={handleOpenPrototype}
+            onConfirmPrototype={handleConfirmPrototype}
+            onPrototypeFeedback={handlePrototypeFeedback}
+            // In-card submit for job-step clarifications (澄清交互卡片: no composer
+            // refill). The card stages its own selection + optional custom answer,
+            // then submits directly through onSend. onSend already routes to
+            // jobs.answerJob when the clarification scope is active, so we set the
+            // scope first, then send the combined answer text. The composer input
+            // is never touched.
+            onSubmitClarification={async (scope, value) => {
+              if (!value || submitting) return
               if (onSelectClarificationScope) onSelectClarificationScope(scope)
-              setInput(prev => {
-                const trimmed = String(prev).trim()
-                // Append rather than overwrite so multi-question clarifications
-                // (or multiple picks) accumulate in the composer. The answer goes
-                // to answerJob as free text the agent reads, so a combined reply
-                // like "演示数据；两级审批；年假、病假" is exactly what we want.
-                return trimmed ? `${trimmed}；${value}` : value
-              })
+              await onSend(value, { attachmentIds: [], pendingAttachments: [] })
             }}
           />
         ))}
+
+        {aggregateGraph.cards
+          .filter(card => card.key !== 'user_input' && card.state !== 'not_started' && !(card.state === 'waiting_upstream' && card.key === 'production_delivery'))
+          .map(card => (
+            <WorkbenchAgentBlock
+              key={card.key}
+              card={card}
+              thinking={thinkingForCard(card)}
+              analysisLog={analysisLogForCard(card)}
+              questions={questionsForCard(card)}
+              prototype={card.key === 'interface_parsing' ? prototypeFromCard(card) : null}
+              onConfirm={key => onConfirmCard ? onConfirmCard(key) : onConfirm && onConfirm({ aggregateCardKey: key })}
+              onOpenArtifact={openArtifact}
+              onSubmitCredential={submitCredential}
+              onOpenPrototype={handleOpenPrototype}
+              onPrototypeFeedback={handlePrototypeFeedback}
+              onConfirmPrototype={handleConfirmPrototype}
+              onContinuePrototype={handleContinuePrototype}
+            />
+          ))}
 
         {/* Continuous-workbench trace surface (Task 7): the dialogue-scoped,
             sequence-replayable visible work-trace. Rendered as a compact
@@ -318,8 +671,13 @@ export function ConversationWorkbench({
 
       {canConfirm ? (
         <div className="cw-answer-bar">
-          <button type="button" className="primary" onClick={onConfirm} disabled={submitting}>
-            {submitting ? '处理中' : isBusiness ? '确认创建' : '确认并生成'}
+          <button
+            type="button"
+            className="primary"
+            onClick={() => onConfirm && onConfirm({ executionPolicy: { manualStepConfirmation: !isBusiness && manualStepConfirmation } })}
+            disabled={submitting}
+          >
+            {submitting ? '处理中' : '确认创建'}
           </button>
         </div>
       ) : null}
@@ -328,7 +686,6 @@ export function ConversationWorkbench({
 
       <footer className="cw-composer">
         {canRetry ? <button type="button" onClick={onRetry} disabled={submitting} title="重试本轮">重试本轮</button> : null}
-        {canAbandon ? <button type="button" onClick={onAbandon} disabled={submitting} title="放弃">放弃</button> : null}
         {/* Archive control: archive a resolved dialogue. The backend endpoint
             (POST /api/dialogues/:id/archive) sets status to `archived`; the hook
             refreshes the view so the composer is replaced by a terminal hint. */}
@@ -345,7 +702,16 @@ export function ConversationWorkbench({
         {status === 'resolved' && !composerActive ? (
           <p className="cw-terminal-hint">会话已完成，在左侧「会话导航」开始新的需求。</p>
         ) : status === 'abandoned' || status === 'failed' || status === 'archived' ? (
-          <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
+          <>
+            {sessionError ? (
+              <div className="cw-session-error" role="alert">
+                <div className="cw-session-error-title">{sessionError.title}</div>
+                {sessionError.detail ? <div className="cw-session-error-detail">{sessionError.detail}</div> : null}
+                {sessionError.hint ? <div className="cw-session-error-hint">{sessionError.hint}</div> : null}
+              </div>
+            ) : null}
+            <p className="cw-terminal-hint">会话已结束。{canRetry ? '失败会话可重试本轮，或' : ''}在左侧会话导航新建会话。</p>
+          </>
         ) : locked && !composerActive ? (
           <p className="cw-terminal-hint">请在上方选择并确认操作。</p>
         ) : (
@@ -355,6 +721,13 @@ export function ConversationWorkbench({
                 正在回复任务内澄清{clarificationScopeLabel ? `：${clarificationScopeLabel}` : ''}。请先回答该问题。
               </div>
             ) : null}
+            <AttachmentComposer
+              items={attachmentState.pending}
+              uploading={attachmentState.uploading}
+              onAddFiles={attachmentState.addFiles}
+              onRemove={attachmentState.removePending}
+              onOpen={setPreviewAttachment}
+            />
             <div className="cw-composer-row">
               <textarea
                 ref={textareaRef}
@@ -371,6 +744,43 @@ export function ConversationWorkbench({
           </>
         )}
       </footer>
+
+      {previewAttachment ? (
+        <AttachmentPreviewModal attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />
+      ) : null}
+
+      <ProjectDocumentPreviewModal document={previewDocument} onClose={() => setPreviewDocument(null)} />
+      <InterfacePreviewModal
+        artifact={previewInterface}
+        jobId={(focusTask && focusTask.id) || ''}
+        onClose={() => setPreviewInterface(null)}
+      />
+
+      {abandonConfirmOpen ? (
+        <div className="cw-confirm-layer" role="presentation" onMouseDown={() => setAbandonConfirmOpen(false)}>
+          <section
+            className="cw-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cw-abandon-title"
+            aria-describedby="cw-abandon-desc"
+            onMouseDown={event => event.stopPropagation()}
+          >
+            <h3 id="cw-abandon-title">放弃本次需求？</h3>
+            <p id="cw-abandon-desc">
+              将结束当前需求澄清/生成对话，后续不能继续补充或确认生成。已在执行的任务不会被取消，如需停止任务请到“任务执行”中取消。
+            </p>
+            <div className="cw-confirm-actions">
+              <button type="button" className="cw-confirm-secondary" onClick={() => setAbandonConfirmOpen(false)}>
+                继续处理
+              </button>
+              <button type="button" className="cw-confirm-danger" onClick={confirmAbandonRequirement} disabled={submitting}>
+                确认放弃
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -423,11 +833,42 @@ function CopyableBlock({ text, children, className = '', copyLabel = '复制' })
   )
 }
 
-function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, onSelectRoute, onOpenApp, onAcceptConsolidation, onSend, onSelectClarificationScope, onPickClarification }) {
+function taskDrawerBadgeInfo(task) {
+  if (!task) return null
+  const status = task.status || ''
+  if (status === 'waiting_user' || status === 'waiting') return { state: 'waiting-user', label: '等待用户处理' }
+  if (status === 'running' || status === 'in_progress') return { state: 'running', label: '执行中' }
+  if (status === 'queued') return { state: 'queued', label: '排队中' }
+  if (status === 'failed') return { state: 'failed', label: '执行失败' }
+  if (status === 'completed' || status === 'succeeded') return { state: 'completed', label: '已完成' }
+  if (status === 'canceled' || status === 'cancelled') return { state: 'canceled', label: '已取消' }
+  return { state: 'unknown', label: '状态未知' }
+}
+
+function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRequirement, dialogueId, onSelectRoute, onOpenApp, onOpenArtifact, onAcceptConsolidation, onSend, onSelectClarificationScope, onSubmitClarification, onOpenPreviewAttachment, onOpenTaskStep, onConfirmTaskStep, onConfirmDataAccess, manualStepConfirmation, onToggleManualStepConfirmation, activePrototype, onOpenPrototype, onConfirmPrototype, onPrototypeFeedback }) {
   if (item.type === 'user_message') {
+    // Submitted attachment refs (Task 11 / spec decision #22): after send, the
+    // persisted user_message carries `attachments` [{ id, active, name,
+    // previewKind }]. Render each as a clickable chip BELOW the content. Inactive
+    // refs (active===false) stay visible but muted with a 已停用 marker (decision
+    // #23: deactivated refs remain for replay/audit). Clicking opens the existing
+    // AttachmentPreviewModal via the shared preview setter (no second modal).
+    const attachments = Array.isArray(item.attachments) ? item.attachments : []
     return (
       <CopyableBlock text={item.content} className="cw-user-wrap">
         <div className="cw-item cw-user">{item.content}</div>
+        {attachments.length > 0 ? (
+          <div className="cw-user-attachments">
+            {attachments.map(ref => (
+              <MessageAttachmentChip
+                key={ref.id}
+                ref_={ref}
+                dialogueId={dialogueId}
+                onOpen={onOpenPreviewAttachment}
+              />
+            ))}
+          </div>
+        ) : null}
       </CopyableBlock>
     )
   }
@@ -440,18 +881,28 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   }
   if (item.type === 'clarification_prompt') {
     // A pipeline step (solution_design / code_generation) paused for user input.
-    // Render the question(s) + structured options as a card; picking an option
-    // fills the composer (the reply goes through the normal send → answerJob
-    // path, which resets the step so the agent reads the user's answer).
+    // Rendered as a unified 澄清交互卡片: the user selects option(s) INSIDE the card
+    // (with an optional in-card custom answer field) and submits via an in-card
+    // action. The composer is NEVER filled (no 输入框回填). Once answered the card
+    // folds to a 折叠澄清摘要卡 that retains agent label, completion state, the
+    // final answer, artifact entries, confirmation time, and an expand action.
     return (
-      <ClarificationPromptCard item={item} onSelectScope={onSelectClarificationScope} onPick={onPickClarification} submitting={submitting} />
+      <ClarificationPromptCard
+        item={item}
+        onSelectScope={onSelectClarificationScope}
+        onSubmit={onSubmitClarification}
+        onConfirmDataAccess={onConfirmDataAccess}
+        onConfirmPrototype={onConfirmPrototype}
+        onOpenArtifact={onOpenArtifact}
+        submitting={submitting}
+      />
     )
   }
   if (item.type === 'analysis_stream') {
     // D6: the persisted analysis lands after the round completes and renders
     // FOLDED (collapsed) above its conclusion. An expand/collapse toggle reveals
     // the full text. Rendered as plaintext only (never dangerouslySetInnerHTML).
-    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} />
+    return <FoldedAnalysis content={item.content} label={item.label} expanded={item.expanded} rawThinking={item.rawThinking} />
   }
   if (item.type === 'task_execution_block') {
     // Phase 3: one block per executing task step. Running/waiting/failed steps
@@ -473,7 +924,7 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
             {item.pending ? <Loader2 size={12} className="cw-spin" /> : null}
             {item.kind === 'step' ? '生成过程' : '分析过程'}
           </span>
-          <pre className="cw-live-text">{item.content}</pre>
+          <pre className="cw-live-text">{translateAnalysisText(item.content)}</pre>
         </div>
       </CopyableBlock>
     )
@@ -481,8 +932,11 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   if (item.type === 'live_thinking' || item.type === 'thinking_summary') {
     return <ThinkingSummary item={item} />
   }
+  // The detailed 协作编排执行图 is hidden from the conversation flow: the pinned
+  // 编排执行总览 (AggregateOrchestrationGraph) is now the primary orchestration
+  // view. Per-agent execution detail still lives in the task drawer.
   if (item.type === 'collaboration_plan_preview') {
-    return <CollaborationPlanPreviewCard preview={item.preview} />
+    return null
   }
   if (item.type === 'route_recommendation') {
     return <RouteChoiceCard reason={item.reason} canReuseExistingApplication={item.canReuseExistingApplication} onSelectRoute={onSelectRoute} submitting={submitting} />
@@ -502,7 +956,81 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   if (item.type === 'consolidation_table') {
     return <ConsolidationTable rows={item.rows} onAccept={onAcceptConsolidation} submitting={submitting} />
   }
-  if (item.type === 'requirement_summary') return <RequirementSummary requirement={focusRequirement || item.requirement} />
+  if (item.type === 'requirement_summary') {
+    return (
+      <>
+        <RequirementSummary requirement={focusRequirement || item.requirement} />
+        {activePrototype ? (
+          <PrototypeConfirmationDock
+            prototype={activePrototype}
+            onOpen={onOpenPrototype}
+            onConfirm={onConfirmPrototype}
+            onFeedback={onPrototypeFeedback}
+          />
+        ) : null}
+      </>
+    )
+  }
+  if (item.type === 'artifact_link') {
+    const art = item.artifact
+    // 原型设计 step: render the generated HTML inline via iframe. The server
+    // emits previewUrl as a relative /api path; in dev the SPA is served on a
+    // different origin than the API (no Vite proxy), so a relative src would
+    // hit the dev server and fall back to the SPA shell — booting a nested copy
+    // of the whole app inside the iframe. Absolutize via the shared helper.
+    if (art && art.kind === 'interface_preview' && art.previewUrl) {
+      return (
+        <div className="cw-timeline-artifact-link">
+          <button type="button" className="cw-artifact-chip" onClick={() => window.open(absoluteApiUrl(art.previewUrl), '_blank')}>
+            <FileText size={14} />
+            <span>{art.label || item.label || '原型预览'}</span>
+          </button>
+        </div>
+      )
+    }
+    return (
+      <div className="cw-timeline-artifact-link">
+        <button type="button" className="cw-artifact-chip" onClick={() => onOpenArtifact && onOpenArtifact(art)}>
+          <FileText size={14} />
+          <span>{art.label || item.label}</span>
+        </button>
+      </div>
+    )
+  }
+  if (item.type === 'prototype_confirmed') {
+    // Durable record of a prototype decision (编排产物确认), rendered as a folded
+    // 折叠澄清摘要卡. The item carries an `outcome` discriminator
+    // ('confirmed' | 'continued_without_confirmation' | 'unknown') plus
+    // outcome-specific copy so the card is always truthful about which decision
+    // was made. The summary keeps the required glossary fields: agent label,
+    // completion state, confirmation result, the confirmed artifact entry
+    // (产物入口 — clickable), confirmation time, and an expand action that
+    // reveals the full question/options.
+    return (
+      <FoldedClarificationSummary
+        agentLabel="界面设计 · 设计师"
+        completionState="已确认原型"
+        resultText={item.detail || item.confirmLabel || ''}
+        summary={item.title || '原型阶段完成'}
+        artifact={item.artifact}
+        artifactLabel={item.label}
+        confirmedAt={item.confirmedAt}
+        outcome={item.outcome}
+        onOpenArtifact={onOpenArtifact}
+        expandBody={
+          <div className="cw-clarification-q">
+            <p className="cw-clarification-text">
+              {item.outcome === 'confirmed'
+                ? '已确认该原型方案，进入下一阶段。'
+                : item.outcome === 'continued_without_confirmation'
+                ? '用户选择不确认原型并继续后续阶段。'
+                : '原型阶段已完成，具体确认结果以记录为准。'}
+            </p>
+          </div>
+        }
+      />
+    )
+  }
   if (item.type === 'business_recommendation') {
     return <BusinessRecommendationCard draft={item.draft} onRedescribe={onSend} submitting={submitting} />
   }
@@ -520,11 +1048,58 @@ function TimelineItem({ item, draftAnswers, setDraftAnswers, submitting, focusRe
   return null
 }
 
+// MessageAttachmentChip renders one submitted attachment reference under a
+// user_message. It reuses the existing `.cw-attach-chip` look. Clicking opens the
+// shared AttachmentPreviewModal (Task 4 wiring). The ref carries only
+// { id, active, name, previewKind }; we attach dialogueId + name + previewKind so
+// the modal degrades to its metadata path when there is no content route yet.
+function MessageAttachmentChip({ ref_, dialogueId, onOpen }) {
+  const active = ref_.active !== false
+  const isImage = ref_.previewKind === 'image'
+  const name = ref_.name || '附件'
+  const open = () => {
+    if (!onOpen || !ref_.id) return
+    onOpen({ id: ref_.id, name, previewKind: ref_.previewKind, dialogueId, originalName: name })
+  }
+  return (
+    <span className={`cw-attach-chip cw-attach-chip-ref${active ? '' : ' cw-attach-chip-inactive'}`}>
+      {isImage ? <ImageIcon size={14} /> : <FileText size={14} />}
+      <button type="button" className="cw-attach-name" onClick={open} title={active ? '预览附件' : '附件已停用'} disabled={!ref_.id || !onOpen}>
+        {name}
+      </button>
+      {active ? null : <em className="cw-attach-deactivated">已停用</em>}
+    </span>
+  )
+}
+
 function ThinkingSummary({ item }) {
   const summary = String(item.summary || '').trim()
   const raw = String(item.content || '').trim()
   const copyValue = summary || raw
+  // Translate known internal English tokens (status keys, requirement field
+  // names, skill slugs, …) that leak into the streamed thinking / analysis text
+  // so the 思考过程 surface reads in Chinese. Conservative whole-token replace.
+  const displaySummary = translateAnalysisText(summary)
+  const displayRaw = translateAnalysisText(raw)
   const live = item.pending || item.type === 'live_thinking'
+  const liveThinkingScrollRef = useRef(null)
+  const liveThinkingShouldFollowRef = useRef(true)
+  useEffect(() => {
+    liveThinkingShouldFollowRef.current = true
+  }, [item.id])
+  const updateLiveThinkingFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    liveThinkingShouldFollowRef.current = distanceToBottom <= LIVE_THINKING_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = liveThinkingScrollRef.current
+    if (!el || !live || !liveThinkingShouldFollowRef.current) return
+    // 思考流内部也按“贴底才跟随”处理，避免用户上滑阅读时被拉回底部。
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [raw, live])
   return (
     <CopyableBlock text={copyValue} className="cw-agent-wrap" copyLabel="复制思考摘要">
       <div className="cw-item cw-agent cw-live-thinking cw-thinking-summary">
@@ -532,21 +1107,25 @@ function ThinkingSummary({ item }) {
           {live ? <Loader2 size={12} className="cw-spin" /> : null}
           {live ? '正在思考…' : '思考摘要'}
         </span>
-        {live && raw ? (
-          <div className="cw-raw-thinking-stream">
-            <pre className="cw-live-text">{raw}</pre>
+        {live && displayRaw ? (
+          <div
+            ref={liveThinkingScrollRef}
+            className="cw-raw-thinking-stream"
+            onScroll={updateLiveThinkingFollowState}
+          >
+            <pre className="cw-live-text">{displayRaw}</pre>
           </div>
         ) : (
           <>
-            {summary ? (
-              <pre className="cw-live-text cw-thinking-summary-text">{summary}</pre>
+            {displaySummary ? (
+              <pre className="cw-live-text cw-thinking-summary-text">{displaySummary}</pre>
             ) : (
               <p className="cw-thinking-summary-empty">中文摘要将在分析过程生成后显示。</p>
             )}
-            {raw ? (
+            {displayRaw ? (
               <details className="cw-raw-thinking">
                 <summary>原始思考过程</summary>
-                <pre className="cw-live-text">{raw}</pre>
+                <pre className="cw-live-text">{displayRaw}</pre>
               </details>
             ) : null}
           </>
@@ -556,99 +1135,15 @@ function ThinkingSummary({ item }) {
   )
 }
 
-function CollaborationPlanPreviewCard({ preview }) {
-  const agents = preview && Array.isArray(preview.agents) ? preview.agents : []
-  const edges = preview && Array.isArray(preview.edges) ? preview.edges : []
-  const adjustments = preview && Array.isArray(preview.adjustments) ? preview.adjustments : []
-  const lanes = preview && Array.isArray(preview.lanes) ? preview.lanes : []
-  const edgeKeys = new Set()
-  const uniqueEdges = edges.filter(edge => {
-    if (!edge || !edge.from || !edge.to) return false
-    const key = `${edge.from}->${edge.to}`
-    if (edgeKeys.has(key)) return false
-    edgeKeys.add(key)
-    return true
-  })
-  const agentOrder = Object.fromEntries(
-    agents.filter(agent => agent && agent.key).map((agent, index) => [agent.key, index + 1]),
-  )
-  const laneRows = lanes.map(lane => ({
-    lane,
-    agents: agents.filter(agent => agent && agent.lane === lane.id),
-  })).filter(row => row.agents.length > 0)
-  const looseAgents = agents.filter(
-    agent => agent && !lanes.some(lane => lane.id === agent.lane),
-  )
-  if (looseAgents.length > 0) {
-    laneRows.push({
-      lane: { id: 'unassigned', label: '其他' },
-      agents: looseAgents,
-    })
-  }
-  if (agents.length === 0) return null
-  return (
-    <section className="cw-collaboration-preview">
-      <div className="cw-collaboration-preview-head">
-        <h3>协作智能体参与计划</h3>
-        <div className="cw-collaboration-stats">
-          <span>{agents.length} 个智能体</span>
-          <span>{uniqueEdges.length} 条依赖</span>
-        </div>
-      </div>
-      {laneRows.length > 0 ? (
-        <div className="cw-collaboration-graph cw-collaboration-flow" aria-label="协作智能体执行关系图">
-          {laneRows.map(row => (
-            <div className="cw-collaboration-stage" key={row.lane.id}>
-              <div className="cw-collaboration-stage-label">
-                <strong>{row.lane.label}</strong>
-                <span>{row.agents.length} 个</span>
-              </div>
-              <div className="cw-collaboration-rail">
-                {row.agents.map((agent, index) => (
-                  <div className="cw-collaboration-node-wrap" key={agent.key || `${row.lane.id}-${index}`}>
-                    <div className="cw-collaboration-node">
-                      <span className="cw-collaboration-node-index">
-                        {String(agentOrder[agent.key] || index + 1).padStart(2, '0')}
-                      </span>
-                      <span className="cw-collaboration-node-main">
-                        <strong>{agent.name || agent.key}</strong>
-                        <small>{agent.role || agent.key}</small>
-                      </span>
-                      {agent.highImpact ? <em>门禁</em> : null}
-                    </div>
-                    {index < row.agents.length - 1 ? (
-                      <ArrowRight size={13} className="cw-collaboration-node-arrow" />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {adjustments.length > 0 ? (
-        <div className="cw-collaboration-adjustments">
-          <AlertTriangle size={13} />
-          <ul>
-            {adjustments.map((adjustment, index) => (
-              <li key={`${adjustment.message || adjustment.action || 'adjustment'}-${index}`}>
-                {adjustment.message || adjustment.action || '协作计划已调整'}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </section>
-  )
-}
 
 // FoldedAnalysis (D6) renders the persisted analysis work log as a COLLAPSED
 // block with an expand/collapse toggle. The round's streamed analysis folds above
 // its conclusion once the persisted analysis lands; the user expands to read it.
 // Plaintext only (a `<pre>`), never dangerouslySetInnerHTML.
-function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
+function FoldedAnalysis({ content, label, expanded: initialExpanded, rawThinking }) {
   const [expanded, setExpanded] = useState(!!initialExpanded)
-  const text = String(content || '')
+  const text = translateAnalysisText(String(content || ''))
+  const raw = String(rawThinking || '')
   return (
     <CopyableBlock text={text} className="cw-agent-wrap" copyLabel="复制分析">
       <div className="cw-item cw-agent cw-folded-analysis">
@@ -662,6 +1157,12 @@ function FoldedAnalysis({ content, label, expanded: initialExpanded }) {
           <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
         </button>
         {expanded ? <pre className="cw-folded-text">{text}</pre> : null}
+        {expanded && raw ? (
+          <details className="cw-raw-thinking">
+            <summary>原始思考过程</summary>
+            <pre className="cw-live-text">{raw}</pre>
+          </details>
+        ) : null}
       </div>
     </CopyableBlock>
   )
@@ -688,8 +1189,11 @@ const TASK_STEP_STATUS_LABEL = {
 
 function TaskExecutionBlock({ item }) {
   const [userExpandedOverride, setUserExpandedOverride] = useState(null)
+  const taskThinkingScrollRef = useRef(null)
+  const taskThinkingShouldFollowRef = useRef(true)
   useEffect(() => {
     setUserExpandedOverride(null)
+    taskThinkingShouldFollowRef.current = true
   }, [item.id])
   const expanded = userExpandedOverride ?? !!item.expanded
   const status = item.status || 'pending'
@@ -699,6 +1203,18 @@ function TaskExecutionBlock({ item }) {
   const error = String(item.error || '')
   const taskThinking = String(item.taskThinking || '')
   const copyText = [safeExecution, summary, taskThinking].filter(Boolean).join('\n\n')
+  const updateTaskThinkingFollowState = event => {
+    const el = event.currentTarget
+    const { scrollHeight, scrollTop, clientHeight } = el
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight
+    taskThinkingShouldFollowRef.current = distanceToBottom <= TASK_THINKING_FOLLOW_BOTTOM_THRESHOLD
+  }
+  useEffect(() => {
+    const el = taskThinkingScrollRef.current
+    if (!el || !expanded || !taskThinkingShouldFollowRef.current) return
+    const { scrollHeight } = el
+    el.scrollTop = scrollHeight
+  }, [taskThinking, expanded])
   return (
     <CopyableBlock text={copyText} className="cw-task-wrap" copyLabel="复制任务块">
       <div className={`cw-item cw-task-block cw-task-status-${status}`}>
@@ -717,7 +1233,11 @@ function TaskExecutionBlock({ item }) {
             {taskThinking ? (
               <section className="cw-task-section cw-task-thinking-section">
                 <h5>任务思考过程{item.taskThinkingRedacted ? <em className="cw-redacted-note">已脱敏/截断</em> : null}</h5>
-                <pre className="cw-live-text">{taskThinking}</pre>
+                <pre
+                  ref={taskThinkingScrollRef}
+                  className="cw-live-text cw-task-thinking-scroll sf-scroll"
+                  onScroll={updateTaskThinkingFollowState}
+                >{taskThinking}</pre>
               </section>
             ) : null}
             {safeExecution ? (
@@ -951,22 +1471,26 @@ function shortId(value) {
 }
 
 // ClarificationPromptCard renders a job-step clarification (solution_design /
-// code_generation pausing for user input) as a distinct, attention-grabbing card
-// in the conversation flow. Unlike the pre-job QuestionCard (which has its own
-// submit + draftAnswers state), a job-step clarification is answered via the
-// normal composer: picking an option (or typing) fills the composer, and sending
-// goes through answerJob → the step resets and the agent reads the reply.
-function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
+// code_generation pausing for user input) as a unified 澄清交互卡片. The user
+// selects option(s) INSIDE the card and submits via an in-card action — the
+// composer is NEVER filled (the 输入框回填 path was removed). For questions that
+// allow a custom answer, an in-card input is rendered. Once answered (status !==
+// 'open'), the card folds to a 折叠澄清摘要卡 that retains agent label,
+// completion state, the final answer, artifact entries, confirmation time, and
+// an expand action that reveals the full original question/options.
+function ClarificationPromptCard({ item, onSelectScope, onSubmit, onConfirmDataAccess, onConfirmPrototype, onOpenArtifact, submitting }) {
   const questions = Array.isArray(item.questions) ? item.questions : []
   const open = item.status === 'open'
   const [expanded, setExpanded] = useState(item.expanded !== false)
-  // Whether ANY question offers structured options. The agent does not always
-  // emit an options array (sometimes it writes (A)/(B)/(C) into the question
-  // text instead). When there are no pickable options, the hint must NOT say
-  // "点击上方选项" — it would mislead the user.
+  const [confirming, setConfirming] = useState(false)
+  // In-card staged selection: a Map of questionId → chosen value (string).
+  // Selection state lives entirely inside the card; the composer is untouched.
+  const [selections, setSelections] = useState({})
+  const [customText, setCustomText] = useState('')
   const hasAnyOptions = questions.some(q => Array.isArray(q.options) && q.options.length > 0)
   const firstQuestion = questions[0] && questions[0].question
   const finalAnswer = String(item.finalAnswer || '')
+  const agentLabel = resolveClarificationAgentLabel(item)
   const attribution = [
     item.taskId ? `任务 ${shortId(item.taskId)}` : '',
     item.stepName || item.stepId ? `步骤 ${item.stepName || shortId(item.stepId)}` : '',
@@ -978,13 +1502,109 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
     if (!open || typeof onSelectScope !== 'function') return
     onSelectScope(scope)
   }
-  const pick = value => {
-    if (!open || submitting || typeof onPick !== 'function') return
-    onPick(scope, value)
+  const chooseOption = (question, opt) => {
+    if (!open || submitting || confirming) return
+    // Specialized confirm questions short-circuit through their dedicated APIs
+    // (they are NOT free-text answers and must not be re-run as plain replies).
+    if (question && question.id === 'data_access_summary_confirmation' && opt && opt.value === 'confirm' && typeof onConfirmDataAccess === 'function') {
+      runConfirm(() => onConfirmDataAccess(scope.taskId, scope.stepId, { version: question.defaultAnswer || '', attempt: scope.attempt }))
+      return
+    }
+    if (question && question.id === 'prototype_confirmation' && opt && opt.value === 'confirm' && typeof onConfirmPrototype === 'function') {
+      runConfirm(() => onConfirmPrototype({ jobId: scope.taskId, stepId: scope.stepId, canConfirm: true }))
+      return
+    }
+    setSelections(prev => ({ ...prev, [question && question.id]: opt.label || opt.value }))
   }
+  const runConfirm = async fn => {
+    setConfirming(true)
+    try {
+      await fn()
+    } catch {
+      // 错误信息已由 useJobs 写入全局错误状态，这里只负责恢复按钮状态。
+    } finally {
+      setConfirming(false)
+    }
+  }
+  const canSubmitInCard = open && !submitting && !confirming && (() => {
+    // The in-card submit is enabled once every question has a staged selection
+    // OR (when a question has no options) a non-empty custom answer.
+    const hasCustom = !!customText.trim()
+    return questions.every(q => {
+      if (selections[q.id]) return true
+      // A no-option question can be satisfied by the shared custom input.
+      if (!Array.isArray(q.options) || q.options.length === 0) return hasCustom
+      return false
+    })
+  })()
+  const submitInCard = async () => {
+    if (!canSubmitInCard || typeof onSubmit !== 'function') return
+    const parts = questions.map(q => selections[q.id]).filter(Boolean)
+    const custom = customText.trim()
+    if (custom) parts.push(custom)
+    const value = parts.join('；')
+    if (!value) return
+    setConfirming(true)
+    try {
+      await onSubmit(scope, value)
+    } catch {
+      // error surfaced via the global submitting/error UX
+    } finally {
+      setConfirming(false)
+      setSelections({})
+      setCustomText('')
+    }
+  }
+  // ANSWERED → render the folded summary (expandable to the full question).
+  if (!open) {
+    return (
+      <FoldedClarificationSummary
+        agentLabel={agentLabel}
+        completionState="已澄清"
+        resultText={finalAnswer}
+        summary={firstQuestion || '任务内澄清'}
+        attribution={attribution}
+        confirmedAt={item.confirmedAt}
+        onOpenArtifact={onOpenArtifact}
+        artifact={item.artifact}
+        artifactLabel={item.artifactLabel}
+        expandBody={
+          <>
+            {questions.map((q, qi) => (
+              <div key={q.id || qi} className="cw-clarification-q">
+                <p className="cw-clarification-text">{q.question}</p>
+                {q.options && q.options.length > 0 ? (
+                  <div className="cw-options cw-clarification-options-readonly">
+                    {q.options.map(opt => (
+                      <span
+                        key={opt.value || opt.label}
+                        className={`cw-option cw-clarification-option cw-clarification-option-static${opt.recommended ? ' cw-option-recommended' : ''}`}
+                      >
+                        <span className="cw-option-head">
+                          <b>{opt.label || opt.value}</b>
+                          {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+            {finalAnswer ? (
+              <div className="cw-clarification-final-answer">
+                <strong>最终回答</strong>
+                <p>{finalAnswer}</p>
+              </div>
+            ) : null}
+          </>
+        }
+      />
+    )
+  }
+  // OPEN → render the unified in-card clarification card.
   return (
     <div
-      className={`cw-item cw-agent cw-clarification${open ? ' cw-clarification-open' : ' cw-clarification-answered'}`}
+      className={`cw-item cw-agent cw-clarification cw-clarification-card${open ? ' cw-clarification-open' : ' cw-clarification-answered'}`}
       onMouseDown={selectScope}
       onFocusCapture={selectScope}
     >
@@ -1005,38 +1625,194 @@ function ClarificationPromptCard({ item, onSelectScope, onPick, submitting }) {
               <p className="cw-clarification-text">{q.question}</p>
               {q.options && q.options.length > 0 ? (
                 <div className="cw-options">
-                  {q.options.map(opt => (
-                    <button
-                      key={opt.value || opt.label}
-                      type="button"
-                      className={`cw-option cw-clarification-option${opt.recommended ? ' cw-option-recommended' : ''}`}
-                      onClick={() => pick(opt.label || opt.value)}
-                      disabled={!open || submitting}
-                    >
-                      <span className="cw-option-head">
-                        <b>{opt.label || opt.value}</b>
-                        {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
-                      </span>
-                    </button>
-                  ))}
+                  {q.options.map(opt => {
+                    const selected = selections[q.id] === (opt.label || opt.value)
+                    return (
+                      <button
+                        key={opt.value || opt.label}
+                        type="button"
+                        className={`cw-option cw-clarification-option${selected ? ' selected' : ''}${opt.recommended ? ' cw-option-recommended' : ''}`}
+                        onClick={() => chooseOption(q, opt)}
+                        disabled={!open || submitting || confirming}
+                        aria-pressed={selected}
+                      >
+                        <span className="cw-option-head">
+                          <b>{opt.label || opt.value}</b>
+                          {opt.recommended ? <em className="cw-option-badge">推荐</em> : null}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               ) : null}
               {q.defaultAnswer ? <small className="cw-clarification-hint">参考建议：{q.defaultAnswer}</small> : null}
             </div>
           ))}
-          {!open && finalAnswer ? (
-            <div className="cw-clarification-final-answer">
-              <strong>最终回答</strong>
-              <p>{finalAnswer}</p>
-            </div>
-          ) : null}
-          <small className="cw-clarification-hint">
-            {open
-              ? hasAnyOptions ? '点击上方选项，或在下方输入框回复' : '请在下方输入框回复你的选择'
-              : '该澄清已归档为只读。'}
-          </small>
+          {/* In-card custom answer (optional). Rendered when at least one
+              question has no options, or always as a free-text supplement. */}
+          <div className="cw-clarification-custom">
+            <input
+              className="cw-custom-input"
+              value={customText}
+              onChange={e => setCustomText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && canSubmitInCard) { e.preventDefault(); submitInCard() } }}
+              placeholder="补充说明（可选）"
+              disabled={submitting || confirming}
+            />
+          </div>
+          <div className="cw-clarification-submit-bar">
+            <small className="cw-clarification-hint">
+              {hasAnyOptions ? '选择上方选项后提交本轮澄清' : '在上方输入框回复后提交本轮澄清'}
+            </small>
+            <button
+              type="button"
+              className="cw-clarification-submit primary"
+              onClick={submitInCard}
+              disabled={!canSubmitInCard}
+            >
+              {confirming ? '处理中…' : '提交本轮澄清'}
+            </button>
+          </div>
         </>
       ) : null}
+    </div>
+  )
+}
+
+// resolveClarificationAgentLabel derives the 阶段/责任名 (agent label) for a
+// clarification/confirmation card from its step kind / agent key, falling back
+// to the generic "任务内澄清" when neither is available.
+function resolveClarificationAgentLabel(item) {
+  if (!item) return '任务内澄清'
+  const stepKind = String(item.stepKind || '')
+  if (stepKind && STAGE_LABELS && STAGE_LABELS[stepKind]) return STAGE_LABELS[stepKind]
+  const agentKey = String(item.agentKey || '')
+  if (agentKey === 'designer' || stepKind === 'design_contract') return '界面设计 · 设计师'
+  if (agentKey === 'data_engineer' || agentKey === 'data') return '数据抓取 · 数据工程师'
+  if (agentKey === 'solution_architect' || stepKind === 'solution_design') return '方案设计 · 架构师'
+  if (agentKey === 'coder' || stepKind === 'code_generation') return '代码生成 · 工程师'
+  return '任务内澄清'
+}
+
+// FoldedClarificationSummary is the 折叠澄清摘要卡: the default compact retained
+// form of a COMPLETED clarification/confirmation. It MUST keep (glossary):
+// agent label (阶段/责任名), completion state, 思考摘要 (optional), final answer or
+// confirmation result, confirmed artifact links (产物入口 — clickable),
+// confirmation time, and an expand action. It MUST NOT: delete history, hide
+// artifact entries, show only a completion icon.
+function FoldedClarificationSummary({
+  agentLabel,
+  completionState,
+  resultText,
+  summary,
+  attribution,
+  artifact,
+  artifactLabel,
+  confirmedAt,
+  outcome,
+  onOpenArtifact,
+  expandBody,
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const OutcomeIcon = outcome === 'confirmed' ? CheckCircle2
+    : outcome === 'continued_without_confirmation' ? AlertCircle
+    : null
+  const time = confirmedAt ? formatConfirmedAt(confirmedAt) : ''
+  const previewTitle = outcome === 'confirmed' ? '查看已确认的原型'
+    : outcome === 'continued_without_confirmation' ? '查看未确认的原型'
+    : '查看产物'
+  return (
+    <div className={`cw-item cw-agent cw-clarification cw-clarification-answered cw-clarification-summary${expanded ? ' is-expanded' : ''}`}>
+      <button
+        type="button"
+        className="cw-clarification-toggle cw-clarification-summary-toggle"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="cw-item-label">
+          {OutcomeIcon ? <OutcomeIcon size={12} /> : null}
+          {agentLabel}
+          <em className="cw-clarification-state">{completionState}</em>
+        </span>
+        <span className="cw-fold-hint">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {attribution ? <small className="cw-clarification-attribution">{attribution}</small> : null}
+      <div className="cw-clarification-summary-body">
+        {summary ? <p className="cw-clarification-summary-text">{summary}</p> : null}
+        {resultText ? (
+          <div className="cw-clarification-final-answer">
+            <strong>{outcome ? '确认结果' : '最终回答'}</strong>
+            <p>{resultText}</p>
+          </div>
+        ) : null}
+        {artifact && (artifact.previewUrl || artifact.id || artifact.path) ? (
+          <button
+            type="button"
+            className="cw-artifact-chip"
+            onClick={() => onOpenArtifact && onOpenArtifact(artifact)}
+            title={previewTitle}
+          >
+            <MonitorCheck size={14} />
+            <span>{artifactLabel || artifact.label || '查看产物'}</span>
+          </button>
+        ) : null}
+        {time ? <small className="cw-clarification-time">确认时间：{time}</small> : null}
+      </div>
+      {expanded && expandBody ? (
+        <div className="cw-clarification-summary-expand">{expandBody}</div>
+      ) : null}
+    </div>
+  )
+}
+
+function formatConfirmedAt(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+// RequirementConfirmCard surfaces the requirement_analysis manual-confirmation
+// gate (a no-option confirm) as an explicit, summary-bearing card so the user is
+// never stuck staring at a bare "等待用户澄清" state. onConfirm is jobs.confirmStep
+// (passed in as onConfirmTaskStep); attempt=0 lets ConfirmManualStep skip the
+// attempt check and locate the step by stepId.
+function RequirementConfirmCard({ requirementConfirm, submitting, onConfirm }) {
+  const { jobId, stepId, requirement } = requirementConfirm || {}
+  if (!jobId || !stepId) return null
+  const appName = requirement && requirement.appName
+  const appType = requirement && requirement.appType
+  const coreScenario = requirement && requirement.coreScenario
+  const targetUsers = requirement && Array.isArray(requirement.targetUsers) ? requirement.targetUsers : []
+  const mainEntities = requirement && Array.isArray(requirement.mainEntities) ? requirement.mainEntities : []
+  const hasSummary = !!(appName || appType || coreScenario || targetUsers.length || mainEntities.length)
+  return (
+    <div className="cw-requirement-confirm">
+      <div className="cw-requirement-confirm-head">
+        <CheckCircle2 size={16} />
+        <strong>需求分析已完成，请确认后开始生成</strong>
+      </div>
+      {hasSummary ? (
+        <dl className="cw-requirement-confirm-summary">
+          {appName ? <div><dt>应用名称</dt><dd>{appName}</dd></div> : null}
+          {appType ? <div><dt>应用类型</dt><dd>{formatAppType(appType)}</dd></div> : null}
+          {coreScenario ? <div><dt>核心场景</dt><dd>{coreScenario}</dd></div> : null}
+          {targetUsers.length ? <div><dt>目标用户</dt><dd>{targetUsers.join('、')}</dd></div> : null}
+          {mainEntities.length ? <div><dt>主要对象</dt><dd>{mainEntities.join('、')}</dd></div> : null}
+        </dl>
+      ) : null}
+      <p className="cw-requirement-confirm-hint">确认后将自动进入方案设计与生成阶段。</p>
+      <button
+        type="button"
+        className="cw-requirement-confirm-btn primary"
+        disabled={submitting}
+        onClick={() => onConfirm && onConfirm(jobId, stepId, 0)}
+      >
+        {submitting ? '处理中…' : '确认并开始生成'}
+      </button>
     </div>
   )
 }
@@ -1099,10 +1875,35 @@ function deploymentVersionLabel({ view, focusTask, traceItems }) {
   return `V${nextNumber}`
 }
 
+function parseStepPendingQuestions(raw) {
+  if (!raw) return []
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const list = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.questions) ? parsed.questions : []
+    return list.map(normalizeStepQuestion).filter(Boolean)
+  } catch (_) {
+    return []
+  }
+}
+
+function normalizeStepQuestion(q) {
+  if (!q || typeof q !== 'object') return null
+  const question = q.question || q.title || q.label || ''
+  if (!question) return null
+  const options = Array.isArray(q.options)
+    ? q.options.map(option => typeof option === 'string' ? { label: option, value: option } : option).filter(Boolean)
+    : []
+  return {
+    ...q,
+    id: q.id || q.questionId || question,
+    question,
+    options,
+  }
+}
 function RequirementSummary({ requirement }) {
   const boundary = requirement && requirement.judgementBoundary
   const rows = [
-    ['应用类型', requirement.appType],
+    ['应用类型', formatAppType(requirement.appType)],
     ['应用名称', requirement.appName],
     ['核心场景', requirement.coreScenario],
     ['主视图', requirement.primaryView],
@@ -1113,7 +1914,84 @@ function RequirementSummary({ requirement }) {
   return (
     <div className="cw-summary">
       <strong>确认需求摘要</strong>
+      {requirement && requirement.description ? (
+        <p className="cw-summary-desc">{requirement.description}</p>
+      ) : null}
       {rows.map(([k, v]) => <div key={k}><span>{k}</span><b>{v}</b></div>)}
+    </div>
+  )
+}
+
+function PrototypeConfirmationDock({ prototype, onOpen, onConfirm, onFeedback }) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+
+  const submitConfirm = async () => {
+    if (confirming) return
+    setConfirming(true)
+    try {
+      await onConfirm(prototype)
+    } catch {
+      // ignore — SSE will eventually sync state
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  const submitFeedback = async () => {
+    const trimmed = feedbackText.trim()
+    if (!trimmed || feedbackSubmitting) return
+    setFeedbackSubmitting(true)
+    try {
+      await onFeedback(prototype, trimmed)
+      setFeedbackText('')
+      setFeedbackOpen(false)
+    } catch {
+      // error handled by caller / toast
+    } finally {
+      setFeedbackSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="cw-prototype-dock">
+      <span>原型设计已生成，请确认原型并继续，或预览后提出修改意见。</span>
+      <div className="cw-prototype-dock-actions">
+        <button type="button" onClick={() => onOpen && onOpen(prototype)}>预览原型</button>
+        {prototype && prototype.canConfirm ? (
+          <button type="button" className="cw-prototype-confirm" onClick={submitConfirm} disabled={confirming}>{confirming ? '确认中…' : '确定原型并继续'}</button>
+        ) : null}
+        <button type="button" onClick={() => setFeedbackOpen(v => !v)}>提出修改意见</button>
+      </div>
+      {feedbackOpen ? (
+        <div className="cw-prototype-feedback">
+          <textarea
+            value={feedbackText}
+            onChange={e => setFeedbackText(e.target.value)}
+            placeholder="请描述您的修改意见…"
+            rows={3}
+            disabled={feedbackSubmitting}
+          />
+          <div className="cw-prototype-feedback-actions">
+            <button
+              type="button"
+              onClick={submitFeedback}
+              disabled={!feedbackText.trim() || feedbackSubmitting}
+            >
+              {feedbackSubmitting ? '提交中…' : '提交'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setFeedbackOpen(false); setFeedbackText('') }}
+              disabled={feedbackSubmitting}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

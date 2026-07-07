@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -34,27 +35,83 @@ func TestValidateRequirementAnalysisInvalidJSON(t *testing.T) {
 	}
 }
 
-// TestValidateRequirementAnalysisNeedsUserInput was renamed/repurposed for the
-// Task-5 freeze contract. The old contract emitted {needsUserInput, questions}
-// and the validator surfaced that as a pause; the new contract hard-fails
-// instead. A frozen-requirement output that lacks the validation block (the old
-// shape) MUST now be rejected with ErrSchemaValidationFailed — there is no
-// clarification path inside the pipeline step.
+// TestValidateRequirementAnalysisNeedsUserInput proves requirement_analysis is
+// one of the few stages allowed to pause for user clarification. It may ask only
+// structured questions; downstream stages must degrade instead of asking.
 func TestValidateRequirementAnalysisNeedsUserInput(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 		"summary": "x", "needsUserInput": true,
 		"questions": [{"id":"q1","question":"how big?","defaultAnswer":"5"}]
 	}`))
-	_, err := ValidateRequirementAnalysis(p)
-	if err == nil {
-		t.Fatal("err = nil, want rejection of legacy needsUserInput shape (no clarification path in the freeze step)")
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
-	// decode is lenient (unknown fields ignored), so the legacy shape decodes
-	// fine and is rejected by the validation rules: no validation block means
-	// validation.complete=false → ErrSchemaValidationFailed. The point of this
-	// test is that the old clarify-then-pause contract is gone.
-	if !errors.Is(err, ErrSchemaValidationFailed) && !errors.Is(err, ErrOutputInvalidJSON) {
-		t.Fatalf("err = %v, want ErrSchemaValidationFailed or ErrOutputInvalidJSON", err)
+	if !out.NeedsUserInput {
+		t.Fatal("NeedsUserInput = false, want true")
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	}
+}
+
+func TestRequirementAnalysisQuestionNormalizesAlternateFields(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+		"needsUserInput": true,
+		"questions": [
+			{
+				"id": "q1",
+				"text": "用演示数据还是真实API？",
+				"options": [
+					{"id": "mock", "label": "演示数据"},
+					{"id": "api", "label": "真实API"}
+				]
+			}
+		]
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(out.Questions) != 1 {
+		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	}
+	q := out.Questions[0]
+	if q.Question != "用演示数据还是真实API？" {
+		t.Fatalf("question text = %q, want normalized from `text`", q.Question)
+	}
+	if len(q.Options) != 2 {
+		t.Fatalf("options = %d, want 2", len(q.Options))
+	}
+	if q.Options[0].Value != "mock" {
+		t.Fatalf("option[0].value = %q, want normalized from `id`", q.Options[0].Value)
+	}
+	if q.Options[0].Label != "演示数据" {
+		t.Fatalf("option[0].label = %q", q.Options[0].Label)
+	}
+}
+
+// TestQuestionOptionToleratesBareString is the regression guard for the
+// job_c86df5ec… output_invalid_json failure: some models emit a select
+// question's options as a bare-string array ["mock_demo_data","skip_for_now"]
+// instead of [{value,label}] objects. QuestionOption must accept the plain
+// string (used as both value and label) so a select question never hard-fails
+// data_integration. Previously the type mismatch surfaced as a misleading
+// output_invalid_json (the JSON itself was valid — only the option shape differed).
+func TestQuestionOptionToleratesBareString(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+		"needsUserInput": true, "status": "needs_input",
+		"questions":[{"id":"q3","question":"选择降级策略","inputType":"select","options":["mock_demo_data","skip_for_now"]}]
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("bare-string options must not fail validation: %v", err)
+	}
+	if len(out.Questions) != 1 || len(out.Questions[0].Options) != 2 {
+		t.Fatalf("question/options not decoded: %+v", out)
+	}
+	if out.Questions[0].Options[0].Value != "mock_demo_data" || out.Questions[0].Options[0].Label != "mock_demo_data" {
+		t.Fatalf("bare-string option not used as value+label: %#v", out.Questions[0].Options[0])
 	}
 }
 
@@ -249,6 +306,32 @@ func TestValidateRequirementAnalysisRejectedRequirement(t *testing.T) {
 	}
 }
 
+func TestValidateRequirementAnalysisAcceptsDeferredInterfaceAndDataFields(t *testing.T) {
+	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
+	  "confirmedRequirementId":"clar_deferred",
+	  "summary":"业务需求已确认，界面和数据细节留给后续阶段补齐",
+	  "appType":"operations_tool",
+	  "appName":"请假审批",
+	  "targetUsers":["员工"],
+	  "coreScenario":"提交和审批请假",
+	  "primaryView":"",
+	  "mainEntities":["请假单"],
+	  "dataPolicy":"",
+	  "acceptanceFocus":["可提交审批"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":false,"supported":true,"missingFields":["primaryView","dataPolicy"],"unsupportedRequests":[]}
+	}`))
+	out, err := ValidateRequirementAnalysis(p)
+	if err != nil {
+		t.Fatalf("ValidateRequirementAnalysis should accept deferred interface/data fields: %v", err)
+	}
+	if out.FrozenRequirementJSON == "" {
+		t.Fatal("FrozenRequirementJSON is empty")
+	}
+}
+
 func TestValidateSolutionDesignHappy(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 		"needsUserInput": false,
@@ -263,11 +346,10 @@ func TestValidateSolutionDesignHappy(t *testing.T) {
 	}
 }
 
-// TestSolutionDesignQuestionNormalizesAlternateFields proves the Question
-// decoder tolerates the model's alternate field names: question text under
-// `text` (not `question`) and option identity under `id` (not `value`). Without
-// this the clarification card loses its question text and option values.
-func TestSolutionDesignQuestionNormalizesAlternateFields(t *testing.T) {
+// TestSolutionDesignQuestionIsDowngradedWhenStageCannotAsk proves a
+// non-allowlisted stage does not pause the job even if the model emits a
+// structured clarification question.
+func TestSolutionDesignQuestionIsDowngradedWhenStageCannotAsk(t *testing.T) {
 	p := writeJSON(t, t.TempDir(), "output.json", []byte(`{
 		"needsUserInput": true,
 		"usedSkills": [".claude/skills/software-factory-app/SKILL.md"],
@@ -286,21 +368,14 @@ func TestSolutionDesignQuestionNormalizesAlternateFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if len(out.Questions) != 1 {
-		t.Fatalf("questions = %d, want 1", len(out.Questions))
+	if out.NeedsUserInput {
+		t.Fatal("NeedsUserInput = true, want downgraded false")
 	}
-	q := out.Questions[0]
-	if q.Question != "用演示数据还是真实API？" {
-		t.Fatalf("question text = %q, want normalized from `text`", q.Question)
+	if len(out.Questions) != 0 {
+		t.Fatalf("questions = %d, want downgraded empty", len(out.Questions))
 	}
-	if len(q.Options) != 2 {
-		t.Fatalf("options = %d, want 2", len(q.Options))
-	}
-	if q.Options[0].Value != "mock" {
-		t.Fatalf("option[0].value = %q, want normalized from `id`", q.Options[0].Value)
-	}
-	if q.Options[0].Label != "演示数据" {
-		t.Fatalf("option[0].label = %q", q.Options[0].Label)
+	if len(out.Warnings) == 0 {
+		t.Fatal("Warnings empty, want downgrade warning")
 	}
 }
 
@@ -495,5 +570,370 @@ func TestValidateRequirementAnalysisToleratesThinkingAndWorkLog(t *testing.T) {
 	}
 	if out.NeedsUserInput {
 		t.Fatal("NeedsUserInput = true, want false")
+	}
+}
+
+func TestValidateRequirementAnalysisRejectsStructuredFieldMismatch(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	// The output's appType diverges from the confirmed requirement — a real
+	// structured-contract mismatch the consistency check must catch. (`summary`
+	// is no longer part of the check — see the accept-test below.)
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"需求摘要 B",
+	  "appType":"operations_management",
+	  "appName":"请假审批",
+	  "targetUsers":["员工"],
+	  "coreScenario":"提交和审批请假",
+	  "primaryView":"审批工作台",
+	  "mainEntities":["请假单"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["可提交审批"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, `{"appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假"}`)
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed (appType mismatch)", err)
+	}
+}
+
+func TestValidateRequirementAnalysisAcceptsMatchingStructuredFields(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	// Production shape: the confirmed requirement (from clarification) carries
+	// NO free-text `summary` — only the 7 structured fields. The analysis agent
+	// produces its own summary, which MUST NOT affect the consistency check. So
+	// even with a totally different summary, matching structured fields → accept.
+	confirmed := `{"appType":"operations_tool","appName":"请假审批","coreScenario":"提交和审批请假","primaryView":"审批工作台","mainEntities":["请假单"],"dataPolicy":"mock_data","acceptanceFocus":["可提交审批"]}`
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"agent 生成的摘要，与确认需求无关，不应影响一致性校验",
+	  "appType":"operations_tool",
+	  "appName":"请假审批",
+	  "targetUsers":["员工"],
+	  "coreScenario":"提交和审批请假",
+	  "primaryView":"审批工作台",
+	  "mainEntities":["请假单"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["可提交审批"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if _, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed); err != nil {
+		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v (summary must be ignored)", err)
+	}
+}
+
+func TestValidateRequirementAnalysisAcceptsConfirmedRequirementWithoutSummary(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	confirmed := `{"appType":"situation_replay","appName":"航母编队月度航迹复盘","coreScenario":"东海地图复盘","primaryView":"地图时间轴","mainEntities":["航母编队"],"dataPolicy":"mock_data","acceptanceFocus":["visual_replay"]}`
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"为指挥决策人员生成航母编队月度航迹复盘。",
+	  "appType":"situation_replay",
+	  "appName":"航母编队月度航迹复盘",
+	  "targetUsers":["commander"],
+	  "coreScenario":"东海地图复盘",
+	  "primaryView":"地图时间轴",
+	  "mainEntities":["航母编队"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["visual_replay"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if _, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed); err != nil {
+		t.Fatalf("ValidateRequirementAnalysisWithConfirmedSummary: %v", err)
+	}
+}
+
+func TestValidateRequirementAnalysisRejectsConfirmedFieldMismatchWithoutSummary(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	confirmed := `{"appType":"situation_replay","appName":"航母编队月度航迹复盘","coreScenario":"东海地图复盘"}`
+	raw := `{
+	  "confirmedRequirementId":"clar_1",
+	  "summary":"为指挥决策人员生成航母编队月度航迹复盘。",
+	  "appType":"situation_replay",
+	  "appName":"航母编队月度航迹复盘",
+	  "targetUsers":["commander"],
+	  "coreScenario":"南海地图复盘",
+	  "primaryView":"地图时间轴",
+	  "mainEntities":["航母编队"],
+	  "dataPolicy":"mock_data",
+	  "acceptanceFocus":["visual_replay"],
+	  "generationProfile":{"base":["software-factory-app"]},
+	  "constraints":{},
+	  "risks":[],
+	  "validation":{"complete":true,"supported":true}
+	}`
+	if err := os.WriteFile(p, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	_, err := ValidateRequirementAnalysisWithConfirmedSummary(p, confirmed)
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
+	}
+}
+
+// TestValidateDataIntegrationRequiresStepwiseFallbackQuestion is the Task-9
+// data-capture fallback contract: when the ontology boundary is unavailable
+// (verification.ontology.status="failed"), the step MUST surface a structured
+// clarification (needsUserInput + 1 question) rather than silently degrading to
+// internet or demo. The validator returns the executor-facing StepOutput
+// (NeedsUserInput true, 1 question) AND the decoded detail so the executor can
+// upsert the data-contract artifact with the source boundary.
+func TestValidateDataIntegrationRequiresStepwiseFallbackQuestion(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	raw := `{
+	  "status":"needs_input",
+	  "summary":"本体接口不可用",
+	  "sourceBoundary":"ontology",
+	  "verification":{"ontology":{"status":"failed","reason":"401"}},
+	  "needsUserInput":true,
+	  "questions":[{"id":"fallback-internet","question":"本体接口不可用，是否降级为互联网抓取？","options":[{"value":"internet","label":"降级为互联网抓取","recommended":true},{"value":"ontology","label":"继续提供本体接口信息"}]}],
+	  "dataContract":{"fields":[]},
+	  "workLog":[{"content":"已验证本体接口，返回 401"}]
+	}`
+	out, detail, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw))
+	if err != nil {
+		t.Fatalf("ValidateDataIntegration: %v", err)
+	}
+	if !out.NeedsUserInput || len(out.Questions) != 1 {
+		t.Fatalf("out = %#v", out)
+	}
+	if detail.SourceBoundary != "ontology" || detail.Verification.Ontology.Status != "failed" {
+		t.Fatalf("detail = %#v", detail)
+	}
+}
+
+// TestValidateDataIntegrationAcceptsConfirmedDemoFallback locks decision #30:
+// the legitimate stepwise-degradation SUCCESS path produces a passed result
+// whose sourceBoundary is "demo" with a non-empty fallbackHistory (ontology
+// failed -> user confirmed internet -> internet failed -> user confirmed
+// demo). That history is the audit trace of the user-confirmed degradation,
+// so the validator must ACCEPT it. No-silent-degradation is enforced by the
+// prompt + executor needsUserInput flow, not here.
+func TestValidateDataIntegrationAcceptsConfirmedDemoFallback(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "output.json")
+	raw := `{"status":"passed","summary":"使用演示数据","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":["ontology_failed","internet_failed"]}`
+	if _, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw)); err != nil {
+		t.Fatalf("confirmed demo fallback must be accepted: %v", err)
+	}
+}
+
+// TestValidateDataIntegrationToleratesModelShapeVariance is the regression guard
+// for job_7a0b3c0ab73a005065e553d9: models (across providers) emit fallbackHistory
+// as an array of OBJECTS [{from,to,reason,userConsented}] and workLog entries as
+// {step,status,detail} — not the []string / {content} the structs naively
+// expected. The tolerant FallbackHistory + workLogEntry unmarshalers must accept
+// both shapes and normalize, so a shape drift never hard-fails the step as
+// output_invalid_json (the JSON itself was valid; only the field shape differed).
+func TestValidateDataIntegrationToleratesModelShapeVariance(t *testing.T) {
+	dir := t.TempDir()
+	raw := `{"status":"passed","summary":"演示数据","sourceBoundary":"demo","needsUserInput":false,` +
+		`"dataContract":{"fields":[{"name":"id"}]},` +
+		`"fallbackHistory":[{"from":"ontology","to":"demo","reason":"无本体凭证","userConsented":true}],` +
+		`"workLog":[{"step":"check_ontology","status":"done","detail":"无可用本体数据源"}],` +
+		`"compatibility":{"status":"passed"}}`
+	p := filepath.Join(dir, "output.json")
+	if _, _, err := ValidateDataIntegration(writeTempFileForContractTest(t, p, raw)); err != nil {
+		t.Fatalf("object-shape fallbackHistory + {step,status,detail} workLog must not fail validation: %v", err)
+	}
+	// Decode-level checks: fallbackHistory normalized to a readable string; the
+	// workLog detail (previously dropped because the struct only modeled content)
+	// is now captured into Content.
+	var out DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "out2.json"), raw), &out); err != nil {
+		t.Fatalf("ReadAndDecode: %v", err)
+	}
+	if len(out.FallbackHistory) != 1 || !strings.Contains(out.FallbackHistory[0], "ontology") || !strings.Contains(out.FallbackHistory[0], "demo") {
+		t.Fatalf("fallbackHistory not normalized from object to string: %#v", out.FallbackHistory)
+	}
+	if len(out.WorkLog) != 1 || !strings.Contains(out.WorkLog[0].Content, "本体") {
+		t.Fatalf("workLog detail not captured into Content: %#v", out.WorkLog)
+	}
+}
+
+// TestTolerantUnmarshalersNeverFailTheStep covers the adversarial shapes that
+// previously made FallbackHistory / workLogEntry RETURN an error (and thus
+// hard-fail the step as output_invalid_json): a non-object workLog entry
+// (number/bool/array), a single-object (non-array) fallbackHistory, and an empty
+// {from,to} fallback object. All must decode without error and without losing
+// the entry — the whole point of the tolerant decoders.
+func TestTolerantUnmarshalersNeverFailTheStep(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Numeric/bool/array workLog entries must not fail the step.
+	numRaw := `{"status":"passed","summary":"s","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"workLog":[42,true,["x"]]}`
+	var numOut DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "num.json"), numRaw), &numOut); err != nil {
+		t.Fatalf("numeric/bool/array workLog entry must not fail the step: %v", err)
+	}
+	if len(numOut.WorkLog) != 3 {
+		t.Fatalf("workLog entries lost: got %d, want 3 (all stringified, none dropped)", len(numOut.WorkLog))
+	}
+
+	// 2. A single-object (non-array) fallbackHistory must not fail; normalized to one entry.
+	objRaw := `{"status":"passed","summary":"s","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":{"from":"ontology","to":"demo","reason":"r"}}`
+	var objOut DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "obj.json"), objRaw), &objOut); err != nil {
+		t.Fatalf("single-object fallbackHistory must not fail: %v", err)
+	}
+	if len(objOut.FallbackHistory) != 1 || !strings.Contains(objOut.FallbackHistory[0], "ontology") {
+		t.Fatalf("single-object fallbackHistory not normalized to one entry: %#v", objOut.FallbackHistory)
+	}
+
+	// 3. An empty {from,to} fallback object collapses to the "fallback" sentinel,
+	// not a bare "→".
+	emptyRaw := `{"status":"passed","summary":"s","sourceBoundary":"demo","needsUserInput":false,"dataContract":{"fields":[{"name":"id"}]},"fallbackHistory":[{"from":"","to":"","reason":""}]}`
+	var emptyOut DataIntegrationOutput
+	if err := ReadAndDecode(writeTempFileForContractTest(t, filepath.Join(dir, "empty.json"), emptyRaw), &emptyOut); err != nil {
+		t.Fatalf("empty from/to fallback must not fail: %v", err)
+	}
+	if len(emptyOut.FallbackHistory) != 1 || emptyOut.FallbackHistory[0] != "fallback" {
+		t.Fatalf("empty from/to fallback should collapse to %q, got %#v", "fallback", emptyOut.FallbackHistory)
+	}
+}
+
+func writeTempFileForContractTest(t *testing.T, path, raw string) string {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+func writeTempJSON(t *testing.T, v any) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "output.json")
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestValidateDesignContractRequiresPrototypeHomePage(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":            "passed",
+		"summary":           "首页静态原型已生成",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{"name"},
+		"prototype": map[string]any{
+			"style":          "ued_review",
+			"targetAudience": "ued",
+			"targetPlatform": "responsive",
+			"fidelity":       "static",
+			"defaultPage":    "home",
+			"pages": []any{
+				map[string]any{"id": "home", "title": "首页", "generated": true, "visibleByDefault": true},
+			},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	out, detail, err := ValidateDesignContract(path)
+	if err != nil {
+		t.Fatalf("ValidateDesignContract err = %v", err)
+	}
+	if out.NeedsUserInput {
+		t.Fatalf("NeedsUserInput = true, want false")
+	}
+	if detail.Prototype.DefaultPage != "home" || len(detail.Prototype.Pages) != 1 {
+		t.Fatalf("prototype not decoded: %+v", detail.Prototype)
+	}
+}
+
+func TestValidateDesignContractAcceptsStructuredAssumedDataFields(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":         "passed",
+		"summary":        "首页静态原型已生成",
+		"needsUserInput": false,
+		"questions":      []any{},
+		"designDocument": map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []any{
+			map[string]any{"entity": "会议室", "fields": []any{
+				map[string]any{"name": "roomId", "type": "string", "description": "会议室唯一标识"},
+				map[string]any{"name": "name", "type": "string"},
+			}},
+			map[string]any{"entity": "预约记录", "field": "reservationId", "type": "string"},
+		},
+		"prototype": map[string]any{
+			"style":          "ued_review",
+			"targetAudience": "ued",
+			"targetPlatform": "responsive",
+			"fidelity":       "static",
+			"defaultPage":    "home",
+			"pages": []any{
+				map[string]any{"id": "home", "title": "首页", "generated": true, "visibleByDefault": true},
+			},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	_, detail, err := ValidateDesignContract(path)
+	if err != nil {
+		t.Fatalf("ValidateDesignContract err = %v", err)
+	}
+	if len(detail.AssumedDataFields) != 3 {
+		t.Fatalf("AssumedDataFields = %+v, want 3 normalized field names", detail.AssumedDataFields)
+	}
+}
+func TestValidateDesignContractRejectsPrototypeWithoutHome(t *testing.T) {
+	path := writeTempJSON(t, map[string]any{
+		"status":            "passed",
+		"summary":           "bad prototype",
+		"needsUserInput":    false,
+		"questions":         []any{},
+		"designDocument":    map[string]any{"views": []string{"home"}},
+		"assumedDataFields": []string{},
+		"prototype": map[string]any{
+			"style":              "business_demo",
+			"targetAudience":     "business_reviewer",
+			"targetPlatform":     "web",
+			"fidelity":           "static",
+			"defaultPage":        "home",
+			"pages":              []any{},
+			"confirmationPolicy": "unconfirmed_reference",
+		},
+		"workLog":  []any{},
+		"warnings": []any{},
+	})
+
+	_, _, err := ValidateDesignContract(path)
+	if err == nil {
+		t.Fatalf("expected schema error for missing homepage")
+	}
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("err = %v, want ErrSchemaValidationFailed", err)
 	}
 }

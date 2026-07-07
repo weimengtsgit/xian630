@@ -76,7 +76,12 @@ launch/recovery wind threshold the caller supplies.
 
 - Trigger on intent about `deck wind`, `10 m wind`, `wind speed and direction`, `recovery condition`, or `launch wind`.
 - Use this skill when the result must drive deck-wind calculation or readiness judgement.
-- Ask for missing region coordinates only when the region cannot be mapped safely.
+- Ask for missing region coordinates only during the data-integration stage, and
+  only when the region cannot be mapped safely from prior dialogue,
+  `confirmedRequirement`, or the selected blueprint. In solution-design or
+  code-generation stages, do NOT ask the final user; use the data-integration
+  result and render a degraded state when the needed coordinate/source is still
+  missing.
 
 ## Source Priority
 

@@ -7,13 +7,18 @@ export function useApplications() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [actionById, setActionById] = useState({})
+  const [generationStats, setGenerationStats] = useState(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await factoryApi.listApps()
+      const [data, stats] = await Promise.all([
+        factoryApi.listApps(),
+        factoryApi.getAppGenerationStats(),
+      ])
       setApps(Array.isArray(data) ? data : (data.apps || []))
+      setGenerationStats(stats || null)
     } catch (err) {
       setError(err.message || String(err))
     } finally {
@@ -71,6 +76,7 @@ export function useApplications() {
     loading,
     error,
     actionById,
+    generationStats,
     refresh,
     startApplication,
     stopApplication,
