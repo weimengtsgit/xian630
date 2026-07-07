@@ -1,0 +1,218 @@
+{
+  "_meta": {
+    "source": "https://ontology.example.test (redacted)",
+    "space_id": "REDACTED_SPACE",
+    "scope_type": "Space",
+    "fetched_at_local": "2026-06-27 10:57:44",
+    "full_cap": 5000,
+    "sample_cap": 1000,
+    "note": "Per-entity raw dumps. fetch_mode=full => all rows; sampled => first SAMPLE_CAP rows of a large table (see sample_note). rows are normalized to objects keyed by columnNames.",
+    "redacted": true,
+    "redaction_note": "Identifiers, names, coords, mmsi/icao, free-text realia, credentials and internal URLs/IPs have been synthetically remapped for external test use. Structure, field types, row counts and cross-entity joins are preserved. Token maps are NOT included."
+  },
+  "endpoints": {
+    "AircraftCarrier": {
+      "file": "all-endpoints\\AircraftCarrier.json",
+      "title": "获取航母打击群的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 11,
+      "rows_fetched": 11,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "AircraftCarrierTrackLog": {
+      "file": "all-endpoints\\AircraftCarrierTrackLog.json",
+      "title": "获取航母的航迹记录的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 48,
+      "rows_fetched": 48,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "AviationCarrier": {
+      "file": "all-endpoints\\AviationCarrier.json",
+      "title": "获取航空母舰的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 14,
+      "rows_fetched": 14,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "CarrierAviationPlatform": {
+      "file": "all-endpoints\\CarrierAviationPlatform.json",
+      "title": "获取舰载机的数据列表",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 962,
+      "rows_fetched": 962,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "CarrierRoutineDynamicEvents": {
+      "file": "all-endpoints\\CarrierRoutineDynamicEvents.json",
+      "title": "获取航母常规动态事件的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 2133,
+      "rows_fetched": 2133,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "CarrierStrikeGroupOperationalBehaviorLaws": {
+      "file": "all-endpoints\\CarrierStrikeGroupOperationalBehaviorLaws.json",
+      "title": "获取航母行为态势规律的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 43,
+      "rows_fetched": 43,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "DeviceType": {
+      "file": "all-endpoints\\DeviceType.json",
+      "title": "获取配套设备的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 1306,
+      "rows_fetched": 1306,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "FireControlSystem": {
+      "file": "all-endpoints\\FireControlSystem.json",
+      "title": "获取火力控制系统的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 63,
+      "rows_fetched": 63,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "MaritimeBaseCombatPlatform": {
+      "file": "all-endpoints\\MaritimeBaseCombatPlatform.json",
+      "title": "获取海基作战平台的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 861,
+      "rows_fetched": 861,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "MediaReport": {
+      "file": "all-endpoints\\MediaReport.json",
+      "title": "获取开源情报的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 76,
+      "rows_fetched": 76,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "NavigationEquipmentType": {
+      "file": "all-endpoints\\NavigationEquipmentType.json",
+      "title": "获取导航装备系统的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 264,
+      "rows_fetched": 264,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "Personnel": {
+      "file": "all-endpoints\\Personnel.json",
+      "title": "获取人员的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 406,
+      "rows_fetched": 406,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "RawADSData": {
+      "file": "all-endpoints\\RawADSData.json",
+      "title": "获取ADS原始数据的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 24598398,
+      "rows_fetched": 1000,
+      "fetch_mode": "sampled",
+      "message": null
+    },
+    "RawAISData": {
+      "file": "all-endpoints\\RawAISData.json",
+      "title": "获取AIS原始数据的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 5095550,
+      "rows_fetched": 1000,
+      "fetch_mode": "sampled",
+      "message": null
+    },
+    "SensorType": {
+      "file": "all-endpoints\\SensorType.json",
+      "title": "获取传感器系统的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 179,
+      "rows_fetched": 179,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "SurfaceCombatPlatform": {
+      "file": "all-endpoints\\SurfaceCombatPlatform.json",
+      "title": "获取水面作战平台的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 177,
+      "rows_fetched": 177,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "WeaponSystemType": {
+      "file": "all-endpoints\\WeaponSystemType.json",
+      "title": "获取武器装备的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 444,
+      "rows_fetched": 444,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "communicationEquipmentType": {
+      "file": "all-endpoints\\communicationEquipmentType.json",
+      "title": "获取通信装备系统的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 200,
+      "rows_fetched": 200,
+      "fetch_mode": "full",
+      "message": null
+    },
+    "hydrologicalEnvironment-BT": {
+      "file": "all-endpoints/hydrologicalEnvironment-BT.json",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 10,
+      "rows_fetched": 10,
+      "fetch_mode": "full",
+      "message": null,
+      "note": "Server default column set + some documented columns (e.g. 'remark') 400 with Unknown-column. Discovered valid columns incrementally.",
+      "rejected_columns": [
+        "description"
+      ]
+    },
+    "meteorological_environment-BT": {
+      "file": "all-endpoints\\meteorological_environment-BT.json",
+      "title": "获取气象环境的数据列表 Swagger",
+      "http_status": 200,
+      "resultCode": 200,
+      "recordTotal": 1936,
+      "rows_fetched": 1936,
+      "fetch_mode": "full",
+      "message": null
+    }
+  }
+}

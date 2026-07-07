@@ -110,6 +110,11 @@ type Requirement struct {
 	GenerationProfile        map[string][]string       `json:"generationProfile"`
 	BlueprintRefs            []string                  `json:"blueprintRefs"`
 	CollaborationAdjustments []CollaborationAdjustment `json:"collaborationAdjustments,omitempty"`
+	ExecutionPolicy          ExecutionPolicy           `json:"executionPolicy,omitempty"`
+}
+
+type ExecutionPolicy struct {
+	ManualStepConfirmation bool `json:"manualStepConfirmation"`
 }
 
 // JudgementBoundary captures the business judgement frame for military/naval

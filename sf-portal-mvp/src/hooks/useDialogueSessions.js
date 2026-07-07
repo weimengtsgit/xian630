@@ -431,7 +431,7 @@ export function useDialogueSessions() {
     }
   }, [loadView, state.view, submitting])
 
-  const confirm = useCallback(async () => {
+  const confirm = useCallback(async (options = {}) => {
     if (!state.view || submitting) return null
     setSubmitting(true)
     setError(null)
@@ -440,7 +440,7 @@ export function useDialogueSessions() {
       if (state.view.session.intent === 'business_processing_agent') {
         view = await factoryApi.confirmDialogueBusinessAgent(state.view.session.id)
       } else {
-        view = await factoryApi.confirmDialogueClarification(state.view.session.id)
+        view = await factoryApi.confirmDialogueClarification(state.view.session.id, options)
       }
       await refreshSessions()
       await loadView(view.session.id)

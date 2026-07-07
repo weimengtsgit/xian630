@@ -439,6 +439,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/healthz", s.health)
 
 	r.Handle("GET", "/api/apps", s.listApps)
+	r.Handle("GET", "/api/apps/generationstats", s.appGenerationStats)
 	r.Handle("GET", "/api/apps/:id", s.getApp)
 	r.Handle("GET", "/api/apps/:id/project-tree", s.applicationProjectTree)
 	r.Handle("GET", "/api/apps/:id/project-file", s.applicationProjectFile)
@@ -463,6 +464,7 @@ func (s *Server) routes() *Router {
 	r.Handle("GET", "/api/jobs/:id", s.getJob)
 	r.Handle("GET", "/api/jobs/:id/steps", s.jobSteps)
 	r.Handle("GET", "/api/jobs/:id/steps/:stepID/execution-records", s.jobStepExecutionRecords)
+	r.Handle("POST", "/api/jobs/:id/steps/:stepID/confirm", s.confirmJobStep)
 	r.Handle("PATCH", "/api/jobs/:id/steps/:stepID/snapshot", s.patchJobStepSnapshot)
 	r.Handle("GET", "/api/jobs/:id/artifacts", s.jobArtifacts)
 	r.Handle("GET", "/api/jobs/:id/execution-summary", s.jobExecutionSummary)

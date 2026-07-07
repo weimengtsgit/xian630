@@ -7,6 +7,11 @@ const chatCss = readFileSync(new URL('../src/components/ChatDialog.css', import.
 const chatJsx = readFileSync(new URL('../src/components/ChatDialog.jsx', import.meta.url), 'utf8')
 const clarJsx = readFileSync(new URL('../src/components/ClarificationPanel.jsx', import.meta.url), 'utf8')
 
+assert.match(clarJsx, /handleAbandonRequirement/, 'ClarificationPanel abandon action should route through a confirmation handler')
+assert.match(clarJsx, /window\.confirm\('确定放弃本次需求吗？/, 'ClarificationPanel abandon action should ask for confirmation')
+assert.match(clarJsx, /放弃本次需求/, 'ClarificationPanel abandon action should use explicit wording')
+assert.match(clarCss, /\.clar-abandon\s*\{[\s\S]*background:\s*transparent/, 'ClarificationPanel abandon action should be visually secondary')
+
 assert.match(
   appCss,
   /\.wb-center\s*>\s*\.conversation-workbench\s*\{[^}]*flex:\s*1\s+1\s+0[^}]*min-height:\s*360px/s,

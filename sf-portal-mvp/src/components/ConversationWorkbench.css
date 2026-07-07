@@ -36,9 +36,29 @@
 }
 .cw-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; }
 .cw-status { font-size: 11px; color: #68ddff; }
+.cw-more { position: relative; z-index: 8; }
+.cw-more-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(111, 218, 255, 0.24); border-radius: 6px; background: rgba(11, 29, 44, 0.6); color: rgba(215, 238, 248, 0.8); cursor: pointer; }
+.cw-more-btn:hover:not(:disabled), .cw-more-btn[aria-expanded="true"] { border-color: rgba(104, 221, 255, 0.56); background: rgba(104, 221, 255, 0.12); color: #edfaff; }
+.cw-more-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.cw-more-menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 150px; padding: 6px; border: 1px solid rgba(111, 218, 255, 0.24); border-radius: 7px; background: rgba(3, 17, 29, 0.98); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36); }
+.cw-more-menu button { width: 100%; padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; text-align: left; font-size: 12px; cursor: pointer; }
+.cw-more-danger { color: rgba(255, 176, 176, 0.82); }
+.cw-more-danger:hover:not(:disabled), .cw-more-danger:focus-visible:not(:disabled) { background: rgba(60, 24, 30, 0.48); color: #ffb0b0; outline: none; }
+.cw-menu-backdrop { position: absolute; inset: 0; z-index: 6; border: 0; background: transparent; cursor: default; }
+.cw-confirm-layer { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(3, 11, 18, 0.58); backdrop-filter: blur(2px); }
+.cw-confirm-dialog { width: min(360px, 100%); padding: 14px; border: 1px solid rgba(255, 150, 150, 0.28); border-radius: 8px; background: rgba(4, 18, 30, 0.98); box-shadow: 0 18px 46px rgba(0, 0, 0, 0.44); }
+.cw-confirm-dialog h3 { margin: 0 0 8px; color: #fff4f4; font-size: 15px; }
+.cw-confirm-dialog p { margin: 0; color: rgba(215, 238, 248, 0.78); font-size: 12px; line-height: 1.55; }
+.cw-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.cw-confirm-actions button { padding: 6px 11px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.cw-confirm-secondary { border: 1px solid rgba(111, 218, 255, 0.28); background: rgba(11, 29, 44, 0.72); color: #d7eef8; }
+.cw-confirm-secondary:hover { border-color: rgba(104, 221, 255, 0.58); background: rgba(104, 221, 255, 0.12); }
+.cw-confirm-danger { border: 1px solid rgba(255, 120, 120, 0.46); background: rgba(96, 26, 36, 0.72); color: #ffd1d1; font-weight: 600; }
+.cw-confirm-danger:hover:not(:disabled) { border-color: rgba(255, 120, 120, 0.72); background: rgba(128, 34, 44, 0.86); color: #fff4f4; }
+.cw-confirm-danger:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* Phase 1: the 3 top-right drawer-entry buttons (任务执行 / 协作智能体 /
- * 应用项目). They open the unified right 工作台抽屉 and are mutually exclusive —
+ * 工作空间). They open the unified right 工作台抽屉 and are mutually exclusive —
  * the active one is highlighted; clicking it closes the drawer. */
 .cw-drawer-btn {
   position: relative;
@@ -98,14 +118,33 @@
   white-space: nowrap;
 }
 
-/* 任务执行 presence-dot badge: shown while the current dialogue has a focus
- * task, even when another drawer entry is open. Full agent-chip strip is later. */
+/* 任务执行 state badge: shown while the current dialogue has a focus task, even
+ * when another drawer entry is open. */
 .cw-drawer-badge {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #7feb9b;
+  background: #8fb0bf;
   box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9);
+}
+.cw-drawer-badge-state-waiting-user { background: #f3c761; animation: cwTaskBadgePulse 1.2s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9), 0 0 10px rgba(243, 199, 97, 0.58); }
+.cw-drawer-badge-state-running { background: #68ddff; animation: cwTaskBadgePulse 1s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9), 0 0 10px rgba(104, 221, 255, 0.58); }
+.cw-drawer-badge-state-queued { background: #8fb0bf; animation: cwTaskBadgeQueue 1.6s ease-in-out infinite; }
+.cw-drawer-badge-state-failed { background: #ff665e; box-shadow: 0 0 0 2px rgba(9, 24, 38, 0.9), 0 0 8px rgba(255, 102, 94, 0.46); }
+.cw-drawer-badge-state-completed { background: #7feb9b; }
+.cw-drawer-badge-state-canceled, .cw-drawer-badge-state-unknown { background: #8fb0bf; opacity: 0.72; }
+@keyframes cwTaskBadgePulse {
+  0%, 100% { transform: scale(1); opacity: 0.84; }
+  50% { transform: scale(1.32); opacity: 1; }
+}
+@keyframes cwTaskBadgeQueue {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cw-drawer-badge {
+    animation: none !important;
+  }
 }
 .cw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .cw-empty { margin: auto; color: rgba(215, 238, 248, 0.58); font-size: 13px; }
@@ -231,6 +270,9 @@
 .cw-business-redescribe button:disabled { cursor: not-allowed; opacity: 0.5; }
 .cw-resolved { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; background: rgba(20, 64, 50, 0.62) !important; border: 1px solid rgba(126, 231, 135, 0.42); color: #bff6c4; }
 .cw-answer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 6px 12px; border-top: 1px solid rgba(111, 218, 255, 0.14); font-size: 12px; }
+.cw-manual-step-toggle { margin-right: auto; display: inline-flex; align-items: center; gap: 7px; color: rgba(215, 238, 248, 0.76); cursor: pointer; user-select: none; }
+.cw-manual-step-toggle input { width: 14px; height: 14px; accent-color: #68ddff; cursor: pointer; }
+.cw-manual-step-toggle input:disabled { cursor: not-allowed; opacity: 0.5; }
 .cw-error { padding: 6px 12px; color: #ff9a9a; background: rgba(255, 102, 94, 0.08); font-size: 12px; }
 .cw-composer-scope { color: #ffc457; font-size: 11px; line-height: 1.4; padding: 4px 8px; border: 1px solid rgba(255, 196, 87, 0.24); border-radius: 6px; background: rgba(45, 34, 12, 0.42); }
 .cw-composer-row { display: flex; align-items: flex-end; gap: 8px; width: 100%; }

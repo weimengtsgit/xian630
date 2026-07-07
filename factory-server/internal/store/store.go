@@ -92,6 +92,16 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate jobs.kind: %w", err)
 	}
+	// jobs.collaboration_plan_json: persisted collaboration-plan snapshot for the
+	// job (agent collaboration connector states). It lives in schema.sql's
+	// CREATE TABLE, so brand-new DBs have it, but DBs created before the column
+	// shipped need this backfill — otherwise ListJobs (whose jobSelectCols
+	// references it) fails with "no such column: collaboration_plan_json".
+	if err := s.ensureColumn(ctx, "jobs", "collaboration_plan_json",
+		`ALTER TABLE jobs ADD COLUMN collaboration_plan_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate jobs.collaboration_plan_json: %w", err)
+	}
 	if err := s.ensureColumn(ctx, "applications", "display_order",
 		`ALTER TABLE applications ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0`); err != nil {
 		db.Close()

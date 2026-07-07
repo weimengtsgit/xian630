@@ -648,6 +648,10 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if job.Status == model.JobStatusWaitingUser && targetStep != nil {
+		if isManualStepConfirmationQuestions(targetStep.PendingQuestions) {
+			writeError(w, http.StatusConflict, "step is waiting for manual confirmation; use the step confirm endpoint")
+			return
+		}
 		// Persist the user's answer onto the step's user_prompt so the re-run can
 		// read it (the generative-step prompts append step.UserPrompt as a
 		// clarification). Without this the step re-runs with identical input and
@@ -687,6 +691,25 @@ func (s *Server) answerJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+func isManualStepConfirmationQuestions(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var items []struct {
+		Type    string `json:"type"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Type == "manual_step_confirmation" && item.Confirm {
+			return true
+		}
+	}
+	return false
+}
+
 // retryCurrentStep handles POST /api/jobs/:id/retry-current-step. It resets the
 // job's current failed step to pending and re-queues the job. Only failed jobs
 // may be retried; anything else is a 409.
@@ -702,6 +725,35 @@ func (s *Server) retryCurrentStep(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.hub.Publish(Event{Type: "job.updated", Data: job})
+	writeJSON(w, http.StatusOK, job)
+}
+
+type confirmJobStepBody struct {
+	Attempt int `json:"attempt"`
+}
+
+func (s *Server) confirmJobStep(w http.ResponseWriter, r *http.Request) {
+	jobID := Param(r, "id")
+	stepID := Param(r, "stepID")
+	var body confirmJobStepBody
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json")
+			return
+		}
+	}
+	job, err := s.exec.ConfirmManualStep(r.Context(), jobID, stepID, body.Attempt)
+	if err != nil {
+		switch {
+		case err.Error() == "job not found" || err.Error() == "step not found":
+			writeError(w, http.StatusNotFound, "not found")
+		default:
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	s.publishStepUpdated(r.Context(), stepID)
 	s.hub.Publish(Event{Type: "job.updated", Data: job})
 	writeJSON(w, http.StatusOK, job)
 }

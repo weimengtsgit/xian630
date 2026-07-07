@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>界面解析智能体</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="workbench">
+    <section class="preview-panel" aria-label="原型预览">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Prototype Preview</p>
+          <h1>界面解析智能体</h1>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="icon-button" id="fullscreen" title="全屏预览">全屏预览</button>
+          <div class="status-pill" id="status">待输入</div>
+        </div>
+      </header>
+      <div class="preview-stage">
+        <iframe id="preview" title="生成的原型预览"></iframe>
+        <div class="preview-loading" id="preview-loading" hidden>
+          <div class="loader" aria-hidden="true"></div>
+          <strong>模型正在生成原型</strong>
+          <span data-loading-text>正在生成，已等待 0 秒...</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="chat-panel" aria-label="多轮对话">
+      <div class="chat-session">
+        <div class="chat-session-header">会话区</div>
+        <div class="messages" id="messages"></div>
+      </div>
+      <form class="composer" id="chat-form">
+        <textarea id="prompt" rows="3" placeholder="描述要生成的界面，或输入修改意见，例如：改成浅色科技风、减少圆角、增加统计卡片。"></textarea>
+        <div class="composer-actions">
+          <button type="button" class="secondary" id="reset">重置</button>
+          <button type="button" class="secondary" id="share">复制预览链接</button>
+          <button type="submit" class="primary" id="submit">生成 / 调整</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

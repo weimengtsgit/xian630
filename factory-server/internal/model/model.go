@@ -210,6 +210,17 @@ type Application struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// ApplicationGenerationStats is the app-store summary of generation duration.
+// ApplicationAverageGenerationMs averages each application's first completed
+// generation job. IterationAverageGenerationMs averages the latest completed
+// job only for applications with more than one completed generation.
+type ApplicationGenerationStats struct {
+	ApplicationAverageGenerationMs *int64 `json:"application_average_generation_ms"`
+	IterationAverageGenerationMs   *int64 `json:"iteration_average_generation_ms"`
+	ApplicationSampleCount         int    `json:"application_sample_count"`
+	IterationSampleCount           int    `json:"iteration_sample_count"`
+}
+
 // AgentCategory partitions agents by how they are produced: the registry-seeded
 // software-development pipeline agents (kind-driven) versus business-processing
 // agents created from a confirmed dialogue.

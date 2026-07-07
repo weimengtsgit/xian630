@@ -55,7 +55,10 @@ type patchRequirementBody struct {
 }
 
 type confirmClarificationBody struct {
-	Requirement json.RawMessage `json:"requirement"`
+	Requirement     json.RawMessage `json:"requirement"`
+	ExecutionPolicy struct {
+		ManualStepConfirmation bool `json:"manualStepConfirmation"`
+	} `json:"executionPolicy"`
 }
 
 // clarificationView is the enriched GET shape: the session plus its parsed
@@ -777,6 +780,7 @@ func (s *Server) confirmClarification(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	req.ExecutionPolicy.ManualStepConfirmation = body.ExecutionPolicy.ManualStepConfirmation
 
 	// Persist the finalized requirement before creating the job.
 	reqBytes, _ := json.Marshal(req)
