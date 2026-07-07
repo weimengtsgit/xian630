@@ -549,6 +549,17 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 				return err
 			}
 		}
+		if e.shouldAwaitManualStepConfirmation(ctx, jobID) {
+			questionsJSON := manualStepConfirmationQuestionsJSON(stepID)
+			if err := e.store.MarkStepAwaitingManualConfirmation(ctx, stepID, questionsJSON); err != nil {
+				return err
+			}
+			if err := e.store.MarkJobWaitingUser(ctx, jobID); err != nil {
+				return err
+			}
+			e.notify(ctx, jobID, stepID)
+			return nil
+		}
 		if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
 			return err
 		}
@@ -603,6 +614,44 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 		e.notify(ctx, jobID, stepID)
 		return nil
 	}
+}
+
+func (e *Executor) shouldAwaitManualStepConfirmation(ctx context.Context, jobID string) bool {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil || job == nil || strings.TrimSpace(job.CollaborationPlanJSON) == "" {
+		return false
+	}
+	if !manualStepConfirmationEnabled(job.CollaborationPlanJSON) {
+		return false
+	}
+	_, ok, err := e.nextPlanStepKind(ctx, jobID, job.CurrentStepKind)
+	return err == nil && ok
+}
+
+func manualStepConfirmationEnabled(planJSON string) bool {
+	var doc struct {
+		ExecutionPolicy struct {
+			ManualStepConfirmation bool `json:"manualStepConfirmation"`
+		} `json:"executionPolicy"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &doc); err != nil {
+		return false
+	}
+	return doc.ExecutionPolicy.ManualStepConfirmation
+}
+
+func manualStepConfirmationQuestionsJSON(stepID string) string {
+	raw, err := json.Marshal([]map[string]any{{
+		"id":      "manual_step_confirmation",
+		"type":    "manual_step_confirmation",
+		"stepId":  stepID,
+		"prompt":  "当前智能体任务已完成，请人工确认后继续执行下一步。",
+		"confirm": true,
+	}})
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 // finalizeCanceled records the canceled terminal state for both step and job.
@@ -765,6 +814,85 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	}
 	e.Signal()
 	return *updated, nil
+}
+
+// ConfirmManualStep releases a collaboration step that finished execution and
+// is paused by executionPolicy.manualStepConfirmation. Ordinary task
+// clarifications still go through answerJob and re-run the waiting step; manual
+// confirmation marks the already-finished step succeeded and advances to the
+// next seeded plan step.
+func (e *Executor) ConfirmManualStep(ctx context.Context, jobID, stepID string, attempt int) (model.Job, error) {
+	job, err := e.store.GetJob(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("get job: %w", err)
+	}
+	if job == nil {
+		return model.Job{}, errors.New("job not found")
+	}
+	if job.Status != model.JobStatusWaitingUser {
+		return model.Job{}, fmt.Errorf("job is %s, only waiting_user jobs can be confirmed", job.Status)
+	}
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return model.Job{}, fmt.Errorf("list steps: %w", err)
+	}
+	var step *model.JobStep
+	for i := range steps {
+		if steps[i].ID == stepID {
+			step = &steps[i]
+			break
+		}
+	}
+	if step == nil {
+		return model.Job{}, errors.New("step not found")
+	}
+	if step.Status != model.StepStatusWaitingUser || !step.NeedsUserInput {
+		return model.Job{}, fmt.Errorf("step is %s, only waiting_user steps can be confirmed", step.Status)
+	}
+	if attempt > 0 && step.Attempt != attempt {
+		return model.Job{}, errors.New("stale step attempt")
+	}
+	if !isManualStepConfirmationPayload(step.PendingQuestions) {
+		return model.Job{}, errors.New("step is waiting for task clarification, not manual confirmation")
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, step.Kind); err != nil {
+		return model.Job{}, fmt.Errorf("point job to confirmed step: %w", err)
+	}
+	if err := e.store.MarkStepSucceeded(ctx, stepID); err != nil {
+		return model.Job{}, fmt.Errorf("mark step succeeded: %w", err)
+	}
+	if err := e.advanceOrComplete(ctx, jobID); err != nil {
+		return model.Job{}, err
+	}
+	e.notify(ctx, jobID, stepID)
+	e.Signal()
+	updated, err := e.store.GetJob(ctx, jobID)
+	if err != nil || updated == nil {
+		if err == nil {
+			err = fmt.Errorf("job %s vanished after manual confirmation", jobID)
+		}
+		return model.Job{}, err
+	}
+	return *updated, nil
+}
+
+func isManualStepConfirmationPayload(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	var items []struct {
+		Type    string `json:"type"`
+		Confirm bool   `json:"confirm"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return false
+	}
+	for _, item := range items {
+		if item.Type == "manual_step_confirmation" && item.Confirm {
+			return true
+		}
+	}
+	return false
 }
 
 // RepairFromFailure rewinds a failed test_verification, image_build, or

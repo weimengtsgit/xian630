@@ -5,7 +5,7 @@
   background: rgba(11, 29, 44, 0.72);
   border: 1px solid rgba(111, 218, 255, 0.24);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* Panel Header */
@@ -220,6 +220,11 @@
   transition: all 0.3s ease;
 }
 
+.agent-node:focus-visible {
+  outline: 2px solid rgba(104, 221, 255, 0.7);
+  outline-offset: 4px;
+}
+
 .agent-node::before {
   content: '';
   position: absolute;
@@ -234,6 +239,37 @@
   border-color: rgba(111, 218, 255, 0.42);
   transform: translateY(-3px);
   box-shadow: 0 10px 30px rgba(104, 221, 255, 0.14);
+}
+
+.agent-node-tooltip {
+  position: absolute;
+  inset: 10px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 20px;
+  color: #edfaff;
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: left;
+  background:
+    linear-gradient(160deg, rgba(4, 17, 28, 0.97), rgba(9, 34, 50, 0.95)),
+    rgba(4, 17, 28, 0.96);
+  border: 1px solid rgba(104, 221, 255, 0.38);
+  border-radius: 14px;
+  box-shadow: inset 0 0 20px rgba(104, 221, 255, 0.08), 0 0 22px rgba(104, 221, 255, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.98);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.agent-node:hover .agent-node-tooltip,
+.agent-node:focus .agent-node-tooltip,
+.agent-node:focus-visible .agent-node-tooltip {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .agent-node[data-status="working"] {

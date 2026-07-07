@@ -131,18 +131,18 @@ export function ApplicationProjectPanel({ applicationId, dialogueId, onDraftAppl
   }
 
   if (!applicationId) {
-    return <div className="application-project-panel app-project-empty">项目尚未准备好。</div>
+    return <div className="application-project-panel app-project-empty">工作空间尚未准备好。</div>
   }
 
   return (
     <div className="application-project-panel">
       <section className="app-project-groups">
         <header className="app-project-title">
-          <strong>{tree?.app?.name || '应用项目'}</strong>
+          <strong>{tree?.app?.name || '工作空间'}</strong>
           {loadingTree ? <Loader2 size={13} className="spin" /> : null}
         </header>
         {treeError ? <p className="app-project-error">{treeError}</p> : null}
-        {groups.length === 0 && !loadingTree && !treeError ? <p className="app-project-empty">暂无项目文件。</p> : null}
+        {groups.length === 0 && !loadingTree && !treeError ? <p className="app-project-empty">暂无工作空间文件。</p> : null}
         {groups.map(group => (
           <ProjectGroup
             key={group.id}
