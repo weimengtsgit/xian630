@@ -87,6 +87,13 @@ type AdjustmentRequest struct {
 	Warning    string `json:"warning,omitempty"`
 }
 
+// disabledGates lists collaboration gates temporarily removed from the default
+// pipeline for faster turnaround (方案设计/代码审查/产品验收). Empty this slice
+// (or drop entries) to bring a gate back. Removal runs AFTER security-review
+// insertion and user adjustments, so removeAgent reconnects the DAG around each
+// disabled gate (e.g. security-reviewer ends up after code-generator).
+var disabledGates = []string{"solution-designer", "code-reviewer", "product-acceptance"}
+
 func DefaultPlan(ctx RequirementContext) Plan {
 	agents := []Agent{
 		agent("requirement-analyst", "需求分析", "requirement_analysis", "analysis", true, "整理用户需求并形成确认需求摘要。", "校验确认需求摘要完整性和高影响事项。", nil),
@@ -129,7 +136,11 @@ func DefaultPlan(ctx RequirementContext) Plan {
 		Agents:          agents,
 		Edges:           edges,
 	}
-	return applyAdjustments(plan, adjustmentsFromRequirement(ctx.ConfirmedRequirementJSON))
+	plan = applyAdjustments(plan, adjustmentsFromRequirement(ctx.ConfirmedRequirementJSON))
+	for _, key := range disabledGates {
+		plan = removeAgent(plan, key)
+	}
+	return plan
 }
 
 func agent(key, name, role, lane string, highImpact bool, desc, instructions string, skills []string) Agent {
