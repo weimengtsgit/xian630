@@ -8,11 +8,13 @@ import {
   Settings,
   HelpCircle,
   Store,
+  GitBranch,
 } from 'lucide-react'
 
 const menuItems = [
   { label: '首页', icon: Home, page: 'workbench' },
-  { label: '应用商店', icon: Store, page: 'appStore' },
+  { label: '智能体广场', icon: Store, href: 'http://220.154.5.91:18016/' },
+  { label: '智能体流水线', icon: GitBranch, href: 'http://220.154.5.91:18002/' },
   { label: '导航', icon: Compass },
   { label: '图层', icon: Layers },
   { label: '文档', icon: FileText },
@@ -35,7 +37,13 @@ export function LeftToolbar({ activePage = 'workbench', onNavigate }) {
             title={item.label}
             className={active ? 'is-active' : ''}
             aria-pressed={active || undefined}
-            onClick={() => item.page && onNavigate && onNavigate(item.page)}
+            onClick={() => {
+              if (item.href) {
+                window.open(item.href, '_blank', 'noopener,noreferrer')
+              } else if (item.page && onNavigate) {
+                onNavigate(item.page)
+              }
+            }}
           >
             <Icon size={20} />
             <span className="toolbar-label">{item.label}</span>
