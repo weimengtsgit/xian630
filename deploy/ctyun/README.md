@@ -1,11 +1,17 @@
 # CTYun Production Deployment Guide
 
-This guide documents the production deployment pattern for the three services on
-China Telecom Cloud:
+This guide documents the production deployment pattern on China Telecom Cloud.
+
+**统一发布的核心三服务**（共享一个 `VERSION`、`active/` 与 `releases/<version>/`，一起构建切换）：
 
 - `cc-status`
 - `factory-server`
 - `sf-portal-mvp`
+
+**独立发布的服务**（各自版本号、各自构建切换，互不影响）：
+
+- `agent-square`（18016，智能体广场）— 见文末 [Agent Square（独立服务）](#agent-square独立服务) 章节
+- `interface-agent`（18020）、`agent-pipeline`（18002）— 见各自目录下 `DEPLOYMENT.md`
 
 The production host uses CentOS Stream 9 and rootful Podman. Images must be
 versioned and named exactly after the service:
@@ -196,6 +202,98 @@ If a data rollback is required, restore from:
 ```
 
 Only restore data after stopping all containers that mount the affected volume.
+
+## Agent Square（独立服务）
+
+`agent-square`（智能体广场，18016）原为 factory-server 生成的应用，现提升为独立一等公民服务：版本化镜像 + `sf_default` 网络 + `/opt/xian630/` 目录 + 蓝绿部署。它与核心三服务**不共用版本号**，按自身节奏单独构建发布。
+
+### 目录结构
+
+```text
+/opt/xian630/
+  apps/agent-square/
+    data/                   # bind-mount → /var/cache/nginx/appstore（持久化运行时应用）
+      runtime-apps.json     # 含"光鱼"等动态注册智能体；属主 nginx(101:101) 以便 njs 写入
+  backups/
+    <version>-agent-square-predeploy/
+```
+
+注意：agent-square 不进 `active/` 与统一 `releases/<version>/`（那是核心三服务的统一发布位）。源码即真相，在仓库 `agent-square/` 下，回滚靠"停新容器 + 启旧容器"。
+
+### njs 基镜像（关键）
+
+`/api/apps` 由 nginx njs 提供，需 `ngx_http_js_module.so`。本机标准 `nginx:alpine` 不带 njs，`apk add nginx-module-njs` 也无法联网安装。runtime 基镜像 `localhost/nginx-njs:1.31` 由**工厂 nginx/1.31.2 镜像 retag 而来**（本机唯一现成 njs 来源）。基镜像丢失时重建：
+
+```bash
+podman tag \
+  localhost/software-factory/operations-management-c4fn:ver_d846cbf9e332cd851e523736 \
+  localhost/nginx-njs:1.31
+```
+
+### 构建镜像
+
+构建上下文 = `agent-square/`（仓库根），在 CTYun 主机上构建以匹配 x86_64：
+
+```bash
+VERSION="$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD)"
+podman build -t localhost/agent-square:${VERSION} -f agent-square/Dockerfile agent-square/
+```
+
+### 运行时命令
+
+```bash
+podman run -d \
+  --name agent-square-${VERSION} \
+  --network sf_default \
+  --network-alias agent-square \
+  --restart unless-stopped \
+  -p 18016:80 \
+  -v /opt/xian630/apps/agent-square/data:/var/cache/nginx/appstore:Z \
+  localhost/agent-square:${VERSION}
+```
+
+- `--network sf_default`：与核心服务同网，可互通。
+- `-v .../data:/var/cache/nginx/appstore:Z`：持久化 `runtime-apps.json`，重启/重建不丢；目录属主须为 `101:101`（nginx），否则 njs 写入报 `Permission denied`。
+
+### 运行时数据迁移（首次，从旧工厂容器）
+
+```bash
+mkdir -p /opt/xian630/apps/agent-square/data
+podman cp sf-operations-management-c4fn-18016:/var/cache/nginx/appstore/runtime-apps.json \
+  /opt/xian630/apps/agent-square/data/runtime-apps.json
+chown -R 101:101 /opt/xian630/apps/agent-square/data
+```
+
+### 蓝绿切换
+
+```bash
+# 1. 临时端口验证（避开已占用的 18017 等生成应用端口）
+podman run -d --name agent-square-${VERSION}-verify --network sf_default \
+  -p 18098:80 -v /opt/xian630/apps/agent-square/data:/var/cache/nginx/appstore:Z \
+  localhost/agent-square:${VERSION}
+curl -fsS http://127.0.0.1:18098/health
+curl -fsS http://127.0.0.1:18098/api/apps        # 应含"光鱼"
+podman stop agent-square-${VERSION}-verify && podman rm agent-square-${VERSION}-verify
+
+# 2. 切换 18016
+podman stop sf-operations-management-c4fn-18016     # 停旧工厂容器（保留可回滚）
+podman run -d --name agent-square-${VERSION} ...    # 见上方"运行时命令"
+```
+
+### 回滚
+
+```bash
+podman stop agent-square-${VERSION} && podman rm agent-square-${VERSION}
+podman start sf-operations-management-c4fn-18016    # 恢复工厂 bind-mount 容器
+```
+
+`runtime-apps.json` 已在 `/opt/xian630/apps/agent-square/data/` 持久化，回滚不影响数据。
+
+### 治理说明
+
+agent-square 接管 18016 后，**不要再通过 factory-server 重新生成/部署 `operations-management-c4fn`**（含已生成的 `y5y3` 版本），否则会与 agent-square 抢占 18016 端口。若未来需用工厂再生成该应用，应换新端口或先停 agent-square。
+
+详细步骤亦见 `agent-square/DEPLOYMENT.md`。
 
 ## Generated App Nginx Proxy
 
