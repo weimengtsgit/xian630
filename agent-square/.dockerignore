@@ -12,6 +12,8 @@ npm-debug.log*
 .playwright-mcp
 # 镜像不需要的本地资料
 docs
+tools
+scripts
 versions
 runtime-data
 RESTORE_NOTES.md

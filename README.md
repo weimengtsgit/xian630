@@ -55,7 +55,6 @@ factory-server 编排协作智能体流水线：
 | `scene/` | 预设场景应用（航母追踪、东海态势、社情告警等），作为生成应用的参考蓝本 |
 | `docs/` | 设计文档、实施计划、本地运维手册 |
 | `generated-apps/` | factory-server 生成的应用代码（gitignore，不入版本控制） |
-| `app-market-18016/` | 智能应用商店前端交付包（线上 18016 的历史构建产物，已被 `agent-square/` 源码取代） |
 | `agent-square/` | 智能体广场（Agent Square）源码。线上 18016 的智能软件目录，由工厂产物提升为独立一等公民服务，镜像蓝绿部署，nginx njs 提供 `/api/apps` 运行时接口。 |
 | `software-factory-course/` | 软件工厂课程材料 |
 
