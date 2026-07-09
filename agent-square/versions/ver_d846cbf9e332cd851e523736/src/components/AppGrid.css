@@ -1,0 +1,34 @@
+/* ===== 卡片网格（横向卡片）===== */
+
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: var(--gap-md);
+  overflow-y: auto;
+  align-content: start;
+  width: 100%;
+}
+
+.app-grid__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap-md);
+  padding: var(--gap-xl);
+  color: var(--text-muted);
+  font-size: 14px;
+  grid-column: 1 / -1;
+}
+
+.app-grid__empty-icon {
+  font-size: 48px;
+  opacity: 0.5;
+}
+
+/* 窄屏回退：单列 */
+@media (max-width: 720px) {
+  .app-grid {
+    grid-template-columns: 1fr;
+  }
+}

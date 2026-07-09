@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "slug": "agent-square",
+  "name": "智能体广场",
+  "type": "operations_management",
+  "source": "generated",
+  "description": "智能体广场，面向情报分析人员的智能体目录，支持智能体浏览、分类筛选、新品推荐与 /api/apps 运行时智能体合并",
+  "entry": "static-vite",
+  "path": "generated-apps/agent-square",
+  "tags": ["agent-square", "defense-operations"],
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}

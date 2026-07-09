@@ -1,0 +1,19 @@
+node_modules
+dist
+dist.bak*
+.env
+.env.*
+.git
+.gitignore
+*.bak*
+coverage
+npm-debug.log*
+.DS_Store
+.playwright-mcp
+# 镜像不需要的本地资料
+docs
+versions
+runtime-data
+RESTORE_NOTES.md
+DEPLOYMENT.md
+README.md

@@ -1,0 +1,43 @@
+/* ===== 侧栏标题 ===== */
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  flex-shrink: 0;
+}
+
+.app-header__title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+
+.app-header__icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.app-header__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.app-header__badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--warning);
+  color: #000;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.app-header__subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
