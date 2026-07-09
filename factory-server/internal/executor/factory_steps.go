@@ -474,35 +474,53 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		containerPort = 80
 	}
 
-	// Allocate a host port across the whole factory runtime. Generated jobs and
-	// preset-app starts share the same 18000-18999 pool, so checking only this
-	// app would collide with another running app.
-	host, err := f.Alloc.Choose(f.portInUse(ctx))
-	if err != nil {
-		if errors.Is(err, deploy.ErrPortUnavailable) {
-			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPortUnavailable, ErrorMessage: err.Error()}, nil
-		}
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("allocate port: %v", err)}, nil
-	}
-
 	rt := f.runtime()
+	isPortInUse := f.portInUse(ctx)
+	rejectedPorts := make(map[int]bool)
+	var host int
 	var container deploy.ContainerRef
 	var res deploy.CommandResult
-	if f.StreamCmds != nil {
-		b := newCommandStreamBatcher(ctx, emit)
-		b.start()
-		container, res, err = rt.RunContainerWithCallbacks(ctx, image, app.Slug, host, containerPort, b.addStdout, b.addStderr)
-		b.close()
-	} else {
-		container, res, err = rt.RunContainer(ctx, image, app.Slug, host, containerPort)
-	}
-	f.writeLogs(ctx, job, step, res)
-	if err != nil || res.ExitCode != 0 {
+
+	for {
+		// A containerized factory cannot see ports held by native host processes
+		// from its own network namespace. Let the runtime's bind result be the
+		// final authority, and reject only ports that produce a bind collision.
+		var err error
+		host, err = f.Alloc.Choose(func(port int) bool {
+			return rejectedPorts[port] || isPortInUse(port)
+		})
+		if err != nil {
+			if errors.Is(err, deploy.ErrPortUnavailable) {
+				return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPortUnavailable, ErrorMessage: err.Error()}, nil
+			}
+			return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorUnknown, ErrorMessage: fmt.Sprintf("allocate port: %v", err)}, nil
+		}
+
+		if f.StreamCmds != nil {
+			b := newCommandStreamBatcher(ctx, emit)
+			b.start()
+			container, res, err = rt.RunContainerWithCallbacks(ctx, image, app.Slug, host, containerPort, b.addStdout, b.addStderr)
+			b.close()
+		} else {
+			container, res, err = rt.RunContainer(ctx, image, app.Slug, host, containerPort)
+		}
+		f.writeLogs(ctx, job, step, res)
+		if err == nil && res.ExitCode == 0 {
+			break
+		}
 		if container.Name != "" {
 			_, _ = rt.RemoveContainer(ctx, container.Name)
 		}
+		if hostPortBindConflict(res, err) {
+			rejectedPorts[host] = true
+			continue
+		}
 		_ = f.Store.MarkApplicationVersionStatus(ctx, version.ID, model.ApplicationVersionFailed)
-		return StepResult{Status: model.StepStatusFailed, ErrorCode: model.ErrorPodmanRunFailed, ErrorMessage: fmt.Sprintf("%s run failed: %v", rt.Name(), err)}, nil
+		return StepResult{
+			Status:       model.StepStatusFailed,
+			ErrorCode:    model.ErrorPodmanRunFailed,
+			ErrorMessage: containerRunFailureMessage(rt.Name(), res, err),
+		}, nil
 	}
 
 	// Health check. On failure, the candidate is marked failed; the prior
@@ -582,6 +600,26 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 		_ = (projectdocs.Generator{}).GenerateSummary(filepath.Join(f.Workspace, filepath.FromSlash(app.Path)))
 	}
 	return StepResult{Status: model.StepStatusSucceeded}, nil
+}
+
+func hostPortBindConflict(res deploy.CommandResult, err error) bool {
+	details := strings.ToLower(res.Stdout + "\n" + res.Stderr)
+	if err != nil {
+		details += "\n" + strings.ToLower(err.Error())
+	}
+	return strings.Contains(details, "address already in use") ||
+		strings.Contains(details, "port is already allocated")
+}
+
+func containerRunFailureMessage(runtimeName string, res deploy.CommandResult, err error) string {
+	msg := runtimeName + " run failed"
+	if err != nil {
+		msg += ": " + err.Error()
+	}
+	if details := strings.TrimSpace(res.Stderr); details != "" {
+		msg += "\n" + deploy.Truncate(details, 2000)
+	}
+	return msg
 }
 
 // copyDir recursively copies src into dst, skipping any "versions" subdir (so a

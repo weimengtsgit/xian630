@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -805,6 +806,8 @@ type fakeContainerRuntime struct {
 	name        string
 	buildCalls  int
 	runCalls    int
+	runPorts    []int
+	runResults  []deploy.CommandResult
 	stopCalls   int
 	removeCalls int
 }
@@ -820,8 +823,12 @@ func (f *fakeContainerRuntime) BuildImageWithCallbacks(ctx context.Context, app 
 	return f.BuildImage(ctx, app, tag)
 }
 
-func (f *fakeContainerRuntime) RunContainer(_ context.Context, _ deploy.ImageRef, _ string, _, _ int) (deploy.ContainerRef, deploy.CommandResult, error) {
+func (f *fakeContainerRuntime) RunContainer(_ context.Context, _ deploy.ImageRef, _ string, hostPort, _ int) (deploy.ContainerRef, deploy.CommandResult, error) {
 	f.runCalls++
+	f.runPorts = append(f.runPorts, hostPort)
+	if f.runCalls <= len(f.runResults) {
+		return deploy.ContainerRef{Name: "fake"}, f.runResults[f.runCalls-1], nil
+	}
 	return deploy.ContainerRef{Name: "fake"}, deploy.CommandResult{ExitCode: 0}, nil
 }
 
@@ -884,6 +891,48 @@ func TestDeploymentRunsContainerHealthchecks(t *testing.T) {
 	}
 	if app.Status != model.AppStatusRunning {
 		t.Fatalf("app status = %s, want running", app.Status)
+	}
+}
+
+func TestDeploymentRetriesOnHostPortBindConflict(t *testing.T) {
+	st := newFactoryTestStore(t)
+	ws := seedFactoryWorkspace(t, true)
+	r, _ := newFactoryRunner(st, ws, true)
+	r.Alloc = deploy.Allocator{Start: 18000, End: 18001}
+	r.Runtime = &fakeContainerRuntime{
+		name: "podman",
+		runResults: []deploy.CommandResult{
+			{
+				ExitCode: 126,
+				Stderr:   "Error: cannot listen on the TCP port: listen tcp4 :18000: bind: address already in use",
+			},
+			{ExitCode: 0},
+		},
+	}
+
+	job, step := factoryJobStep(model.StepDeployment)
+	res, err := r.Run(context.Background(), job, step, runner.NopEmitter{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Status != model.StepStatusSucceeded {
+		t.Fatalf("status = %s (%s/%s), want succeeded", res.Status, res.ErrorCode, res.ErrorMessage)
+	}
+
+	rt := r.Runtime.(*fakeContainerRuntime)
+	if got, want := rt.runPorts, []int{18000, 18001}; !slices.Equal(got, want) {
+		t.Fatalf("run ports = %v, want %v", got, want)
+	}
+	if rt.removeCalls != 1 {
+		t.Fatalf("remove calls = %d, want 1 for the failed container", rt.removeCalls)
+	}
+
+	dep, err := st.GetActiveDeployment(context.Background(), "app-demo")
+	if err != nil || dep == nil {
+		t.Fatalf("get active deployment: %#v %v", dep, err)
+	}
+	if dep.HostPort != 18001 {
+		t.Fatalf("host port = %d, want 18001", dep.HostPort)
 	}
 }
 
