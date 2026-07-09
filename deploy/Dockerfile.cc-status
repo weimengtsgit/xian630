@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1
+# Build context = cc-status/
+FROM docker.m.daocloud.io/library/golang:1.26-alpine AS build
+WORKDIR /src
+ENV GOPROXY=https://goproxy.cn,direct
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/cc-status ./cmd/cc-status
+
+FROM docker.m.daocloud.io/library/alpine:3.22
+RUN adduser -D -H -u 10001 app \
+    && mkdir -p /data /var/log/cc-status \
+    && chown -R app:app /data /var/log/cc-status
+COPY --from=build /out/cc-status /usr/local/bin/cc-status
+ENV CC_STATUS_ADDR=0.0.0.0:8765 \
+    CC_STATUS_DBPATH=/data/state.db \
+    CC_STATUS_LOG_PATH=/var/log/cc-status/cc-status.jsonl
+EXPOSE 8765
+USER app
+ENTRYPOINT ["/usr/local/bin/cc-status"]
+CMD ["serve"]
