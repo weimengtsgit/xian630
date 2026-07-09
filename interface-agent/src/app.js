@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
+import fetch from 'node-fetch';
 import { createRateLimiter } from './lib/rateLimit.js';
 import { validateGenerateRequest } from './lib/validation.js';
 import { BladeFileError } from './lib/bladeFiles.js';
@@ -9,7 +10,35 @@ function isNotFoundError(error) {
   return error?.status === 404 || (error instanceof BladeFileError && error.status === 404);
 }
 
-export function createApp({ config, deepseekClient, fileClient = null }) {
+async function markPipelineStageCompleted({ config, fetchClient }) {
+  if (!config.pipelineStageCompleteUrl) {
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.pipelineCompleteTimeoutMs || 5000);
+
+  try {
+    // 确认原型输出后，回写流程页中“界面解析智能体”的完成状态。
+    const response = await fetchClient(config.pipelineStageCompleteUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Pipeline stage completion failed: HTTP ${response.status} ${detail}`.trim());
+    }
+
+    return true;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function createApp({ config, deepseekClient, fileClient = null, fetchClient = fetch }) {
   const app = express();
   const previews = new Map();
   const rateLimit = createRateLimiter({
@@ -77,15 +106,35 @@ export function createApp({ config, deepseekClient, fileClient = null }) {
       return;
     }
 
-    if (fileClient && config.confirmedOutputPath) {
+    // 按 projectname 构造输出路径：共享/<projectname>/prototype.html
+    let outputPath = config.confirmedOutputPath
+    const projectname = typeof req.body?.projectname === 'string' ? req.body.projectname.trim() : ''
+    if (projectname && config.confirmedOutputPath) {
+      const lastSlash = config.confirmedOutputPath.lastIndexOf('/')
+      const dir = lastSlash >= 0 ? config.confirmedOutputPath.slice(0, lastSlash) : ''
+      const filename = lastSlash >= 0 ? config.confirmedOutputPath.slice(lastSlash + 1) : config.confirmedOutputPath
+      outputPath = dir ? `${dir}/${projectname}/${filename}` : `${projectname}/${filename}`
+    }
+
+    if (fileClient && outputPath) {
       try {
-        await fileClient.uploadText(config.confirmedOutputPath, html);
-        payload.confirmedOutputPath = config.confirmedOutputPath;
+        await fileClient.uploadText(outputPath, html);
+        payload.confirmedOutputPath = outputPath;
       } catch (error) {
         console.error(error);
         res.status(502).json({ error: '共享文件写入失败，请稍后重试。' });
         return;
       }
+    }
+
+    try {
+      if (await markPipelineStageCompleted({ config, fetchClient })) {
+        payload.pipelineStageCompleted = true;
+      }
+    } catch (error) {
+      console.error(error);
+      res.status(502).json({ error: '流程状态更新失败，请稍后重试。' });
+      return;
     }
 
     previews.set(id, html);

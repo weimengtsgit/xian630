@@ -14,5 +14,7 @@ export function loadConfig(env = process.env) {
     pendingInputPath: env.PENDING_INPUT_PATH || '',
     confirmedOutputPath: env.CONFIRMED_OUTPUT_PATH || '',
     pendingPollIntervalMs: Number(env.PENDING_POLL_INTERVAL_MS || 3000),
+    pipelineStageCompleteUrl: env.PIPELINE_STAGE_COMPLETE_URL || '',
+    pipelineCompleteTimeoutMs: Number(env.PIPELINE_COMPLETE_TIMEOUT_MS || 5000),
   };
 }

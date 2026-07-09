@@ -1,5 +1,6 @@
-const STORAGE_KEY = 'ai-prototype-workbench-state';
-const STORAGE_VERSION = 4;
+const STORAGE_KEY = 'interface-agent-state';
+const STORAGE_VERSION = 5;
+const PROJECT_NAME = new URLSearchParams(location.search).get('projectname') || '';
 
 export function createDefaultPrototype() {
   return `<!doctype html>
@@ -8,45 +9,248 @@ export function createDefaultPrototype() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
+    :root {
+      --bg-base: #0a0e14;
+      --bg-panel: #111823;
+      --bg-elevated: #18212e;
+      --bg-inset: #0c1119;
+      --border-subtle: rgba(120, 150, 180, 0.10);
+      --border-default: rgba(130, 160, 190, 0.16);
+      --border-strong: rgba(140, 170, 200, 0.30);
+      --accent-cyan: #38b6e6;
+      --accent-cyan-bright: #63d2f7;
+      --accent-cyan-dim: rgba(56, 182, 230, 0.14);
+      --critical: #e5484d;
+      --critical-bg: rgba(229, 72, 77, 0.13);
+      --approve: #3fbd6b;
+      --approve-bg: rgba(63, 189, 107, 0.13);
+      --warning: #e0a339;
+      --warning-bg: rgba(224, 163, 57, 0.13);
+      --text-primary: #e8eef5;
+      --text-secondary: #9fb2c6;
+      --text-muted: #647689;
+      --clsf-unclass: #4a9e57;
+      --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-mono: "Cascadia Code", "Consolas", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    html,
     body {
       margin: 0;
-      font-family: "OPPO Sans 4.0", Inter, ui-sans-serif, system-ui, sans-serif;
-      background: #243340;
-      color: #E5EAFF;
+      min-height: 100%;
+    }
+    body {
+      min-height: 100vh;
+      background:
+        linear-gradient(rgba(56, 182, 230, 0.020) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56, 182, 230, 0.020) 1px, transparent 1px),
+        var(--bg-base);
+      background-size: 40px 40px;
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .c2-clsf-banner {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 22px;
+      background: var(--clsf-unclass);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.3);
+      color: #d6f0da;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+    .c2-clsf-banner .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
     }
     main {
-      min-height: 100vh;
+      min-height: calc(100vh - 22px);
       display: grid;
       place-items: center;
-      padding: 40px;
-      box-sizing: border-box;
-      background-image:
-        radial-gradient(circle, rgba(187, 203, 217, 0.12) 1px, transparent 1px);
-      background-size: 22px 22px;
+      padding: 32px;
+      background:
+        radial-gradient(circle at 50% 42%, rgba(56, 182, 230, 0.10), transparent 56%),
+        transparent;
     }
-    section {
-      max-width: 860px;
+    .c2-panel {
       width: 100%;
-      border: 1px solid rgba(187, 203, 217, 0.35);
-      background: #1B2732;
-      border-radius: 18px;
-      padding: 40px 36px;
-      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.45);
-      text-align: center;
+      max-width: 900px;
+      overflow: hidden;
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      background: var(--bg-panel);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-default);
+      background: linear-gradient(180deg, rgba(56, 182, 230, 0.05), transparent);
+    }
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--accent-cyan);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
     }
     h1 {
       margin: 0;
-      font-size: 22px;
-      font-weight: 400;
-      color: #E5EAFF;
-      line-height: 1.5;
+      color: var(--text-primary);
+      font-size: 20px;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 3px;
+      background: var(--approve-bg);
+      box-shadow: inset 0 0 0 1px rgba(63, 189, 107, 0.35);
+      color: var(--approve);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .panel-body {
+      display: grid;
+      gap: 16px;
+      padding: 16px;
+    }
+    .situation {
+      border: 1px solid var(--border-default);
+      border-left: 3px solid var(--accent-cyan);
+      border-radius: 5px;
+      background: var(--bg-elevated);
+      padding: 14px 16px;
+    }
+    .situation strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .situation span {
+      color: var(--text-secondary);
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .metric {
+      min-height: 86px;
+      border: 1px solid var(--border-default);
+      border-radius: 5px;
+      background: var(--bg-inset);
+      padding: 12px;
+    }
+    .metric .label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .metric .value {
+      display: block;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 20px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+    .timeline {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--border-default);
+      border-radius: 5px;
+      background: var(--bg-inset);
+      padding: 12px;
+    }
+    .bar {
+      height: 18px;
+      width: 62%;
+      border: 1px solid var(--accent-cyan);
+      border-radius: 3px;
+      background: linear-gradient(180deg, rgba(56, 182, 230, 0.50), rgba(56, 182, 230, 0.28));
+      box-shadow: 0 0 10px rgba(56, 182, 230, 0.25);
+    }
+    .timeline span {
+      display: block;
+      margin-top: 8px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 1px;
+    }
+    @media (max-width: 720px) {
+      main {
+        padding: 16px;
+      }
+      .panel-head,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+      .panel-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
     }
   </style>
 </head>
 <body>
+  <div class="c2-clsf-banner"><span class="dot"></span>UNCLASSIFIED // NOTIONAL PROTOTYPE<span class="dot"></span></div>
   <main>
-    <section>
-      <h1>在下方输入你要生成的界面需求，生成结果会显示在这里。</h1>
+    <section class="c2-panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Prototype Preview</p>
+          <h1>在下方输入界面需求，生成结果会显示在这里。</h1>
+        </div>
+        <span class="badge"><span class="dot"></span>Ready</span>
+      </div>
+      <div class="panel-body">
+        <div class="situation">
+          <strong>等待生成任务</strong>
+          <span>描述目标页面、组件和交互约束后，智能体会在此沙箱预览区生成可检查的 HTML 原型。</span>
+        </div>
+        <div class="metrics">
+          <div class="metric"><span class="label">Input</span><span class="value">0</span></div>
+          <div class="metric"><span class="label">Preview</span><span class="value">READY</span></div>
+          <div class="metric"><span class="label">Mode</span><span class="value">C2</span></div>
+        </div>
+        <div class="timeline">
+          <div class="bar"></div>
+          <span>STAGE 01 // REQUIREMENT INTAKE</span>
+        </div>
+      </div>
     </section>
   </main>
 </body>
@@ -197,7 +401,7 @@ async function createPreviewSharePayload(html) {
   const response = await fetch('/api/previews', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ html }),
+    body: JSON.stringify({ html, projectname: PROJECT_NAME }),
   });
 
   const payload = await response.json().catch(() => ({}));

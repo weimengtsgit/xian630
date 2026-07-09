@@ -477,15 +477,16 @@ export function ConversationWorkbench({
           >
             <span className="cw-drawer-btn-label">工作空间</span>
           </button>
-          <button
-            type="button"
+          <a
+            href="http://220.154.5.91:18016/"
+            target="_blank"
+            rel="noopener noreferrer"
             className="cw-store-btn"
-            onClick={onOpenApplicationStore}
-            title="应用商店"
-            aria-label="应用商店"
+            title="智能体广场"
+            aria-label="智能体广场"
           >
-            <span className="cw-drawer-btn-label">应用商店</span>
-          </button>
+            <span className="cw-drawer-btn-label">智能体广场</span>
+          </a>
           {canAbandon ? (
             <div className="cw-more">
               <button

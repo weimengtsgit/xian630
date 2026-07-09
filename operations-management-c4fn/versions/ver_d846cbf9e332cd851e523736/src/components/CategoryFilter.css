@@ -1,0 +1,52 @@
+/* ===== 侧栏分类导航（纵向）===== */
+
+.category-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.category-filter__btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.category-filter__btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.category-filter__btn--active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.category-filter__count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-align: center;
+}
+
+.category-filter__btn--active .category-filter__count {
+  background: rgba(0, 212, 255, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
