@@ -2,6 +2,43 @@ const MAX_MESSAGE_LENGTH = 4000;
 const MAX_HTML_LENGTH = 120000;
 const MAX_HISTORY_ITEMS = 20;
 
+/**
+ * F1: strict project-key regex — lowercase alphanumeric + hyphen, 1-32 chars,
+ * must start with a letter/digit. Blocks path traversal (`../../`, `/`, `\`,
+ * `..`, spaces, dots, uppercase) at every entry that builds a Blade OS artifact
+ * or delivery path. Centralized so artifactPath + delivery builders share one
+ * definition (no drift).
+ */
+const PROJECT_KEY_REGEX = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/** Thrown when a project key fails the strict regex (mapped to HTTP 400). */
+export class InvalidProjectKeyError extends Error {
+  constructor(key) {
+    super('项目标识只能包含小写字母、数字和连字符，长度 1-32。');
+    this.name = 'InvalidProjectKeyError';
+    this.code = 'INVALID_PROJECT_KEY';
+  }
+}
+
+/**
+ * Validate a project key against the strict regex (F1). Throws
+ * InvalidProjectKeyError on failure. Used by the artifact/delivery path
+ * builders (defense in depth) and at the resolve entry point.
+ * @param {string} key
+ * @returns {string} the validated key
+ */
+export function validateProjectKey(key) {
+  if (typeof key !== 'string' || !PROJECT_KEY_REGEX.test(key)) {
+    throw new InvalidProjectKeyError(key);
+  }
+  return key;
+}
+
+/** Non-throwing predicate form (for route guards that return 400). */
+export function isValidProjectKey(key) {
+  return typeof key === 'string' && PROJECT_KEY_REGEX.test(key);
+}
+
 export function validateGenerateRequest(body) {
   if (!body || typeof body !== 'object') {
     return { ok: false, status: 400, error: '请求格式不正确。' };

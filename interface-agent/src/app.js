@@ -1,54 +1,126 @@
-import crypto from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
 import fetch from 'node-fetch';
-import { createRateLimiter } from './lib/rateLimit.js';
-import { validateGenerateRequest } from './lib/validation.js';
 import { BladeFileError } from './lib/bladeFiles.js';
+import { createRepository } from './lib/db/repository.js';
+import { createSessionAuth } from './lib/auth/cookieSession.js';
+import { createAuthRouter } from './lib/auth/routes.js';
+import { createSessionRouter } from './lib/sessions/routes.js';
+import { createGenerationsRouter } from './lib/generations/routes.js';
+import { createGenerationWorker } from './lib/generations/worker.js';
+import { createVersionsRouter } from './lib/versions/routes.js';
+import { createSharesRouter } from './lib/shares/routes.js';
+import { createConfirmationsRouter } from './lib/confirmations/routes.js';
+import { createDeliveriesRouter } from './lib/deliveries/routes.js';
+import { createDeliveryWorker } from './lib/deliveries/worker.js';
+import { createArtifactCleanup } from './lib/generations/cleanup.js';
 
 function isNotFoundError(error) {
   return error?.status === 404 || (error instanceof BladeFileError && error.status === 404);
 }
 
-async function markPipelineStageCompleted({ config, fetchClient }) {
-  if (!config.pipelineStageCompleteUrl) {
-    return false;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.pipelineCompleteTimeoutMs || 5000);
-
-  try {
-    // 确认原型输出后，回写流程页中“界面解析智能体”的完成状态。
-    const response = await fetchClient(config.pipelineStageCompleteUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'completed' }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`Pipeline stage completion failed: HTTP ${response.status} ${detail}`.trim());
-    }
-
-    return true;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-export function createApp({ config, deepseekClient, fileClient = null, fetchClient = fetch }) {
+export function createApp({ config, deepseekClient, fileClient = null, fetchClient = fetch, db = null }) {
   const app = express();
-  const previews = new Map();
-  const rateLimit = createRateLimiter({
-    windowMs: config.rateLimitWindowMs,
-    max: config.rateLimitMax,
-  });
-
+  // `db` (better-sqlite3 handle) is opened and migrated at boot by server.js
+  // and reserved for the versioning routes added in later tasks. Kept on the
+  // closure so this factory remains the single wiring point.
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.static('public'));
+
+  // Session auth primitives (edit token -> one-time start code -> signed
+  // HttpOnly cookie). Mounted only when a DB handle is wired in; the version
+  // routes (T4-T7) reuse repository + sessionAuth stashed on app.locals.
+  if (db) {
+    const repository = createRepository(db);
+    const sessionAuth = createSessionAuth({
+      repository,
+      sessionSecret: config.sessionSecret,
+      secureCookies: config.secureCookies,
+    });
+    app.locals.repository = repository;
+    app.locals.sessionAuth = sessionAuth;
+
+    // Background generation worker (not auto-started; server.js calls start()).
+    // Injectable: tests drive it via app.locals.worker.tick() with fake clients.
+    const worker = createGenerationWorker({
+      repository,
+      deepseekClient,
+      fileClient,
+      config,
+    });
+    app.locals.worker = worker;
+
+    // Background delivery worker (spec §确认与交付流程). Same lifecycle pattern
+    // as the generation worker: atomic claim, IO outside the sync tx, atomic
+    // guarded status tx, restart recovery. Not auto-started; server.js calls
+    // start(). Injectable fetchClient for the pipeline callback + tests.
+    const deliveryWorker = createDeliveryWorker({
+      repository,
+      fileClient,
+      config,
+      fetchClient,
+    });
+    app.locals.deliveryWorker = deliveryWorker;
+
+    // Orphan-artifact cleanup (T8). Reclaims version prototype.html files
+    // whose DB commit never landed, after an age threshold so in-flight tx
+    // files are never touched. Startup-delayed + optional periodic. Not
+    // auto-started; server.js calls start() (and stop() on shutdown).
+    const artifactCleanup = createArtifactCleanup({ fileClient, repository, config });
+    app.locals.artifactCleanup = artifactCleanup;
+
+    app.use(
+      '/api/auth',
+      createAuthRouter({
+        repository,
+        sessionAuth,
+        startCodeTtlMs: config.startCodeTtlMs,
+        rateLimitWindowMs: config.rateLimitWindowMs,
+        rateLimitMax: config.rateLimitMax,
+      }),
+    );
+    app.use(
+      '/api/interface-sessions',
+      createSessionRouter({
+        repository,
+        sessionAuth,
+        startCodeTtlMs: config.startCodeTtlMs,
+        fileClient,
+        config,
+        rateLimitWindowMs: config.rateLimitWindowMs,
+        rateLimitMax: config.rateLimitMax,
+      }),
+    );
+    app.use(
+      '/api/interface-sessions',
+      createGenerationsRouter({
+        repository,
+        sessionAuth,
+        rateLimitWindowMs: config.rateLimitWindowMs,
+        rateLimitMax: config.rateLimitMax,
+      }),
+    );
+    app.use(
+      '/api/interface-sessions',
+      createVersionsRouter({ repository, sessionAuth, fileClient }),
+    );
+    // Confirmations + deliveries are independent operations on the same session
+    // prefix (spec: share / confirm / deliver are three independent ops).
+    app.use(
+      '/api/interface-sessions',
+      createConfirmationsRouter({ repository, sessionAuth }),
+    );
+    app.use(
+      '/api/interface-sessions',
+      createDeliveriesRouter({ repository, sessionAuth }),
+    );
+    // Shares spans both session-scoped (create/list) and public (no-cookie)
+    // paths plus the human-facing /share/:token viewer, so it owns its full
+    // paths from root. Mounted last so the other /api/interface-sessions
+    // routers handle their routes first; shares only matches its own paths.
+    app.use('/', createSharesRouter({ repository, sessionAuth, fileClient, config }));
+  }
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
@@ -84,91 +156,6 @@ export function createApp({ config, deepseekClient, fileClient = null, fetchClie
       }
       console.error(error);
       res.status(502).json({ error: '读取待定输入文件失败。' });
-    }
-  });
-
-  app.post('/api/previews', async (req, res) => {
-    const html = typeof req.body?.html === 'string' ? req.body.html.trim() : '';
-    if (!html) {
-      res.status(400).json({ error: '没有可分享的预览内容。' });
-      return;
-    }
-
-    const id = crypto.randomUUID();
-    const baseUrl = config.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
-    const payload = {
-      id,
-      url: `${baseUrl.replace(/\/$/, '')}/preview/${id}`,
-    };
-
-    if (config.confirmedOutputPath && !fileClient) {
-      res.status(500).json({ error: '服务端未配置 Blade OS 文件服务。' });
-      return;
-    }
-
-    // 按 projectname 构造输出路径：共享/<projectname>/prototype.html
-    let outputPath = config.confirmedOutputPath
-    const projectname = typeof req.body?.projectname === 'string' ? req.body.projectname.trim() : ''
-    if (projectname && config.confirmedOutputPath) {
-      const lastSlash = config.confirmedOutputPath.lastIndexOf('/')
-      const dir = lastSlash >= 0 ? config.confirmedOutputPath.slice(0, lastSlash) : ''
-      const filename = lastSlash >= 0 ? config.confirmedOutputPath.slice(lastSlash + 1) : config.confirmedOutputPath
-      outputPath = dir ? `${dir}/${projectname}/${filename}` : `${projectname}/${filename}`
-    }
-
-    if (fileClient && outputPath) {
-      try {
-        await fileClient.uploadText(outputPath, html);
-        payload.confirmedOutputPath = outputPath;
-      } catch (error) {
-        console.error(error);
-        res.status(502).json({ error: '共享文件写入失败，请稍后重试。' });
-        return;
-      }
-    }
-
-    try {
-      if (await markPipelineStageCompleted({ config, fetchClient })) {
-        payload.pipelineStageCompleted = true;
-      }
-    } catch (error) {
-      console.error(error);
-      res.status(502).json({ error: '流程状态更新失败，请稍后重试。' });
-      return;
-    }
-
-    previews.set(id, html);
-    res.json(payload);
-  });
-
-  app.get('/preview/:id', (req, res) => {
-    const html = previews.get(req.params.id);
-    if (!html) {
-      res.status(404).type('text/plain').send('Preview not found or expired.');
-      return;
-    }
-
-    res.type('html').send(html);
-  });
-
-  app.post('/api/generate', rateLimit, async (req, res) => {
-    if (!config.deepseekApiKey) {
-      res.status(500).json({ error: '服务端未配置 DeepSeek API Key。' });
-      return;
-    }
-
-    const validation = validateGenerateRequest(req.body);
-    if (!validation.ok) {
-      res.status(validation.status).json({ error: validation.error });
-      return;
-    }
-
-    try {
-      const html = await deepseekClient.generateHtml(validation.value);
-      res.json({ html });
-    } catch (error) {
-      console.error(error);
-      res.status(502).json({ error: '调用 DeepSeek 失败，请稍后重试。' });
     }
   });
 

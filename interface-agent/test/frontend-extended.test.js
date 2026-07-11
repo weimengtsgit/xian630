@@ -80,7 +80,7 @@ describe('frontend workbench state', () => {
   });
 
   it('provides a non-empty default prototype', () => {
-    expect(createDefaultPrototype()).toContain('在下方输入你要生成的界面需求，生成结果会显示在这里。');
+    expect(createDefaultPrototype()).toContain('在下方输入界面需求，生成结果会显示在这里。');
   });
 
   it('formats visible loading text with elapsed seconds', () => {

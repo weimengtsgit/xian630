@@ -9,7 +9,7 @@ description: C2 军事指挥态势感知深色设计系统 — interface-agent �
 
 ## 何时使用
 
-interface-agent 每次 `POST /api/generate` 生成 / 调整原型界面时，自动套用本 skill 的 C2 设计语言（除非用户在请求里明确要求别的风格）。无需手动调用。
+interface-agent 每次异步生成界面稿时（`POST /api/interface-sessions/:id/generations` 由后台 generations worker 调用 DeepSeek），自动套用本 skill 的 C2 设计语言（除非用户在请求里明确要求别的风格）。无需手动调用。
 
 ## 文件
 

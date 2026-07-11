@@ -57,13 +57,30 @@ interface-agent/
 
 ## API 接口
 
+界面稿版本机制以"界面设计会话 + 不可变版本"为核心。所有写操作校验会话归属（HttpOnly Cookie 鉴权），`projectname` 只定位项目、不授权。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/health` | 健康检查 |
-| `GET` | `/api/pending-input` | 轮询读取上游写入的待定需求文件 |
-| `POST` | `/api/generate` | 调用 DeepSeek 生成/调整 HTML 原型 |
-| `POST` | `/api/previews` | 保存预览 + 写入确认文件 + 回写流水线完成状态 |
-| `GET` | `/preview/:id` | 查看已保存的预览 |
+| `GET` | `/api/pending-input` | 轮询读取上游写入的待定需求文件（旧轮询入口，保留兼容） |
+| `GET` | `/api/auth/session` | 基于 Cookie 恢复当前会话（刷新页面用） |
+| `POST` | `/api/auth/exchange` | 一次性启动码换签名的 HttpOnly 会话 Cookie |
+| `POST` | `/api/auth/restore` | 用恢复码（editToken）恢复独立会话并设置 Cookie（限流） |
+| `POST` | `/api/interface-sessions/resolve` | 服务间：按 `projectKey` + 编辑凭证恢复或创建活跃会话（需 `X-Internal-Token` 创建） |
+| `POST` | `/api/interface-sessions/independent` | 独立浏览器入口：直接创建会话并设置编辑 Cookie（限流，无需内部令牌） |
+| `POST` | `/api/interface-sessions/:id/restart` | 归档当前会话并创建新活跃会话 |
+| `GET` | `/api/interface-sessions/:id` | 读取会话摘要（确认版本、交付状态、版本数） |
+| `GET`/`PATCH` | `/api/interface-sessions/:id/versions[/:versionId]` | 版本树元数据 / 版本详情 / 改标题 / 归档 |
+| `GET` | `/api/interface-sessions/:id/versions/:versionId/html` | 读取不可变版本 HTML（`Content-Security-Policy: sandbox allow-scripts`） |
+| `POST` | `/api/interface-sessions/:id/generations` | 提交异步生成（202 返回 requestId；同幂等键返回已有请求） |
+| `GET` | `/api/interface-sessions/:id/generations/:requestId` | 恢复生成进度与结果 |
+| `POST` | `/api/interface-sessions/:id/confirmations` | 确认采用（乐观并发，过期返回 409；触发后台交付） |
+| `POST`/`DELETE` | `/api/interface-sessions/:id/shares` / `/api/shares/:token` | 创建 / 撤销只读分享（固定到版本，可过期） |
+| `GET` | `/api/shares/:token/preview` | 公共只读版本 HTML 预览（`sandbox allow-scripts`） |
+| `POST` | `/api/interface-sessions/:id/deliveries/:deliveryId/retry` | 幂等重试交付 |
+| `GET` | `/api/interface-sessions/:id/events` | 读取完整操作记录（已脱敏） |
+
+> 说明：旧的 `POST /api/generate`、`POST /api/previews`、`GET /preview/:id` 已删除，分别由异步生成、分享 + 后台交付、版本 HTML 预览取代。
 
 ## 技术栈
 
@@ -121,6 +138,14 @@ pm2 save
 | `CONFIRMED_OUTPUT_PATH` | 空 | 确认后写入的 HTML 文件路径（如 `共享/prototype.html`） |
 | `PIPELINE_STAGE_COMPLETE_URL` | 空 | 确认原型后回写流水线完成状态的 URL |
 | `PUBLIC_BASE_URL` | 空 | 预览分享链接的外部访问地址 |
+| `INTERFACE_AGENT_DB_PATH` | `/var/lib/interface-agent/interface-agent.db` | SQLite 持久化路径（会话、版本树、生成请求、分享、交付）。生产必须挂载持久卷。 |
+| `INTERFACE_AGENT_SESSION_SECRET` | 空（启动生成临时密钥并告警） | 会话 Cookie 的 HMAC-SHA256 签名密钥。**生产必配**固定强随机值（如 `openssl rand -base64 32`）；未配置则重启后所有会话 Cookie 失效。 |
+| `INTERFACE_AGENT_INTERNAL_TOKEN` | 空（fail-closed） | resolve CREATE 的服务间共享密钥（`X-Internal-Token`）。**必须与 agent-pipeline 配置相同值**；未配置则拒绝所有会话创建。 |
+| `INTERFACE_AGENT_COOKIE_SECURE` | `0` | 设为 `1` 时（HTTPS）给 Cookie 打 Secure 标志。 |
+| `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `60000` / `20` | 独立会话入口 + 恢复码端点的单 IP 限流。 |
+| `ARTIFACT_CLEANUP_ENABLED` | `1` | 孤立版本产物回收开关；设 `0` 关闭。 |
+| `ARTIFACT_CLEANUP_INTERVAL_MS` | `21600000` | 周期回收间隔；设 `0` 关闭周期回收（启动一次性回收仍执行）。 |
+| `ARTIFACT_CLEANUP_MAX_AGE_MS` | `3600000` | 回收的最小文件年龄（保护在途事务文件，**勿调小**）。 |
 
 ## 安全
 

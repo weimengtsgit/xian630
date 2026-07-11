@@ -117,6 +117,44 @@ export function createBladeFileClient(config, fetchImpl = globalThis.fetch || no
       const checked = await check(response);
       return checked.json();
     },
+
+    /**
+     * List a directory (GET /api/v1/files/list?path=). Returns the `items`
+     * array from the response, each entry shaped
+     * `{ name, path, is_dir, size, modified, extension }` (Blade OS file-op
+     * API; see docs/blade-os-file-api/). An empty/non-object body yields `[]`
+     * so callers can treat a missing directory as "nothing to scan".
+     */
+    async list(path) {
+      const search = new URLSearchParams({ path: String(path || '') });
+      const response = await fetchImpl(`${url('/list')}?${search}`, {
+        headers: authHeaders(),
+        signal: createTimeoutSignal(timeoutMs),
+      });
+      const checked = await check(response);
+      const parsed = await checked.json();
+      return Array.isArray(parsed?.items) ? parsed.items : [];
+    },
+
+    /**
+     * Delete files/directories (POST /api/v1/files/delete body `{paths:[...]}`).
+     * Returns the parsed JSON body. Used by the orphan-artifact cleanup task to
+     * reclaim prototype.html files whose DB version row never committed.
+     *
+     * Error tolerance is the caller's responsibility: cleanup collects per-path
+     * errors and continues, so a single failed delete never aborts the sweep.
+     */
+    async remove(paths) {
+      const list = Array.isArray(paths) ? paths : [paths];
+      const response = await fetchImpl(url('/delete'), {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ paths: list }),
+        signal: createTimeoutSignal(timeoutMs),
+      });
+      const checked = await check(response);
+      return checked.json();
+    },
   };
 
   return client;
