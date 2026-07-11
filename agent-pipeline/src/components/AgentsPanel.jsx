@@ -42,7 +42,7 @@ const AGENT_META = {
   }
 }
 
-function AgentNode({ id, status, url, onActivate, projectname }) {
+function AgentNode({ id, status, url, onActivate, projectname, projectId }) {
   const meta = AGENT_META[id] || { icon: Bot, name: id, type: '', desc: '' }
   const Icon = meta.icon
   const st = status || 'pending'
@@ -57,7 +57,21 @@ function AgentNode({ id, status, url, onActivate, projectname }) {
   function handleClick() {
     if (!clickable) return
     if (st === 'pending') onActivate(id)   // 启动 → 进行中
-    // 跳转时追加 ?projectname=xxx
+
+    // 界面解析智能体：通过后端凭证传递打开（editToken 永不进浏览器 URL）
+    if (id === 'agent-prototype' && projectId) {
+      fetch(`/api/projects/${projectId}/interface-launch`, { method: 'POST' })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
+        .then(data => {
+          if (data.startCode) {
+            window.open(url + '?start=' + data.startCode, '_blank', 'noopener')
+          }
+        })
+        .catch(() => { /* 静默失败，用户可重试 */ })
+      return
+    }
+
+    // 其他智能体：沿用 projectname 参数
     const sep = url.includes('?') ? '&' : '?'
     window.open(url + sep + 'projectname=' + (projectname || ''), '_blank', 'noopener')
   }
@@ -174,7 +188,7 @@ function MergeConnector() {
   )
 }
 
-export function AgentsPanel({ userInput, projectname }) {
+export function AgentsPanel({ userInput, projectname, projectId }) {
   const { stages, loading, activate } = useStages()
   const find = (key) => stages.find(s => s.key === key)
 
@@ -189,7 +203,7 @@ export function AgentsPanel({ userInput, projectname }) {
 
   const node = (key) => {
     const s = find(key)
-    return <AgentNode id={key} status={s?.status} url={s?.url} onActivate={activate} projectname={projectname} />
+    return <AgentNode id={key} status={s?.status} url={s?.url} onActivate={activate} projectname={projectname} projectId={projectId} />
   }
 
   return (

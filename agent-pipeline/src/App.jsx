@@ -93,7 +93,7 @@ function App() {
         />
         <div className="portal-main">
           {selectedProject
-            ? <AgentsPanel key={selectedProject.id} userInput={userInput} projectname={selectedProject.projectname} />
+            ? <AgentsPanel key={selectedProject.id} userInput={userInput} projectname={selectedProject.projectname} projectId={selectedProject.id} />
             : <EmptyState />
           }
         </div>

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 import { createApp } from './app.js'
 import { createStageStore, STAGE_KEYS } from './stages.js'
+import { isValidProjectName } from './projects.js'
 
 const CONFIG = STAGE_KEYS.map(k => ({ key: k, name: k, url: '' }))
 
@@ -68,4 +69,17 @@ test('POST invalid status → 400', async () => {
     const { status } = await req(base, 'POST', '/api/stages/agent-business', { status: 'idle' })
     assert.equal(status, 400)
   })
+})
+
+// ---- F1: projectname validation (path-traversal guard) ----
+// NOTE: the createProject + POST /api/projects tests live in interface-launch.test.js
+// because they share projects.json (parallel node --test files must not race on it).
+
+test('F1: isValidProjectName rejects traversal / invalid; accepts valid', () => {
+  for (const bad of ['../../etc', 'a/b', 'a\\b', 'a b', 'a.b', 'A-B', 'x'.repeat(33), '', '-lead', 'a_b']) {
+    assert.equal(isValidProjectName(bad), false, `${bad} should be invalid`)
+  }
+  for (const ok of ['demo', 'a', 'valid-key-1', 'x'.repeat(32)]) {
+    assert.equal(isValidProjectName(ok), true, `${ok} should be valid`)
+  }
 })

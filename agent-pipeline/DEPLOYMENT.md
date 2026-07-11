@@ -96,3 +96,11 @@ podman run -d \
 | cc-status | `localhost/cc-status:<ver>` | 8765 | `cc-status-<ver>` |
 | interface-agent | `localhost/interface-agent:<ver>` | 18020→18020 | `interface-agent-<ver>` |
 | **agent-pipeline** | `localhost/agent-pipeline:<ver>` | **18002→3000** | **`agent-pipeline-<ver>`** |
+
+## 安全与网络隔离（重要）
+
+- **无用户鉴权（既有基线）**：agent-pipeline 所有路由均无用户认证——这是一个**未认证的内部运维工具**。版本机制功能通过 `POST /api/projects/:id/interface-launch` 新增了"凭证服务端传递"（持有 interface-agent 编辑令牌），提高了风险等级，但**未引入**该开放服务基线。
+- **必须网络隔离**：agent-pipeline **必须仅在可信内网可达**，**绝不暴露公网**。interface-launch 持有可铸造 startCode 的内部令牌；用户鉴权层是路线图项。
+- **同源策略**：已移除宽松 CORS（不设置 `Access-Control-Allow-Origin: *`）；SPA 与后端同源。interface-launch 额外校验同源 `Origin` 头（跨站 → 403）。
+- `INTERFACE_AGENT_INTERNAL_TOKEN`：interface-launch 调用 interface-agent 时携带此共享密钥；两端必须配同值。
+- `interfaceEditToken` 仅存服务端，**绝不**返回浏览器。

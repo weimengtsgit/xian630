@@ -37,7 +37,7 @@ sf-portal/
 │   └── utils/              # 工具函数
 ├── server/                 # 后端源码（Express）
 │   ├── index.js            # 入口：createApp().listen(port)
-│   ├── app.js              # Express 应用（CORS + /api/stages 路由 + 静态文件服务）
+│   ├── app.js              # Express 应用（同源策略 + /api/stages 路由 + 静态文件服务）
 │   ├── stages.js           # 阶段配置读取 + 内存状态管理（pending/working/completed）
 │   ├── stages.json         # 阶段静态配置（名称 + 跳转 URL）
 │   └── *.test.js           # 测试
@@ -71,3 +71,11 @@ npm start
 - `completed` - 已完成
 
 状态存储在后端内存中（重启后回到全 pending），通过 `/api/stages` 接口读取。
+
+## 安全与网络隔离
+
+- **同源策略（不设置宽松 CORS）**：agent-pipeline SPA 与后端同源，fetch 调用默认同源。**不**设置全局 `Access-Control-Allow-Origin: *`，否则任意跨站页面可对 `POST /api/projects/:id/interface-launch` 发起表单/fetch 请求（该路由无用户鉴权）。
+- **interface-launch 同源 Origin 校验（M1 缓解）**：`POST /api/projects/:id/interface-launch` 校验 `Origin` 头——若 Origin 存在且与 agent-pipeline 自身 origin 不同则返回 403，阻断跨站 startCode 铸造。无 Origin 头（非浏览器 / 直接调用）放行。
+- **`INTERFACE_AGENT_INTERNAL_TOKEN`**：interface-launch 调用 interface-agent resolve 时携带此服务间共享密钥（`X-Internal-Token`），两端必须配置相同值。
+- **无用户鉴权（既有基线）**：agent-pipeline 所有路由均无用户认证。这是一个**未认证的内部运维工具**，**必须在网络层面隔离**（仅可信内网可达，不暴露公网）。用户鉴权层是路线图项；版本机制功能通过新增 interface-launch 提高了风险等级，但未引入该开放服务基线——其本身需要网络隔离保护。
+- `interfaceEditToken` 仅存于服务端（projects.json），**绝不**返回给浏览器；浏览器只拿到一次性 startCode。
