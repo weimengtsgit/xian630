@@ -223,7 +223,8 @@ describe('sqlite db foundation', () => {
   it('7. config honors INTERFACE_AGENT_DB_PATH override and default', () => {
     const override = '/custom/path/interface-agent.db';
     expect(loadConfig({ INTERFACE_AGENT_DB_PATH: override }).dbPath).toBe(override);
-    expect(loadConfig({}).dbPath).toBe('/var/lib/interface-agent/interface-agent.db');
+    // 本地默认 ./data/（容器内由 Dockerfile ENV 固定为 /var/lib/...）
+    expect(loadConfig({}).dbPath).toBe('./data/interface-agent.db');
   });
 });
 
