@@ -43,13 +43,28 @@ ssh root@220.154.5.91 \
 
 # 4. 备份当前部署（容器 stop 前先存）—— 必须包含 SQLite 热备（见下方「部署前备份」）
 ssh root@220.154.5.91 << 'EOF'
+set -euo pipefail
 BACKUP_DIR="/opt/xian630/backups/$(date +%Y%m%d-%H%M%S)-interface-agent"
 mkdir -p "$BACKUP_DIR"
-# 备份当前容器信息
-podman inspect $(podman ps --format '{{.Names}}' | grep interface-agent) > "$BACKUP_DIR/container-inspect.json" 2>/dev/null || true
-# 备份 SQLite（WAL 模式在线热备，一致快照）
-podman exec $(podman ps --format '{{.Names}}' | grep interface-agent) \
-  sqlite3 /var/lib/interface-agent/interface-agent.db ".backup '$BACKUP_DIR/interface-agent.db'" 2>/dev/null || true
+CONTAINER="$(podman ps --format '{{.Names}}' | grep '^interface-agent-' | head -n 1)"
+BACKUP_NAME="pre-deploy-$(date +%Y%m%d-%H%M%S).db"
+podman inspect "$CONTAINER" > "$BACKUP_DIR/container-inspect.json"
+
+# 使用镜像内已安装的 better-sqlite3 在线备份到绑定卷。不要依赖镜像中
+# 不存在的 sqlite3 CLI，也不要把容器内路径误写成宿主机备份目录。
+podman exec -e BACKUP_PATH="/var/lib/interface-agent/$BACKUP_NAME" "$CONTAINER" \
+  node --input-type=module -e '
+    import Database from "better-sqlite3";
+    const source = process.env.INTERFACE_AGENT_DB_PATH || "/var/lib/interface-agent/interface-agent.db";
+    const db = new Database(source, { readonly: true });
+    try { await db.backup(process.env.BACKUP_PATH); } finally { db.close(); }
+  '
+
+# /var/lib/interface-agent 是绑定卷，容器写入后必须能在宿主机看到非空文件。
+test -s "/var/lib/interface-agent/$BACKUP_NAME"
+cp "/var/lib/interface-agent/$BACKUP_NAME" "$BACKUP_DIR/interface-agent.db"
+test -s "$BACKUP_DIR/interface-agent.db"
+rm -f "/var/lib/interface-agent/$BACKUP_NAME"
 EOF
 
 # 5. 停止旧容器
@@ -102,12 +117,22 @@ SQLite 启动时自动开启 WAL、外键和 busy timeout，并在容器关闭�
 每次部署、停旧容器**之前**备份 SQLite（WAL 模式下在线 `.backup` 是一致的）：
 
 ```bash
-# 方式一：用 sqlite3 在线热备（推荐，容器不停）
+# 方式一：用镜像内 better-sqlite3 在线热备（推荐，容器不停）
 TS=$(date +%Y%m%d-%H%M%S)
-ssh root@220.154.5.91 \
-  "podman exec interface-agent-<old-version> sqlite3 /var/lib/interface-agent/interface-agent.db '.backup /var/lib/interface-agent/backup-$TS.db'"
-ssh root@220.154.5.91 \
-  "podman cp interface-agent-<old-version>:/var/lib/interface-agent/backup-$TS.db /opt/xian630/backups/interface-agent-db-$TS.db"
+ssh root@220.154.5.91 << EOF
+set -euo pipefail
+podman exec -e BACKUP_PATH="/var/lib/interface-agent/backup-$TS.db" interface-agent-<old-version> \
+  node --input-type=module -e '
+    import Database from "better-sqlite3";
+    const source = process.env.INTERFACE_AGENT_DB_PATH || "/var/lib/interface-agent/interface-agent.db";
+    const db = new Database(source, { readonly: true });
+    try { await db.backup(process.env.BACKUP_PATH); } finally { db.close(); }
+  '
+test -s "/var/lib/interface-agent/backup-$TS.db"
+cp "/var/lib/interface-agent/backup-$TS.db" "/opt/xian630/backups/interface-agent-db-$TS.db"
+test -s "/opt/xian630/backups/interface-agent-db-$TS.db"
+rm -f "/var/lib/interface-agent/backup-$TS.db"
+EOF
 
 # 方式二：停容器后直接从持久卷复制（最稳，需要短暂停服）
 ssh root@220.154.5.91 \

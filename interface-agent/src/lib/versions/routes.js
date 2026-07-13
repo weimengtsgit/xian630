@@ -8,7 +8,8 @@ import { BladeFileError } from '../bladeFiles.js';
  *
  *   GET   /api/interface-sessions/:id/versions                    — version tree metadata
  *   GET   /api/interface-sessions/:id/versions/:versionId         — detail + branch dialogue
- *   GET   /api/interface-sessions/:id/versions/:versionId/html    — immutable version HTML
+ *   GET   /api/interface-sessions/:id/versions/:versionId/(preview|html)
+ *                                                               — immutable version HTML
  *   PATCH /api/interface-sessions/:id/versions/:versionId         — title (in place) / archive
  *   GET   /api/interface-sessions/:id/events                      — sanitized operation log
  *
@@ -150,7 +151,7 @@ export function createVersionsRouter({ repository, sessionAuth, fileClient = nul
     },
   );
 
-  // --------------------------------- GET /:id/versions/:versionId/html
+  // ------------------------- GET /:id/versions/:versionId/(html|preview)
 
   /**
    * Immutable version HTML, proxied through Blade OS (the browser never talks
@@ -158,7 +159,7 @@ export function createVersionsRouter({ repository, sessionAuth, fileClient = nul
    * sanitized message (never echoes the internal path).
    */
   router.get(
-    '/:id/versions/:versionId/html',
+    ['/:id/versions/:versionId/html', '/:id/versions/:versionId/preview'],
     sessionAuth.requireSession,
     requireSessionMatch,
     ownVersion,
@@ -212,25 +213,33 @@ export function createVersionsRouter({ repository, sessionAuth, fileClient = nul
       const wantsTitle = Object.prototype.hasOwnProperty.call(body, 'title');
       const wantsArchived = Object.prototype.hasOwnProperty.call(body, 'archived');
 
+      if (!wantsTitle && !wantsArchived) {
+        return res.status(400).json({ error: '仅支持修改 title 或 archived。' });
+      }
+
+      let normalizedTitle = null;
       if (wantsTitle) {
         if (typeof body.title !== 'string' || !body.title.trim()) {
           return res.status(400).json({ error: '标题不能为空。' });
         }
-        repository.updateVersionTitle(version.id, body.title.trim().slice(0, 120));
+        normalizedTitle = body.title.trim().slice(0, 120);
       }
       if (wantsArchived) {
+        if (typeof body.archived !== 'boolean') {
+          return res.status(400).json({ error: 'archived 必须为布尔值。' });
+        }
         // F5: the confirmed version must not be archivable (spec: only
         // non-confirmed branches are archivable). Un-archiving (archived:false)
         // is always allowed. Archiving a non-confirmed version is allowed.
         if (body.archived === true && session.confirmed_version_id === version.id) {
           return res.status(409).json({ error: '已确认版本不可归档。' });
         }
-        repository.setVersionArchived(version.id, Boolean(body.archived));
       }
 
-      if (!wantsTitle && !wantsArchived) {
-        return res.status(400).json({ error: '仅支持修改 title 或 archived。' });
-      }
+      repository.tx(() => {
+        if (wantsTitle) repository.updateVersionTitle(version.id, normalizedTitle);
+        if (wantsArchived) repository.setVersionArchived(version.id, body.archived);
+      });
 
       const refreshed = repository.getVersion(version.id);
       const requestById = requestMetaById(session.id);

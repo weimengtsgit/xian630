@@ -74,29 +74,36 @@ export function createAuthRouter({ repository, sessionAuth, startCodeTtlMs, rate
   });
 
   /**
-   * F7: POST /api/auth/restore { editToken } — recover an independent session on
-   * a new device / after losing the cookie. The editToken was returned ONCE by
-   * /independent as a recovery code. This validates it against every active
-   * session's scrypt hash (the hash is salted so it can't be queried directly),
-   * then sets the signed HttpOnly cookie. Rate-limited per IP. 401 on any
-   * failure (no leakage of which sessions exist).
+   * F7: POST /api/auth/restore { recoveryCode } — recover an independent session
+   * on a new device / after losing the cookie. The code is `<projectKey>.<editToken>`:
+   * the stable project key selects the current active session across restarts,
+   * and the high-entropy token proves ownership. This keeps each request to one
+   * scrypt verification. Rate-limited per IP; credential failures use one
+   * generic 401 response.
    */
   router.post('/restore', ...(restoreRateLimit ? [restoreRateLimit] : []), (req, res) => {
-    const { editToken } = req.body || {};
-    if (!editToken || typeof editToken !== 'string') {
-      return res.status(400).json({ error: '缺少 editToken。' });
+    const { recoveryCode } = req.body || {};
+    if (!recoveryCode || typeof recoveryCode !== 'string') {
+      return res.status(400).json({ error: '缺少 recoveryCode。' });
     }
 
-    // Iterate active sessions with an edit-token hash; verify each (scrypt).
-    // Bounded by at-most-one-active-session-per-project. The first match wins.
-    const candidates = repository.listActiveSessionsWithEditToken();
-    for (const candidate of candidates) {
-      if (verifyEditToken(editToken, candidate.edit_token_hash)) {
-        sessionAuth.setSessionCookie(res, candidate.id);
-        return res.json({ sessionId: candidate.id });
-      }
+    const separator = recoveryCode.indexOf('.');
+    if (separator <= 0 || separator === recoveryCode.length - 1) {
+      return res.status(400).json({ error: '恢复码格式无效。' });
     }
-    return res.status(401).json({ error: '恢复码无效。' });
+    const projectKey = recoveryCode.slice(0, separator);
+    const editToken = recoveryCode.slice(separator + 1);
+    const session = repository.getActiveSessionByProjectKey(projectKey);
+    if (
+      !session ||
+      session.status !== 'active' ||
+      !session.edit_token_hash ||
+      !verifyEditToken(editToken, session.edit_token_hash)
+    ) {
+      return res.status(401).json({ error: '恢复码无效。' });
+    }
+    sessionAuth.setSessionCookie(res, session.id);
+    return res.json({ sessionId: session.id });
   });
 
   /** POST /api/auth/logout — clear the session cookie. */

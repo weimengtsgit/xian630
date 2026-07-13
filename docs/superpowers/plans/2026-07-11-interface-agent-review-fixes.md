@@ -28,7 +28,7 @@
 - Test: `interface-agent/test/task7-frontend.test.js`
 
 **Interfaces:**
-- Produces: recovery code `<sessionId>.<editToken>` and `POST /api/auth/restore { recoveryCode }`.
+- Produces: recovery code `<projectKey>.<editToken>` and `POST /api/auth/restore { recoveryCode }`.
 
 - [ ] Add tests proving restore queries one session, rejects malformed codes, and the frontend sends `recoveryCode`.
 - [ ] Run the focused tests and confirm they fail for the missing targeted lookup.

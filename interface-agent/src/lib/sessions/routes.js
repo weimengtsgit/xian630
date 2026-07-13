@@ -172,7 +172,7 @@ export function createSessionRouter({ repository, sessionAuth, startCodeTtlMs, f
    * Distinct from resolve: NO internal-token required, NO start-code dance — the
    * browser IS the owner. Creates a session with a synthetic projectKey
    * (`independent-<hex>`, ≤32 chars to satisfy the F1 regex), generates an edit
-   * token (F7: the plaintext is returned ONCE as a recovery code), and sets the
+   * token (F7: returned ONCE inside a project-targeted recovery code), and sets the
    * signed HttpOnly edit cookie DIRECTLY. Rate-limited per IP so the no-token
    * entry can't be abused.
    */
@@ -182,10 +182,10 @@ export function createSessionRouter({ repository, sessionAuth, startCodeTtlMs, f
     const projectKey = `independent-${crypto.randomBytes(8).toString('hex')}`;
     const { session, editToken } = mintSession(projectKey);
     sessionAuth.setSessionCookie(res, session.id);
-    // F7: return the plaintext editToken ONCE as a recovery code (long-lived
-    // credential the user saves to recover the session on a new device / lost
-    // cookie via POST /api/auth/restore).
-    return res.status(201).json({ sessionId: session.id, editToken });
+    // The non-secret project key stays stable across session restart and selects
+    // exactly one active salted hash. The edit token remains the credential.
+    const recoveryCode = `${session.project_key}.${editToken}`;
+    return res.status(201).json({ sessionId: session.id, recoveryCode });
   });
 
   // --------------------------------------------------------------- /:id/restart

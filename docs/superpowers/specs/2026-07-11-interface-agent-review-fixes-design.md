@@ -6,7 +6,7 @@ Only `interface-agent` is changed. `agent-pipeline` authentication, storage, and
 
 ## Decisions
 
-1. Independent-session recovery codes contain an opaque session locator plus the existing high-entropy edit token. Restore queries one active session and performs one scrypt verification; it never scans every active session.
+1. Independent-session recovery codes contain the stable project key plus the existing high-entropy edit token. Restore queries the project's current active session and performs one scrypt verification; it never scans every active session, and the code remains valid after session restart.
 2. Archived versions cannot become confirmed. Version metadata PATCH validates the complete request before any write and applies title/archive changes in one SQLite transaction.
 3. The documented `/versions/:versionId/preview` endpoint is restored as an alias of `/html`; both use the same authenticated, sandboxed HTML handler.
 4. SQLite deployment backup uses the installed `better-sqlite3` runtime to create an online backup inside the mounted persistent volume. Deployment stops if backup creation or verification fails.

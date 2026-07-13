@@ -1,5 +1,5 @@
 import express from 'express';
-import { ConfirmConflictError } from '../db/repository.js';
+import { ArchivedVersionConfirmError, ConfirmConflictError } from '../db/repository.js';
 
 /**
  * Confirmation HTTP route (spec §API line 119, §确认与交付流程, task-7 brief §B).
@@ -76,6 +76,9 @@ export function createConfirmationsRouter({ repository, sessionAuth }) {
           currentConfirmedVersionId: error.currentConfirmedVersionId,
           rowVersion: error.rowVersion,
         });
+      }
+      if (error instanceof ArchivedVersionConfirmError) {
+        return res.status(409).json({ error: '归档版本不可确认，请先恢复该版本。' });
       }
       throw error;
     }

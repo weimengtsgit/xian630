@@ -23,6 +23,15 @@ export class ConfirmConflictError extends Error {
   }
 }
 
+/** Raised when a caller attempts to confirm an archived draft version. */
+export class ArchivedVersionConfirmError extends Error {
+  constructor(versionId) {
+    super('archived version cannot be confirmed');
+    this.name = 'ArchivedVersionConfirmError';
+    this.versionId = versionId;
+  }
+}
+
 /**
  * Repository boundary for the interface-agent versioning feature.
  *
@@ -297,22 +306,6 @@ export function createRepository(db) {
          WHERE project_key = ? AND status = 'active'`,
       )
       .get(projectKey);
-  }
-
-  /**
-   * F7: list all active sessions that have an edit-token hash, for the restore
-   * endpoint (POST /api/auth/restore). The edit-token hash is scrypt-salted, so
-   * it cannot be queried by value; the route verifies each candidate. Bounded by
-   * the at-most-one-active-session-per-project invariant. Returns minimal
-   * projection { id, edit_token_hash } — no other secrets.
-   */
-  function listActiveSessionsWithEditToken() {
-    return db
-      .prepare(
-        `SELECT id, edit_token_hash FROM interface_design_sessions
-         WHERE status = 'active' AND edit_token_hash IS NOT NULL`,
-      )
-      .all();
   }
 
   /** Archive a session (status -> 'archived', set archived_at). Preserves versions. */
@@ -781,6 +774,14 @@ export function createRepository(db) {
         throw new ConfirmConflictError(current, session.row_version);
       }
 
+      // Re-check ownership and archive state inside the same write transaction
+      // that updates confirmed_version_id. This closes the inverse path around
+      // the archive guard: an archived version must not become confirmed.
+      const version = assertVersionInSession(versionId, sessionId);
+      if (version.archived_at != null) {
+        throw new ArchivedVersionConfirmError(versionId);
+      }
+
       const now = new Date().toISOString();
       const newRowVersion = session.row_version + 1;
 
@@ -814,7 +815,7 @@ export function createRepository(db) {
       insertEvent({
         sessionId,
         type: 'confirm',
-        payload: { versionId, versionLabel: getVersion(versionId)?.version_label || null },
+        payload: { versionId, versionLabel: version.version_label || null },
         createdBy: sessionId,
       });
 
@@ -981,7 +982,6 @@ export function createRepository(db) {
     listEvents,
     // T4 session + settings + events
     getActiveSessionByProjectKey,
-    listActiveSessionsWithEditToken,
     archiveSession,
     createSessionWithToken,
     countVersions,

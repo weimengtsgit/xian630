@@ -247,6 +247,30 @@ describe('confirm cross-session version rejected', () => {
   });
 });
 
+// ================================================ 5. archived version rejected
+
+describe('confirm archived version rejected', () => {
+  let h;
+  afterEach(() => { if (h) cleanup(h); });
+
+  it('5. archived version -> 409 without changing confirmation or creating delivery', async () => {
+    h = buildHarness();
+    const { sessionId } = await setupSession(h, 'pk-archived-confirm');
+    const v1 = seedRootVersion(h, sessionId, { title: 'archived root' });
+    h.app.locals.repository.setVersionArchived(v1.id, true);
+
+    const response = await confirm(h, sessionId, {
+      versionId: v1.id,
+      expectedConfirmedVersionId: null,
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toContain('归档');
+    expect(h.app.locals.repository.getSession(sessionId).confirmed_version_id).toBeNull();
+    expect(deliveriesForSession(h, sessionId)).toHaveLength(0);
+  });
+});
+
 // ----------------------------------------------- helpers
 
 function repoCommit(h, sessionId, parentVersionId) {

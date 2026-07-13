@@ -375,15 +375,15 @@ describe('createIndependentSession (Sp6 standalone browser entry)', () => {
 // ================================================ F7: recovery-code restore
 
 describe('restoreSessionByEditToken (F7 recovery code)', () => {
-  it('F7d. POSTs editToken to /api/auth/restore, returns sessionId', async () => {
+  it('F7d. POSTs targeted recoveryCode to /api/auth/restore, returns sessionId', async () => {
     const fn = vi.fn(async (url, init) => ({
       ok: true,
       status: 200,
       json: async () => ({ sessionId: 'recovered-1' }),
     }));
-    const result = await restoreSessionByEditToken('iaet_recovery_code', fn);
+    const result = await restoreSessionByEditToken('session-1.iaet_recovery_code', fn);
     expect(fn).toHaveBeenCalledWith('/api/auth/restore', expect.objectContaining({ method: 'POST' }));
-    expect(JSON.parse(fn.mock.calls[0][1].body)).toEqual({ editToken: 'iaet_recovery_code' });
+    expect(JSON.parse(fn.mock.calls[0][1].body)).toEqual({ recoveryCode: 'session-1.iaet_recovery_code' });
     expect(result.sessionId).toBe('recovered-1');
   });
 

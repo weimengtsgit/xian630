@@ -417,19 +417,19 @@ export async function createIndependentSession(fetchImpl) {
 }
 
 /**
- * F7: recover an independent session via the one-time recovery code (editToken).
- * POSTs to /api/auth/restore; the server validates the editToken against active
- * sessions and sets the signed HttpOnly cookie. Returns { sessionId }. Throws on
+ * F7: recover an independent session via its one-time recovery code.
+ * POSTs to /api/auth/restore; the server uses the embedded session locator to
+ * validate one edit-token hash and sets the signed HttpOnly cookie. Returns { sessionId }. Throws on
  * 401 (wrong code) / 429 (rate-limited). The recovery code was shown once when
  * the independent session was created.
  */
-export async function restoreSessionByEditToken(editToken, fetchImpl) {
+export async function restoreSessionByEditToken(recoveryCode, fetchImpl) {
   const f = fetchImpl || ((typeof fetch !== 'undefined' ? fetch : null));
   if (!f) throw new Error('网络不可用。');
   const res = await f('/api/auth/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ editToken }),
+    body: JSON.stringify({ recoveryCode }),
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -819,11 +819,11 @@ function bootstrap() {
         currentSessionId = result.sessionId;
         status.textContent = '独立会话已创建';
         node.remove();
-        // F7: show the recovery code (editToken) ONCE so the user can save it
+        // F7: show the recovery code ONCE so the user can save it
         // to recover the session on a new device / lost cookie. The cookie is
         // already set; this is a separate one-time disclosure.
-        if (result.editToken) {
-          appendRecoveryCodeNotice(result.editToken);
+        if (result.recoveryCode) {
+          appendRecoveryCodeNotice(result.recoveryCode);
         }
         void initVersionUI();
       } catch (error) {

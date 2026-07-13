@@ -642,6 +642,8 @@ describe('POST /api/interface-sessions/independent (standalone browser entry)', 
     const r = await request(h.app).post('/api/interface-sessions/independent');
     expect(r.status).toBe(201);
     expect(r.body.sessionId).toBeTruthy();
+    expect(r.body.recoveryCode).toMatch(/^independent-[a-f0-9]{16}\.iaet_/);
+    expect(r.body.editToken).toBeUndefined();
 
     // The edit cookie is set directly (no start-code dance). The cookie is the
     // credential for standalone sessions.

@@ -277,6 +277,14 @@ describe('GET version html', () => {
     const csp = r.headers['content-security-policy'] || '';
     expect(csp).toBe('sandbox allow-scripts');
     expect(csp).not.toMatch(/allow-same-origin/);
+
+    const preview = await request(h.app)
+      .get(`/api/interface-sessions/${sessionId}/versions/${v1.id}/preview`)
+      .set('Cookie', cookieFor(h, sessionId));
+    expect(preview.status).toBe(200);
+    expect(preview.headers['content-type']).toMatch(/text\/html/);
+    expect(preview.headers['content-security-policy']).toBe('sandbox allow-scripts');
+    expect(preview.text).toBe(VERSION_HTML);
   });
 
   it('3b. missing artifact file -> 404 with sanitized message', async () => {
@@ -385,8 +393,16 @@ describe('PATCH version title', () => {
     const blockConf = await request(h.app)
       .patch(`/api/interface-sessions/${sessionId}/versions/${v1.id}`)
       .set('Cookie', cookieFor(h, sessionId))
-      .send({ archived: true });
+      .send({ title: 'must not persist', archived: true });
     expect(blockConf.status).toBe(409);
+    expect(h.app.locals.repository.getVersion(v1.id).title).toBe('root');
+
+    const invalidArchived = await request(h.app)
+      .patch(`/api/interface-sessions/${sessionId}/versions/${v1.id}`)
+      .set('Cookie', cookieFor(h, sessionId))
+      .send({ archived: 1 });
+    expect(invalidArchived.status).toBe(400);
+    expect(h.app.locals.repository.getVersion(v1.id).archived_at).toBeNull();
 
     // Archive a NON-confirmed branch -> ok
     const okBranch = await request(h.app)

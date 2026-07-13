@@ -291,16 +291,17 @@ describe('F7: POST /api/auth/restore (independent session recovery)', () => {
     if (h) { h.db.close(); rmSync(h.dir, { recursive: true, force: true }); }
   });
 
-  it('F7a. /independent returns editToken; restore with it sets cookie + returns sessionId', async () => {
+  it('F7a. /independent returns targeted recoveryCode; restore sets cookie + returns sessionId', async () => {
     h = buildHarness();
     const ind = await request(h.app).post('/api/interface-sessions/independent');
     expect(ind.status).toBe(201);
-    expect(ind.body.editToken).toMatch(/^iaet_/); // F7: returned once as recovery code
+    expect(ind.body.recoveryCode).toMatch(/^independent-[a-f0-9]{16}\.iaet_/);
+    expect(ind.body.editToken).toBeUndefined();
 
-    // Restore with the editToken → sets cookie + returns sessionId
+    // Restore with the targeted recovery code -> sets cookie + returns sessionId.
     const restore = await request(h.app)
       .post('/api/auth/restore')
-      .send({ editToken: ind.body.editToken });
+      .send({ recoveryCode: ind.body.recoveryCode });
     expect(restore.status).toBe(200);
     expect(restore.body.sessionId).toBe(ind.body.sessionId);
 
@@ -311,12 +312,37 @@ describe('F7: POST /api/auth/restore (independent session recovery)', () => {
     const me = await request(h.app).get('/api/auth/session').set('Cookie', cookie);
     expect(me.status).toBe(200);
     expect(me.body.sessionId).toBe(ind.body.sessionId);
+
+    // Restart creates a new session for the same stable project key. The saved
+    // recovery code must follow that project and restore the new active session.
+    const restarted = await request(h.app)
+      .post(`/api/interface-sessions/${ind.body.sessionId}/restart`)
+      .set('Cookie', cookie);
+    expect(restarted.status).toBe(200);
+    const afterRestart = await request(h.app)
+      .post('/api/auth/restore')
+      .send({ recoveryCode: ind.body.recoveryCode });
+    expect(afterRestart.status).toBe(200);
+    expect(afterRestart.body.sessionId).toBe(restarted.body.sessionId);
   });
 
-  it('F7b. wrong / missing editToken → 401 (no leakage)', async () => {
+  it('F7b. wrong / malformed recoveryCode is rejected without scanning sessions', async () => {
     h = buildHarness();
-    const wrong = await request(h.app).post('/api/auth/restore').send({ editToken: 'iaet_wrong' });
+    const ind = await request(h.app).post('/api/interface-sessions/independent');
+    const [projectKey] = ind.body.recoveryCode.split('.', 1);
+    const getSessionSpy = vi.spyOn(h.app.locals.repository, 'getActiveSessionByProjectKey');
+
+    const wrong = await request(h.app)
+      .post('/api/auth/restore')
+      .send({ recoveryCode: `${projectKey}.iaet_wrong` });
     expect(wrong.status).toBe(401);
+    expect(getSessionSpy).toHaveBeenCalledTimes(1);
+    expect(getSessionSpy).toHaveBeenCalledWith(projectKey);
+
+    const malformed = await request(h.app)
+      .post('/api/auth/restore')
+      .send({ recoveryCode: 'iaet_legacy_without_session_locator' });
+    expect(malformed.status).toBe(400);
     const missing = await request(h.app).post('/api/auth/restore').send({});
     expect(missing.status).toBe(400);
   });
@@ -324,9 +350,9 @@ describe('F7: POST /api/auth/restore (independent session recovery)', () => {
   it('F7c. restore is rate-limited per IP', async () => {
     h = buildHarness({ rateLimitWindowMs: 60000, rateLimitMax: 2 });
     // Two wrong attempts (allowed), third → 429
-    await request(h.app).post('/api/auth/restore').send({ editToken: 'iaet_x' });
-    await request(h.app).post('/api/auth/restore').send({ editToken: 'iaet_y' });
-    const r3 = await request(h.app).post('/api/auth/restore').send({ editToken: 'iaet_z' });
+    await request(h.app).post('/api/auth/restore').send({ recoveryCode: 's1.iaet_x' });
+    await request(h.app).post('/api/auth/restore').send({ recoveryCode: 's1.iaet_y' });
+    const r3 = await request(h.app).post('/api/auth/restore').send({ recoveryCode: 's1.iaet_z' });
     expect(r3.status).toBe(429);
   });
 });
