@@ -176,6 +176,30 @@ _Avoid_: 全局当前任务, 最近创建任务, 排队开始时间
 A deployable revision of an application produced by one generation task. Versions preserve the application's linear evolution within its continuing dialogue session and identify the preceding version as their baseline.
 _Avoid_: 独立应用, 覆盖式修改, 会话版本
 
+**界面设计会话**:
+A persistent, resumable interface-design conversation owned by the interface agent. It contains one isolated interface draft version history, resumes by default when its project is reopened, and is distinct from the software factory's dialogue session.
+_Avoid_: 对话会话, 需求澄清会话, 应用谱系
+
+**界面稿版本**:
+An immutable saved revision of an interface prototype produced by one successful interface-generation round or explicitly imported as the root of a new interface design session. It identifies its baseline so history may branch; individual versions may be archived but are removed only with their interface design session, and they are not application versions.
+_Avoid_: 应用版本, 生效版本, 覆盖式当前稿
+
+**界面稿分支**:
+The selected interface draft version and its ancestor versions that together provide the inherited context for a later interface-generation round. Instructions from descendant or sibling versions do not belong to that round's inherited context.
+_Avoid_: 全量对话历史, 当前页面内容, 应用谱系
+
+**已确认界面稿版本**:
+The single interface draft version explicitly accepted as the current interface output of an interface design session. Sharing a preview or generating another interface draft version does not replace it; explicitly accepting another version does.
+_Avoid_: 最新版本, 分享版本, 应用版本, 生效版本
+
+**当前选中界面稿版本**:
+The interface draft version one user is currently viewing and will use as the baseline for their next interface modification. It is personal interaction state and does not change the interface design session's accepted interface draft version.
+_Avoid_: 已确认界面稿版本, 会话当前版本, 最新版本
+
+**界面稿交付**:
+The retryable handoff of an accepted interface draft version to the interface agent's configured downstream output and pipeline notification. A delivery failure does not undo the user's acceptance decision, and a newer acceptance may supersede an unfinished delivery.
+_Avoid_: 界面稿确认, 分享预览, 应用部署
+
 **应用谱系**:
 One application and its ordered versions, generation tasks, deployments, and continuing dialogue session. A distinct application has a distinct application lineage and dialogue session.
 _Avoid_: 多应用混合会话, 无关联任务集合
