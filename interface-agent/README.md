@@ -65,13 +65,13 @@ interface-agent/
 | `GET` | `/api/pending-input` | 轮询读取上游写入的待定需求文件（旧轮询入口，保留兼容） |
 | `GET` | `/api/auth/session` | 基于 Cookie 恢复当前会话（刷新页面用） |
 | `POST` | `/api/auth/exchange` | 一次性启动码换签名的 HttpOnly 会话 Cookie |
-| `POST` | `/api/auth/restore` | 用恢复码（editToken）恢复独立会话并设置 Cookie（限流） |
+| `POST` | `/api/auth/restore` | 用定向恢复码恢复独立会话并设置 Cookie（只校验一个会话，限流） |
 | `POST` | `/api/interface-sessions/resolve` | 服务间：按 `projectKey` + 编辑凭证恢复或创建活跃会话（需 `X-Internal-Token` 创建） |
 | `POST` | `/api/interface-sessions/independent` | 独立浏览器入口：直接创建会话并设置编辑 Cookie（限流，无需内部令牌） |
 | `POST` | `/api/interface-sessions/:id/restart` | 归档当前会话并创建新活跃会话 |
 | `GET` | `/api/interface-sessions/:id` | 读取会话摘要（确认版本、交付状态、版本数） |
 | `GET`/`PATCH` | `/api/interface-sessions/:id/versions[/:versionId]` | 版本树元数据 / 版本详情 / 改标题 / 归档 |
-| `GET` | `/api/interface-sessions/:id/versions/:versionId/html` | 读取不可变版本 HTML（`Content-Security-Policy: sandbox allow-scripts`） |
+| `GET` | `/api/interface-sessions/:id/versions/:versionId/preview`（兼容 `/html`） | 读取不可变版本 HTML（`Content-Security-Policy: sandbox allow-scripts`） |
 | `POST` | `/api/interface-sessions/:id/generations` | 提交异步生成（202 返回 requestId；同幂等键返回已有请求） |
 | `GET` | `/api/interface-sessions/:id/generations/:requestId` | 恢复生成进度与结果 |
 | `POST` | `/api/interface-sessions/:id/confirmations` | 确认采用（乐观并发，过期返回 409；触发后台交付） |
@@ -81,6 +81,12 @@ interface-agent/
 | `GET` | `/api/interface-sessions/:id/events` | 读取完整操作记录（已脱敏） |
 
 > 说明：旧的 `POST /api/generate`、`POST /api/previews`、`GET /preview/:id` 已删除，分别由异步生成、分享 + 后台交付、版本 HTML 预览取代。
+
+### 异步处理语义
+
+- 生成和交付 worker 均采用可恢复的 at-least-once 执行；同一生成请求最多创建一个版本。
+- 模型输出返回后立即写入 `staged_html`，已暂存的请求重启时不会再次调用模型。模型返回与本地写入之间仍有不可原子化的极窄窗口，严格模型调用 exactly-once 需要模型提供方支持幂等请求或可恢复流。
+- 交付使用稳定的 `X-Idempotency-Key` 并记录 `notified_at`。HTTP 是否已被下游接受无法与本地 SQLite 原子提交，严格通知 exactly-once 要求下游按该键持久去重。
 
 ## 技术栈
 
@@ -92,18 +98,45 @@ interface-agent/
 
 ## 本地运行
 
+### 前置
+- Node.js 20+、npm
+- DeepSeek API Key（生成原型必需）；Blade OS 地址 + PAT（读写共享文件必需，不配则文件读写相关功能不可用）
+
+### 快速启动
 ```bash
 npm install
-cp .env.example .env
-# 编辑 .env，填入 DEEPSEEK_API_KEY（必填）
-npm start
+npm run dev        # 文件变更自动重启；DB 默认落到 ./data/（自动创建，已 gitignore）
 ```
+服务端口取自 `.env` 的 `PORT`（默认 3000；仓库 `.env` 常为 18020）。访问 `http://localhost:<PORT>/`。
 
-访问 `http://localhost:3000`。
+SQLite 数据库默认路径为 `./data/interface-agent.db`（本地开发无需 root，开箱即用）。容器内由 Dockerfile `ENV INTERFACE_AGENT_DB_PATH` 固定为 `/var/lib/interface-agent/interface-agent.db`（持久卷），本地默认值不影响容器。如需自定义本地路径，设 `INTERFACE_AGENT_DB_PATH`。
 
-开发模式（文件变更自动重启）：
+> 直接 `npm run dev` 即可启动。启动时若 `INTERFACE_AGENT_INTERNAL_TOKEN` / `INTERFACE_AGENT_SESSION_SECRET` 未配，会打印告警（非致命），见下文。
+
+### 配置 `.env`
 ```bash
-npm run dev
+cp .env.example .env   # 首次；已有 .env 可跳过
+```
+至少填 `DEEPSEEK_API_KEY`、`BLADE_OS_BASE_URL`、`BLADE_OS_PAT`、`CONFIRMED_OUTPUT_PATH`（如 `共享/prototype.html`）。
+
+### 联调项目会话流程（可选）
+若要在本地走通「从 agent-pipeline 打开 → 创建项目会话 → 编辑」的完整链路，还需在 `.env` 或命令行配：
+```bash
+INTERFACE_AGENT_SESSION_SECRET=dev-secret          # Cookie 签名密钥（不配则重启后 Cookie 失效）
+INTERFACE_AGENT_INTERNAL_TOKEN=dev-internal         # resolve 创建项目会话的服务间密钥（须与 agent-pipeline 一致）
+# 例：INTERFACE_AGENT_SESSION_SECRET=dev-secret INTERFACE_AGENT_INTERNAL_TOKEN=dev-internal npm run dev
+```
+未配时的告警含义：
+- `INTERFACE_AGENT_INTERNAL_TOKEN` 未配 → resolve 创建项目会话 fail-closed（仅影响"经 agent-pipeline 创建项目会话"；独立会话入口不受影响）。
+- `INTERFACE_AGENT_SESSION_SECRET` 未配 → 启动生成临时密钥，重启后会话 Cookie 失效（开发期可忽略）。
+
+### 两种入口
+- **项目会话**：经 agent-pipeline 用 `?start=<一次性启动码>` 打开（需 `INTERFACE_AGENT_INTERNAL_TOKEN` 与 agent-pipeline 一致才能联调）。
+- **独立会话**：直接访问 `http://localhost:<PORT>/`，点"创建独立会话"（无需 INTERNAL_TOKEN；返回一次性恢复码，可换设备恢复）。
+
+### 生产式启动（不自动重启）
+```bash
+npm start
 ```
 
 ## 部署
@@ -138,7 +171,7 @@ pm2 save
 | `CONFIRMED_OUTPUT_PATH` | 空 | 确认后写入的 HTML 文件路径（如 `共享/prototype.html`） |
 | `PIPELINE_STAGE_COMPLETE_URL` | 空 | 确认原型后回写流水线完成状态的 URL |
 | `PUBLIC_BASE_URL` | 空 | 预览分享链接的外部访问地址 |
-| `INTERFACE_AGENT_DB_PATH` | `/var/lib/interface-agent/interface-agent.db` | SQLite 持久化路径（会话、版本树、生成请求、分享、交付）。生产必须挂载持久卷。 |
+| `INTERFACE_AGENT_DB_PATH` | 本地 `./data/interface-agent.db`；容器由 Dockerfile 固定为 `/var/lib/interface-agent/interface-agent.db` | SQLite 持久化路径（会话、版本树、生成请求、分享、交付）。容器生产必须挂载持久卷 `-v /var/lib/interface-agent:/var/lib/interface-agent`。 |
 | `INTERFACE_AGENT_SESSION_SECRET` | 空（启动生成临时密钥并告警） | 会话 Cookie 的 HMAC-SHA256 签名密钥。**生产必配**固定强随机值（如 `openssl rand -base64 32`）；未配置则重启后所有会话 Cookie 失效。 |
 | `INTERFACE_AGENT_INTERNAL_TOKEN` | 空（fail-closed） | resolve CREATE 的服务间共享密钥（`X-Internal-Token`）。**必须与 agent-pipeline 配置相同值**；未配置则拒绝所有会话创建。 |
 | `INTERFACE_AGENT_COOKIE_SECURE` | `0` | 设为 `1` 时（HTTPS）给 Cookie 打 Secure 标志。 |

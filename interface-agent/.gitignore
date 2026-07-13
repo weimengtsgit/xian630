@@ -14,3 +14,6 @@ gen*-tmp.json
 prev-body.json
 generated-preview.html
 pending.md
+
+# local SQLite (dev default DB path; container uses /var/lib/interface-agent via Dockerfile ENV)
+data/

@@ -16,8 +16,10 @@ export function loadConfig(env = process.env) {
     pendingPollIntervalMs: Number(env.PENDING_POLL_INTERVAL_MS || 3000),
     pipelineStageCompleteUrl: env.PIPELINE_STAGE_COMPLETE_URL || '',
     pipelineCompleteTimeoutMs: Number(env.PIPELINE_COMPLETE_TIMEOUT_MS || 5000),
-    // SQLite 持久化路径：容器内建议 /var/lib/interface-agent/interface-agent.db（持久卷）
-    dbPath: env.INTERFACE_AGENT_DB_PATH || '/var/lib/interface-agent/interface-agent.db',
+    // SQLite 持久化路径。容器内由 Dockerfile ENV 固定为
+    // /var/lib/interface-agent/interface-agent.db（持久卷）；本地开发未设 env 时
+    // 落到 ./data/（可在本地直接 npm run dev，无需 root）。
+    dbPath: env.INTERFACE_AGENT_DB_PATH || './data/interface-agent.db',
     // 会话 Cookie 签名密钥（HMAC-SHA256）。未配置时启动会生成临时密钥并告警
     // （重启后所有会话 Cookie 失效）；生产必须配置。
     sessionSecret: env.INTERFACE_AGENT_SESSION_SECRET || '',
