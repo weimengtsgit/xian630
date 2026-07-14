@@ -5,7 +5,9 @@ FROM docker.m.daocloud.io/library/node:20-alpine
 
 # better-sqlite3 ships a native addon; on Alpine it must be compiled against
 # musl at install time. These build deps are needed only for `npm ci`.
-RUN apk add --no-cache python3 make g++
+# 先把 apk 源换成国内镜像（清华 tuna），避免国内构建访问 Alpine 官方源超时。
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories \
+    && apk add --no-cache python3 make g++
 
 WORKDIR /app
 

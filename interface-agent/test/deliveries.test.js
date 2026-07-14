@@ -146,7 +146,7 @@ describe('delivery worker success', () => {
     // still dedupe a restart re-run where it supports the header.
     expect(h.fetchClient).toHaveBeenCalledTimes(1);
     const pipelineBody = JSON.parse(h.fetchClient.mock.calls[0][1].body);
-    expect(pipelineBody).toEqual({ status: 'completed' });
+    expect(pipelineBody).toEqual({ projectname: 'pk-success', status: 'succeeded' });
     const pipelineHeaders = h.fetchClient.mock.calls[0][1].headers;
     expect(pipelineHeaders['X-Idempotency-Key']).toBe(delivery.idempotency_key);
     expect(pipelineHeaders['X-Interface-Project']).toBe('pk-success');
@@ -190,8 +190,10 @@ describe('delivery failure leaves confirm intact', () => {
     const session = h.app.locals.repository.getSession(sessionId);
     expect(session.confirmed_version_id).toBe(v1.id);
 
-    // Pipeline never reached (failure was before/at file write)
-    expect(h.fetchClient).not.toHaveBeenCalled();
+    // Failure callback notified agent-pipeline: POST {projectname, status:'failed'}
+    expect(h.fetchClient).toHaveBeenCalledTimes(1);
+    const failBody = JSON.parse(h.fetchClient.mock.calls[0][1].body);
+    expect(failBody).toEqual({ projectname: 'pk-blade-fail', status: 'failed' });
   });
 
   it('2b. pipeline failure → delivery failed, confirm stays confirmed', async () => {

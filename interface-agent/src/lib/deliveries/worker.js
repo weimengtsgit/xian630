@@ -137,7 +137,7 @@ export function createDeliveryWorker({ repository, fileClient, config, fetchClie
           'X-Interface-Project': projectKey || '',
           'X-Interface-Version-Label': version?.version_label || '',
         },
-        body: JSON.stringify({ status: 'completed' }),
+        body: JSON.stringify({ projectname: projectKey, status: 'succeeded' }),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -299,6 +299,18 @@ export function createDeliveryWorker({ repository, fileClient, config, fetchClie
           });
         }
       });
+      // 通知 agent-pipeline 交付失败(仅非 pipeline 错误,避免循环重试)。
+      // agent-pipeline 回调:POST /api/stages/agent-prototype {projectname, status:'failed'}
+      if (failed && code !== 'pipeline' && config.pipelineStageCompleteUrl && session?.project_key) {
+        try {
+          await fetchClient(config.pipelineStageCompleteUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectname: session.project_key, status: 'failed' }),
+            signal: AbortSignal.timeout(config.pipelineCompleteTimeoutMs || 5000),
+          });
+        } catch { /* best-effort:交付已标记 failed,回调失败不影响本地状态 */ }
+      }
       console.error(`[delivery-worker] ${deliveryId} failed [${code}]: ${message}`);
       return true;
     }
