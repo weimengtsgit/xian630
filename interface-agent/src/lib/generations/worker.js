@@ -241,6 +241,19 @@ export function createGenerationWorker({ repository, deepseekClient, fileClient,
         });
       });
 
+      // 回调 agent-pipeline:生成成功 → running(best-effort,不影响生成结果;
+      // 用户仍在调整界面,尚未交付 → 卡片保持"进行中")
+      if (config.pipelineStageCompleteUrl && session?.project_key) {
+        try {
+          await fetch(config.pipelineStageCompleteUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectname: session.project_key, status: 'running' }),
+            signal: AbortSignal.timeout(config.pipelineCompleteTimeoutMs || 5000),
+          });
+        } catch { /* best-effort:回调失败不影响已成功的生成 */ }
+      }
+
       console.log(`[worker] generation ${requestId} succeeded`);
       return true;
     } catch (error) {
