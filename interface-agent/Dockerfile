@@ -12,7 +12,8 @@ RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/re
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# 国内构建: npm 源换 npmmirror, 避免 npmjs.org 超时
+RUN npm config set registry https://registry.npmmirror.com && npm ci --omit=dev
 
 COPY src/ ./src/
 COPY public/ ./public/
