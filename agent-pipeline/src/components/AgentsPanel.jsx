@@ -75,7 +75,7 @@ function AgentNode({ id, status, url, projectname, projectId }) {
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
         .then(data => {
           if (data.startCode) {
-            window.open(url + '?start=' + data.startCode, '_blank', 'noopener')
+            window.open(url + '?start=' + data.startCode + '&projectname=' + (projectname || ''), '_blank', 'noopener')
           }
         })
         .catch(() => {})
