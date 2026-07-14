@@ -92,7 +92,7 @@ test('interface-launch: first call stores token server-side, returns startCode o
 
     await withServer(app, async base => {
       // Create a project
-      const createRes = await req(base, 'POST', '/api/projects', {})
+      const createRes = await req(base, 'POST', '/api/projects', { name: 'test' })
       assert.equal(createRes.status, 201)
       assert.ok(createRes.json.id)
       assert.equal(createRes.json.interfaceEditToken, undefined,
@@ -137,7 +137,7 @@ test('interface-launch: second call reuses stored token, editToken stays server-
     const app = createApp(store, { fetchImpl: stub })
 
     await withServer(app, async base => {
-      const createRes = await req(base, 'POST', '/api/projects', {})
+      const createRes = await req(base, 'POST', '/api/projects', { name: 'test' })
       const projId = createRes.json.id
 
       // First launch
@@ -190,7 +190,7 @@ test('S1: interface-launch does not set Access-Control-Allow-Origin: * (same-ori
     const app = createApp(store, { fetchImpl: stub })
 
     await withServer(app, async base => {
-      const createRes = await req(base, 'POST', '/api/projects', {})
+      const createRes = await req(base, 'POST', '/api/projects', { name: 'test' })
       const projId = createRes.json.id
       try {
         // Same-origin POST still works
@@ -220,7 +220,7 @@ test('interface-launch: resolve call sends X-Internal-Token (Fix 4)', async () =
     })
 
     await withServer(app, async base => {
-      const createRes = await req(base, 'POST', '/api/projects', {})
+      const createRes = await req(base, 'POST', '/api/projects', { name: 'test' })
       const projId = createRes.json.id
 
       await req(base, 'POST', `/api/projects/${projId}/interface-launch`)
@@ -244,13 +244,13 @@ test('F1: createProject rejects invalid projectname; default randomCode is valid
   const backup = fs.existsSync(DATA_FILE) ? fs.readFileSync(DATA_FILE, 'utf8') : null
   try {
     for (const bad of ['../../etc', 'a/b', 'a b', 'x'.repeat(33)]) {
-      assert.throws(() => createProject({ projectname: bad }), InvalidProjectNameError)
+      assert.throws(() => createProject({ name: 't', projectname: bad }), InvalidProjectNameError)
     }
-    // default (no projectname) uses randomCode(4) — must satisfy the regex
-    const proj = createProject({})
+    // default (no projectname) uses randomCode(4)+date — must satisfy the regex
+    const proj = createProject({ name: '默认名' })
     assert.equal(isValidProjectName(proj.projectname), true)
     // explicit valid projectname accepted
-    const proj2 = createProject({ projectname: 'my-proj' })
+    const proj2 = createProject({ name: 't', projectname: 'my-proj' })
     assert.equal(proj2.projectname, 'my-proj')
   } finally {
     if (backup !== null) fs.writeFileSync(DATA_FILE, backup)
@@ -264,9 +264,9 @@ test('F1: POST /api/projects with bad projectname → 400', async () => {
     const store = createStageStore(CONFIG)
     const app = createApp(store)
     await withServer(app, async base => {
-      const bad = await req(base, 'POST', '/api/projects', { projectname: '../../etc' })
+      const bad = await req(base, 'POST', '/api/projects', { name: 't', projectname: '../../etc' })
       assert.equal(bad.status, 400)
-      const ok = await req(base, 'POST', '/api/projects', { projectname: 'clean-key' })
+      const ok = await req(base, 'POST', '/api/projects', { name: 't', projectname: 'clean-key' })
       assert.equal(ok.status, 201)
       assert.equal(ok.json.projectname, 'clean-key')
       await req(base, 'DELETE', `/api/projects/${ok.json.id}`)
@@ -287,7 +287,7 @@ test('M1: foreign Origin → 403; same-origin / no-Origin → works', async () =
     const app = createApp(store, { fetchImpl: stub })
 
     await withServer(app, async base => {
-      const createRes = await req(base, 'POST', '/api/projects', {})
+      const createRes = await req(base, 'POST', '/api/projects', { name: 'test' })
       const projId = createRes.json.id
       const launchPath = `/api/projects/${projId}/interface-launch`
 

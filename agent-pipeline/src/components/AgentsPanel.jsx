@@ -1,7 +1,8 @@
-import { useStages } from '../hooks/useStages'
+import { useState, useEffect } from 'react'
 import {
   CheckCircle,
   Clock,
+  XCircle,
   Bot,
   User,
   Briefcase,
@@ -42,23 +43,33 @@ const AGENT_META = {
   }
 }
 
-function AgentNode({ id, status, url, onActivate, projectname, projectId }) {
+function AgentNode({ id, status, url, projectname, projectId }) {
   const meta = AGENT_META[id] || { icon: Bot, name: id, type: '', desc: '' }
   const Icon = meta.icon
   const st = status || 'pending'
   const hasUrl = !!url
-  const completed = st === 'completed'
-  const working = st === 'working'
-  // working 中不可点；无 url 不可点；其余（pending/completed 有 url）可点
-  const clickable = hasUrl && !working
-  const accent = completed ? '#7feb9b' : working ? '#68ddff' : hasUrl ? '#9ecbf0' : '#6b8693'
-  const statusText = completed ? '已完成' : working ? '进行中' : '待处理'
+  const succeeded = st === 'succeeded'
+  const failed = st === 'failed'
+  const running = st === 'running'
+  const terminal = succeeded || failed
+  // 终态(failed/succeeded)不可点;无 url 不可点;pending/running 可点
+  const clickable = hasUrl && !terminal
+  const accent = succeeded ? '#7feb9b' : failed ? '#ff6b6b' : running ? '#68ddff' : hasUrl ? '#9ecbf0' : '#6b8693'
+  const StatusIcon = succeeded ? CheckCircle : failed ? XCircle : Clock
+  const statusText = succeeded ? '已完成' : failed ? '失败' : running ? '进行中' : '待处理'
 
   function handleClick() {
     if (!clickable) return
-    if (st === 'pending') onActivate(id)   // 启动 → 进行中
+    // 用户决策 1:点击即乐观回调 running
+    if (st === 'pending' && projectname) {
+      fetch(`/api/stages/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectname, status: 'running' }),
+      }).catch(() => {})
+    }
 
-    // 界面解析智能体：通过后端凭证传递打开（editToken 永不进浏览器 URL）
+    // 界面解析智能体:通过后端凭证传递打开(editToken 永不进浏览器 URL)
     if (id === 'agent-prototype' && projectId) {
       fetch(`/api/projects/${projectId}/interface-launch`, { method: 'POST' })
         .then(r => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
@@ -67,11 +78,11 @@ function AgentNode({ id, status, url, onActivate, projectname, projectId }) {
             window.open(url + '?start=' + data.startCode, '_blank', 'noopener')
           }
         })
-        .catch(() => { /* 静默失败，用户可重试 */ })
+        .catch(() => {})
       return
     }
 
-    // 其他智能体：沿用 projectname 参数
+    // 其他智能体:projectname 参数
     const sep = url.includes('?') ? '&' : '?'
     window.open(url + sep + 'projectname=' + (projectname || ''), '_blank', 'noopener')
   }
@@ -94,7 +105,7 @@ function AgentNode({ id, status, url, onActivate, projectname, projectId }) {
       <div className="agent-node-head">
         <div className="agent-node-icon" style={{ borderColor: `${accent}55`, background: `${accent}1a` }}>
           <Icon size={30} style={{ color: accent }} />
-          {working && <span className="agent-node-pulse" style={{ borderColor: accent }} />}
+          {running && <span className="agent-node-pulse" style={{ borderColor: accent }} />}
         </div>
         <div className="agent-node-titles">
           <div className="agent-node-name">{meta.name}</div>
@@ -105,11 +116,12 @@ function AgentNode({ id, status, url, onActivate, projectname, projectId }) {
       <div className="agent-node-desc">{meta.desc}</div>
 
       <div className="agent-node-status">
-        {completed ? <CheckCircle size={17} color={accent} /> : <Clock size={17} color={accent} />}
+        <StatusIcon size={17} color={accent} />
         <span style={{ color: accent }}>{statusText}</span>
       </div>
 
-      {completed && <div className="agent-node-done">产出就绪 ✓</div>}
+      {succeeded && <div className="agent-node-done">产出就绪 ✓</div>}
+      {failed && <div className="agent-node-done" style={{ color: accent }}>执行失败</div>}
       {!hasUrl && <div className="agent-node-wait">未配置跳转</div>}
     </div>
   )
@@ -189,7 +201,27 @@ function MergeConnector() {
 }
 
 export function AgentsPanel({ userInput, projectname, projectId }) {
-  const { stages, loading, activate } = useStages()
+  const [stages, setStages] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  // 按项目获取智能体状态 + 3s 轮询(反映回调实时状态)
+  useEffect(() => {
+    if (!projectId) { setLoading(false); return }
+    let cancelled = false
+    const fetchData = async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/stages`)
+        if (res.ok) {
+          const data = await res.json()
+          if (!cancelled) { setStages(data.stages || []); setLoading(false) }
+        }
+      } catch { /* 静默 */ }
+    }
+    fetchData()
+    const timer = setInterval(fetchData, 3000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [projectId])
+
   const find = (key) => stages.find(s => s.key === key)
 
   if (loading) {
@@ -203,7 +235,7 @@ export function AgentsPanel({ userInput, projectname, projectId }) {
 
   const node = (key) => {
     const s = find(key)
-    return <AgentNode id={key} status={s?.status} url={s?.url} onActivate={activate} projectname={projectname} projectId={projectId} />
+    return <AgentNode id={key} status={s?.status} url={s?.url} projectname={projectname} projectId={projectId} />
   }
 
   return (

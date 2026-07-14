@@ -14,6 +14,8 @@ function formatTime(ts) {
 export function ProjectNav({ projects, selectedId, onNewProject, onSelectProject, onDeleteProject }) {
   const list = Array.isArray(projects) ? projects : []
   const [pendingDelete, setPendingDelete] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [nameInput, setNameInput] = useState('')
 
   async function confirmDelete() {
     if (!pendingDelete) return
@@ -28,13 +30,47 @@ export function ProjectNav({ projects, selectedId, onNewProject, onSelectProject
         <button
           type="button"
           className="project-nav-new"
-          onClick={onNewProject}
+          onClick={() => { setCreating(true); setNameInput('') }}
           title="新建项目"
         >
           <Plus size={16} />
           <span>新建项目</span>
         </button>
       </div>
+
+      {creating && (
+        <div className="project-nav-create">
+          <input
+            type="text"
+            className="project-nav-create-input"
+            placeholder="输入项目名称…"
+            value={nameInput}
+            autoFocus
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && nameInput.trim()) { onNewProject(nameInput.trim()); setCreating(false); setNameInput('') }
+              if (e.key === 'Escape') { setCreating(false); setNameInput('') }
+            }}
+          />
+          <div className="project-nav-create-actions">
+            <button
+              type="button"
+              className="project-nav-create-ok"
+              disabled={!nameInput.trim()}
+              onClick={() => { onNewProject(nameInput.trim()); setCreating(false); setNameInput('') }}
+            >
+              确定
+            </button>
+            <button
+              type="button"
+              className="project-nav-create-cancel"
+              onClick={() => { setCreating(false); setNameInput('') }}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="project-nav-list">
         {list.length === 0 ? (

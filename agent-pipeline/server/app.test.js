@@ -35,38 +35,26 @@ test('GET /api/stages 初始全 pending', async () => {
   })
 })
 
-test('POST /api/stages/:key working → completed 流转', async () => {
+test('POST /api/stages/:key 无 projectname → 400', async () => {
   const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
-    let r = await req(base, 'POST', '/api/stages/agent-data', { status: 'working' })
-    assert.equal(r.status, 200)
-    assert.equal(r.json.stages.find(s => s.key === 'agent-data').status, 'working')
-    r = await req(base, 'POST', '/api/stages/agent-data', { status: 'completed' })
-    assert.equal(r.json.stages.find(s => s.key === 'agent-data').status, 'completed')
+    const r = await req(base, 'POST', '/api/stages/agent-data', { status: 'running' })
+    assert.equal(r.status, 400)
   })
 })
 
-test('POST /api/stages/reset 全回 pending', async () => {
+test('POST unknown key (with projectname) → 400', async () => {
   const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
-    await req(base, 'POST', '/api/stages/agent-data', { status: 'completed' })
-    const { json } = await req(base, 'POST', '/api/stages/reset')
-    assert.ok(json.stages.every(s => s.status === 'pending'))
-  })
-})
-
-test('POST unknown key → 400', async () => {
-  const store = createStageStore(CONFIG)
-  await withServer(createApp(store), async base => {
-    const { status } = await req(base, 'POST', '/api/stages/agent-nope', { status: 'completed' })
+    const { status } = await req(base, 'POST', '/api/stages/agent-nope', { projectname: 'any', status: 'running' })
     assert.equal(status, 400)
   })
 })
 
-test('POST invalid status → 400', async () => {
+test('POST invalid status (with projectname) → 400', async () => {
   const store = createStageStore(CONFIG)
   await withServer(createApp(store), async base => {
-    const { status } = await req(base, 'POST', '/api/stages/agent-business', { status: 'idle' })
+    const { status } = await req(base, 'POST', '/api/stages/agent-business', { projectname: 'any', status: 'idle' })
     assert.equal(status, 400)
   })
 })

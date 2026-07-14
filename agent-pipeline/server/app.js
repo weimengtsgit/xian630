@@ -2,7 +2,7 @@ import express from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { store as defaultStore } from './stages.js'
-import { listProjects, createProject, findProject, updateProject, deleteProject } from './projects.js'
+import { listProjects, createProject, findProject, findProjectByProjectname, updateProject, deleteProject, setAgentStatus } from './projects.js'
 
 export function createApp(storeOverride, options = {}) {
   const store = storeOverride || defaultStore
@@ -44,10 +44,27 @@ export function createApp(storeOverride, options = {}) {
     res.json({ stages: store.reset() })
   })
 
+  // 合并 stage 静态配置(key/name/url) + 该项目的 agentStatus → 卡片视图。
+  function projectStagesView(project) {
+    const cfg = store.read()
+    const stages = cfg.map((s) => ({
+      key: s.key,
+      name: s.name,
+      url: s.url,
+      status: (project && project.agentStatus && project.agentStatus[s.key]) || 'pending',
+    }))
+    return { stages, completed: Boolean(project && project.completed) }
+  }
+
+  // 智能体回调:按 projectname 设置该智能体状态(per-project,持久)。
+  // body: { projectname, status }。status 兼容旧值 working→running、completed→succeeded。
   app.post('/api/stages/:key', (req, res) => {
+    const { projectname, status } = req.body || {}
+    if (!projectname) return res.status(400).json({ error: '缺少 projectname。' })
     try {
-      const stages = store.update(req.params.key, req.body || {})
-      res.json({ stages })
+      const project = setAgentStatus(projectname, req.params.key, status)
+      if (!project) return res.status(404).json({ error: '项目不存在。' })
+      res.json(projectStagesView(project))
     } catch (err) {
       res.status(400).json({ error: err.message })
     }
@@ -79,6 +96,13 @@ export function createApp(storeOverride, options = {}) {
   app.delete('/api/projects/:id', (req, res) => {
     const projects = deleteProject(req.params.id)
     res.json({ projects: projects.map(sanitizeProject) })
+  })
+
+  // 按项目的智能体状态视图(供 AgentsPanel 渲染 + 轮询):合并 stage 配置 + agentStatus。
+  app.get('/api/projects/:id/stages', (req, res) => {
+    const project = findProject(req.params.id)
+    if (!project) return res.status(404).json({ error: '项目不存在。' })
+    res.json(projectStagesView(project))
   })
 
   // ---- 界面智能体启动（凭证服务端传递）----

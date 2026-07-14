@@ -27,12 +27,12 @@ function App() {
   useEffect(() => { refreshProjects() }, [refreshProjects])
 
   // 新建项目
-  const handleNewProject = useCallback(async () => {
+  const handleNewProject = useCallback(async (name) => {
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ name }),
       })
       const proj = await res.json()
       setProjects(prev => [proj, ...prev])
