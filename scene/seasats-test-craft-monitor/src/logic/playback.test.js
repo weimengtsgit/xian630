@@ -68,7 +68,7 @@ test("resolveReplayWindow falls back to metadata then fixed window", () => {
 
   assert.deepEqual(resolveReplayWindow({ selectedTarget: {}, metadata: {} }), {
     start: 1764954060,
-    end: 1782237606,
+    end: 1784131200,
     source: "fallback",
   });
 });
@@ -97,7 +97,7 @@ test("buildRemoteMapUrl encodes mmsi and replay window", () => {
       startTime: DEFAULT_REPLAY_WINDOW.start,
       endTime: DEFAULT_REPLAY_WINDOW.end,
     }),
-    "http://218.61.33.200:18000/?mmsi=338414915&start_time=1764954060&end_time=1782237606"
+    "http://218.61.33.200:18000/?mmsi=338414915&start_time=1764954060&end_time=1784131200"
   );
 
   assert.equal(
@@ -107,7 +107,7 @@ test("buildRemoteMapUrl encodes mmsi and replay window", () => {
       startTime: DEFAULT_REPLAY_WINDOW.start * 1000,
       endTime: DEFAULT_REPLAY_WINDOW.end * 1000,
     }),
-    "http://218.61.33.200:18000/?foo=bar&mmsi=338414915&start_time=1764954060&end_time=1782237606"
+    "http://218.61.33.200:18000/?foo=bar&mmsi=338414915&start_time=1764954060&end_time=1784131200"
   );
 });
 
@@ -126,9 +126,9 @@ test("filterPayloadByReplayWindow keeps only track points inside the configured 
 
   const filtered = filterPayloadByReplayWindow(payload, DEFAULT_REPLAY_WINDOW);
 
-  assert.deepEqual(filtered.trackPoints.map((point) => point.speedKn), [2, 3, 5]);
+  assert.deepEqual(filtered.trackPoints.map((point) => point.speedKn), [2, 3, 4, 5]);
   assert.equal(filtered.metadata.dataWindow.start, "2025-12-05T17:01:00.000Z");
-  assert.equal(filtered.metadata.dataWindow.end, "2026-06-23T18:00:06.000Z");
+  assert.equal(filtered.metadata.dataWindow.end, "2026-07-15T16:00:00.000Z");
   assert.equal(payload.trackPoints.length, 5);
 });
 

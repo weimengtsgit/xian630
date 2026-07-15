@@ -1,5 +1,5 @@
 export const DEFAULT_REMOTE_MAP_BASE_URL = "http://218.61.33.200:18000/";
-export const DEFAULT_REPLAY_WINDOW = { start: 1764954060, end: 1782237606 };
+export const DEFAULT_REPLAY_WINDOW = { start: 1764954060, end: 1784131200 };
 
 export function toEpochSeconds(value) {
   if (value === null || value === undefined || value === "") return null;
