@@ -8,7 +8,7 @@ test("emptyFeatureCollection returns valid empty GeoJSON", () => {
 
 test("buildMapData converts targets, areas, tracks, gaps, and alerts to collections", () => {
   const data = buildMapData({
-    targets: [{ mmsi: "1", name: "SEASATS 1", lon: 120, lat: 20, status: "异常行为目标", score: 90 }],
+    targets: [{ mmsi: "1", name: "SEASATS 1", lon: 120, lat: 20, status: "异常行为舰艇", score: 90 }],
     areas: [{ id: "a", name: "区域A", center: { lon: 120, lat: 20 }, radiusNm: 10 }],
     segments: [{ id: "seg-1", targetMmsi: "1", areaIds: ["a"], points: [
       { time: "2026-01-01T00:00:00Z", lon: 120, lat: 20 },

@@ -12,7 +12,7 @@ test("buildSummary threat=none when nothing happens", () => {
 
 test("buildSummary threat=critical on coast high", () => {
   const analysis = {
-    targets: [{ mmsi: "X", name: "SEASATS 1", minCoastDistanceNm: 50, status: "异常行为目标", score: 90 }],
+    targets: [{ mmsi: "X", name: "SEASATS 1", minCoastDistanceNm: 50, status: "异常行为舰艇", score: 90 }],
     alerts: [{ type: "coast-proximity", level: "high", severity: "critical", targetName: "SEASATS 1", summary: "距海岸 50 海里" }],
     aisGaps: [],
   };
@@ -23,7 +23,7 @@ test("buildSummary threat=critical on coast high", () => {
 
 test("buildSummary threat=high on coast medium", () => {
   const analysis = {
-    targets: [{ mmsi: "X", name: "SEASATS 2", minCoastDistanceNm: 100, status: "待核验目标", score: 50 }],
+    targets: [{ mmsi: "X", name: "SEASATS 2", minCoastDistanceNm: 100, status: "待核验舰艇", score: 50 }],
     alerts: [{ type: "coast-proximity", level: "medium", severity: "warning", targetName: "SEASATS 2", summary: "距海岸 100 海里" }],
     aisGaps: [],
   };
@@ -33,10 +33,29 @@ test("buildSummary threat=high on coast medium", () => {
 
 test("buildSummary surfaces ais-gap count in findings", () => {
   const analysis = {
-    targets: [{ mmsi: "X", name: "SEASATS 3", minCoastDistanceNm: null, status: "高可信目标", score: 60 }],
+    targets: [{ mmsi: "X", name: "SEASATS 3", minCoastDistanceNm: null, status: "高可信舰艇", score: 60 }],
     alerts: [{ type: "ais-gap", severity: "critical", summary: "缺口 400 分钟" }],
     aisGaps: [{ id: "g1" }],
   };
   const s = buildSummary(analysis, PARAMS);
   assert.ok(s.findings.some((f) => /AIS/i.test(f.label) || /AIS/i.test(String(f.value))));
+});
+
+test("buildSummary formats long AIS gap duration as days and hours", () => {
+  const s = buildSummary({
+    targets: [{
+      mmsi: "X",
+      name: "SEASATS 55",
+      status: "异常行为舰艇",
+      score: 90,
+      hasObservedTrack: true,
+      reportCount: 300,
+      activeDays: 42,
+    }],
+    alerts: [],
+    aisGaps: [{ id: "g1", gapMinutes: 4166, severity: "critical" }],
+  }, PARAMS);
+
+  assert.match(s.narrative, /2天21小时26分钟/);
+  assert.doesNotMatch(s.narrative, /4166\s*分钟/);
 });

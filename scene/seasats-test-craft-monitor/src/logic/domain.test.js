@@ -77,6 +77,43 @@ test("builds behavior alerts and scores partial evidence without hard filtering"
   assert.equal(scoreTarget({ nameHit: true, dimension: { score: 12 }, latestAreaIds: [], hasObservedTrack: false, alerts: [] }), 42);
 });
 
+test("formats long alert durations as hours and days instead of raw minutes", () => {
+  const alerts = buildAlerts({
+    target: { mmsi: "1", name: "SEASATS 1" },
+    segments: [{
+      id: "seg-long",
+      targetMmsi: "1",
+      startTime: "2026-01-01T00:00:00Z",
+      endTime: "2026-01-03T21:26:00Z",
+      durationMinutes: 4166,
+      lowSpeedMinutes: 4166,
+      pathNm: 12,
+      displacementNm: 2,
+      pathDisplacementRatio: 1,
+      areaIds: ["test-area"],
+      centroid: { lon: 120, lat: 20 },
+    }],
+    aisGaps: [{
+      id: "gap-long",
+      targetMmsi: "1",
+      fromTime: "2026-01-01T00:00:00Z",
+      toTime: "2026-01-23T09:36:00Z",
+      gapMinutes: 32256,
+      severity: "critical",
+      lon: 120,
+      lat: 20,
+      nearAreaIds: ["test-area"],
+    }],
+    areas,
+  });
+
+  const text = alerts.flatMap((alert) => [alert.summary, ...(alert.evidence || [])]).join(" ");
+  assert.match(text, /2天21小时26分钟/);
+  assert.match(text, /22天9小时36分钟/);
+  assert.doesNotMatch(text, /4166\s*分钟/);
+  assert.doesNotMatch(text, /32256\s*分钟/);
+});
+
 test("analyzes payload and keeps tracked target first", () => {
   const analysis = analyzePayload({
     parameters: { lowSpeedDurationMinutes: 10, aisGapWarningMinutes: 30, aisGapCriticalMinutes: 360 },
@@ -91,7 +128,7 @@ test("analyzes payload and keeps tracked target first", () => {
     ],
   });
   assert.equal(analysis.targets[0].mmsi, "1");
-  assert.equal(analysis.targets[0].status, "异常行为目标");
+  assert.equal(analysis.targets[0].status, "异常行为舰艇");
 });
 
 test("computeTrackMetrics aggregates a small track", () => {

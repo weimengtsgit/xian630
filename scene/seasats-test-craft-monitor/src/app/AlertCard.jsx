@@ -27,12 +27,12 @@ export function AlertCard({ alert, onClose }) {
       <div className="card-grid">
         <div className="card-cell">
           <span className="cell-label"><Gauge size={12} /> 平均速度</span>
-          <span className="cell-big">{avg.toFixed(1)}<small>kt</small></span>
+          <span className="cell-big">{avg.toFixed(1)}<small>节</small></span>
           <div className="mini-bars">
-            <span style={{ height: `${(pre / maxBar) * 100}%` }} title={`中断前 ${pre}kt`} />
-            <span style={{ height: `${(post / maxBar) * 100}%` }} title={`中断后 ${post}kt`} />
+            <span style={{ height: `${(pre / maxBar) * 100}%` }} title={`中断前 ${pre}节`} />
+            <span style={{ height: `${(post / maxBar) * 100}%` }} title={`中断后 ${post}节`} />
           </div>
-          <small className="cell-sub">前 {pre}kt → 后 {post}kt</small>
+          <small className="cell-sub">前 {pre}节 → 后 {post}节</small>
         </div>
         <div className="card-cell">
           <span className="cell-label"><ArrowUp size={12} /> 航向</span>

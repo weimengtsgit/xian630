@@ -93,7 +93,7 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
       map.addLayer({ id: "monitored-area-outline", type: "line", source: "monitored-areas", paint: { "line-color": "#43f5d6", "line-width": 1.2, "line-opacity": 0.8 } });
       map.addLayer({ id: "track-segments", type: "line", source: "track-segments", filter: ["!=", ["get", "targetMmsi"], selectedMmsi ?? null], paint: { "line-color": "#64748b", "line-width": 1.4, "line-opacity": 0.4 } });
       map.addLayer({ id: "ais-gaps", type: "circle", source: "ais-gaps", paint: { "circle-radius": 6, "circle-color": ["match", ["get", "severity"], "critical", "#ef4444", "warning", "#f59e0b", "#9ca3af"], "circle-stroke-color": "#fff7ed", "circle-stroke-width": 1, "circle-opacity": 0.95 } });
-      map.addLayer({ id: "vessel-points", type: "circle", source: "vessel-points", paint: { "circle-radius": selectedTargetRadius(selectedMmsi), "circle-color": ["match", ["get", "status"], "异常行为目标", "#ef4444", "高可信目标", "#22c55e", "待核验目标", "#eab308", "#94a3b8"], "circle-stroke-color": "#f8fafc", "circle-stroke-width": selectedTargetStroke(selectedMmsi), "circle-opacity": 0.92 } });
+        map.addLayer({ id: "vessel-points", type: "circle", source: "vessel-points", paint: { "circle-radius": selectedTargetRadius(selectedMmsi), "circle-color": ["match", ["get", "status"], "异常行为舰艇", "#ef4444", "高可信舰艇", "#22c55e", "待核验舰艇", "#eab308", "#94a3b8"], "circle-stroke-color": "#f8fafc", "circle-stroke-width": selectedTargetStroke(selectedMmsi), "circle-opacity": 0.92 } });
       map.addLayer({ id: "alert-points", type: "circle", source: "alert-points", paint: { "circle-radius": selectedAlertRadius(selectedAlertId), "circle-color": ["match", ["get", "severity"], "critical", "#dc2626", "warning", "#f97316", "#38bdf8"], "circle-stroke-color": "#fef2f2", "circle-stroke-width": selectedAlertStroke(selectedAlertId), "circle-opacity": 0.86 } });
       map.addLayer({ id: "coast-line", type: "line", source: "coast-line", paint: { "line-color": "#22d3ee", "line-width": 1.6, "line-opacity": 0.9 } });
       map.addLayer({ id: "coast-buffer", type: "line", source: "coast-line", paint: { "line-color": "#ef4444", "line-width": ["interpolate", ["linear"], ["zoom"], 2, 6, 8, 26], "line-opacity": 0.10 } });
@@ -209,12 +209,12 @@ export function MapPanel({ mapData, selectedMmsi, selectedAlertId, focusRequest,
         {mapError && (
           <div className="map-fallback">
             <strong>地图渲染受限</strong>
-            <span>当前浏览器环境无法初始化 WebGL，目标、告警和轨迹数据仍可在两侧面板查看。</span>
+            <span>当前浏览器环境无法初始化 WebGL，舰艇、告警和轨迹数据仍可在两侧面板查看。</span>
           </div>
         )}
         {basemapLimited && <div className="map-warning">底图加载受限</div>}
         <div className="map-toggles" aria-label="图层">
-          <button className={showTargets ? "on" : ""} onClick={() => setShowTargets((v) => !v)} title="船只最新位置">目标</button>
+          <button className={showTargets ? "on" : ""} onClick={() => setShowTargets((v) => !v)} title="船只最新位置">舰艇</button>
           <button className={showTracks ? "on" : ""} onClick={() => setShowTracks((v) => !v)} title="船只航线（选中船高亮）">轨迹</button>
           <button className={showAreas ? "on" : ""} onClick={() => setShowAreas((v) => !v)} title="监测区 + 海岸警戒带">区域</button>
           <button className={showAlerts ? "on" : ""} onClick={() => setShowAlerts((v) => !v)} title="异常事件：低速/往返/AIS中断/接近国土">告警</button>

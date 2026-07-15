@@ -1,15 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowUp, Clock3, Database, Filter, Navigation, Search, Ship, Target, X } from "lucide-react";
-import { analyzePayload, fmtDuration } from "../logic/domain.js";
+import { AlertTriangle, Clock3, Database, Filter, Navigation, Search, Ship, X } from "lucide-react";
+import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
+import { buildRemoteMapUrl, filterForFocusMode, filterPayloadByReplayWindow, resolveReplayWindow } from "../logic/playback.js";
+import { buildSummary } from "../logic/summary.js";
 import { MapPanel } from "./MapPanel.jsx";
 import { AlertCard } from "./AlertCard.jsx";
 import { AnalysisPanel } from "./AnalysisPanel.jsx";
+import { PlaybackControlBar } from "./PlaybackControlBar.jsx";
+import { RemotePlaybackMap } from "./RemotePlaybackMap.jsx";
+import { VesselFocusPanel } from "./VesselFocusPanel.jsx";
 import coastData from "../data/chinaCoast.json";
 
 const payloadUrl = new URL("../data/seasatsPayload.json", import.meta.url).href;
-const statusOptions = ["全部状态", "异常行为目标", "高可信目标", "待核验目标", "仅最新位置"];
+const statusOptions = ["全部状态", "异常行为舰艇", "高可信舰艇", "待核验舰艇", "仅最新位置"];
 const sourceOptions = ["全部来源", "真实附件轨迹", "仅最新位置"];
+
+function replaySourceLabel(source) {
+  if (source === "selected-target") return "当前舰艇轨迹";
+  if (source === "metadata") return "数据集时间范围";
+  if (source === "fallback") return "默认回放时间范围";
+  return source || "未提供时间来源";
+}
 
 function fmtDateTime(value) {
   if (!value) return "--";
@@ -77,40 +89,68 @@ export function App() {
     return <main className="stm-shell loading-shell"><section className="loading-panel error"><AlertTriangle size={22} /><h1>数据加载失败</h1><p>{loadError.message}</p></section></main>;
   }
   if (!payloadData) {
-    return <main className="stm-shell loading-shell"><section className="loading-panel"><Database size={22} /><h1>无人艇跟监告警智能体</h1><p>加载附件分析数据</p></section></main>;
+    return <main className="stm-shell loading-shell"><section className="loading-panel"><Database size={22} /><h1>“光鱼”无人艇跟监告警智能体</h1><p>加载附件分析数据</p></section></main>;
   }
   return <Dashboard payload={payloadData} />;
 }
 
 function Dashboard({ payload }) {
-  const analysis = useMemo(() => analyzePayload(payload, coastData), [payload]);
+  const scopedPayload = useMemo(() => filterPayloadByReplayWindow(payload), [payload]);
+  const analysis = useMemo(() => analyzePayload(scopedPayload, coastData), [scopedPayload]);
   const [selectedMmsi, setSelectedMmsi] = useState(() => analysis.targets[0]?.mmsi);
   const [selectedAlertId, setSelectedAlertId] = useState(() => analysis.alerts[0]?.id || null);
   const [statusFilter, setStatusFilter] = useState(statusOptions[0]);
   const [sourceFilter, setSourceFilter] = useState(sourceOptions[0]);
-  const [areaFilter, setAreaFilter] = useState("全部区域");
   const [query, setQuery] = useState("");
   const [mapFocus, setMapFocus] = useState(null);
+  const [mapMode, setMapMode] = useState("remote");
+  const [focusOnly, setFocusOnly] = useState(true);
   const [cardAlert, setCardAlert] = useState(null);
   const [showAlertDrawer, setShowAlertDrawer] = useState(false);
-  const visibleTargets = useMemo(() => {
+  const selectableTargets = useMemo(() => {
     const q = query.trim().toLowerCase();
     return analysis.targets.filter((target) => {
       if (statusFilter !== "全部状态" && target.status !== statusFilter) return false;
       if (sourceFilter !== "全部来源" && target.trackSource !== sourceFilter) return false;
-      if (areaFilter !== "全部区域" && !target.latestAreaIds.includes(areaFilter)) return false;
       if (q && !`${target.name} ${target.mmsi}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [analysis.targets, areaFilter, query, sourceFilter, statusFilter]);
-  const visibleMmsi = useMemo(() => new Set(visibleTargets.map((target) => target.mmsi)), [visibleTargets]);
-  const visibleSegments = useMemo(() => analysis.segments.filter((segment) => visibleMmsi.has(segment.targetMmsi)), [analysis.segments, visibleMmsi]);
-  const visibleGaps = useMemo(() => analysis.aisGaps.filter((gap) => visibleMmsi.has(gap.targetMmsi)), [analysis.aisGaps, visibleMmsi]);
-  const visibleAlerts = useMemo(() => analysis.alerts.filter((alert) => visibleMmsi.has(alert.targetMmsi)), [analysis.alerts, visibleMmsi]);
-  const selectedTarget = analysis.targets.find((target) => target.mmsi === selectedMmsi) || visibleTargets[0] || analysis.targets[0];
-  const selectedAlert = analysis.alerts.find((alert) => alert.id === selectedAlertId) || selectedTarget?.alerts?.[0] || visibleAlerts[0] || null;
+  }, [analysis.targets, query, sourceFilter, statusFilter]);
+  const selectedTarget = selectableTargets.find((target) => target.mmsi === selectedMmsi) || selectableTargets[0] || null;
+  const displaySeedTargets = useMemo(() => {
+    if (focusOnly && selectedTarget) return [selectedTarget];
+    return selectableTargets;
+  }, [focusOnly, selectableTargets, selectedTarget]);
+  const displayMmsi = useMemo(() => new Set(displaySeedTargets.map((target) => target.mmsi)), [displaySeedTargets]);
+  const displaySeedAnalysis = useMemo(() => ({
+    ...analysis,
+    targets: displaySeedTargets,
+    segments: analysis.segments.filter((segment) => displayMmsi.has(segment.targetMmsi)),
+    aisGaps: analysis.aisGaps.filter((gap) => displayMmsi.has(gap.targetMmsi)),
+    alerts: analysis.alerts.filter((alert) => displayMmsi.has(alert.targetMmsi)),
+  }), [analysis, displayMmsi, displaySeedTargets]);
+  const displayAnalysis = useMemo(() => {
+    const filtered = filterForFocusMode({ analysis: displaySeedAnalysis, selectedMmsi: selectedTarget?.mmsi, focusOnly });
+    return { ...filtered, summary: buildSummary(filtered, filtered.parameters) };
+  }, [displaySeedAnalysis, focusOnly, selectedTarget?.mmsi]);
+  const visibleTargets = displayAnalysis.targets;
+  const visibleSegments = displayAnalysis.segments;
+  const visibleGaps = displayAnalysis.aisGaps;
+  const visibleAlerts = displayAnalysis.alerts;
+  const selectedTargetForDisplay = useMemo(
+    () => selectedTarget ? { ...selectedTarget } : selectedTarget,
+    [selectedTarget],
+  );
+  const selectedAlert = visibleAlerts.find((alert) => alert.id === selectedAlertId) || selectedTarget?.alerts?.find((alert) => visibleAlerts.some((item) => item.id === alert.id)) || visibleAlerts[0] || null;
+  const visibleCardAlert = cardAlert && visibleAlerts.some((alert) => alert.id === cardAlert.id) ? cardAlert : null;
   const mapData = useMemo(() => buildMapData({ targets: visibleTargets, areas: analysis.monitoredAreas, segments: visibleSegments, aisGaps: visibleGaps, alerts: visibleAlerts, coast: coastData, selectedTarget }), [analysis.monitoredAreas, visibleAlerts, visibleGaps, visibleSegments, visibleTargets, selectedTarget]);
-  const summary = analysis.summary;
+  const playbackWindow = useMemo(() => resolveReplayWindow({ forceFallback: true }), []);
+  const remoteMapUrl = useMemo(() => selectedTarget ? buildRemoteMapUrl({
+    mmsi: selectedTarget.mmsi,
+    startTime: playbackWindow.start,
+    endTime: playbackWindow.end,
+  }) : "", [playbackWindow, selectedTarget]);
+  const summary = displayAnalysis.summary;
   const handleTargetSelect = (mmsi) => {
     const target = analysis.targets.find((item) => item.mmsi === mmsi);
     setSelectedMmsi(mmsi);
@@ -135,47 +175,60 @@ function Dashboard({ payload }) {
   return (
     <main className="stm-shell">
       <header className="topbar">
-        <div className="brand"><Ship size={22} /><div><h1>无人艇跟监告警智能体</h1></div></div>
+        <div className="brand"><Ship size={22} /><div><h1>“光鱼”无人艇跟监告警智能体</h1></div></div>
         <div className="top-metrics">
-          <span><Database size={14} />目标 {analysis.metadata.targetCount}</span>
+          <span><Database size={14} />舰艇 {analysis.metadata.targetCount}</span>
           <span><AlertTriangle size={14} />告警 {analysis.alerts.length}</span>
           <span><Clock3 size={14} />数据至 {fmtDateTime(analysis.metadata.dataWindow.end)}</span>
         </div>
       </header>
 
+      <PlaybackControlBar
+        mapMode={mapMode}
+        onMapModeChange={setMapMode}
+        focusOnly={focusOnly}
+        onFocusOnlyChange={setFocusOnly}
+        playbackWindow={{ ...playbackWindow, source: replaySourceLabel(playbackWindow.source) }}
+        selectedTarget={selectedTargetForDisplay}
+        remoteMapUrl={remoteMapUrl}
+      />
+
       <section className="workspace">
         <aside className="target-panel">
-          <div className="panel-head"><h2><Target size={15} />目标</h2><span>{visibleTargets.length}/{analysis.targets.length}</span></div>
+          <div className="panel-head"><h2><Ship size={15} />舰艇</h2><span>{selectableTargets.length}/{analysis.targets.length}</span></div>
           <div className="filters">
             <label className="searchbox"><Search size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="船名 / MMSI" /></label>
-            <label><Filter size={13} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statusOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label><Filter size={13} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statusOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+            <label><Filter size={13} /><select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>{sourceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
           </div>
-          <div className="target-list">{visibleTargets.map((target) => <TargetRow key={target.mmsi} target={target} selected={target.mmsi === selectedTarget?.mmsi} onSelect={handleTargetSelect} />)}</div>
+          <div className="target-list">{selectableTargets.map((target) => <TargetRow key={target.mmsi} target={target} selected={target.mmsi === selectedTarget?.mmsi} onSelect={handleTargetSelect} />)}</div>
         </aside>
 
         <div className="map-stack">
-          <MapPanel mapData={mapData} selectedMmsi={selectedTarget?.mmsi} selectedAlertId={selectedAlert?.id} focusRequest={mapFocus} onAction={handleMapAction} />
-          <section className="dashstrip">
-            <div className="dashstrip-title">
-              <h3>{selectedTarget?.name}</h3><span>{selectedTarget?.mmsi}</span>
-              <strong className="score-pill">威胁分 {selectedTarget?.score}</strong>
-            </div>
-            <div className="dash-cells">
-              <div className="dash-cell">
-                <small>离国土</small>
-                <strong>{selectedTarget?.minCoastDistanceNm != null ? selectedTarget.minCoastDistanceNm.toFixed(0) : "—"}</strong>
-                <small>海里</small>
-                <div className="bar"><span style={{ width: `${Math.min(100, ((selectedTarget?.minCoastDistanceNm ?? 200) / 200) * 100)}%` }} /></div>
-              </div>
-              <div className="dash-cell"><small>最快</small><strong>{selectedTarget?.maxSpeedSegment ? selectedTarget.maxSpeedSegment.speedKn.toFixed(1) : "—"}</strong><small>kt</small></div>
-              <div className="dash-cell"><small>活动天数</small><strong>{selectedTarget?.activeDays ?? "—"}</strong></div>
-              <div className="dash-cell compass-cell"><small>航向</small><span className="compass" style={{ transform: `rotate(${selectedTarget?.orientation ?? selectedTarget?.courseDeg ?? 0}deg)` }}><ArrowUp size={20} /></span></div>
-            </div>
+          {mapMode === "remote" ? (
+            <RemotePlaybackMap
+              src={remoteMapUrl}
+              title="远程球面轨迹回放地图"
+              selectedTarget={selectedTarget}
+              windowSource={replaySourceLabel(playbackWindow.source)}
+            />
+          ) : (
+            <MapPanel mapData={mapData} selectedMmsi={selectedTarget?.mmsi} selectedAlertId={selectedAlert?.id} focusRequest={mapFocus} onAction={handleMapAction} />
+          )}
+          <section className="insight-strip">
             {summary?.advice?.length > 0 && (
               <div className={`advice-strip advice-${summary.advice[0].level || "low"}`}>{summary.advice[0].text}</div>
             )}
           </section>
         </div>
+
+        <VesselFocusPanel
+          selectedTarget={selectedTargetForDisplay}
+          visibleCount={visibleTargets.length}
+          totalCount={analysis.targets.length}
+          focusOnly={focusOnly}
+          onFocusOnlyChange={setFocusOnly}
+        />
 
         <button className={`alert-fab ${visibleAlerts.length ? "has" : ""}`} onClick={() => setShowAlertDrawer((v) => !v)} aria-label="告警列表">
           <AlertTriangle size={18} /><span>{visibleAlerts.length}</span>
@@ -194,8 +247,8 @@ function Dashboard({ payload }) {
         )}
       </section>
 
-      <AnalysisPanel analysis={analysis} selectedTarget={selectedTarget} coast={coastData} />
-      <AlertCard alert={cardAlert} onClose={() => setCardAlert(null)} />
+      <AnalysisPanel analysis={displayAnalysis} selectedTarget={selectedTarget} coastData={coastData} />
+      <AlertCard alert={visibleCardAlert} onClose={() => setCardAlert(null)} />
     </main>
   );
 }

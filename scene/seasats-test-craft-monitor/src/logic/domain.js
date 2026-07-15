@@ -18,9 +18,9 @@ export const DEFAULT_PARAMETERS = {
 };
 
 export const STATUS_PRIORITY = {
-  "异常行为目标": 0,
-  "高可信目标": 1,
-  "待核验目标": 2,
+  "异常行为舰艇": 0,
+  "高可信舰艇": 1,
+  "待核验舰艇": 2,
   "仅最新位置": 3,
 };
 
@@ -271,11 +271,12 @@ function areaNames(areaIds, areas) {
 
 export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], params = DEFAULT_PARAMETERS }) {
   const alerts = [];
-  const targetName = target?.name || target?.mmsi || "目标";
+  const targetName = target?.name || target?.mmsi || "舰艇";
   for (const segment of segments) {
     if (segment.areaIds.length === 0) continue;
     const names = areaNames(segment.areaIds, areas).join(" / ");
     if (segment.lowSpeedMinutes >= params.lowSpeedDurationMinutes) {
+      const lowSpeedDuration = fmtDuration(segment.lowSpeedMinutes);
       alerts.push({
         id: `${segment.id}-low-speed`,
         targetMmsi: target?.mmsi || segment.targetMmsi,
@@ -283,12 +284,12 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
         type: "sustained-low-speed",
         severity: segment.lowSpeedMinutes >= 60 ? "critical" : "warning",
         title: "持续低速活动",
-        summary: `${targetName} 在 ${names} 低速覆盖 ${Math.round(segment.lowSpeedMinutes)} 分钟`,
+        summary: `${targetName} 在 ${names} 低速覆盖 ${lowSpeedDuration}`,
         time: segment.endTime,
         lon: segment.centroid.lon,
         lat: segment.centroid.lat,
         areaIds: segment.areaIds,
-        evidence: [`低速阈值 0-3 节`, `覆盖 ${Math.round(segment.lowSpeedMinutes)} 分钟`, `区域 ${names}`],
+        evidence: [`低速阈值 0-3 节`, `覆盖 ${lowSpeedDuration}`, `区域 ${names}`],
       });
     }
     if (
@@ -318,6 +319,7 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
   }
   for (const gap of aisGaps) {
     const names = areaNames(gap.nearAreaIds, areas);
+    const gapDuration = fmtDuration(gap.gapMinutes);
     alerts.push({
       id: gap.id,
       targetMmsi: target?.mmsi || gap.targetMmsi,
@@ -325,12 +327,12 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
       type: "ais-gap",
       severity: gap.severity,
       title: "疑似 AIS 中断",
-      summary: `${targetName} AIS 轨迹缺口 ${Math.round(gap.gapMinutes)} 分钟${names.length ? `，靠近 ${names.join(" / ")}` : ""}`,
+      summary: `${targetName} AIS 轨迹缺口 ${gapDuration}${names.length ? `，靠近 ${names.join(" / ")}` : ""}`,
       time: gap.toTime,
       lon: gap.lon,
       lat: gap.lat,
       areaIds: gap.nearAreaIds,
-      evidence: [`上一点 ${gap.fromTime}`, `下一点 ${gap.toTime}`, `缺口 ${Math.round(gap.gapMinutes)} 分钟`],
+      evidence: [`上一点 ${gap.fromTime}`, `下一点 ${gap.toTime}`, `缺口 ${gapDuration}`],
       preSpeedKn: gap.preSpeedKn ?? null,
       postSpeedKn: gap.postSpeedKn ?? null,
       segmentAvgSpeedKn: gap.preSpeedKn != null && gap.postSpeedKn != null
@@ -349,7 +351,7 @@ export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], p
       type: "dimension-review",
       severity: "info",
       title: "尺寸近似命中",
-      summary: `${targetName} 为 3*2，作为尺寸偏差目标保留核验`,
+      summary: `${targetName} 为 3*2，作为尺寸偏差舰艇保留核验`,
       time: target.latestTime,
       lon: target.lon,
       lat: target.lat,
@@ -399,9 +401,9 @@ export function scoreTarget({ nameHit, dimension, latestAreaIds = [], hasObserve
 }
 
 function classifyStatus(score, alerts, hasObservedTrack) {
-  if (alerts.some((a) => a.severity === "critical" || a.type === "sustained-low-speed" || a.type === "repeated-activity" || (a.type === "coast-proximity" && a.level === "high"))) return "异常行为目标";
-  if (score >= 65 && hasObservedTrack) return "高可信目标";
-  if (score >= 40) return "待核验目标";
+  if (alerts.some((a) => a.severity === "critical" || a.type === "sustained-low-speed" || a.type === "repeated-activity" || (a.type === "coast-proximity" && a.level === "high"))) return "异常行为舰艇";
+  if (score >= 65 && hasObservedTrack) return "高可信舰艇";
+  if (score >= 40) return "待核验舰艇";
   return "仅最新位置";
 }
 

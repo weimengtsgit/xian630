@@ -6,17 +6,34 @@ function targetPoints(target) {
   return target.segments.flatMap((s) => s.points || []);
 }
 
-function decimateByCount(arr, maxCount) {
+// 时间均匀采样：在 [tFirst, tLast] 上均匀切出 maxCount 个目标时刻，各取一个最近点。
+// 按计数等距抽样会让密集段（如 12-2 月）挤掉稀疏段（如 3-6 月），导致折线提前截断；
+// 改按时间均匀后，稀疏的尾部数据也能在折线上呈现。
+function sampleByTime(arr, maxCount) {
   if (arr.length <= maxCount) return arr;
-  const step = Math.ceil(arr.length / maxCount);
+  const sorted = [...arr].sort((a, b) => (Date.parse(a?.time) || 0) - (Date.parse(b?.time) || 0));
+  if (maxCount <= 1) return [sorted[sorted.length - 1]];
+  const tFirst = Date.parse(sorted[0].time) || 0;
+  const tLast = Date.parse(sorted[sorted.length - 1].time) || tFirst;
+  const span = Math.max(1, tLast - tFirst);
   const out = [];
-  for (let i = 0; i < arr.length; i += step) out.push(arr[i]);
+  let idx = 0;
+  for (let bucket = 0; bucket < maxCount && idx < sorted.length; bucket += 1) {
+    const target = tFirst + (bucket / (maxCount - 1)) * span;
+    while (idx < sorted.length && (Date.parse(sorted[idx].time) || 0) < target) idx += 1;
+    if (idx < sorted.length) {
+      out.push(sorted[idx]);
+      idx += 1;
+    }
+  }
+  const last = sorted[sorted.length - 1];
+  if (!out.length || out[out.length - 1] !== last) out.push(last);
   return out;
 }
 
-// 选中船速度时序 [{t, v}]（v=kt）
+// 选中船速度时序 [{t, v}]（v=节）
 export function speedSeries(target, maxPoints = 80) {
-  const pts = decimateByCount(targetPoints(target), maxPoints);
+  const pts = sampleByTime(targetPoints(target), maxPoints);
   return pts
     .map((p) => ({ t: p.time, v: toNumber(p.speedKn) }))
     .filter((x) => x.v !== null);
@@ -25,7 +42,7 @@ export function speedSeries(target, maxPoints = 80) {
 // 选中船离国土距离时序 [{t, v}]（v=海里）
 export function coastDistanceSeries(target, coast, maxPoints = 80) {
   if (!coast) return [];
-  const pts = decimateByCount(targetPoints(target), maxPoints);
+  const pts = sampleByTime(targetPoints(target), maxPoints);
   const out = [];
   for (const p of pts) {
     const np = nearestPointOnCoastNm(p, coast);
@@ -36,9 +53,9 @@ export function coastDistanceSeries(target, coast, maxPoints = 80) {
 
 export function statusDistribution(targets) {
   const order = [
-    { key: "异常行为目标", label: "异常", color: "#ef4444" },
-    { key: "高可信目标", label: "高可信", color: "#22c55e" },
-    { key: "待核验目标", label: "待核验", color: "#eab308" },
+    { key: "异常行为舰艇", label: "异常", color: "#ef4444" },
+    { key: "高可信舰艇", label: "高可信", color: "#22c55e" },
+    { key: "待核验舰艇", label: "待核验", color: "#eab308" },
     { key: "仅最新位置", label: "仅位置", color: "#64748b" },
   ];
   return order.map((o) => ({ ...o, count: targets.filter((t) => t.status === o.key).length }));
@@ -77,18 +94,20 @@ export function hourDistribution(target) {
 }
 
 const DIRS = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
-// 选中船航向（orientation）8 方向分布
+// 选中船航向（orientation）8 方向分布（排除 360/511 等“不可用”坏点）
 export function headingDistribution(target) {
   const counts = new Array(8).fill(0);
+  let valid = 0;
   for (const p of targetPoints(target)) {
     const o = toNumber(p.orientation) ?? toNumber(p.courseDeg);
-    if (o === null || !Number.isFinite(o)) continue;
+    if (o === null || !Number.isFinite(o) || o < 0 || o >= 360) continue;
+    valid += 1;
     counts[Math.round(o / 45) % 8] += 1;
   }
-  return DIRS.map((dir, i) => ({ dir, count: counts[i] }));
+  return DIRS.map((dir, i) => ({ dir, count: counts[i], total: valid }));
 }
 
-// 全部目标离国土距离分布（升序）
+// 全部舰艇离国土距离分布（升序）
 export function targetDistanceDistribution(targets) {
   return targets
     .filter((t) => t.minCoastDistanceNm != null)
@@ -144,7 +163,7 @@ export function signalQuality(target) {
   return { reportCount, gapCount: gaps.length, gapMinutes };
 }
 
-// 各目标告警类型堆叠数据（Top N 有告警目标）
+// 各舰艇告警类型堆叠数据（Top N 有告警舰艇）
 const ALERT_TYPE_META = [
   { key: "sustained-low-speed", label: "持续低速", color: "#f59e0b" },
   { key: "repeated-activity", label: "往返盘旋", color: "#a855f7" },
@@ -163,7 +182,7 @@ export function perTargetAlertBreakdown(targets, n = 8) {
 
 // 速度 + 离国土距离 统一时序（按轨迹点合并）
 export function combinedSpeedDistanceSeries(target, coast, maxPoints = 80) {
-  const pts = decimateByCount(targetPoints(target), maxPoints);
+  const pts = sampleByTime(targetPoints(target), maxPoints);
   const out = [];
   for (const p of pts) {
     const speed = toNumber(p.speedKn);
