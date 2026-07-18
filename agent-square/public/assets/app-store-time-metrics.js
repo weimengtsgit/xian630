@@ -19,6 +19,9 @@
     'app-010': { name: '航母舰载机挖掘分析', vendor: '国防科大，领铄', version: 'v1.0.0', durationSeconds: 2736 },
   }
 
+  // 新增应用 fallback：按名称缓存，稳定随机耗时，避免每秒刷新抖动
+  var fallbackCache = {}
+
   function parseVersion(version) {
     const match = String(version || '').match(/v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/i)
     if (!match) return [0, 0, 0]
@@ -48,6 +51,21 @@
 
   function timeLabel(metric) {
     return classifyMetric(metric) === 'iteration' ? '迭代时间' : '生成时间'
+  }
+
+  function randomDuration(kind) {
+    // 生成时间: 30~50 分钟; 迭代时间: 15~30 分钟
+    var min = kind === 'generation' ? 1800 : 900
+    var max = kind === 'generation' ? 3000 : 1800
+    return min + Math.floor(Math.random() * (max - min))
+  }
+
+  function getOrCreateFallback(name, version) {
+    if (fallbackCache[name]) return fallbackCache[name]
+    var kind = classifyVersion(version)
+    var metric = { name: name, version: version, timeKind: kind, durationSeconds: randomDuration(kind) }
+    fallbackCache[name] = metric
+    return metric
   }
 
   function average(items) {
@@ -114,16 +132,21 @@
     header.appendChild(card)
   }
 
+  function resolveMetric(card, name, versionSelector) {
+    var metric = findMetricByName(name)
+    if (metric) return metric
+    var version = card.querySelector(versionSelector)?.textContent?.trim() || 'v1.0.0'
+    return getOrCreateFallback(name, version)
+  }
+
   function renderCards() {
     document.querySelectorAll('.app-card').forEach(card => {
       const name = card.querySelector('.app-card__name')?.textContent?.trim()
-      const metric = findMetricByName(name)
-      ensureTextMetric(card.querySelector('.app-card__meta'), 'app-card__time', metric)
+      ensureTextMetric(card.querySelector('.app-card__meta'), 'app-card__time', resolveMetric(card, name, '.app-card__version'))
     })
     document.querySelectorAll('.new-rec-card').forEach(card => {
       const name = card.querySelector('.new-rec-card__name')?.textContent?.trim()
-      const metric = findMetricByName(name)
-      ensureTextMetric(card.querySelector('.new-rec-card__meta'), 'new-rec-card__time', metric)
+      ensureTextMetric(card.querySelector('.new-rec-card__meta'), 'new-rec-card__time', resolveMetric(card, name, '.new-rec-card__version'))
     })
   }
 
@@ -131,7 +154,8 @@
     const detail = document.querySelector('.app-detail')
     if (!detail) return
     const name = detail.querySelector('.app-detail__name')?.textContent?.trim()
-    const metric = findMetricByName(name)
+    const version = detail.querySelector('.app-detail__version')?.textContent?.trim() || 'v1.0.0'
+    var metric = findMetricByName(name) || getOrCreateFallback(name, version)
     const grid = detail.querySelector('.app-detail__info-grid')
     if (!grid || !metric || grid.querySelector('[data-time-metric-detail]')) return
     const item = document.createElement('div')
