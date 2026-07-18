@@ -81,7 +81,7 @@ test("renders association below metrics with snapshot time and fallback heading"
       carriers: [{
         carrier: { mmsi: "366984000", name: "CVN-71" },
         relationType: "时延跟随",
-        lag: { lagMinutes: 120, averageDistanceNm: 62.86 },
+        lag: { lagMinutes: 120, averageDistanceNm: 62.86, minimumDistanceNm: 4.2, matchedPoints: 8, courseFilterApplied: true, maxCourseDifferenceDeg: 32 },
       }],
     },
     affiliationRefreshedAt: "2026-07-18T07:41:01.382Z",
@@ -92,6 +92,8 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /西奥多·罗斯福号/);
   assert.match(markup, /西奥多·罗斯福号.*跟随 海巡 630/);
   assert.match(markup, /尚不支持仅据 AIS 定性具体任务/);
+  assert.match(markup, /最小距离 4\.20 海里/);
+  assert.match(markup, /航向误差不超过45°（本次最大 32°）/);
   assert.match(markup, /时延 2小时/);
   assert.ok(markup.indexOf("最快速度") < markup.indexOf("航母关联（历史）"));
   assert.match(markup, /航向\/方向[\s\S]*--/);
@@ -107,7 +109,10 @@ test("renders delay-aligned distance evidence only for a matched delay relation"
         lag: {
           lagMinutes: 11520,
           averageDistanceNm: 2.34,
+          minimumDistanceNm: 2.1,
           matchedPoints: 8,
+          courseFilterApplied: true,
+          maxCourseDifferenceDeg: 30,
           distanceSeries: [
             { time: "2026-01-01T00:00:00.000Z", distanceNm: 2.1 },
             { time: "2026-01-01T00:01:00.000Z", distanceNm: 2.6 },

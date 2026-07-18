@@ -100,31 +100,32 @@ function metric(label, value) {
   );
 }
 
-function relationEntry({ name, mmsi, relation, key, followerName }) {
+function relationEntry({ name, mmsi, relation, key, followerName, followerRole }) {
+  const followerLabel = followerRole === "无人艇" ? `${followerName} 无人艇` : followerName;
   const relationship = relation.relationType === "同步伴随"
-    ? `${followerName} 与 ${name} 同步伴随`
+    ? `${followerLabel} 与 ${name} 同步伴随`
     // 与使用方 Python 程序的 Lead(参考艇) → Follow(航母) 输出口径一致。
-    : `${name} 跟随 ${followerName}`;
+    : `${name} 跟随 ${followerLabel}`;
   const averageDistance = numberOrNull(relation?.lag?.averageDistanceNm);
+  const minimumDistance = numberOrNull(relation?.lag?.minimumDistanceNm);
   const matchedPoints = numberOrNull(relation?.lag?.matchedPoints) || 0;
-  const startMs = Date.parse(relation?.lag?.startTime || "");
-  const endMs = Date.parse(relation?.lag?.endTime || "");
-  const spanDays = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
-    ? Math.max(1, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)))
-    : null;
+  const courseEvidence = relation?.lag?.courseFilterApplied
+    ? `航向误差不超过45°（本次最大 ${formatNumber(relation.lag.maxCourseDifferenceDeg ?? 45, 0)}°）`
+    : "航向数据不足，未纳入45°过滤";
   let assessment;
   if (relation.relationType === "同步伴随") {
     const syncDistance = numberOrNull(relation?.sync?.averageDistanceNm);
+    const syncMinimumDistance = numberOrNull(relation?.sync?.minimumDistanceNm);
     const syncPoints = numberOrNull(relation?.sync?.matchedPoints) || 0;
     assessment = syncDistance !== null && syncDistance <= 10 && syncPoints >= 30
-      ? `研判：同期近距离匹配 ${formatCount(syncPoints)} 点、均距 ${formatNumber(syncDistance, 2)} 海里，存在较强协同伴随线索。`
-      : `研判：存在同期轨迹匹配，但证据强度有限；仅凭 AIS 不能推断具体任务。`;
+      ? `研判依据：同期近距离匹配 ${formatCount(syncPoints)} 点、最小距离 ${formatNumber(syncMinimumDistance, 2)} 海里，存在较强协同伴随线索。`
+      : `研判依据：存在同期轨迹匹配，但证据强度有限；仅凭 AIS 不能推断具体任务。`;
   } else if (averageDistance !== null && averageDistance <= 10 && matchedPoints >= 30) {
-    assessment = `研判：${spanDays ? `覆盖约 ${spanDays} 天，` : ""}近距离时延匹配 ${formatCount(matchedPoints)} 点、均距 ${formatNumber(averageDistance, 2)} 海里，存在较强协同伴随线索。`;
+    assessment = `研判依据：近距离时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}，存在较强协同伴随线索。`;
   } else if (averageDistance !== null && averageDistance <= 30 && matchedPoints >= 50) {
-    assessment = `研判：${spanDays ? `覆盖约 ${spanDays} 天，` : ""}时延匹配 ${formatCount(matchedPoints)} 点、均距 ${formatNumber(averageDistance, 2)} 海里，存在中等强度关联线索。`;
+    assessment = `研判依据：时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}，存在中等强度关联线索。`;
   } else {
-    assessment = `研判：${spanDays ? `覆盖约 ${spanDays} 天，` : ""}时延匹配 ${formatCount(matchedPoints)} 点、均距 ${formatNumber(averageDistance, 2)} 海里；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
+    assessment = `研判依据：时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
   }
   return React.createElement(
     "div",
@@ -132,8 +133,8 @@ function relationEntry({ name, mmsi, relation, key, followerName }) {
     React.createElement("strong", null, relationship),
     React.createElement("small", null, `关联航母 ${mmsi} · ${relation.relationType}`),
     React.createElement("span", null, relation.relationType === "同步伴随"
-      ? `同步均距 ${formatNumber(relation.sync.averageDistanceNm, 2)} 海里`
-      : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，均距 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里`),
+      ? `同步最小距离 ${formatNumber(relation.sync.minimumDistanceNm, 2)} 海里`
+      : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里`),
     React.createElement("p", { className: "affiliation-assessment" }, assessment),
   );
 }
@@ -156,7 +157,8 @@ function distanceEvidence({ relation, name }) {
   const plot = { left: 30, right: 6, top: 16, bottom: 88 };
   const thresholdNm = 100;
   // 纵轴至少覆盖判定阈值，曲线相对阈值的位置才能直观反映关联依据。
-  const maxDistance = Math.max(...values, thresholdNm, 1);
+  const observedMaxDistance = Math.max(...values);
+  const maxDistance = Math.max(observedMaxDistance, thresholdNm, 1);
   const plotWidth = width - plot.left - plot.right;
   const plotHeight = plot.bottom - plot.top;
   const xFor = (index) => plot.left + (index / (series.length - 1)) * plotWidth;
@@ -174,7 +176,7 @@ function distanceEvidence({ relation, name }) {
     "section",
     { className: "affiliation-evidence", key: `evidence-${relation.carrier.mmsi}` },
     React.createElement("strong", null, `关联依据：${name} 的时延对齐距离`),
-    React.createElement("small", null, `延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 平均 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
+    React.createElement("small", null, `延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
     React.createElement(
       "svg",
       { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${name} 时延对齐后的距离曲线` },
@@ -192,7 +194,7 @@ function distanceEvidence({ relation, name }) {
       React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
       React.createElement("text", { x: width / 2, y: height - 2, textAnchor: "middle", className: "affiliation-evidence-label title" }, "时间（北京时间）"),
     ),
-    React.createElement("span", null, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(maxDistance, 2)} 海里；越低表示轨迹越接近。`),
+    React.createElement("span", null, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(observedMaxDistance, 2)} 海里；越低表示轨迹越接近。`),
   );
 }
 
@@ -205,12 +207,12 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
     const selectedCarrierName = carrierDisplayName(selectedMmsi, nameByMmsi.get(selectedMmsi));
     const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
       .filter((relation) => relation.carrier.mmsi === selectedMmsi && relation.relationType !== "未命中")
-      .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), relation })));
+      .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), role: item.reference?.role, relation })));
     if (!relatedVessels.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的舰船。");
     return React.createElement(
       React.Fragment,
       null,
-      relatedVessels.map((item) => relationEntry({ name: selectedCarrierName, mmsi: selectedMmsi, followerName: item.name, relation: item.relation, key: `${selectedMmsi}-${item.mmsi}` })),
+      relatedVessels.map((item) => relationEntry({ name: selectedCarrierName, mmsi: selectedMmsi, followerName: item.name, followerRole: item.role, relation: item.relation, key: `${selectedMmsi}-${item.mmsi}` })),
     );
   }
   if (affiliation.status === "no-track") return React.createElement("p", { className: "affiliation-empty" }, "历史窗口内未获取到该舰艇 AIS 轨迹。");
@@ -227,7 +229,7 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
       return React.createElement(
         React.Fragment,
         { key: item.carrier.mmsi },
-        relationEntry({ name, mmsi: item.carrier.mmsi, followerName, relation: item, key: item.carrier.mmsi }),
+        relationEntry({ name, mmsi: item.carrier.mmsi, followerName, followerRole: affiliation.reference?.role, relation: item, key: item.carrier.mmsi }),
         // 只呈现命中的、时延已对齐的实测距离，避免全量轨迹图造成时间语义误读。
         distanceEvidence({ relation: item, name }),
       );

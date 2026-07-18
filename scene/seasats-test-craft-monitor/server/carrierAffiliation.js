@@ -75,6 +75,10 @@ function avg(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
 
+function minimum(values) {
+  return values.length ? Math.min(...values) : null;
+}
+
 function range(times) {
   if (!times.length) return { startTime: null, endTime: null };
   let minTime = times[0];
@@ -135,8 +139,9 @@ function analyzeSync(leader, follower) {
     }
   }
   const averageDistanceNm = avg(distances);
+  const minimumDistanceNm = minimum(distances);
   const averageCourseCosine = courseCosines.length ? avg(courseCosines) : 1;
-  return { matchedPoints: distances.length, averageDistanceNm, averageCourseCosine, ...range(times), matched: distances.length >= RULES.minMatchedPoints && averageDistanceNm < RULES.syncDistThreshNm && averageCourseCosine > Math.cos(RULES.syncCourseThreshDeg * Math.PI / 180) };
+  return { matchedPoints: distances.length, averageDistanceNm, minimumDistanceNm, averageCourseCosine, ...range(times), matched: distances.length >= RULES.minMatchedPoints && averageDistanceNm < RULES.syncDistThreshNm && averageCourseCosine > Math.cos(RULES.syncCourseThreshDeg * Math.PI / 180) };
 }
 
 function analyzeLag(leader, follower) {
@@ -158,19 +163,25 @@ function analyzeLag(leader, follower) {
     // 与对方 Python 程序一致：仅当航向过滤后仍有足够点，才采用航向过滤结果；否则回退到全部有效插值点。
     const courseMatched = rawMatches.filter(({ point, interpolated }) => point.heading !== null && interpolated.heading !== null
       && courseDifference(point.heading, interpolated.heading) <= RULES.lagCourseThreshDeg);
-    const matches = courseMatched.length >= RULES.minMatchedPoints ? courseMatched : rawMatches;
-    const averageDistanceNm = avg(matches.map((match) => match.distanceNm));
+    const courseFilterApplied = courseMatched.length >= RULES.minMatchedPoints;
+    const matches = courseFilterApplied ? courseMatched : rawMatches;
+    const distances = matches.map((match) => match.distanceNm);
+    const averageDistanceNm = avg(distances);
+    const minimumDistanceNm = minimum(distances);
     if (!best || averageDistanceNm < best.averageDistanceNm) {
       best = {
         lagMinutes,
         averageDistanceNm,
+        minimumDistanceNm,
         matchedPoints: matches.length,
+        courseFilterApplied,
+        maxCourseDifferenceDeg: courseFilterApplied ? Math.max(...matches.map(({ point, interpolated }) => courseDifference(point.heading, interpolated.heading))) : null,
         ...range(matches.map((match) => match.point.timeMs)),
       };
     }
   }
   if (!best || best.averageDistanceNm >= RULES.lagDistThreshNm) {
-    return { ...(best || { lagMinutes: null, averageDistanceNm: null, matchedPoints: 0, startTime: null, endTime: null }), distanceSeries: [], matched: false };
+    return { ...(best || { lagMinutes: null, averageDistanceNm: null, minimumDistanceNm: null, matchedPoints: 0, courseFilterApplied: false, maxCourseDifferenceDeg: null, startTime: null, endTime: null }), distanceSeries: [], matched: false };
   }
 
   // 图表只保留已按最佳时延对齐、且真实报点时间相近的距离，避免将插值点误当作 AIS 实测点。
@@ -200,7 +211,7 @@ export function analyzeVesselCarrierRelations({ vessels, carriers, tracksByMmsi 
   const associationsByMmsi = {};
   for (const vessel of vessels) {
     if (carriers.some((carrier) => carrier.mmsi === vessel.mmsi)) {
-      associationsByMmsi[vessel.mmsi] = { status: "carrier", carriers: [] };
+      associationsByMmsi[vessel.mmsi] = { status: "carrier", reference: vessel, carriers: [] };
       continue;
     }
     const vesselTrack = cleanTrack(tracksByMmsi[vessel.mmsi] || []);
@@ -212,7 +223,7 @@ export function analyzeVesselCarrierRelations({ vessels, carriers, tracksByMmsi 
       const relationType = sync.matched ? "同步伴随" : lag.matched ? "时延跟随" : "未命中";
       return { carrier, relationType, vesselPointCount: vesselTrack.length, carrierPointCount: carrierTrack.length, sync, lag };
     });
-    associationsByMmsi[vessel.mmsi] = { status: vesselTrack.length ? "analyzed" : "no-track", carriers: carriersResult };
+    associationsByMmsi[vessel.mmsi] = { status: vesselTrack.length ? "analyzed" : "no-track", reference: vessel, carriers: carriersResult };
   }
   return { rules: RULES, generatedAt: new Date().toISOString(), associationsByMmsi };
 }
