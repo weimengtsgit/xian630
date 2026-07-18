@@ -37,7 +37,7 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
-const affiliationSnapshotVersion = "python-select-v2-map-fallback-min-distance";
+const affiliationSnapshotVersion = "python-select-v3-map-fallback-distance-evidence";
 
 function affiliationRulesChanged(snapshot) {
   // 规则或轨迹来源升级后不能将旧快照误标为新口径，必须完成一次后台重算再对外展示。

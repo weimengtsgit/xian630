@@ -37,6 +37,25 @@ test("按 Python 的 24 小时时延步长识别候选舰船领先的时延跟�
   assert.equal(result.relations[0].lag.distanceSeries.length, 8);
   // 两条轨迹可完全重合，仅时间偏移，因此最小距离允许为 0。
   assert.equal(result.relations[0].lag.minimumDistanceNm, 0);
+  assert.equal(result.relations[0].lag.distanceSeriesSource, "observed");
+});
+
+test("原始 AIS 报点稀疏时仍保留插值对齐距离图表数据", () => {
+  const startMs = Date.UTC(2026, 0, 1);
+  const result = analyzeCarrierAffiliations({
+    reference: { mmsi: "USV" },
+    candidates: [{ mmsi: "CVN", name: "CVN" }],
+    tracksByMmsi: {
+      USV: points({ mmsi: "USV", startMs, offsetMs: 8 * 24 * 60 * 60_000 }),
+      CVN: [
+        { mmsi: "CVN", time: new Date(startMs - 10 * 60_000).toISOString(), lon: 119.99, lat: 20, speedKn: 5, heading: 90 },
+        { mmsi: "CVN", time: new Date(startMs + 10 * 60_000).toISOString(), lon: 120.01, lat: 20, speedKn: 5, heading: 90 },
+      ],
+    },
+  });
+  assert.equal(result.relations[0].relationType, "时延跟随");
+  assert.equal(result.relations[0].lag.distanceSeriesSource, "interpolated");
+  assert.equal(result.relations[0].lag.distanceSeries.length, 8);
 });
 
 test("为每艘非航母舰艇保存其与候选航母的历史关联", () => {

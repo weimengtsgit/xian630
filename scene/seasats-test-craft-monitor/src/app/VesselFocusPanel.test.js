@@ -131,6 +131,31 @@ test("renders delay-aligned distance evidence only for a matched delay relation"
   assert.match(markup, /阈值 100 海里/);
 });
 
+test("renders an explicitly labelled interpolation chart when raw AIS points are sparse", () => {
+  const markup = render({
+    affiliation: {
+      status: "analyzed",
+      carriers: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        lag: {
+          lagMinutes: 120,
+          minimumDistanceNm: 4.2,
+          matchedPoints: 8,
+          distanceSeriesSource: "interpolated",
+          distanceSeries: [
+            { time: "2026-01-01T00:00:00.000Z", distanceNm: 4.2 },
+            { time: "2026-01-01T00:01:00.000Z", distanceNm: 4.8 },
+          ],
+        },
+      }],
+    },
+  });
+  assert.match(markup, /插值对齐距离/);
+  assert.match(markup, /航母报点稀疏，按关联算法插值对齐/);
+  assert.match(markup, /距离曲线/);
+});
+
 test("does not render NaN for invalid numeric values", () => {
   const markup = render({
     selectedTarget: {

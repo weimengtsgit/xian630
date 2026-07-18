@@ -169,6 +169,11 @@ function analyzeLag(leader, follower) {
     const averageDistanceNm = avg(distances);
     const minimumDistanceNm = minimum(distances);
     if (!best || averageDistanceNm < best.averageDistanceNm) {
+      // 图表回退序列沿用本轮关联判定已使用的插值点，不能因原始报点稀疏而丢失证据。
+      const alignedDistanceSeries = downsampleSeries(matches.map(({ point, distanceNm: matchedDistanceNm }) => ({
+        time: new Date(point.timeMs).toISOString(),
+        distanceNm: matchedDistanceNm,
+      })));
       best = {
         lagMinutes,
         averageDistanceNm,
@@ -177,11 +182,13 @@ function analyzeLag(leader, follower) {
         courseFilterApplied,
         maxCourseDifferenceDeg: courseFilterApplied ? Math.max(...matches.map(({ point, interpolated }) => courseDifference(point.heading, interpolated.heading))) : null,
         ...range(matches.map((match) => match.point.timeMs)),
+        alignedDistanceSeries,
       };
     }
   }
   if (!best || best.averageDistanceNm >= RULES.lagDistThreshNm) {
-    return { ...(best || { lagMinutes: null, averageDistanceNm: null, minimumDistanceNm: null, matchedPoints: 0, courseFilterApplied: false, maxCourseDifferenceDeg: null, startTime: null, endTime: null }), distanceSeries: [], matched: false };
+    const { alignedDistanceSeries, ...lagResult } = best || { lagMinutes: null, averageDistanceNm: null, minimumDistanceNm: null, matchedPoints: 0, courseFilterApplied: false, maxCourseDifferenceDeg: null, startTime: null, endTime: null };
+    return { ...lagResult, distanceSeries: [], distanceSeriesSource: null, matched: false };
   }
 
   // 图表只保留已按最佳时延对齐、且真实报点时间相近的距离，避免将插值点误当作 AIS 实测点。
@@ -191,7 +198,15 @@ function analyzeLag(leader, follower) {
     if (!matched) continue;
     distanceSeries.push({ time: new Date(point.timeMs).toISOString(), distanceNm: distanceNm(point, matched.point) });
   }
-  return { ...best, distanceSeries: downsampleSeries(distanceSeries), matched: true };
+  const { alignedDistanceSeries, ...lagResult } = best;
+  const hasObservedSeries = distanceSeries.length >= 2;
+  return {
+    ...lagResult,
+    // 原始 AIS 同时刻报点不足时展示计算判定实际采用的插值序列，并通过来源字段供前端如实标注。
+    distanceSeries: hasObservedSeries ? downsampleSeries(distanceSeries) : alignedDistanceSeries,
+    distanceSeriesSource: hasObservedSeries ? "observed" : "interpolated",
+    matched: true,
+  };
 }
 
 export function analyzeCarrierAffiliations({ reference, candidates, tracksByMmsi }) {

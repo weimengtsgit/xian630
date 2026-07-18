@@ -150,6 +150,8 @@ function formatChartTime(value) {
 function distanceEvidence({ relation, name }) {
   const series = relation?.lag?.distanceSeries || [];
   if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
+  const isInterpolated = relation?.lag?.distanceSeriesSource === "interpolated";
+  const sourceLabel = isInterpolated ? "插值对齐距离" : "实测对齐距离";
   const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
   if (values.length < 2) return null;
   const width = 300;
@@ -175,8 +177,8 @@ function distanceEvidence({ relation, name }) {
   return React.createElement(
     "section",
     { className: "affiliation-evidence", key: `evidence-${relation.carrier.mmsi}` },
-    React.createElement("strong", null, `关联依据：${name} 的时延对齐距离`),
-    React.createElement("small", null, `延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
+    React.createElement("strong", null, `关联依据：${name} 的${sourceLabel}`),
+    React.createElement("small", null, `${isInterpolated ? "航母报点稀疏，按关联算法插值对齐" : "原始 AIS 报点对齐"} · 延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
     React.createElement(
       "svg",
       { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${name} 时延对齐后的距离曲线` },
