@@ -100,12 +100,15 @@ function metric(label, value) {
   );
 }
 
-function relationEntry({ name, mmsi, relation, key }) {
+function relationEntry({ name, mmsi, relation, key, followerName }) {
+  const relationship = relation.relationType === "同步伴随"
+    ? `${followerName} 与 ${name} 同步伴随`
+    : `${followerName} 跟随 ${name}`;
   return React.createElement(
     "div",
     { className: "affiliation-match", key },
-    React.createElement("strong", null, name),
-    React.createElement("small", null, `${mmsi} · ${relation.relationType}`),
+    React.createElement("strong", null, relationship),
+    React.createElement("small", null, `关联航母 ${mmsi} · ${relation.relationType}`),
     React.createElement("span", null, relation.relationType === "同步伴随"
       ? `同步均距 ${formatNumber(relation.sync.averageDistanceNm, 2)} 海里`
       : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，均距 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里`),
@@ -170,12 +173,13 @@ function distanceEvidence({ relation, name }) {
   );
 }
 
-function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTargets) {
+function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliations, allTargets) {
   if (!affiliation || affiliation.status === "refreshing" || affiliation.status === "not-generated") {
     return React.createElement("p", { className: "affiliation-empty" }, "历史关联正在计算，完成后自动展示。");
   }
   if (affiliation.status === "carrier") {
     const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+    const selectedCarrierName = carrierDisplayName(selectedMmsi, nameByMmsi.get(selectedMmsi));
     const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
       .filter((relation) => relation.carrier.mmsi === selectedMmsi && relation.relationType !== "未命中")
       .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), relation })));
@@ -183,13 +187,14 @@ function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTarge
     return React.createElement(
       React.Fragment,
       null,
-      relatedVessels.map((item) => relationEntry({ ...item, key: `${selectedMmsi}-${item.mmsi}` })),
+      relatedVessels.map((item) => relationEntry({ name: selectedCarrierName, mmsi: selectedMmsi, followerName: item.name, relation: item.relation, key: `${selectedMmsi}-${item.mmsi}` })),
     );
   }
   if (affiliation.status === "no-track") return React.createElement("p", { className: "affiliation-empty" }, "历史窗口内未获取到该舰艇 AIS 轨迹。");
   const matched = (affiliation.carriers || []).filter((item) => item.relationType !== "未命中");
   if (!matched.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的航母关联。");
   const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+  const followerName = selectedName || nameByMmsi.get(selectedMmsi) || `MMSI ${selectedMmsi}`;
   return React.createElement(
     React.Fragment,
     null,
@@ -199,7 +204,7 @@ function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTarge
       return React.createElement(
         React.Fragment,
         { key: item.carrier.mmsi },
-        relationEntry({ name, mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi }),
+        relationEntry({ name, mmsi: item.carrier.mmsi, followerName, relation: item, key: item.carrier.mmsi }),
         // 只呈现命中的、时延已对齐的实测距离，避免全量轨迹图造成时间语义误读。
         distanceEvidence({ relation: item, name }),
       );
@@ -274,7 +279,7 @@ export function VesselFocusPanel({
         React.createElement("span", null, "航母关联（历史）"),
         snapshotTime && React.createElement("time", null, `快照：${snapshotTime}`),
       ),
-      affiliationContent(affiliation, vesselMmsi(selectedTarget), allAffiliations, allTargets),
+      affiliationContent(affiliation, vesselMmsi(selectedTarget), vesselName(selectedTarget), allAffiliations, allTargets),
     ),
   );
 }
