@@ -200,7 +200,7 @@ function distanceEvidence({ relation, name }) {
 
 function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliations, allTargets) {
   if (!affiliation || affiliation.status === "refreshing" || affiliation.status === "not-generated") {
-    return React.createElement("p", { className: "affiliation-empty" }, "历史关联正在计算，完成后自动展示。");
+    return React.createElement("p", { className: "affiliation-empty" }, "暂无可用的航母关联历史快照。");
   }
   if (affiliation.status === "carrier") {
     const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));

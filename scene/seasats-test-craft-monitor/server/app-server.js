@@ -569,8 +569,8 @@ createServer(async (request, response) => {
   summaryReady = false;
   // 每 30 分钟原子更新一次完整态势；已有历史关联快照时不因重启重复慢算。
   void refreshFleetSnapshot().catch(() => {});
+  // 重算期间保留上一份完整快照，避免页面先清空再显示新结果。
   if (!affiliationHistory || affiliationRulesChanged(affiliationHistory)) {
-    affiliationHistory = { status: "refreshing", refreshIntervalHours: 5 };
     void refreshAffiliationHistory().catch(() => {});
   }
   setInterval(() => { void refreshFleetSnapshot().catch(() => {}); }, fleetRefreshMs);

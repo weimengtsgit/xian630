@@ -140,9 +140,15 @@ function Dashboard({ payload }) {
     const loadHistory = () => fetch("/api/seasats/affiliations")
       .then((response) => response.ok ? response.json() : null)
       .then((data) => { if (!cancelled) setAffiliationHistory(data); })
-      .catch(() => { if (!cancelled) setAffiliationHistory(null); });
+      // 轮询瞬时失败时保留上一份已展示快照，不能把关联卡片清空。
+      .catch(() => {});
     loadHistory();
-    return () => { cancelled = true; };
+    // 历史关联只在新快照完整落盘后替换；定时拉取可让页面无感更新而不展示计算中状态。
+    const intervalId = window.setInterval(loadHistory, 30 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, []);
   useEffect(() => {
     if (!selectedMmsi) return undefined;
