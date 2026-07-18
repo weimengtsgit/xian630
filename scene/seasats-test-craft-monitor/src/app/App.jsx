@@ -316,12 +316,10 @@ function Dashboard({ payload }) {
           affiliationRefreshedAt={affiliationHistory?.refreshedAt || null}
           allAffiliations={affiliationHistory?.associationsByMmsi || {}}
           allTargets={analysis.targets}
-          trackLoading={trackLoading}
+          visibleAlertCount={visibleAlerts.length}
+          onAlertToggle={() => setShowAlertDrawer((value) => !value)}
         />
 
-        <button className={`alert-fab ${visibleAlerts.length ? "has" : ""}`} onClick={() => setShowAlertDrawer((v) => !v)} aria-label="告警列表">
-          <AlertTriangle size={18} /><span>{visibleAlerts.length}</span>
-        </button>
         {showAlertDrawer && (
           <aside className="alert-drawer">
             <div className="panel-head"><h2><AlertTriangle size={15} />告警</h2><button className="card-close" onClick={() => setShowAlertDrawer(false)}><X size={14} /></button></div>

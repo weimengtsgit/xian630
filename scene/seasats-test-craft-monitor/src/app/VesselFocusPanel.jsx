@@ -1,4 +1,5 @@
 import React from "react";
+import { AlertTriangle } from "lucide-react";
 
 const confirmedCarrierNames = {
   "368913000": "乔治·华盛顿号 (USS George Washington)",
@@ -129,6 +130,8 @@ export function VesselFocusPanel({
   affiliationRefreshedAt,
   allAffiliations,
   allTargets,
+  visibleAlertCount = 0,
+  onAlertToggle,
 }) {
   const maxSpeed = valueFrom(selectedTarget, ["maxSpeedKn", "fastestSpeedKn", "maxSpeed"]) ?? selectedTarget?.maxSpeedSegment?.speedKn;
   const avgSpeed = valueFrom(selectedTarget, ["avgSpeedKn", "averageSpeedKn", "avgSpeed"]);
@@ -154,9 +157,19 @@ export function VesselFocusPanel({
       ),
       React.createElement(
         "div",
-        { className: "vessel-threat-score" },
-        React.createElement("span", null, "威胁分"),
-        React.createElement("strong", null, formatNumber(threatScore, 0)),
+        { className: "vessel-header-actions" },
+        React.createElement(
+          "button",
+          { className: `vessel-alert-toggle ${visibleAlertCount ? "has" : ""}`, onClick: onAlertToggle, "aria-label": "告警列表" },
+          React.createElement(AlertTriangle, { size: 18 }),
+          React.createElement("span", null, formatCount(visibleAlertCount)),
+        ),
+        React.createElement(
+          "div",
+          { className: "vessel-threat-score" },
+          React.createElement("span", null, "威胁分"),
+          React.createElement("strong", null, formatNumber(threatScore, 0)),
+        ),
       ),
     ),
     React.createElement(

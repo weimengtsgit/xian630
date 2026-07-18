@@ -387,6 +387,10 @@ html, body { overflow: auto; }
 .insight-strip .advice-strip { margin: 0; }
 .vessel-focus-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: #e2e8f0; }
 .vessel-focus-header { display: flex; justify-content: space-between; gap: 12px; }
+.vessel-header-actions { display: flex; align-items: flex-start; gap: 8px; }
+.vessel-alert-toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 9px; border: 1px solid rgba(148,163,184,0.3); border-radius: 999px; color: #e2e8f0; background: rgba(15,23,42,0.92); font-size: 13px; cursor: pointer; }
+.vessel-alert-toggle.has { border-color: #ef4444; color: #fca5a5; box-shadow: 0 0 14px rgba(239,68,68,0.35); }
+.vessel-alert-toggle span { font-weight: 700; }
 .vessel-focus-header small, .vessel-threat-score span, .vessel-metric span { color: #94a3b8; font-size: 11px; }
 .vessel-focus-header h2 { margin: 3px 0; color: #f8fafc; font-size: 18px; line-height: 1.2; overflow-wrap: anywhere; }
 .vessel-focus-header p { margin: 0; color: #cbd5e1; font-size: 12px; }
