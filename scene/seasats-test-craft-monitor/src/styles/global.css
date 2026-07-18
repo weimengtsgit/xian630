@@ -385,7 +385,7 @@ html, body { overflow: auto; }
 .remote-map-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .insight-strip { padding: 10px 12px; }
 .insight-strip .advice-strip { margin: 0; }
-/* 与地图区域等高，令航母关联区可通过 margin-top: auto 稳定贴在右侧底部。 */
+/* 与地图区域等高；航母关联紧接指标卡，不额外撑开垂直空白。 */
 .vessel-focus-panel { align-self: stretch; height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: #e2e8f0; }
 .vessel-focus-header { display: flex; justify-content: space-between; gap: 12px; }
 .vessel-header-actions { display: flex; align-items: flex-start; gap: 8px; }
@@ -402,7 +402,7 @@ html, body { overflow: auto; }
 .vessel-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .vessel-metric { min-width: 0; padding: 9px; border-radius: 7px; background: rgba(30, 41, 59, 0.58); border: 1px solid rgba(148, 163, 184, 0.13); }
 .vessel-metric strong { display: block; margin-top: 4px; color: #f8fafc; font-size: 16px; overflow-wrap: anywhere; }
-.vessel-affiliation { max-height: 270px; margin-top: auto; padding: 10px; overflow-y: auto; overscroll-behavior: contain; border-radius: 7px; border: 1px solid rgba(56, 189, 248, 0.28); background: rgba(8, 47, 73, 0.32); scrollbar-width: thin; scrollbar-color: #2786ad transparent; }
+.vessel-affiliation { max-height: 270px; margin-top: 0; padding: 10px; overflow-y: auto; overscroll-behavior: contain; border-radius: 7px; border: 1px solid rgba(56, 189, 248, 0.28); background: rgba(8, 47, 73, 0.32); scrollbar-width: thin; scrollbar-color: #2786ad transparent; }
 /* 关联对象较多时只滚动卡片内容，标题始终保留便于确认当前信息。 */
 .vessel-affiliation h3 { position: sticky; top: -10px; z-index: 1; display: flex; justify-content: space-between; gap: 8px; margin: 0 0 8px; padding: 10px 0 7px; color: #bae6fd; background: #082f49; font-size: 13px; }
 .vessel-affiliation h3 time { color: #9cc5df; font-size: 10px; font-weight: 400; white-space: nowrap; }
