@@ -37,10 +37,12 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
+const affiliationSnapshotVersion = "python-select-v1-map-fallback";
 
 function affiliationRulesChanged(snapshot) {
-  // 规则升级后不能将旧快照误标为新口径，必须完成一次后台重算再对外展示。
-  return JSON.stringify(snapshot?.rules || {}) !== JSON.stringify(CARRIER_AFFILIATION_RULES);
+  // 规则或轨迹来源升级后不能将旧快照误标为新口径，必须完成一次后台重算再对外展示。
+  return snapshot?.algorithmVersion !== affiliationSnapshotVersion
+    || JSON.stringify(snapshot?.rules || {}) !== JSON.stringify(CARRIER_AFFILIATION_RULES);
 }
 
 function analyzeAffiliationsInWorker(input) {
@@ -331,6 +333,23 @@ async function buildTrack(mmsi) {
   return payload;
 }
 
+async function buildAffiliationTrack(mmsi) {
+  try {
+    const ontologyTrack = await buildTrack(mmsi);
+    if (ontologyTrack.trackPoints.length) return ontologyTrack;
+    // 本体存在脏数据清理或缺失时，不可把“0 条”误判成“无航母关联”。
+    console.warn(`本体未返回 ${mmsi} 的历史 AIS，回退至球形地图轨迹`);
+  } catch (error) {
+    // 关联快照是后台能力，本体单船暂时不可用时仍可用球形地图完成该船的历史研判。
+    console.warn(`本体拉取 ${mmsi} 历史 AIS 失败，回退至球形地图：${error instanceof Error ? error.message : error}`);
+  }
+  const remoteTrack = await buildRemoteMapTrack(mmsi);
+  return {
+    ...remoteTrack,
+    meta: { ...remoteTrack.meta, source: "remote-map-affiliation-fallback" },
+  };
+}
+
 async function buildFastSummary() {
   // 页面首屏只加载名单和默认关注船的完整轨迹，确保不被其他舰船的全量历史数据阻塞。
   const [identities, initialTrack] = await Promise.all([
@@ -483,12 +502,16 @@ async function refreshAffiliationHistory() {
     // 关联计算只消费已完整落盘的态势快照，绝不读取本轮的中间轨迹数据。
     if (!summarySnapshot) await refreshFleetSnapshot();
     // 航母归属需全轨迹，独立低频拉取，不能挤占 30 分钟一次的首屏态势刷新。
-    const tracks = await mapConcurrent(MONITORED_VESSELS, 2, async (vessel) => [vessel.mmsi, await buildTrack(vessel.mmsi)]);
+    const tracks = await mapConcurrent(MONITORED_VESSELS, 2, async (vessel) => [vessel.mmsi, await buildAffiliationTrack(vessel.mmsi)]);
     const tracksByMmsi = Object.fromEntries(tracks.map(([mmsi, track]) => [mmsi, track.trackPoints]));
+    const trackSourcesByMmsi = Object.fromEntries(tracks.map(([mmsi, track]) => [mmsi, {
+      source: track.meta?.source || "unknown",
+      loadedCount: track.meta?.loadedCount || track.trackPoints.length,
+    }]));
     const carriers = MONITORED_VESSELS.filter((vessel) => vessel.role === "航母");
     const result = await analyzeAffiliationsInWorker({ vessels: MONITORED_VESSELS, carriers, tracksByMmsi });
     const refreshedAt = new Date().toISOString();
-    const nextAffiliation = { ...result, refreshedAt, refreshIntervalHours: 5 };
+    const nextAffiliation = { ...result, algorithmVersion: affiliationSnapshotVersion, trackSourcesByMmsi, refreshedAt, refreshIntervalHours: 5 };
     await writeSnapshot(affiliationHistoryFile, nextAffiliation);
     affiliationHistory = nextAffiliation;
     console.log(`航母关联历史快照已更新：${refreshedAt}`);
