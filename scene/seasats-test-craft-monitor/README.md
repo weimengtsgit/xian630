@@ -11,12 +11,11 @@ Preset scene app for monitoring SEASATS test-craft candidates from customer-prov
 
 ## Data Boundary
 
-- `scripts/build-data.py` reads the two customer Excel files and writes `src/data/seasatsPayload.json`.
-- Default source files live under `data/raw/` so the app can be regenerated without machine-local absolute paths.
-- The target workbook contributes 79 latest-position targets.
-- The track workbook contributes 19091 AIS points for `mmsi=338414915` (`SEASATS 55`).
-- The browser loads the generated JSON as a static asset; it does not parse Excel.
-- Future extension tracks can reuse the same JSON shape, but internal provenance must distinguish observed AIS, latest-position-only, and generated extension tracks.
+- 运行时数据源为本体 `RawAISData`，浏览器不会再加载 `src/data/seasatsPayload.json` 或解析 CSV/Excel。
+- `server/app-server.js` 在服务端注入本体鉴权信息，提供同源的摘要接口和按 MMSI 轨迹接口；令牌不会发送给浏览器。
+- 页面打开时，仅对部署配置 `MONITORED_MMSI` 中的船只从本体获取完整 AIS；服务端仅保留 `2025-12-01`（含）之后的报点，按业务字段去重并排序。多个 MMSI 使用逗号分隔，例如 `MONITORED_MMSI=338555318,338414915`。
+- `RawAISData` 的字段为 `mmsi`、`latitude`、`longitude`、`sog`、`courseOverGround`、`trueHeading`、`navigationalStatus`、`typeCode`、`startTime`、`dataUpdateTime`。它不提供 CSV 中的 `LENGTH/width`，界面会如实显示“接口未提供尺寸”。
+- `server/seasatsScope.js` 只保存受监测 MMSI 范围，不保存位置或轨迹；新增受监测艇时更新此范围即可。
 
 ## Judgement Rules
 
@@ -41,24 +40,7 @@ The satellite base map requires network access. If tiles are unavailable, the ap
 npm install
 npm test
 npm run build
+npm start
+# 另一个终端（开发环境）
 npm run dev -- --host 127.0.0.1 --port 5179
-```
-
-To regenerate the JSON payload:
-
-```bash
-/Users/mengwei/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/build-data.py
-```
-
-The script defaults to:
-
-- `data/raw/副本1a8083ce4a7ced5847024a560e3ed22b.xlsx`
-- `data/raw/副本0cb4b68fa1a67179a0368da8eb82dff6.xlsx`
-
-For a one-off rebuild with different files, pass relative or absolute paths:
-
-```bash
-SEASATS_TARGETS_XLSX=data/raw/targets.xlsx \
-SEASATS_TRACKS_XLSX=data/raw/tracks.xlsx \
-/Users/mengwei/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/build-data.py
 ```

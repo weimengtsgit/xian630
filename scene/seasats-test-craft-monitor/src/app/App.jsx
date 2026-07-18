@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Clock3, Database, Filter, Navigation, Search, Ship, X } from "lucide-react";
 import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
-import { buildRemoteMapUrl, filterForFocusMode, filterPayloadByReplayWindow, resolveReplayWindow } from "../logic/playback.js";
+import { buildRemoteMapUrl, filterForFocusMode, resolveReplayWindow } from "../logic/playback.js";
 import { buildSummary } from "../logic/summary.js";
 import { MapPanel } from "./MapPanel.jsx";
 import { AlertCard } from "./AlertCard.jsx";
@@ -12,9 +12,8 @@ import { RemotePlaybackMap } from "./RemotePlaybackMap.jsx";
 import { VesselFocusPanel } from "./VesselFocusPanel.jsx";
 import coastData from "../data/chinaCoast.json";
 
-const payloadUrl = new URL("../data/seasatsPayload.json", import.meta.url).href;
 const statusOptions = ["全部状态", "异常行为舰艇", "高可信舰艇", "待核验舰艇", "仅最新位置"];
-const sourceOptions = ["全部来源", "真实附件轨迹", "仅最新位置"];
+const sourceOptions = ["全部来源", "真实 AIS 轨迹", "仅最新位置"];
 
 function replaySourceLabel(source) {
   if (source === "selected-target") return "当前舰艇轨迹";
@@ -37,6 +36,10 @@ function fmtShort(value) {
   return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
+function isGenericVesselName(name) {
+  return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
+}
+
 function severityLabel(severity) {
   if (severity === "critical") return "高风险";
   if (severity === "warning") return "关注";
@@ -53,7 +56,9 @@ function TargetRow({ target, selected, onSelect }) {
     <button className={`target-row ${selected ? "selected" : ""}`} onClick={() => onSelect(target.mmsi)}>
       <span className={`status-dot ${target.status}`} />
       <span className="target-main"><strong>{target.name}</strong><small>{target.mmsi}</small></span>
-      {target.hasObservedTrack
+      {target.latestOnly
+        ? <span className="track-mark has" title="最新 AIS 点位">点位</span>
+        : target.hasObservedTrack
         ? <span className="track-mark has" title="有轨迹"><Navigation size={12} />轨迹</span>
         : <span className="track-mark" title="仅最新位置">仅位置</span>}
       <span className="target-score">{target.score}</span>
@@ -74,29 +79,52 @@ function AlertRow({ alert, selected, onSelect }) {
 export function App() {
   const [payloadData, setPayloadData] = useState(null);
   const [loadError, setLoadError] = useState(null);
+  const [loadingMessage, setLoadingMessage] = useState("数据加载中，正在计算全部舰艇的最新点位威胁分…");
   useEffect(() => {
     let cancelled = false;
-    fetch(payloadUrl)
-      .then((response) => {
+    let retryTimer;
+    const loadSnapshot = async () => {
+      try {
+        const response = await fetch("/api/seasats/summary");
+        if (response.status === 202) {
+          if (!cancelled) setLoadingMessage("数据加载中，正在更新全部舰艇的最新点位威胁分…");
+          retryTimer = window.setTimeout(loadSnapshot, 5000);
+          return;
+        }
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then((data) => { if (!cancelled) setPayloadData(data); })
-      .catch((error) => { if (!cancelled) setLoadError(error); });
-    return () => { cancelled = true; };
+        const data = await response.json();
+        if (!cancelled) setPayloadData(data);
+      } catch (error) {
+        if (!cancelled) setLoadError(error);
+      }
+    };
+    loadSnapshot();
+    return () => { cancelled = true; window.clearTimeout(retryTimer); };
   }, []);
   if (loadError) {
     return <main className="stm-shell loading-shell"><section className="loading-panel error"><AlertTriangle size={22} /><h1>数据加载失败</h1><p>{loadError.message}</p></section></main>;
   }
   if (!payloadData) {
-    return <main className="stm-shell loading-shell"><section className="loading-panel"><Database size={22} /><h1>“光鱼”无人艇跟监告警智能体</h1><p>加载附件分析数据</p></section></main>;
+    return <main className="stm-shell loading-shell"><section className="loading-panel"><Database size={22} /><h1>“光鱼”无人艇跟监告警智能体</h1><p>{loadingMessage}</p></section></main>;
   }
   return <Dashboard payload={payloadData} />;
 }
 
 function Dashboard({ payload }) {
-  const scopedPayload = useMemo(() => filterPayloadByReplayWindow(payload), [payload]);
-  const analysis = useMemo(() => analyzePayload(scopedPayload, coastData), [scopedPayload]);
+  const [livePayload, setLivePayload] = useState(payload);
+  const [affiliationHistory, setAffiliationHistory] = useState(null);
+  const [trackLoading, setTrackLoading] = useState(false);
+  // 每次点选均递增，用于即使重复点击同一艘舰艇也强制重新拉取实时 AIS 数据。
+  const [trackRefreshVersion, setTrackRefreshVersion] = useState(0);
+  // 进入页面时以当前时刻生成远程地图结束时间，不在页面内定时重载地图。
+  const [remoteMapEndTime] = useState(() => Math.floor(Date.now() / 1000));
+  // 单船轨迹由服务端按窗口过滤；首屏评分只使用后端计算好的最新点位结果。
+  const scopedPayload = livePayload;
+  const analysis = useMemo(() => {
+    // 服务端批量快照已完成全量研判，首屏直接使用结果，避免浏览器再次遍历所有历史报点。
+    if (scopedPayload.precomputedAnalysis) return scopedPayload;
+    return analyzePayload(scopedPayload, coastData);
+  }, [scopedPayload]);
   const [selectedMmsi, setSelectedMmsi] = useState(() => analysis.targets[0]?.mmsi);
   const [selectedAlertId, setSelectedAlertId] = useState(() => analysis.alerts[0]?.id || null);
   const [statusFilter, setStatusFilter] = useState(statusOptions[0]);
@@ -107,6 +135,56 @@ function Dashboard({ payload }) {
   const [focusOnly, setFocusOnly] = useState(true);
   const [cardAlert, setCardAlert] = useState(null);
   const [showAlertDrawer, setShowAlertDrawer] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const loadHistory = () => fetch("/api/seasats/affiliations")
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => { if (!cancelled) setAffiliationHistory(data); })
+      .catch(() => { if (!cancelled) setAffiliationHistory(null); });
+    loadHistory();
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!selectedMmsi) return undefined;
+    let cancelled = false;
+    setTrackLoading(true);
+    fetch(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/track`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const points = data.trackPoints || [];
+        const latest = points.at(-1);
+        // 轨迹统计只重新计算当前点选舰艇，保留首屏已原子发布的其它舰艇态势，避免页面出现逐艘跳变。
+        const currentTarget = livePayload.targets.find((target) => target.mmsi === selectedMmsi);
+        const detailed = currentTarget ? analyzePayload({
+          metadata: {}, parameters: livePayload.parameters, monitoredAreas: livePayload.monitoredAreas,
+          targets: [{ ...currentTarget, latestOnly: false }], trackPoints: points,
+        }, coastData) : null;
+        const detailedTarget = detailed?.targets?.[0] || null;
+        setLivePayload((current) => ({
+          ...current,
+          trackPoints: [...current.trackPoints.filter((point) => point.mmsi !== selectedMmsi), ...points],
+          targets: current.targets.map((target) => target.mmsi !== selectedMmsi || !latest ? target : {
+            ...target,
+            ...detailedTarget,
+            // 球形地图轨迹不稳定提供船名；通用名或空值均不能覆盖首页已识别的标准船名。
+            name: latest.name && !isGenericVesselName(latest.name) ? latest.name : target.name,
+            latestTime: latest.time, lon: latest.lon, lat: latest.lat,
+            speedKn: latest.speedKn, speedRawDiv10: latest.speedKn == null ? null : latest.speedKn * 10,
+            courseDeg: latest.courseDeg, rawTypeCode: latest.aisSourceType || target.rawTypeCode,
+          }),
+          segments: [...current.segments.filter((segment) => segment.targetMmsi !== selectedMmsi), ...(detailed?.segments || [])],
+          aisGaps: [...current.aisGaps.filter((gap) => gap.targetMmsi !== selectedMmsi), ...(detailed?.aisGaps || [])],
+          alerts: [...current.alerts.filter((alert) => alert.targetMmsi !== selectedMmsi), ...(detailed?.alerts || [])],
+        }));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setTrackLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedMmsi, trackRefreshVersion]);
   const selectableTargets = useMemo(() => {
     const q = query.trim().toLowerCase();
     return analysis.targets.filter((target) => {
@@ -144,7 +222,11 @@ function Dashboard({ payload }) {
   const selectedAlert = visibleAlerts.find((alert) => alert.id === selectedAlertId) || selectedTarget?.alerts?.find((alert) => visibleAlerts.some((item) => item.id === alert.id)) || visibleAlerts[0] || null;
   const visibleCardAlert = cardAlert && visibleAlerts.some((alert) => alert.id === cardAlert.id) ? cardAlert : null;
   const mapData = useMemo(() => buildMapData({ targets: visibleTargets, areas: analysis.monitoredAreas, segments: visibleSegments, aisGaps: visibleGaps, alerts: visibleAlerts, coast: coastData, selectedTarget }), [analysis.monitoredAreas, visibleAlerts, visibleGaps, visibleSegments, visibleTargets, selectedTarget]);
-  const playbackWindow = useMemo(() => resolveReplayWindow({ forceFallback: true }), []);
+  const playbackWindow = useMemo(() => ({
+    ...resolveReplayWindow({ forceFallback: true }),
+    end: remoteMapEndTime,
+    source: "当前时间",
+  }), [remoteMapEndTime]);
   const remoteMapUrl = useMemo(() => selectedTarget ? buildRemoteMapUrl({
     mmsi: selectedTarget.mmsi,
     startTime: playbackWindow.start,
@@ -154,6 +236,8 @@ function Dashboard({ payload }) {
   const handleTargetSelect = (mmsi) => {
     const target = analysis.targets.find((item) => item.mmsi === mmsi);
     setSelectedMmsi(mmsi);
+    // 每次点击都从服务端取最新 AIS 并在返回后一次性更新底部图表，绝不复用旧轨迹。
+    setTrackRefreshVersion((version) => version + 1);
     setSelectedAlertId(target?.alerts?.[0]?.id || null);
     if (!target?.hasObservedTrack) setMapFocus(pointFocus("target", target, 11));
   };
@@ -228,6 +312,11 @@ function Dashboard({ payload }) {
           totalCount={analysis.targets.length}
           focusOnly={focusOnly}
           onFocusOnlyChange={setFocusOnly}
+          affiliation={affiliationHistory?.associationsByMmsi?.[selectedTarget?.mmsi] || affiliationHistory}
+          affiliationRefreshedAt={affiliationHistory?.refreshedAt || null}
+          allAffiliations={affiliationHistory?.associationsByMmsi || {}}
+          allTargets={analysis.targets}
+          trackLoading={trackLoading}
         />
 
         <button className={`alert-fab ${visibleAlerts.length ? "has" : ""}`} onClick={() => setShowAlertDrawer((v) => !v)} aria-label="告警列表">

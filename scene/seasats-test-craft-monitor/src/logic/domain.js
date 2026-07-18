@@ -42,6 +42,8 @@ export function isNameHit(name) {
 export function dimensionMatch(length, width) {
   const l = toNumber(length);
   const w = toNumber(width);
+  // RawAISData 未提供船长、船宽，不能把缺失字段误判为尺寸不符。
+  if (l === null || w === null) return { level: "unknown", label: "接口未提供尺寸", score: 0 };
   if (l === 4 && w === 2) return { level: "strong", label: "4*2 强命中", score: 20 };
   if (l === 3 && w === 2) return { level: "review", label: "3*2 尺寸偏差", score: 12 };
   return { level: "mismatch", label: "尺寸不符", score: 0 };
@@ -434,7 +436,7 @@ export function analyzePayload(payload, coast = null) {
       dimension,
       latestAreaIds,
       hasObservedTrack,
-      trackSource: hasObservedTrack ? "真实附件轨迹" : "仅最新位置",
+      trackSource: hasObservedTrack ? "真实 AIS 轨迹" : "仅最新位置",
       ...metrics,
     };
     const alerts = buildAlerts({ target: targetBase, segments, aisGaps, areas, params });

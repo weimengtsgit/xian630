@@ -63,12 +63,59 @@ function metric(label, value) {
   );
 }
 
+function relationEntry({ name, mmsi, relation, key }) {
+  return React.createElement(
+    "div",
+    { className: "affiliation-match", key },
+    React.createElement("strong", null, name),
+    React.createElement("small", null, `${mmsi} · ${relation.relationType}`),
+    React.createElement("span", null, relation.relationType === "同步伴随"
+      ? `同步均距 ${formatNumber(relation.sync.averageDistanceNm, 2)} 海里`
+      : `时延 ${formatNumber(relation.lag.lagMinutes, 0)} 分钟，均距 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里`),
+  );
+}
+
+function affiliationContent(affiliation, refreshedAt, selectedMmsi, allAffiliations, allTargets) {
+  if (!affiliation || affiliation.status === "refreshing" || affiliation.status === "not-generated") {
+    return React.createElement("p", { className: "affiliation-empty" }, "历史关联正在计算，完成后自动展示。");
+  }
+  if (affiliation.status === "carrier") {
+    const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+    const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
+      .filter((relation) => relation.carrier.mmsi === selectedMmsi && relation.relationType !== "未命中")
+      .map((relation) => ({ mmsi, name: nameByMmsi.get(mmsi) || `MMSI ${mmsi}`, relation })));
+    if (!relatedVessels.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足 MATLAB 阈值的关联舰船。");
+    return React.createElement(
+      React.Fragment,
+      null,
+      relatedVessels.map((item) => relationEntry({ ...item, key: `${selectedMmsi}-${item.mmsi}` })),
+      refreshedAt && React.createElement("time", { className: "affiliation-time" }, `历史快照：${new Date(refreshedAt).toLocaleString("zh-CN", { hour12: false })}`),
+    );
+  }
+  if (affiliation.status === "no-track") return React.createElement("p", { className: "affiliation-empty" }, "历史窗口内未获取到该舰艇 AIS 轨迹。");
+  const matched = (affiliation.carriers || []).filter((item) => item.relationType !== "未命中");
+  if (!matched.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足 MATLAB 阈值的历史航母关联。");
+  const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+  return React.createElement(
+    React.Fragment,
+    null,
+    // 卡片使用首页已经识别出的真实船名，避免只显示 CVN-71 一类内部编号。
+    matched.map((item) => relationEntry({ name: nameByMmsi.get(item.carrier.mmsi) || item.carrier.name, mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi })),
+    refreshedAt && React.createElement("time", { className: "affiliation-time" }, `历史快照：${new Date(refreshedAt).toLocaleString("zh-CN", { hour12: false })}`),
+  );
+}
+
 export function VesselFocusPanel({
   selectedTarget,
   visibleCount = 0,
   totalCount = 0,
   focusOnly = false,
   onFocusOnlyChange,
+  affiliation,
+  affiliationRefreshedAt,
+  allAffiliations,
+  allTargets,
+  trackLoading = false,
 }) {
   const maxSpeed = valueFrom(selectedTarget, ["maxSpeedKn", "fastestSpeedKn", "maxSpeed"]) ?? selectedTarget?.maxSpeedSegment?.speedKn;
   const avgSpeed = valueFrom(selectedTarget, ["avgSpeedKn", "averageSpeedKn", "avgSpeed"]);
@@ -121,7 +168,7 @@ export function VesselFocusPanel({
     React.createElement(
       "div",
       { className: "focus-mode-status", "aria-live": "polite" },
-      displayStatus,
+      trackLoading ? "数据加载中…" : displayStatus,
     ),
     React.createElement(
       "div",
@@ -132,6 +179,12 @@ export function VesselFocusPanel({
       metric("活动天数", `${formatNumber(activeDays, 0)} 天`),
       metric("AIS 中断数", `${formatCount(aisGapCount)} 次`),
       metric("告警数", `${formatCount(alertCount)} 条`),
+    ),
+    React.createElement(
+      "section",
+      { className: "vessel-affiliation" },
+      React.createElement("h3", null, "航母关联（历史）"),
+      affiliationContent(affiliation, affiliationRefreshedAt, vesselMmsi(selectedTarget), allAffiliations, allTargets),
     ),
   );
 }

@@ -31,6 +31,7 @@ test("matches SEASAT or SEASATS followed by TEST or a number", () => {
 test("classifies dimensions and inclusive low speed", () => {
   assert.deepEqual(dimensionMatch(4, 2), { level: "strong", label: "4*2 强命中", score: 20 });
   assert.deepEqual(dimensionMatch("3", "2"), { level: "review", label: "3*2 尺寸偏差", score: 12 });
+  assert.deepEqual(dimensionMatch(null, null), { level: "unknown", label: "接口未提供尺寸", score: 0 });
   assert.equal(isLowSpeed(0), true);
   assert.equal(isLowSpeed(3), true);
   assert.equal(isLowSpeed(3.1), false);
