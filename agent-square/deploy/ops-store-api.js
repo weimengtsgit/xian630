@@ -62,7 +62,9 @@ function apps(r) {
   r.headersOut['Access-Control-Allow-Origin'] = '*';
 
   if (r.method === 'GET') {
-    json(r, 200, readApps());
+    const showAll = (r.args && r.args.all === '1');
+    const all = readApps();
+    json(r, 200, showAll ? all : all.filter(item => !item.deleted));
     return;
   }
 
@@ -76,10 +78,19 @@ function apps(r) {
     }
 
     const app = normalizeApp(input);
-    const apps = readApps().filter(item => item.id !== app.id && item.name !== app.name);
-    apps.unshift(app);
+    const apps = readApps();
+
+    // 如果同名/id 已存在（包括软删除的），在旧记录位置原地替换，保留 deleted 以外的字段不变
+    const idx = apps.findIndex(item => item.id === app.id || item.name === app.name);
+    if (idx >= 0) {
+      const prev = apps[idx];
+      apps[idx] = Object.assign({}, prev, app, { deleted: false });
+    } else {
+      apps.unshift(app);
+    }
+
     writeApps(apps);
-    json(r, 201, app);
+    json(r, 201, apps[idx >= 0 ? idx : 0]);
     return;
   }
 
@@ -90,10 +101,16 @@ function apps(r) {
       return;
     }
 
-    const before = readApps();
-    const after = before.filter(item => item.id !== key && item.name !== key);
-    writeApps(after);
-    json(r, 200, { deleted: before.length - after.length });
+    const apps = readApps();
+    let deleted = 0;
+    for (const item of apps) {
+      if (item.id === key || item.name === key) {
+        item.deleted = true;
+        deleted += 1;
+      }
+    }
+    writeApps(apps);
+    json(r, 200, { deleted });
     return;
   }
 
