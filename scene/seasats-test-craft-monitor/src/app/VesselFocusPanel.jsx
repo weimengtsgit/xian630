@@ -160,6 +160,16 @@ export function VesselFocusPanel({
       ),
     ),
     React.createElement(
+      "div",
+      { className: "vessel-metric-grid" },
+      metric("最快速度", `${formatNumber(maxSpeed)} 节`),
+      metric("平均速度", `${formatNumber(avgSpeed)} 节`),
+      metric("航向/方向", formatHeading(heading)),
+      metric("活动天数", `${formatNumber(activeDays, 0)} 天`),
+      metric("AIS 中断数", `${formatCount(aisGapCount)} 次`),
+      metric("告警数", `${formatCount(alertCount)} 条`),
+    ),
+    React.createElement(
       "section",
       { className: "vessel-affiliation" },
       React.createElement(
@@ -169,16 +179,6 @@ export function VesselFocusPanel({
         snapshotTime && React.createElement("time", null, `快照：${snapshotTime}`),
       ),
       affiliationContent(affiliation, vesselMmsi(selectedTarget), allAffiliations, allTargets),
-    ),
-    React.createElement(
-      "div",
-      { className: "vessel-metric-grid" },
-      metric("最快速度", `${formatNumber(maxSpeed)} 节`),
-      metric("平均速度", `${formatNumber(avgSpeed)} 节`),
-      metric("航向/方向", formatHeading(heading)),
-      metric("活动天数", `${formatNumber(activeDays, 0)} 天`),
-      metric("AIS 中断数", `${formatCount(aisGapCount)} 次`),
-      metric("告警数", `${formatCount(alertCount)} 条`),
     ),
   );
 }

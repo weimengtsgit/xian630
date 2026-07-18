@@ -70,7 +70,7 @@ test("renders focused vessel identity, threat score, and key metrics", () => {
   assert.match(markup, /4 条/);
 });
 
-test("renders association above metrics with snapshot time and fallback heading", () => {
+test("renders association below metrics with snapshot time and fallback heading", () => {
   const markup = render({
     selectedTarget: {
       ...selectedTarget,
@@ -90,7 +90,7 @@ test("renders association above metrics with snapshot time and fallback heading"
   assert.match(markup, /航母关联（历史）/);
   assert.match(markup, /快照：/);
   assert.match(markup, /西奥多·罗斯福号/);
-  assert.ok(markup.indexOf("航母关联（历史）") < markup.indexOf("最快速度"));
+  assert.ok(markup.indexOf("最快速度") < markup.indexOf("航母关联（历史）"));
   assert.match(markup, /航向\/方向[\s\S]*--/);
 });
 
