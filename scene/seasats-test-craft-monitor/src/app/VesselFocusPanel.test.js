@@ -90,7 +90,8 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /航母关联（历史）/);
   assert.match(markup, /快照：/);
   assert.match(markup, /西奥多·罗斯福号/);
-  assert.match(markup, /海巡 630 跟随 西奥多·罗斯福号/);
+  assert.match(markup, /西奥多·罗斯福号.*跟随 海巡 630/);
+  assert.match(markup, /疑似承担航母外围巡逻、侦察或引导等任务/);
   assert.match(markup, /时延 2小时/);
   assert.ok(markup.indexOf("最快速度") < markup.indexOf("航母关联（历史）"));
   assert.match(markup, /航向\/方向[\s\S]*--/);

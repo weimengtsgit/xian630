@@ -103,7 +103,11 @@ function metric(label, value) {
 function relationEntry({ name, mmsi, relation, key, followerName }) {
   const relationship = relation.relationType === "同步伴随"
     ? `${followerName} 与 ${name} 同步伴随`
-    : `${followerName} 跟随 ${name}`;
+    // 与使用方 Python 程序的 Lead(参考艇) → Follow(航母) 输出口径一致。
+    : `${name} 跟随 ${followerName}`;
+  const assessment = relation.relationType === "同步伴随"
+    ? `研判：${followerName} 与 ${name} 在同一时段持续伴随活动，疑似存在协同行动。`
+    : `研判：${followerName} 疑似承担航母外围巡逻、侦察或引导等任务；仅依据历史 AIS 轨迹关联，需结合其他情报核验。`;
   return React.createElement(
     "div",
     { className: "affiliation-match", key },
@@ -112,6 +116,7 @@ function relationEntry({ name, mmsi, relation, key, followerName }) {
     React.createElement("span", null, relation.relationType === "同步伴随"
       ? `同步均距 ${formatNumber(relation.sync.averageDistanceNm, 2)} 海里`
       : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，均距 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里`),
+    React.createElement("p", { className: "affiliation-assessment" }, assessment),
   );
 }
 
