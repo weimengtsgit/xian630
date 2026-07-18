@@ -127,7 +127,7 @@ function normalizePoint(row, index = 0) {
 }
 
 function isGenericVesselName(name) {
-  return /^(?:USs+GOV(?:ERNMENT)?(?:s+VESSEL)?|USs+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
+  return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
 }
 
 function selectPreferredVesselName(names, role = "") {
