@@ -161,7 +161,8 @@ function Dashboard({ payload }) {
         const currentTarget = livePayload.targets.find((target) => target.mmsi === selectedMmsi);
         const detailed = currentTarget ? analyzePayload({
           metadata: {}, parameters: livePayload.parameters, monitoredAreas: livePayload.monitoredAreas,
-          targets: [{ ...currentTarget, latestOnly: false }], trackPoints: points,
+          // 至少两个有效报点才称为轨迹；仅返回最新单点时须继续标记为“点位”。
+          targets: [{ ...currentTarget, latestOnly: points.length <= 1 }], trackPoints: points,
         }, coastData) : null;
         const detailedTarget = detailed?.targets?.[0] || null;
         setLivePayload((current) => ({
