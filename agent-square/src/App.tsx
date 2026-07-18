@@ -139,10 +139,22 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // 假删除 — 仅前端隐藏，不调 DELETE API
+  // 删除应用 — 前端立即隐藏 + 调 DELETE API 真删
   const handleHideApp = useCallback((appId: string) => {
     setHiddenIds((prev) => new Set([...prev, appId]));
     setSelectedApp(null);
+    fetch(`/api/apps/${encodeURIComponent(appId)}`, { method: 'DELETE' })
+      .then(() => {
+        setApps((prev) => prev.filter((a) => a.id !== appId));
+        setHiddenIds((prev) => {
+          const next = new Set(prev);
+          next.delete(appId);
+          return next;
+        });
+      })
+      .catch(() => {
+        // API 不可用时仅靠前端隐藏，不做额外处理
+      });
   }, []);
 
   // 统计数据
