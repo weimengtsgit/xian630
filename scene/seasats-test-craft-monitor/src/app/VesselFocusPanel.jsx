@@ -127,6 +127,10 @@ function relationEntry({ name, mmsi, relation, key, followerName, followerRole }
   } else {
     assessment = `研判依据：时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
   }
+  // 无人艇与航母形成命中关联时给出保守任务研判，明确该结论仅是 AIS 行为线索而非任务确认。
+  const operationalAssessment = followerRole === "无人艇"
+    ? `研判：${followerLabel} 疑似在 ${name} 航行活动中承担协同巡逻或侦察任务；仅据 AIS 无法确认具体任务。`
+    : null;
   return React.createElement(
     "div",
     { className: "affiliation-match", key },
@@ -136,6 +140,7 @@ function relationEntry({ name, mmsi, relation, key, followerName, followerRole }
       ? `同步最小距离 ${formatNumber(relation.sync.minimumDistanceNm, 2)} 海里`
       : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里`),
     React.createElement("p", { className: "affiliation-assessment" }, assessment),
+    operationalAssessment ? React.createElement("p", { className: "affiliation-assessment" }, operationalAssessment) : null,
   );
 }
 

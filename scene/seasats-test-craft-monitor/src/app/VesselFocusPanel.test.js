@@ -156,6 +156,23 @@ test("renders an explicitly labelled interpolation chart when raw AIS points are
   assert.match(markup, /距离曲线/);
 });
 
+test("renders a conservative patrol-or-reconnaissance assessment for an affiliated USV", () => {
+  const markup = render({
+    selectedTarget: { ...selectedTarget, name: "SEAHAWK", mmsi: "368926574" },
+    affiliation: {
+      status: "analyzed",
+      reference: { mmsi: "368926574", name: "SEAHAWK", role: "无人艇" },
+      carriers: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        lag: { lagMinutes: 120, averageDistanceNm: 8, minimumDistanceNm: 4.2, matchedPoints: 30, courseFilterApplied: true, maxCourseDifferenceDeg: 20 },
+      }],
+    },
+  });
+  assert.match(markup, /研判：SEAHAWK 无人艇 疑似在 西奥多·罗斯福号.*航行活动中承担协同巡逻或侦察任务/);
+  assert.match(markup, /仅据 AIS 无法确认具体任务/);
+});
+
 test("does not render NaN for invalid numeric values", () => {
   const markup = render({
     selectedTarget: {
