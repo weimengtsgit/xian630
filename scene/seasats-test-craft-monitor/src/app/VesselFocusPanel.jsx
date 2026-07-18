@@ -59,6 +59,22 @@ function formatHeading(value) {
   return number === null ? "--" : `${number.toFixed(0)}°`;
 }
 
+function formatDurationMinutes(value) {
+  const totalMinutes = numberOrNull(value);
+  if (totalMinutes === null) return "--";
+  const sign = totalMinutes < 0 ? "-" : "";
+  let remaining = Math.abs(Math.round(totalMinutes));
+  const days = Math.floor(remaining / (24 * 60));
+  remaining %= 24 * 60;
+  const hours = Math.floor(remaining / 60);
+  const minutes = remaining % 60;
+  const parts = [];
+  if (days) parts.push(`${days}天`);
+  if (hours) parts.push(`${hours}小时`);
+  if (minutes || !parts.length) parts.push(`${minutes}分钟`);
+  return `${sign}${parts.join("")}`;
+}
+
 function formatSnapshotTime(value) {
   if (!value) return null;
   const time = new Date(value);
@@ -92,7 +108,7 @@ function relationEntry({ name, mmsi, relation, key }) {
     React.createElement("small", null, `${mmsi} · ${relation.relationType}`),
     React.createElement("span", null, relation.relationType === "同步伴随"
       ? `同步均距 ${formatNumber(relation.sync.averageDistanceNm, 2)} 海里`
-      : `时延 ${formatNumber(relation.lag.lagMinutes, 0)} 分钟，均距 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里`),
+      : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，均距 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里`),
   );
 }
 
@@ -115,7 +131,7 @@ function distanceEvidence({ relation, name }) {
     "section",
     { className: "affiliation-evidence", key: `evidence-${relation.carrier.mmsi}` },
     React.createElement("strong", null, `关联依据：${name} 的时延对齐距离`),
-    React.createElement("small", null, `延迟 ${formatNumber(relation.lag.lagMinutes, 0)} 分钟 · 平均 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
+    React.createElement("small", null, `延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 平均 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
     React.createElement(
       "svg",
       { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${name} 时延对齐后的距离曲线` },

@@ -90,6 +90,7 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /航母关联（历史）/);
   assert.match(markup, /快照：/);
   assert.match(markup, /西奥多·罗斯福号/);
+  assert.match(markup, /时延 2小时/);
   assert.ok(markup.indexOf("最快速度") < markup.indexOf("航母关联（历史）"));
   assert.match(markup, /航向\/方向[\s\S]*--/);
 });
@@ -115,7 +116,8 @@ test("renders delay-aligned distance evidence only for a matched delay relation"
   });
 
   assert.match(markup, /关联依据：西奥多·罗斯福号/);
-  assert.match(markup, /11520 分钟/);
+  assert.match(markup, /8天/);
+  assert.doesNotMatch(markup, /11520 分钟/);
   assert.match(markup, /距离曲线/);
 });
 
