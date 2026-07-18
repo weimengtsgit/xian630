@@ -375,6 +375,8 @@ html, body { overflow: auto; }
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 8px;
 }
+/* 左侧列表与右侧详情同高，超出部分由列表自身滚动，保持两侧模块底边对齐。 */
+.target-panel { align-self: stretch; height: 100%; min-height: 0; }
 .map-stack { grid-template-rows: minmax(600px, 66vh) auto; }
 .remote-map-panel { min-height: 600px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 12px; overflow: hidden; }
 .remote-map-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
