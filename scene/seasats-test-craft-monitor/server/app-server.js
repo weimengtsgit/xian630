@@ -361,8 +361,8 @@ function buildSummaryFromTracks(trackEntries) {
     const latest = trackPoints.at(-1);
     const rawTarget = {
       mmsi,
-      // 仅采用本体 AIS 返回的船名；缺失时保留 MMSI 标识。
-      name: latest?.name || `MMSI ${mmsi}`,
+      // 球形地图的“US GOV VESSEL”是通用占位名，不能覆盖已确认的航母名称。
+      name: latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`,
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,

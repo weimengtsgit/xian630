@@ -1,5 +1,19 @@
 import React from "react";
 
+const confirmedCarrierNames = {
+  "368913000": "乔治·华盛顿号 (USS George Washington)",
+  "366984000": "西奥多·罗斯福号 (USS Theodore Roosevelt)",
+};
+
+function isGenericVesselName(name) {
+  return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
+}
+
+function carrierDisplayName(mmsi, name) {
+  // 关联结果必须标明具体航母，不能将 AIS 通用占位名误展示成航母名称。
+  return confirmedCarrierNames[mmsi] || (isGenericVesselName(name) ? null : name) || `航母 MMSI ${mmsi}`;
+}
+
 function textOrFallback(value, fallback = "--") {
   return value === undefined || value === null || value === "" ? fallback : String(value);
 }
@@ -83,7 +97,7 @@ function affiliationContent(affiliation, refreshedAt, selectedMmsi, allAffiliati
     const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
     const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
       .filter((relation) => relation.carrier.mmsi === selectedMmsi && relation.relationType !== "未命中")
-      .map((relation) => ({ mmsi, name: nameByMmsi.get(mmsi) || `MMSI ${mmsi}`, relation })));
+      .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), relation })));
     if (!relatedVessels.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足 MATLAB 阈值的关联舰船。");
     return React.createElement(
       React.Fragment,
@@ -100,7 +114,7 @@ function affiliationContent(affiliation, refreshedAt, selectedMmsi, allAffiliati
     React.Fragment,
     null,
     // 卡片使用首页已经识别出的真实船名，避免只显示 CVN-71 一类内部编号。
-    matched.map((item) => relationEntry({ name: nameByMmsi.get(item.carrier.mmsi) || item.carrier.name, mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi })),
+    matched.map((item) => relationEntry({ name: carrierDisplayName(item.carrier.mmsi, nameByMmsi.get(item.carrier.mmsi) || item.carrier.name), mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi })),
     refreshedAt && React.createElement("time", { className: "affiliation-time" }, `历史快照：${new Date(refreshedAt).toLocaleString("zh-CN", { hour12: false })}`),
   );
 }

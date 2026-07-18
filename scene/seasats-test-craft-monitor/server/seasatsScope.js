@@ -5,10 +5,10 @@ const defaultVessels = [
   { mmsi: "338432795", name: "SD3001", role: "候选舰船" },
   { mmsi: "338432796", name: "SD3002", role: "候选舰船" },
   { mmsi: "338432797", name: "SD3003", role: "候选舰船" },
-  { mmsi: "368913000", name: "CVN-73", role: "航母" },
+  { mmsi: "368913000", name: "乔治·华盛顿号 (USS George Washington)", role: "航母" },
   { mmsi: "368926574", name: "海鹰", role: "候选舰船" },
   { mmsi: "369970970", name: "海猎号", role: "候选舰船" },
-  { mmsi: "366984000", name: "CVN-71", role: "航母" },
+  { mmsi: "366984000", name: "西奥多·罗斯福号 (USS Theodore Roosevelt)", role: "航母" },
   // 来自 mmsis.csv 的补充名单；名称会在用户点选并获取真实 AIS 后以接口值更新。
   { mmsi: "338462016", name: "MMSI 338462016", role: "候选舰船" },
   { mmsi: "338526166", name: "MMSI 338526166", role: "候选舰船" },
