@@ -53,17 +53,34 @@
     return classifyMetric(metric) === 'iteration' ? '迭代时间' : '生成时间'
   }
 
-  function randomDuration(kind) {
-    // 生成时间: 30~50 分钟; 迭代时间: 15~30 分钟
+  function stableDuration(name, kind) {
+    // 基于名称的确定性哈希，同一应用每次加载值不变
+    // 生成时间: 1800~3000s (30~50min); 迭代时间: 900~1800s (15~30min)
     var min = kind === 'generation' ? 1800 : 900
     var max = kind === 'generation' ? 3000 : 1800
-    return min + Math.floor(Math.random() * (max - min))
+    var range = max - min
+    var hash = 0
+    for (var i = 0; i < name.length; i++) {
+      hash = ((hash << 5) - hash) + name.charCodeAt(i)
+      hash = hash | 0  // 保持在 32 位有符号整数范围
+    }
+    if (hash < 0) hash = -hash
+    // 将哈希映射到 range 内，并保留 1s 粒度
+    // 映射到 0..range-1，再偏移到 min..(min+range-1)，确保范围永远不超过 max-min
+    var offset = 0
+    var remaining = hash
+    for (var j = 0; j < 4; j++) {
+      offset = (offset + (remaining % range)) % range
+      remaining = Math.floor(remaining / range)
+      if (remaining === 0) break
+    }
+    return min + offset
   }
 
   function getOrCreateFallback(name, version) {
     if (fallbackCache[name]) return fallbackCache[name]
     var kind = classifyVersion(version)
-    var metric = { name: name, version: version, timeKind: kind, durationSeconds: randomDuration(kind) }
+    var metric = { name: name, version: version, timeKind: kind, durationSeconds: stableDuration(name, kind) }
     fallbackCache[name] = metric
     return metric
   }
