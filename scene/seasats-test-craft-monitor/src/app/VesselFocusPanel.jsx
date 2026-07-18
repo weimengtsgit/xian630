@@ -105,9 +105,27 @@ function relationEntry({ name, mmsi, relation, key, followerName }) {
     ? `${followerName} 与 ${name} 同步伴随`
     // 与使用方 Python 程序的 Lead(参考艇) → Follow(航母) 输出口径一致。
     : `${name} 跟随 ${followerName}`;
-  const assessment = relation.relationType === "同步伴随"
-    ? `研判：${followerName} 与 ${name} 在同一时段持续伴随活动，疑似存在协同行动。`
-    : `研判：${followerName} 疑似承担航母外围巡逻、侦察或引导等任务；仅依据历史 AIS 轨迹关联，需结合其他情报核验。`;
+  const averageDistance = numberOrNull(relation?.lag?.averageDistanceNm);
+  const matchedPoints = numberOrNull(relation?.lag?.matchedPoints) || 0;
+  const startMs = Date.parse(relation?.lag?.startTime || "");
+  const endMs = Date.parse(relation?.lag?.endTime || "");
+  const spanDays = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+    ? Math.max(1, Math.round((endMs - startMs) / (24 * 60 * 60 * 1000)))
+    : null;
+  let assessment;
+  if (relation.relationType === "同步伴随") {
+    const syncDistance = numberOrNull(relation?.sync?.averageDistanceNm);
+    const syncPoints = numberOrNull(relation?.sync?.matchedPoints) || 0;
+    assessment = syncDistance !== null && syncDistance <= 10 && syncPoints >= 30
+      ? `研判：同期近距离匹配 ${formatCount(syncPoints)} 点、均距 ${formatNumber(syncDistance, 2)} 海里，存在较强协同伴随线索。`
+      : `研判：存在同期轨迹匹配，但证据强度有限；仅凭 AIS 不能推断具体任务。`;
+  } else if (averageDistance !== null && averageDistance <= 10 && matchedPoints >= 30) {
+    assessment = `研判：${spanDays ? `覆盖约 ${spanDays} 天，` : ""}近距离时延匹配 ${formatCount(matchedPoints)} 点、均距 ${formatNumber(averageDistance, 2)} 海里，存在较强协同伴随线索。`;
+  } else if (averageDistance !== null && averageDistance <= 30 && matchedPoints >= 50) {
+    assessment = `研判：${spanDays ? `覆盖约 ${spanDays} 天，` : ""}时延匹配 ${formatCount(matchedPoints)} 点、均距 ${formatNumber(averageDistance, 2)} 海里，存在中等强度关联线索。`;
+  } else {
+    assessment = `研判：${spanDays ? `覆盖约 ${spanDays} 天，` : ""}时延匹配 ${formatCount(matchedPoints)} 点、均距 ${formatNumber(averageDistance, 2)} 海里；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
+  }
   return React.createElement(
     "div",
     { className: "affiliation-match", key },
