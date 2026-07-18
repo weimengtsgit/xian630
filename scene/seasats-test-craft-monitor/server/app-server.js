@@ -4,9 +4,10 @@ import crypto from "node:crypto";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { MONITORED_VESSELS } from "./seasatsScope.js";
 import { JUDGEMENT_PARAMETERS, MONITORED_AREAS } from "./monitoringRules.js";
-import { analyzeVesselCarrierRelations } from "./carrierAffiliation.js";
+import { CARRIER_AFFILIATION_RULES } from "./carrierAffiliation.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
 import coastData from "../src/data/chinaCoast.json" with { type: "json" };
 
@@ -36,6 +37,26 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
+
+function affiliationRulesChanged(snapshot) {
+  // 规则升级后不能将旧快照误标为新口径，必须完成一次后台重算再对外展示。
+  return JSON.stringify(snapshot?.rules || {}) !== JSON.stringify(CARRIER_AFFILIATION_RULES);
+}
+
+function analyzeAffiliationsInWorker(input) {
+  // 长历史轨迹的 61 组时延扫描是 CPU 密集型任务，必须脱离 HTTP 主线程执行。
+  return new Promise((resolveWorker, rejectWorker) => {
+    const worker = new Worker(new URL("./carrier-affiliation-worker.js", import.meta.url), { workerData: input });
+    worker.once("message", (message) => {
+      if (message?.error) rejectWorker(new Error(message.error));
+      else resolveWorker(message.result);
+    });
+    worker.once("error", rejectWorker);
+    worker.once("exit", (code) => {
+      if (code !== 0) rejectWorker(new Error(`航母关联计算 Worker 异常退出：${code}`));
+    });
+  });
+}
 
 function readSkillEnv(file) {
   if (!file || !existsSync(file)) return {};
@@ -465,7 +486,7 @@ async function refreshAffiliationHistory() {
     const tracks = await mapConcurrent(MONITORED_VESSELS, 2, async (vessel) => [vessel.mmsi, await buildTrack(vessel.mmsi)]);
     const tracksByMmsi = Object.fromEntries(tracks.map(([mmsi, track]) => [mmsi, track.trackPoints]));
     const carriers = MONITORED_VESSELS.filter((vessel) => vessel.role === "航母");
-    const result = analyzeVesselCarrierRelations({ vessels: MONITORED_VESSELS, carriers, tracksByMmsi });
+    const result = await analyzeAffiliationsInWorker({ vessels: MONITORED_VESSELS, carriers, tracksByMmsi });
     const refreshedAt = new Date().toISOString();
     const nextAffiliation = { ...result, refreshedAt, refreshIntervalHours: 5 };
     await writeSnapshot(affiliationHistoryFile, nextAffiliation);
@@ -525,7 +546,10 @@ createServer(async (request, response) => {
   summaryReady = false;
   // 每 30 分钟原子更新一次完整态势；已有历史关联快照时不因重启重复慢算。
   void refreshFleetSnapshot().catch(() => {});
-  if (!affiliationHistory) void refreshAffiliationHistory().catch(() => {});
+  if (!affiliationHistory || affiliationRulesChanged(affiliationHistory)) {
+    affiliationHistory = { status: "refreshing", refreshIntervalHours: 5 };
+    void refreshAffiliationHistory().catch(() => {});
+  }
   setInterval(() => { void refreshFleetSnapshot().catch(() => {}); }, fleetRefreshMs);
   setInterval(() => { void refreshAffiliationHistory().catch(() => {}); }, affiliationRefreshMs);
 });

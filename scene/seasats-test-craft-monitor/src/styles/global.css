@@ -418,6 +418,13 @@ html, body { overflow: auto; }
 .affiliation-match:first-of-type { border-top: 0; }
 .affiliation-match strong { color: #f0f9ff; font-size: 13px; }
 .affiliation-match small, .affiliation-match span { color: #9cc5df; font-size: 11px; }
+/* 展示时延对齐后的实测距离，帮助使用者快速理解关联结论。 */
+.affiliation-evidence { display: grid; gap: 4px; margin: 6px 0 10px; padding: 8px; border-radius: 6px; background: rgba(15, 78, 107, 0.3); }
+.affiliation-evidence strong { color: #d9f5ff; font-size: 11px; }
+.affiliation-evidence small, .affiliation-evidence span { color: #9cc5df; font-size: 10px; line-height: 1.45; }
+.affiliation-evidence svg { display: block; width: 100%; height: 68px; overflow: visible; }
+.affiliation-evidence-axis { stroke: rgba(186, 230, 253, 0.32); stroke-width: 1; }
+.affiliation-evidence-line { fill: none; stroke: #4ade80; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
 .simplified-analysis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .simplified-analysis .analysis-group { min-width: 0; min-height: 138px; padding: 10px; }
 .analysis-metric-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }

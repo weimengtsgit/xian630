@@ -96,6 +96,36 @@ function relationEntry({ name, mmsi, relation, key }) {
   );
 }
 
+function distanceEvidence({ relation, name }) {
+  const series = relation?.lag?.distanceSeries || [];
+  if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
+  const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
+  if (values.length < 2) return null;
+  const width = 300;
+  const height = 68;
+  const maxDistance = Math.max(...values, 1);
+  const points = series.map((item, index) => {
+    const distance = numberOrNull(item.distanceNm);
+    if (distance === null) return null;
+    const x = (index / (series.length - 1)) * width;
+    const y = height - (distance / maxDistance) * (height - 8);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).filter(Boolean).join(" ");
+  return React.createElement(
+    "section",
+    { className: "affiliation-evidence", key: `evidence-${relation.carrier.mmsi}` },
+    React.createElement("strong", null, `关联依据：${name} 的时延对齐距离`),
+    React.createElement("small", null, `延迟 ${formatNumber(relation.lag.lagMinutes, 0)} 分钟 · 平均 ${formatNumber(relation.lag.averageDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
+    React.createElement(
+      "svg",
+      { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${name} 时延对齐后的距离曲线` },
+      React.createElement("line", { x1: 0, x2: width, y1: height - 1, y2: height - 1, className: "affiliation-evidence-axis" }),
+      React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
+    ),
+    React.createElement("span", null, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(maxDistance, 2)} 海里；越低表示轨迹越接近。`),
+  );
+}
+
 function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTargets) {
   if (!affiliation || affiliation.status === "refreshing" || affiliation.status === "not-generated") {
     return React.createElement("p", { className: "affiliation-empty" }, "历史关联正在计算，完成后自动展示。");
@@ -105,7 +135,7 @@ function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTarge
     const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
       .filter((relation) => relation.carrier.mmsi === selectedMmsi && relation.relationType !== "未命中")
       .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), relation })));
-    if (!relatedVessels.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足 MATLAB 阈值的关联舰船。");
+    if (!relatedVessels.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的舰船。");
     return React.createElement(
       React.Fragment,
       null,
@@ -114,13 +144,22 @@ function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTarge
   }
   if (affiliation.status === "no-track") return React.createElement("p", { className: "affiliation-empty" }, "历史窗口内未获取到该舰艇 AIS 轨迹。");
   const matched = (affiliation.carriers || []).filter((item) => item.relationType !== "未命中");
-  if (!matched.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足 MATLAB 阈值的历史航母关联。");
+  if (!matched.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的航母关联。");
   const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
   return React.createElement(
     React.Fragment,
     null,
     // 卡片使用首页已经识别出的真实船名，避免只显示 CVN-71 一类内部编号。
-    matched.map((item) => relationEntry({ name: carrierDisplayName(item.carrier.mmsi, nameByMmsi.get(item.carrier.mmsi) || item.carrier.name), mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi })),
+    matched.map((item) => {
+      const name = carrierDisplayName(item.carrier.mmsi, nameByMmsi.get(item.carrier.mmsi) || item.carrier.name);
+      return React.createElement(
+        React.Fragment,
+        { key: item.carrier.mmsi },
+        relationEntry({ name, mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi }),
+        // 只呈现命中的、时延已对齐的实测距离，避免全量轨迹图造成时间语义误读。
+        distanceEvidence({ relation: item, name }),
+      );
+    }),
   );
 }
 

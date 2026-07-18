@@ -94,6 +94,31 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /航向\/方向[\s\S]*--/);
 });
 
+test("renders delay-aligned distance evidence only for a matched delay relation", () => {
+  const markup = render({
+    affiliation: {
+      status: "analyzed",
+      carriers: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        lag: {
+          lagMinutes: 11520,
+          averageDistanceNm: 2.34,
+          matchedPoints: 8,
+          distanceSeries: [
+            { time: "2026-01-01T00:00:00.000Z", distanceNm: 2.1 },
+            { time: "2026-01-01T00:01:00.000Z", distanceNm: 2.6 },
+          ],
+        },
+      }],
+    },
+  });
+
+  assert.match(markup, /关联依据：西奥多·罗斯福号/);
+  assert.match(markup, /11520 分钟/);
+  assert.match(markup, /距离曲线/);
+});
+
 test("does not render NaN for invalid numeric values", () => {
   const markup = render({
     selectedTarget: {

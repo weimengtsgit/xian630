@@ -1,15 +1,17 @@
-// 与使用方提供的 corralation.m 保持一致的关联阈值与计算口径。
-const RULES = {
-  syncDistThreshNm: 10,
+// 与使用方提供的 Python select.py 保持一致的关联阈值与计算口径。
+export const CARRIER_AFFILIATION_RULES = Object.freeze({
+  syncDistThreshNm: 20,
   syncCourseThreshDeg: 30,
-  lagMaxMinutes: 120,
-  lagStepMinutes: 60,
+  lagMaxMinutes: 30 * 24 * 60,
+  lagStepMinutes: 24 * 60,
   lagDistThreshNm: 100,
   lagCourseThreshDeg: 45,
   minMatchedPoints: 8,
-  timeMatchWindowSyncSec: 30,
+  timeMatchWindowSyncSec: 30 * 60,
   timeMatchWindowLagSec: 120,
-};
+});
+
+const RULES = CARRIER_AFFILIATION_RULES;
 
 const EARTH_RADIUS_NM = 3440.065;
 
@@ -84,6 +86,41 @@ function range(times) {
   return { startTime: new Date(minTime).toISOString(), endTime: new Date(maxTime).toISOString() };
 }
 
+function courseDifference(a, b) {
+  let difference = Math.abs(a - b);
+  if (difference > 180) difference = 360 - difference;
+  return difference;
+}
+
+function interpolateFollowerAt(follower, targetTimeMs, cursor) {
+  // 轨迹已按时间升序。游标避免在百万级 AIS 中对每一个点重复二分查找。
+  while (cursor.index < follower.length && follower[cursor.index].timeMs < targetTimeMs) cursor.index += 1;
+  if (cursor.index < follower.length && follower[cursor.index].timeMs === targetTimeMs) {
+    const exact = follower[cursor.index];
+    return { lon: exact.lon, lat: exact.lat, heading: exact.heading };
+  }
+  if (cursor.index === 0 || cursor.index >= follower.length) return null;
+  const before = follower[cursor.index - 1];
+  const after = follower[cursor.index];
+  const span = after.timeMs - before.timeMs;
+  if (span <= 0) return null;
+  const ratio = (targetTimeMs - before.timeMs) / span;
+  const interpolate = (key) => {
+    if (before[key] === null || after[key] === null) return null;
+    return before[key] + (after[key] - before[key]) * ratio;
+  };
+  return { lon: interpolate("lon"), lat: interpolate("lat"), heading: interpolate("heading") };
+}
+
+function downsampleSeries(series, limit = 160) {
+  if (series.length <= limit) return series;
+  const sampled = [];
+  for (let index = 0; index < limit; index += 1) {
+    sampled.push(series[Math.round(index * (series.length - 1) / (limit - 1))]);
+  }
+  return sampled;
+}
+
 function analyzeSync(leader, follower) {
   const distances = [];
   const courseCosines = [];
@@ -105,35 +142,56 @@ function analyzeSync(leader, follower) {
 function analyzeLag(leader, follower) {
   let best = null;
   for (let lagMinutes = -RULES.lagMaxMinutes; lagMinutes <= RULES.lagMaxMinutes; lagMinutes += RULES.lagStepMinutes) {
-    const distances = [];
-    const times = [];
+    const lagMs = lagMinutes * 60_000;
+    // 没有时间交集时直接跳过，等价 Python 对平移后轨迹的快速判断。
+    if (!leader.length || !follower.length || follower[0].timeMs + lagMs > leader.at(-1).timeMs || follower.at(-1).timeMs + lagMs < leader[0].timeMs) continue;
+    const rawMatches = [];
+    const cursor = { index: 0 };
     for (const point of leader) {
-      const matched = nearestWithin(follower, point.timeMs + lagMinutes * 60_000, RULES.timeMatchWindowLagSec * 1000);
-      if (!matched) continue;
-      if (point.speedKn > 0.5 && matched.point.speedKn > 0.5) {
-        let headingDiff = Math.abs(point.heading - matched.point.heading);
-        if (headingDiff > 180) headingDiff = 360 - headingDiff;
-        if (headingDiff > RULES.lagCourseThreshDeg) continue;
-      }
-      distances.push(distanceNm(point, matched.point));
-      times.push(point.timeMs);
+      // Python 版将候选航母时间向 lag 方向平移；换算到原始时间即为 leader - lag。
+      const interpolated = interpolateFollowerAt(follower, point.timeMs - lagMs, cursor);
+      if (!interpolated || interpolated.lon === null || interpolated.lat === null) continue;
+      rawMatches.push({ point, interpolated, distanceNm: distanceNm(point, interpolated) });
     }
-    if (distances.length < RULES.minMatchedPoints) continue;
-    const averageDistanceNm = avg(distances);
-    if (!best || averageDistanceNm < best.averageDistanceNm) best = { lagMinutes, averageDistanceNm, matchedPoints: distances.length, ...range(times) };
+    if (rawMatches.length < RULES.minMatchedPoints) continue;
+
+    // 与对方 Python 程序一致：仅当航向过滤后仍有足够点，才采用航向过滤结果；否则回退到全部有效插值点。
+    const courseMatched = rawMatches.filter(({ point, interpolated }) => point.heading !== null && interpolated.heading !== null
+      && courseDifference(point.heading, interpolated.heading) <= RULES.lagCourseThreshDeg);
+    const matches = courseMatched.length >= RULES.minMatchedPoints ? courseMatched : rawMatches;
+    const averageDistanceNm = avg(matches.map((match) => match.distanceNm));
+    if (!best || averageDistanceNm < best.averageDistanceNm) {
+      best = {
+        lagMinutes,
+        averageDistanceNm,
+        matchedPoints: matches.length,
+        ...range(matches.map((match) => match.point.timeMs)),
+      };
+    }
   }
-  return { ...(best || { lagMinutes: null, averageDistanceNm: null, matchedPoints: 0, startTime: null, endTime: null }), matched: Boolean(best && best.averageDistanceNm < RULES.lagDistThreshNm) };
+  if (!best || best.averageDistanceNm >= RULES.lagDistThreshNm) {
+    return { ...(best || { lagMinutes: null, averageDistanceNm: null, matchedPoints: 0, startTime: null, endTime: null }), distanceSeries: [], matched: false };
+  }
+
+  // 图表只保留已按最佳时延对齐、且真实报点时间相近的距离，避免将插值点误当作 AIS 实测点。
+  const distanceSeries = [];
+  for (const point of leader) {
+    const matched = nearestWithin(follower, point.timeMs - best.lagMinutes * 60_000, RULES.timeMatchWindowLagSec * 1000);
+    if (!matched) continue;
+    distanceSeries.push({ time: new Date(point.timeMs).toISOString(), distanceNm: distanceNm(point, matched.point) });
+  }
+  return { ...best, distanceSeries: downsampleSeries(distanceSeries), matched: true };
 }
 
 export function analyzeCarrierAffiliations({ reference, candidates, tracksByMmsi }) {
   const referenceTrack = cleanTrack(tracksByMmsi[reference.mmsi] || []);
   const relations = candidates.map((candidate) => {
     const candidateTrack = cleanTrack(tracksByMmsi[candidate.mmsi] || []);
-    // 压缩包的文件排序会使候选舰船位于 usv338414915.csv 前；此处同样以候选舰船为“先导”，无人艇为“跟随”。
-    const sync = analyzeSync(candidateTrack, referenceTrack);
-    const lag = analyzeLag(candidateTrack, referenceTrack);
+    // 与 Python 程序一致：用户选择的无人艇为参考轨迹，逐一对比候选航母。
+    const sync = analyzeSync(referenceTrack, candidateTrack);
+    const lag = analyzeLag(referenceTrack, candidateTrack);
     const relationType = sync.matched ? "同步伴随" : lag.matched ? "时延跟随" : "未发现满足阈值的关联";
-    return { candidate, leaderMmsi: candidate.mmsi, followerMmsi: reference.mmsi, referenceMmsi: reference.mmsi, candidatePointCount: candidateTrack.length, referencePointCount: referenceTrack.length, relationType, sync, lag };
+    return { candidate, leaderMmsi: reference.mmsi, followerMmsi: candidate.mmsi, referenceMmsi: reference.mmsi, candidatePointCount: candidateTrack.length, referencePointCount: referenceTrack.length, relationType, sync, lag };
   });
   return { reference, rules: RULES, generatedAt: new Date().toISOString(), relations };
 }

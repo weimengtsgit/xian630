@@ -13,7 +13,7 @@ function points({ mmsi, startMs, offsetMs = 0, lon = 120, lat = 20 }) {
   }));
 }
 
-test("按 MATLAB 阈值识别同步伴随", () => {
+test("按 Python 阈值识别同步伴随", () => {
   const startMs = Date.UTC(2026, 0, 1);
   const result = analyzeCarrierAffiliations({
     reference: { mmsi: "USV" },
@@ -24,15 +24,16 @@ test("按 MATLAB 阈值识别同步伴随", () => {
   assert.equal(result.relations[0].sync.matchedPoints, 8);
 });
 
-test("按 MATLAB 阈值识别候选舰船领先的时延跟随", () => {
+test("按 Python 的 24 小时时延步长识别候选舰船领先的时延跟随", () => {
   const startMs = Date.UTC(2026, 0, 1);
   const result = analyzeCarrierAffiliations({
     reference: { mmsi: "USV" },
     candidates: [{ mmsi: "CVN", name: "CVN" }],
-    tracksByMmsi: { USV: points({ mmsi: "USV", startMs, offsetMs: 60 * 60_000 }), CVN: points({ mmsi: "CVN", startMs }) },
+    tracksByMmsi: { USV: points({ mmsi: "USV", startMs, offsetMs: 8 * 24 * 60 * 60_000 }), CVN: points({ mmsi: "CVN", startMs }) },
   });
   assert.equal(result.relations[0].relationType, "时延跟随");
-  assert.equal(result.relations[0].lag.lagMinutes, 60);
+  assert.equal(result.relations[0].lag.lagMinutes, 8 * 24 * 60);
+  assert.equal(result.relations[0].lag.distanceSeries.length, 8);
 });
 
 test("为每艘非航母舰艇保存其与候选航母的历史关联", () => {
