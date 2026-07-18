@@ -385,7 +385,8 @@ html, body { overflow: auto; }
 .remote-map-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .insight-strip { padding: 10px 12px; }
 .insight-strip .advice-strip { margin: 0; }
-.vessel-focus-panel { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: #e2e8f0; }
+/* 与地图区域等高，令航母关联区可通过 margin-top: auto 稳定贴在右侧底部。 */
+.vessel-focus-panel { align-self: stretch; height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: #e2e8f0; }
 .vessel-focus-header { display: flex; justify-content: space-between; gap: 12px; }
 .vessel-header-actions { display: flex; align-items: flex-start; gap: 8px; }
 .vessel-alert-toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 9px; border: 1px solid rgba(148,163,184,0.3); border-radius: 999px; color: #e2e8f0; background: rgba(15,23,42,0.92); font-size: 13px; cursor: pointer; }
