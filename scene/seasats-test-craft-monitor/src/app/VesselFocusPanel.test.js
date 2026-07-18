@@ -119,6 +119,9 @@ test("renders delay-aligned distance evidence only for a matched delay relation"
   assert.match(markup, /8天/);
   assert.doesNotMatch(markup, /11520 分钟/);
   assert.match(markup, /距离曲线/);
+  assert.match(markup, /距离（海里）/);
+  assert.match(markup, /时间（北京时间）/);
+  assert.match(markup, /阈值 100 海里/);
 });
 
 test("does not render NaN for invalid numeric values", () => {

@@ -112,21 +112,38 @@ function relationEntry({ name, mmsi, relation, key }) {
   );
 }
 
+function formatChartTime(value) {
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return "--";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(time).replace(",", " ");
+}
+
 function distanceEvidence({ relation, name }) {
   const series = relation?.lag?.distanceSeries || [];
   if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
   const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
   if (values.length < 2) return null;
   const width = 300;
-  const height = 68;
-  const maxDistance = Math.max(...values, 1);
+  const height = 120;
+  const plot = { left: 30, right: 6, top: 16, bottom: 88 };
+  const thresholdNm = 100;
+  // 纵轴至少覆盖判定阈值，曲线相对阈值的位置才能直观反映关联依据。
+  const maxDistance = Math.max(...values, thresholdNm, 1);
+  const plotWidth = width - plot.left - plot.right;
+  const plotHeight = plot.bottom - plot.top;
+  const xFor = (index) => plot.left + (index / (series.length - 1)) * plotWidth;
+  const yFor = (distance) => plot.bottom - (distance / maxDistance) * plotHeight;
   const points = series.map((item, index) => {
     const distance = numberOrNull(item.distanceNm);
     if (distance === null) return null;
-    const x = (index / (series.length - 1)) * width;
-    const y = height - (distance / maxDistance) * (height - 8);
+    const x = xFor(index);
+    const y = yFor(distance);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).filter(Boolean).join(" ");
+  const timeIndexes = [...new Set([0, Math.round((series.length - 1) / 2), series.length - 1])];
+  const yTicks = [maxDistance, maxDistance / 2, 0];
   return React.createElement(
     "section",
     { className: "affiliation-evidence", key: `evidence-${relation.carrier.mmsi}` },
@@ -135,8 +152,19 @@ function distanceEvidence({ relation, name }) {
     React.createElement(
       "svg",
       { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${name} 时延对齐后的距离曲线` },
-      React.createElement("line", { x1: 0, x2: width, y1: height - 1, y2: height - 1, className: "affiliation-evidence-axis" }),
+      yTicks.map((tick) => React.createElement(React.Fragment, { key: `y-${tick}` },
+        React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(tick), y2: yFor(tick), className: "affiliation-evidence-grid" }),
+        React.createElement("text", { x: plot.left - 4, y: yFor(tick) + 3, textAnchor: "end", className: "affiliation-evidence-label" }, formatNumber(tick, tick >= 10 ? 0 : 1)),
+      )),
+      timeIndexes.map((index) => React.createElement(React.Fragment, { key: `x-${index}` },
+        React.createElement("line", { x1: xFor(index), x2: xFor(index), y1: plot.top, y2: plot.bottom, className: "affiliation-evidence-grid vertical" }),
+        React.createElement("text", { x: xFor(index), y: plot.bottom + 13, textAnchor: index === 0 ? "start" : index === series.length - 1 ? "end" : "middle", className: "affiliation-evidence-label" }, formatChartTime(series[index]?.time)),
+      )),
+      React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(thresholdNm), y2: yFor(thresholdNm), className: "affiliation-evidence-threshold" }),
+      React.createElement("text", { x: width - plot.right, y: yFor(thresholdNm) - 3, textAnchor: "end", className: "affiliation-evidence-threshold-label" }, "阈值 100 海里"),
+      React.createElement("text", { x: plot.left, y: 10, className: "affiliation-evidence-label title" }, "距离（海里）"),
       React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
+      React.createElement("text", { x: width / 2, y: height - 2, textAnchor: "middle", className: "affiliation-evidence-label title" }, "时间（北京时间）"),
     ),
     React.createElement("span", null, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(maxDistance, 2)} 海里；越低表示轨迹越接近。`),
   );
