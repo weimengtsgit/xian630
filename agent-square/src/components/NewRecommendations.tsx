@@ -9,15 +9,9 @@ interface NewRecommendationsProps {
 }
 
 const NewRecommendations: React.FC<NewRecommendationsProps> = ({ apps, onSelect }) => {
-  const priority: Record<string, number> = {
-    '“光鱼”无人艇跟监告警智能体': -1,
-    '航母舰载机挖掘分析': 0,
-    '航母甲板风条件评估看板': 1,
-    '华盛顿号航母打击群西太地区活动规律分析智能体': 2,
-  };
   const newApps = apps
     .filter((a) => a.status === '新品')
-    .sort((a, b) => (priority[a.name] ?? 99) - (priority[b.name] ?? 99));
+    .sort((a, b) => b.publishDate.localeCompare(a.publishDate));
 
   if (newApps.length === 0) return null;
 

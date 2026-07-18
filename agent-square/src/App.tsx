@@ -76,11 +76,24 @@ const App: React.FC = () => {
     [apps, hiddenIds],
   );
 
+  // 新品推荐仅保留最新 3 个，其余降为"已上架"
+  const displayApps = useMemo(() => {
+    const newApps = visibleApps
+      .filter((a) => a.status === '新品')
+      .sort((a, b) => b.publishDate.localeCompare(a.publishDate));
+    const top3Ids = new Set(newApps.slice(0, 3).map((a) => a.id));
+    return visibleApps.map((a) =>
+      a.status === '新品' && !top3Ids.has(a.id)
+        ? { ...a, status: '已上架' as const }
+        : a,
+    );
+  }, [visibleApps]);
+
   // 筛选后的应用列表
   const filteredApps = useMemo(() => {
-    if (activeCategory === 'all') return visibleApps;
-    return visibleApps.filter((a) => a.category === activeCategory);
-  }, [visibleApps, activeCategory]);
+    if (activeCategory === 'all') return displayApps;
+    return displayApps.filter((a) => a.category === activeCategory);
+  }, [displayApps, activeCategory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,8 +146,8 @@ const App: React.FC = () => {
   }, []);
 
   // 统计数据
-  const newCount = useMemo(() => visibleApps.filter((a) => a.status === '新品').length, [visibleApps]);
-  const favoritedCount = useMemo(() => visibleApps.filter((a) => a.favorited).length, [visibleApps]);
+  const newCount = useMemo(() => displayApps.filter((a) => a.status === '新品').length, [displayApps]);
+  const favoritedCount = useMemo(() => displayApps.filter((a) => a.favorited).length, [displayApps]);
 
   // 选择应用 — 状态切换：选中/取消选中
   const handleSelectApp = useCallback((app: SmartApp) => {
@@ -161,7 +174,7 @@ const App: React.FC = () => {
     <div className="app-layout">
       {/* 顶部状态栏 — defense-operations-ui 模式 */}
       <StatusBar
-        appCount={visibleApps.length}
+        appCount={displayApps.length}
         newCount={newCount}
         favoritedCount={favoritedCount}
       />
@@ -171,7 +184,7 @@ const App: React.FC = () => {
           <Header />
 
           {/* 新品推荐区域 — 横向滚动 */}
-          <NewRecommendations apps={visibleApps} onSelect={handleSelectApp} />
+          <NewRecommendations apps={displayApps} onSelect={handleSelectApp} />
 
           <CategoryFilter
             filters={CATEGORY_FILTERS}
