@@ -26,7 +26,7 @@ function writeApps(apps) {
 }
 
 function firstChar(value) {
-  return Array.from(String(value || '应'))[0] || '应';
+  return Array.from(String(value || '应').trim())[0] || '应';
 }
 
 function normalizeApp(input) {

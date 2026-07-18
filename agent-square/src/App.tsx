@@ -20,7 +20,7 @@ declare global {
 }
 
 const firstDisplayChar = (value: string) =>
-  Array.from(value.replace(/^["“”‘’「『]/, ''))[0] || '应';
+  Array.from(value.trim().replace(/^["“”‘’「『]/, ''))[0] || '应';
 
 const normalizeStoreApp = (input: IncomingStoreApp): SmartApp => {
   const name = String(input.name || input['名字'] || '未命名应用');
