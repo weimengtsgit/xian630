@@ -399,13 +399,13 @@ html, body { overflow: auto; }
 .vessel-metric strong { display: block; margin-top: 4px; color: #f8fafc; font-size: 16px; overflow-wrap: anywhere; }
 .vessel-affiliation { max-height: 270px; margin-top: auto; padding: 10px; overflow-y: auto; overscroll-behavior: contain; border-radius: 7px; border: 1px solid rgba(56, 189, 248, 0.28); background: rgba(8, 47, 73, 0.32); scrollbar-width: thin; scrollbar-color: #2786ad transparent; }
 /* 关联对象较多时只滚动卡片内容，标题始终保留便于确认当前信息。 */
-.vessel-affiliation h3 { position: sticky; top: -10px; z-index: 1; margin: 0 0 8px; padding: 10px 0 7px; color: #bae6fd; background: #082f49; font-size: 13px; }
+.vessel-affiliation h3 { position: sticky; top: -10px; z-index: 1; display: flex; justify-content: space-between; gap: 8px; margin: 0 0 8px; padding: 10px 0 7px; color: #bae6fd; background: #082f49; font-size: 13px; }
+.vessel-affiliation h3 time { color: #9cc5df; font-size: 10px; font-weight: 400; white-space: nowrap; }
 .affiliation-empty { margin: 0; color: #9db1c9; font-size: 12px; line-height: 1.55; }
 .affiliation-match { display: grid; gap: 3px; padding: 8px 0; border-top: 1px solid rgba(125, 211, 252, 0.16); }
 .affiliation-match:first-of-type { border-top: 0; }
 .affiliation-match strong { color: #f0f9ff; font-size: 13px; }
-.affiliation-match small, .affiliation-match span, .affiliation-time { color: #9cc5df; font-size: 11px; }
-.affiliation-time { display: block; margin-top: 8px; }
+.affiliation-match small, .affiliation-match span { color: #9cc5df; font-size: 11px; }
 .simplified-analysis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .simplified-analysis .analysis-group { min-width: 0; min-height: 138px; padding: 10px; }
 .analysis-metric-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }

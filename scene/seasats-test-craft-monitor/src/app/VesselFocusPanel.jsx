@@ -58,6 +58,12 @@ function formatHeading(value) {
   return number === null ? "--" : `${number.toFixed(0)}°`;
 }
 
+function formatSnapshotTime(value) {
+  if (!value) return null;
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? null : time.toLocaleString("zh-CN", { hour12: false });
+}
+
 function countFrom(selectedTarget, countKeys, arrayKeys) {
   const explicitCount = valueFrom(selectedTarget, countKeys);
   if (explicitCount !== undefined) return explicitCount;
@@ -89,7 +95,7 @@ function relationEntry({ name, mmsi, relation, key }) {
   );
 }
 
-function affiliationContent(affiliation, refreshedAt, selectedMmsi, allAffiliations, allTargets) {
+function affiliationContent(affiliation, selectedMmsi, allAffiliations, allTargets) {
   if (!affiliation || affiliation.status === "refreshing" || affiliation.status === "not-generated") {
     return React.createElement("p", { className: "affiliation-empty" }, "历史关联正在计算，完成后自动展示。");
   }
@@ -103,7 +109,6 @@ function affiliationContent(affiliation, refreshedAt, selectedMmsi, allAffiliati
       React.Fragment,
       null,
       relatedVessels.map((item) => relationEntry({ ...item, key: `${selectedMmsi}-${item.mmsi}` })),
-      refreshedAt && React.createElement("time", { className: "affiliation-time" }, `历史快照：${new Date(refreshedAt).toLocaleString("zh-CN", { hour12: false })}`),
     );
   }
   if (affiliation.status === "no-track") return React.createElement("p", { className: "affiliation-empty" }, "历史窗口内未获取到该舰艇 AIS 轨迹。");
@@ -115,21 +120,15 @@ function affiliationContent(affiliation, refreshedAt, selectedMmsi, allAffiliati
     null,
     // 卡片使用首页已经识别出的真实船名，避免只显示 CVN-71 一类内部编号。
     matched.map((item) => relationEntry({ name: carrierDisplayName(item.carrier.mmsi, nameByMmsi.get(item.carrier.mmsi) || item.carrier.name), mmsi: item.carrier.mmsi, relation: item, key: item.carrier.mmsi })),
-    refreshedAt && React.createElement("time", { className: "affiliation-time" }, `历史快照：${new Date(refreshedAt).toLocaleString("zh-CN", { hour12: false })}`),
   );
 }
 
 export function VesselFocusPanel({
   selectedTarget,
-  visibleCount = 0,
-  totalCount = 0,
-  focusOnly = false,
-  onFocusOnlyChange,
   affiliation,
   affiliationRefreshedAt,
   allAffiliations,
   allTargets,
-  trackLoading = false,
 }) {
   const maxSpeed = valueFrom(selectedTarget, ["maxSpeedKn", "fastestSpeedKn", "maxSpeed"]) ?? selectedTarget?.maxSpeedSegment?.speedKn;
   const avgSpeed = valueFrom(selectedTarget, ["avgSpeedKn", "averageSpeedKn", "avgSpeed"]);
@@ -138,11 +137,7 @@ export function VesselFocusPanel({
   const aisGapCount = countFrom(selectedTarget, ["aisGapCount", "aisGapsCount", "gapCount"], ["aisGaps"]);
   const alertCount = countFrom(selectedTarget, ["alertCount", "alertsCount"], ["alerts"]);
   const threatScore = valueFrom(selectedTarget, ["threatScore", "score"]);
-  const visibleLabel = formatCount(visibleCount);
-  const totalLabel = formatCount(totalCount);
-  const displayStatus = focusOnly
-    ? `当前只显示 ${visibleLabel} 艘关注舰艇`
-    : `全部 ${totalLabel} 艘舰艇`;
+  const snapshotTime = formatSnapshotTime(affiliationRefreshedAt);
 
   return React.createElement(
     "aside",
@@ -165,24 +160,15 @@ export function VesselFocusPanel({
       ),
     ),
     React.createElement(
-      "div",
-      { className: "vessel-focus-state" },
-      React.createElement("span", null, "状态：", textOrFallback(valueFrom(selectedTarget, ["status", "state"]), "未知")),
+      "section",
+      { className: "vessel-affiliation" },
       React.createElement(
-        "label",
-        { className: "focus-only-toggle" },
-        React.createElement("input", {
-          type: "checkbox",
-          checked: Boolean(focusOnly),
-          onChange: (event) => onFocusOnlyChange?.(event.currentTarget.checked),
-        }),
-        React.createElement("span", null, "只看关注舰艇"),
+        "h3",
+        null,
+        React.createElement("span", null, "航母关联（历史）"),
+        snapshotTime && React.createElement("time", null, `快照：${snapshotTime}`),
       ),
-    ),
-    React.createElement(
-      "div",
-      { className: "focus-mode-status", "aria-live": "polite" },
-      trackLoading ? "数据加载中…" : displayStatus,
+      affiliationContent(affiliation, vesselMmsi(selectedTarget), allAffiliations, allTargets),
     ),
     React.createElement(
       "div",
@@ -193,12 +179,6 @@ export function VesselFocusPanel({
       metric("活动天数", `${formatNumber(activeDays, 0)} 天`),
       metric("AIS 中断数", `${formatCount(aisGapCount)} 次`),
       metric("告警数", `${formatCount(alertCount)} 条`),
-    ),
-    React.createElement(
-      "section",
-      { className: "vessel-affiliation" },
-      React.createElement("h3", null, "航母关联（历史）"),
-      affiliationContent(affiliation, affiliationRefreshedAt, vesselMmsi(selectedTarget), allAffiliations, allTargets),
     ),
   );
 }

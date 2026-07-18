@@ -47,14 +47,14 @@ function render(props = {}) {
   }));
 }
 
-test("renders focused vessel identity, status, threat score, and key metrics", () => {
+test("renders focused vessel identity, threat score, and key metrics", () => {
   const markup = render();
 
   assert.match(markup, /class="[^"]*vessel-focus-panel/);
   assert.match(markup, /关注舰艇/);
   assert.match(markup, /海巡 630/);
   assert.match(markup, /413000630/);
-  assert.match(markup, /AIS 异常/);
+  assert.doesNotMatch(markup, /AIS 异常/);
   assert.match(markup, /威胁分/);
   assert.match(markup, /86/);
   assert.match(markup, /最快速度/);
@@ -70,21 +70,28 @@ test("renders focused vessel identity, status, threat score, and key metrics", (
   assert.match(markup, /4 条/);
 });
 
-test("renders focus display status and fallback heading", () => {
+test("renders association above metrics with snapshot time and fallback heading", () => {
   const markup = render({
     selectedTarget: {
       ...selectedTarget,
       orientation: null,
     },
-    focusOnly: false,
-    visibleCount: 12,
-    totalCount: 12,
+    affiliation: {
+      status: "analyzed",
+      carriers: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        lag: { lagMinutes: 120, averageDistanceNm: 62.86 },
+      }],
+    },
+    affiliationRefreshedAt: "2026-07-18T07:41:01.382Z",
   });
 
-  assert.match(markup, /class="[^"]*focus-mode-status/);
-  assert.match(markup, /全部 12 艘舰艇/);
+  assert.match(markup, /航母关联（历史）/);
+  assert.match(markup, /快照：/);
+  assert.match(markup, /西奥多·罗斯福号/);
+  assert.ok(markup.indexOf("航母关联（历史）") < markup.indexOf("最快速度"));
   assert.match(markup, /航向\/方向[\s\S]*--/);
-  assert.doesNotMatch(markup, /checked=""/);
 });
 
 test("does not render NaN for invalid numeric values", () => {
@@ -93,21 +100,18 @@ test("does not render NaN for invalid numeric values", () => {
       ...selectedTarget,
       score: Number.NaN,
     },
-    visibleCount: Number.NaN,
-    totalCount: Number.NaN,
-    focusOnly: false,
   });
 
   assert.doesNotMatch(markup, /NaN/);
-  assert.match(markup, /全部 -- 艘舰艇/);
+  assert.match(markup, /威胁分[\s\S]*--/);
 });
 
-test("renders focused-only status", () => {
+test("does not render removed focus status controls", () => {
   const markup = render();
 
-  assert.match(markup, /当前只显示 1 艘关注舰艇/);
-  assert.match(markup, /type="checkbox"/);
-  assert.match(markup, /checked=""/);
+  assert.doesNotMatch(markup, /当前只显示/);
+  assert.doesNotMatch(markup, /type="checkbox"/);
+  assert.doesNotMatch(markup, /数据加载中/);
 });
 
 test("static markup never uses forbidden wording", () => {
