@@ -7,9 +7,10 @@ interface AppDetailProps {
   app: SmartApp | null;
   onClose: () => void;
   onToggleFavorite: (appId: string) => void;
+  onHide: (appId: string) => void;
 }
 
-const AppDetail: React.FC<AppDetailProps> = ({ app, onClose, onToggleFavorite }) => {
+const AppDetail: React.FC<AppDetailProps> = ({ app, onClose, onToggleFavorite, onHide }) => {
   if (!app) return null;
 
   const categoryColor = CATEGORY_COLORS[app.category] || '#64748b';
@@ -62,6 +63,10 @@ const AppDetail: React.FC<AppDetailProps> = ({ app, onClose, onToggleFavorite })
           <h3 className="app-detail__section-title">应用信息</h3>
           <div className="app-detail__info-grid">
             <div className="app-detail__info-item">
+              <span className="app-detail__info-label">ID</span>
+              <span className="app-detail__info-value" style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', wordBreak: 'break-all' }}>{app.id}</span>
+            </div>
+            <div className="app-detail__info-item">
               <span className="app-detail__info-label">上架日期</span>
               <span className="app-detail__info-value">{app.publishDate}</span>
             </div>
@@ -96,6 +101,12 @@ const AppDetail: React.FC<AppDetailProps> = ({ app, onClose, onToggleFavorite })
           >
             访问应用 →
           </a>
+          <button
+            className="app-detail__del-btn"
+            onClick={() => { if (window.confirm(`确定删除「${app.name}」？`)) onHide(app.id) }}
+          >
+            删除应用
+          </button>
         </div>
       </div>
     </div>

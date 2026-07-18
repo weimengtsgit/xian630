@@ -68,12 +68,19 @@ const App: React.FC = () => {
   const [apps, setApps] = useState<SmartApp[]>(initialApps);
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [selectedApp, setSelectedApp] = useState<SmartApp | null>(null);
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+
+  // 排除已隐藏的应用
+  const visibleApps = useMemo(
+    () => apps.filter((a) => !hiddenIds.has(a.id)),
+    [apps, hiddenIds],
+  );
 
   // 筛选后的应用列表
   const filteredApps = useMemo(() => {
-    if (activeCategory === 'all') return apps;
-    return apps.filter((a) => a.category === activeCategory);
-  }, [apps, activeCategory]);
+    if (activeCategory === 'all') return visibleApps;
+    return visibleApps.filter((a) => a.category === activeCategory);
+  }, [visibleApps, activeCategory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,9 +126,15 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // 假删除 — 仅前端隐藏，不调 DELETE API
+  const handleHideApp = useCallback((appId: string) => {
+    setHiddenIds((prev) => new Set([...prev, appId]));
+    setSelectedApp(null);
+  }, []);
+
   // 统计数据
-  const newCount = useMemo(() => apps.filter((a) => a.status === '新品').length, [apps]);
-  const favoritedCount = useMemo(() => apps.filter((a) => a.favorited).length, [apps]);
+  const newCount = useMemo(() => visibleApps.filter((a) => a.status === '新品').length, [visibleApps]);
+  const favoritedCount = useMemo(() => visibleApps.filter((a) => a.favorited).length, [visibleApps]);
 
   // 选择应用 — 状态切换：选中/取消选中
   const handleSelectApp = useCallback((app: SmartApp) => {
@@ -148,7 +161,7 @@ const App: React.FC = () => {
     <div className="app-layout">
       {/* 顶部状态栏 — defense-operations-ui 模式 */}
       <StatusBar
-        appCount={apps.length}
+        appCount={visibleApps.length}
         newCount={newCount}
         favoritedCount={favoritedCount}
       />
@@ -158,7 +171,7 @@ const App: React.FC = () => {
           <Header />
 
           {/* 新品推荐区域 — 横向滚动 */}
-          <NewRecommendations apps={apps} onSelect={handleSelectApp} />
+          <NewRecommendations apps={visibleApps} onSelect={handleSelectApp} />
 
           <CategoryFilter
             filters={CATEGORY_FILTERS}
@@ -183,6 +196,7 @@ const App: React.FC = () => {
           app={selectedApp}
           onClose={() => setSelectedApp(null)}
           onToggleFavorite={handleToggleFavorite}
+          onHide={handleHideApp}
         />
       )}
     </div>
