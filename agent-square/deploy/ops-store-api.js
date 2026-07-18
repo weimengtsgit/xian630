@@ -103,9 +103,9 @@ function apps(r) {
 
     const apps = readApps();
     let deleted = 0;
-    for (const item of apps) {
-      if (item.id === key || item.name === key) {
-        item.deleted = true;
+    for (let i = 0; i < apps.length; i++) {
+      if (apps[i].id === key || apps[i].name === key) {
+        apps[i].deleted = true;
         deleted += 1;
       }
     }
