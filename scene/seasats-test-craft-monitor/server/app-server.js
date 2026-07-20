@@ -386,7 +386,7 @@ async function buildFastSummary() {
   };
 }
 
-function buildSummaryFromTracks(trackEntries) {
+function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
   const allAlerts = [];
   const compactTargets = [];
   const initialMmsi = MONITORED_VESSELS[0]?.mmsi;
@@ -399,10 +399,11 @@ function buildSummaryFromTracks(trackEntries) {
     if (!vessel) continue;
     const trackPoints = track.trackPoints || [];
     const latest = trackPoints.at(-1);
+    const identity = identityByMmsi.get(mmsi);
     const rawTarget = {
       mmsi,
-      // 球形地图的“US GOV VESSEL”是通用占位名，不能覆盖已确认的航母名称。
-      name: latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`,
+      // 船名以本体 shipName 为准；北邮只补充实时点位及本体缺失时的名称，避免通用占位名覆盖真实名称。
+      name: identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
@@ -478,8 +479,21 @@ async function refreshFleetSnapshot() {
   fleetRefreshPromise = (async () => {
     // 使用球形地图的历史轨迹与最新点位，按原有完整规则计算威胁分，而非用单点降级评分。
     // 球形地图并发过高会偶发超时；6 路实测可在首屏时限内稳定完成整批更新。
-    const tracks = await mapConcurrent(MONITORED_VESSELS, 6, async (vessel) => [vessel.mmsi, await buildRemoteMapTrack(vessel.mmsi)]);
-    const nextSummary = buildSummaryFromTracks(tracks);
+    const [tracks, identities] = await Promise.all([
+      mapConcurrent(MONITORED_VESSELS, 6, async (vessel) => [vessel.mmsi, await buildRemoteMapTrack(vessel.mmsi)]),
+      // 仅查询姓名字段，控制并发以免本体查询影响 AIS 历史轨迹服务。
+      mapConcurrent(MONITORED_VESSELS, 6, async (vessel) => {
+        try {
+          return await fetchVesselIdentity(vessel);
+        } catch (error) {
+          // 单艘船名查询失败不得阻断整批点位与威胁分快照，继续使用北邮或配置名称。
+          console.warn(`本体未返回 ${vessel.mmsi} 的船名：${error instanceof Error ? error.message : error}`);
+          return { mmsi: vessel.mmsi, name: null, rawTypeCode: null };
+        }
+      }),
+    ]);
+    const identityByMmsi = new Map(identities.map((identity) => [identity.mmsi, identity]));
+    const nextSummary = buildSummaryFromTracks(tracks, identityByMmsi);
     const refreshedAt = new Date().toISOString();
     nextSummary.metadata.refreshedAt = refreshedAt;
     // 舰艇态势计算完成即可进入页面；航母关联可能耗时很长，必须与首屏数据解耦。
