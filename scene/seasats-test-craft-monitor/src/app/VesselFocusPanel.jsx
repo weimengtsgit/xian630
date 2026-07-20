@@ -2,17 +2,22 @@ import React from "react";
 import { AlertTriangle } from "lucide-react";
 
 const confirmedCarrierNames = {
-  "368913000": "乔治·华盛顿号 (USS George Washington)",
-  "366984000": "西奥多·罗斯福号 (USS Theodore Roosevelt)",
+  "368913000": "乔治·华盛顿号",
+  "366984000": "西奥多·罗斯福号",
 };
 
 function isGenericVesselName(name) {
   return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
 }
 
+function displayNameWithoutAlias(name) {
+  // 页面仅展示中文主名称，移除英文别名括号以保持关联卡片紧凑。
+  return String(name || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
+}
+
 function carrierDisplayName(mmsi, name) {
   // 关联结果必须标明具体航母，不能将 AIS 通用占位名误展示成航母名称。
-  return confirmedCarrierNames[mmsi] || (isGenericVesselName(name) ? null : name) || `航母 MMSI ${mmsi}`;
+  return confirmedCarrierNames[mmsi] || (isGenericVesselName(name) ? null : displayNameWithoutAlias(name)) || `航母 MMSI ${mmsi}`;
 }
 
 function textOrFallback(value, fallback = "--") {
@@ -33,10 +38,10 @@ function valueFrom(selectedTarget, keys) {
 }
 
 function vesselName(selectedTarget) {
-  return textOrFallback(
+  return displayNameWithoutAlias(textOrFallback(
     valueFrom(selectedTarget, ["name", "vesselName", "shipName"]),
     "未选择舰艇",
-  );
+  ));
 }
 
 function vesselMmsi(selectedTarget) {
@@ -101,7 +106,8 @@ function metric(label, value) {
 }
 
 function relationEntry({ name, mmsi, relation, key, followerName, followerRole }) {
-  const followerLabel = followerRole === "无人艇" ? `${followerName} 无人艇` : followerName;
+  // 航母关联卡片中的另一方均以无人艇呈现；航母自身不重复添加类型标签。
+  const followerLabel = followerRole === "航母" || /\s无人艇$/.test(followerName) ? followerName : `${followerName} 无人艇`;
   const relationship = relation.relationType === "同步伴随"
     ? `${followerLabel} 与 ${name} 同步伴随`
     // 与使用方 Python 程序的 Lead(参考艇) → Follow(航母) 输出口径一致。
@@ -152,11 +158,12 @@ function formatChartTime(value) {
   }).format(time).replace(",", " ");
 }
 
-function distanceEvidence({ relation, name }) {
+function distanceEvidence({ relation, subjectName, subjectRole }) {
   const series = relation?.lag?.distanceSeries || [];
   if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
   const isInterpolated = relation?.lag?.distanceSeriesSource === "interpolated";
   const sourceLabel = isInterpolated ? "插值对齐距离" : "实测对齐距离";
+  const subjectLabel = subjectRole === "航母" || /\s无人艇$/.test(subjectName) ? subjectName : `${subjectName} 无人艇`;
   const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
   if (values.length < 2) return null;
   const width = 300;
@@ -182,11 +189,11 @@ function distanceEvidence({ relation, name }) {
   return React.createElement(
     "section",
     { className: "affiliation-evidence", key: `evidence-${relation.carrier.mmsi}` },
-    React.createElement("strong", null, `关联依据：${name} 的${sourceLabel}`),
-    React.createElement("small", null, `${isInterpolated ? "航母报点稀疏，按关联算法插值对齐" : "原始 AIS 报点对齐"} · 延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
+    React.createElement("strong", null, `关联依据：${subjectLabel} 实际轨迹的${sourceLabel}`),
+    React.createElement("small", null, `${subjectLabel} 实际报点时间 · ${isInterpolated ? "航母报点稀疏，按关联算法插值对齐" : "原始 AIS 报点对齐"} · 延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点（判定阈值 100 海里）`),
     React.createElement(
       "svg",
-      { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${name} 时延对齐后的距离曲线` },
+      { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: "none", role: "img", "aria-label": `${subjectLabel} 实际轨迹时延对齐后的距离曲线` },
       yTicks.map((tick) => React.createElement(React.Fragment, { key: `y-${tick}` },
         React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(tick), y2: yFor(tick), className: "affiliation-evidence-grid" }),
         React.createElement("text", { x: plot.left - 4, y: yFor(tick) + 3, textAnchor: "end", className: "affiliation-evidence-label" }, formatNumber(tick, tick >= 10 ? 0 : 1)),
@@ -199,7 +206,7 @@ function distanceEvidence({ relation, name }) {
       React.createElement("text", { x: width - plot.right, y: yFor(thresholdNm) - 3, textAnchor: "end", className: "affiliation-evidence-threshold-label" }, "阈值 100 海里"),
       React.createElement("text", { x: plot.left, y: 10, className: "affiliation-evidence-label title" }, "距离（海里）"),
       React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
-      React.createElement("text", { x: width / 2, y: height - 2, textAnchor: "middle", className: "affiliation-evidence-label title" }, "时间（北京时间）"),
+      React.createElement("text", { x: width / 2, y: height - 2, textAnchor: "middle", className: "affiliation-evidence-label title" }, "无人艇实际时间（北京时间）"),
     ),
     React.createElement("span", null, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(observedMaxDistance, 2)} 海里；越低表示轨迹越接近。`),
   );
@@ -238,7 +245,7 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
         { key: item.carrier.mmsi },
         relationEntry({ name, mmsi: item.carrier.mmsi, followerName, followerRole: affiliation.reference?.role, relation: item, key: item.carrier.mmsi }),
         // 只呈现命中的、时延已对齐的实测距离，避免全量轨迹图造成时间语义误读。
-        distanceEvidence({ relation: item, name }),
+        distanceEvidence({ relation: item, subjectName: followerName, subjectRole: affiliation.reference?.role }),
       );
     }),
   );

@@ -90,7 +90,8 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /航母关联（历史）/);
   assert.match(markup, /快照：/);
   assert.match(markup, /西奥多·罗斯福号/);
-  assert.match(markup, /西奥多·罗斯福号.*跟随 海巡 630/);
+  assert.match(markup, /西奥多·罗斯福号.*跟随 海巡 630 无人艇/);
+  assert.doesNotMatch(markup, /USS Theodore Roosevelt/);
   assert.match(markup, /尚不支持仅据 AIS 定性具体任务/);
   assert.match(markup, /最小距离 4\.20 海里/);
   assert.match(markup, /航向误差不超过45°（本次最大 32°）/);
@@ -122,12 +123,12 @@ test("renders delay-aligned distance evidence only for a matched delay relation"
     },
   });
 
-  assert.match(markup, /关联依据：西奥多·罗斯福号/);
+  assert.match(markup, /关联依据：海巡 630 无人艇 实际轨迹/);
   assert.match(markup, /8天/);
   assert.doesNotMatch(markup, /11520 分钟/);
   assert.match(markup, /距离曲线/);
   assert.match(markup, /距离（海里）/);
-  assert.match(markup, /时间（北京时间）/);
+  assert.match(markup, /无人艇实际时间（北京时间）/);
   assert.match(markup, /阈值 100 海里/);
 });
 
