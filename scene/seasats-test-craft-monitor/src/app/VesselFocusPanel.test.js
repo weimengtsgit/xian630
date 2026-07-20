@@ -91,10 +91,11 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /快照：/);
   assert.match(markup, /西奥多·罗斯福号/);
   assert.match(markup, /西奥多·罗斯福号.*跟随 海巡 630 无人艇/);
-  assert.doesNotMatch(markup, /USS Theodore Roosevelt/);
+  assert.match(markup, /USS Theodore Roosevelt/);
   assert.match(markup, /尚不支持仅据 AIS 定性具体任务/);
   assert.match(markup, /最小距离 4\.20 海里/);
-  assert.match(markup, /航向误差不超过45°（本次最大 32°）/);
+  assert.match(markup, /航向误差不超过45°/);
+  assert.doesNotMatch(markup, /本次最大 32°/);
   assert.match(markup, /时延 2小时/);
   assert.ok(markup.indexOf("最快速度") < markup.indexOf("航母关联（历史）"));
   assert.match(markup, /航向\/方向[\s\S]*--/);

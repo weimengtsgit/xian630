@@ -2,22 +2,17 @@ import React from "react";
 import { AlertTriangle } from "lucide-react";
 
 const confirmedCarrierNames = {
-  "368913000": "乔治·华盛顿号",
-  "366984000": "西奥多·罗斯福号",
+  "368913000": "乔治·华盛顿号 (USS George Washington)",
+  "366984000": "西奥多·罗斯福号 (USS Theodore Roosevelt)",
 };
 
 function isGenericVesselName(name) {
   return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
 }
 
-function displayNameWithoutAlias(name) {
-  // 页面仅展示中文主名称，移除英文别名括号以保持关联卡片紧凑。
-  return String(name || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
-}
-
 function carrierDisplayName(mmsi, name) {
   // 关联结果必须标明具体航母，不能将 AIS 通用占位名误展示成航母名称。
-  return confirmedCarrierNames[mmsi] || (isGenericVesselName(name) ? null : displayNameWithoutAlias(name)) || `航母 MMSI ${mmsi}`;
+  return confirmedCarrierNames[mmsi] || (isGenericVesselName(name) ? null : name) || `航母 MMSI ${mmsi}`;
 }
 
 function textOrFallback(value, fallback = "--") {
@@ -38,10 +33,10 @@ function valueFrom(selectedTarget, keys) {
 }
 
 function vesselName(selectedTarget) {
-  return displayNameWithoutAlias(textOrFallback(
+  return textOrFallback(
     valueFrom(selectedTarget, ["name", "vesselName", "shipName"]),
     "未选择舰艇",
-  ));
+  );
 }
 
 function vesselMmsi(selectedTarget) {
@@ -116,7 +111,7 @@ function relationEntry({ name, mmsi, relation, key, followerName, followerRole }
   const minimumDistance = numberOrNull(relation?.lag?.minimumDistanceNm);
   const matchedPoints = numberOrNull(relation?.lag?.matchedPoints) || 0;
   const courseEvidence = relation?.lag?.courseFilterApplied
-    ? `航向误差不超过45°（本次最大 ${formatNumber(relation.lag.maxCourseDifferenceDeg ?? 45, 0)}°）`
+    ? "航向误差不超过45°"
     : "航向数据不足，未纳入45°过滤";
   let assessment;
   if (relation.relationType === "同步伴随") {
