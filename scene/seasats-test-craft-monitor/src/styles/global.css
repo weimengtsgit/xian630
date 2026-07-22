@@ -288,6 +288,11 @@ html, body { overflow: auto; }
 .map-canvas-wrap { min-height: 520px; }
 .target-panel { height: auto; max-height: 620px; }
 .analysis-panel { align-items: start; }
+.track-query-status { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 8px; color: #bae6fd; background: rgba(14, 116, 144, 0.16); }
+.track-query-status.error { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; background: rgba(127, 29, 29, 0.22); }
+.track-mark.error { color: #fecaca; border-color: rgba(248, 113, 113, 0.45); background: rgba(127, 29, 29, 0.22); }
+.vessel-data-error { margin: 0; padding: 8px 10px; color: #fecaca; border: 1px solid rgba(248, 113, 113, 0.45); border-radius: 7px; background: rgba(127, 29, 29, 0.22); }
+.affiliation-empty.error { color: #fecaca; }
 .loading-shell { min-height: 100vh; }
 
 /* === 图放大：2列网格 === */

@@ -224,14 +224,19 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
       relatedVessels.map((item) => relationEntry({ name: selectedCarrierName, mmsi: selectedMmsi, followerName: item.name, followerRole: item.role, relation: item.relation, key: `${selectedMmsi}-${item.mmsi}` })),
     );
   }
+  if (affiliation.status === "source-error") return React.createElement("p", { className: "affiliation-empty error", role: "alert" }, "本体轨迹查询失败，暂不生成航母关联结论。");
+  const partialSourceWarning = affiliation.status === "partial-source-error"
+    ? React.createElement("p", { className: "affiliation-empty error", role: "alert" }, "部分航母轨迹查询失败，当前关联结论不完整。")
+    : null;
   if (affiliation.status === "no-track") return React.createElement("p", { className: "affiliation-empty" }, "历史窗口内未获取到该舰艇 AIS 轨迹。");
   const matched = (affiliation.carriers || []).filter((item) => item.relationType !== "未命中");
-  if (!matched.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的航母关联。");
+  if (!matched.length) return partialSourceWarning || React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的航母关联。");
   const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
   const followerName = selectedName || nameByMmsi.get(selectedMmsi) || `MMSI ${selectedMmsi}`;
   return React.createElement(
     React.Fragment,
     null,
+    partialSourceWarning,
     // 卡片使用首页已经识别出的真实船名，避免只显示 CVN-71 一类内部编号。
     matched.map((item) => {
       const name = carrierDisplayName(item.carrier.mmsi, nameByMmsi.get(item.carrier.mmsi) || item.carrier.name);
@@ -263,6 +268,7 @@ export function VesselFocusPanel({
   const alertCount = countFrom(selectedTarget, ["alertCount", "alertsCount"], ["alerts"]);
   const threatScore = valueFrom(selectedTarget, ["threatScore", "score"]);
   const snapshotTime = formatSnapshotTime(affiliationRefreshedAt);
+  const snapshotLabel = snapshotTime || (affiliation?.status === "refreshing" || affiliation?.status === "not-generated" ? "生成中" : null);
 
   return React.createElement(
     "aside",
@@ -294,6 +300,9 @@ export function VesselFocusPanel({
         ),
       ),
     ),
+    selectedTarget?.dataUnavailable
+      ? React.createElement("p", { className: "vessel-data-error", role: "alert" }, "本体轨迹查询失败，当前舰艇威胁分不可用。")
+      : null,
     React.createElement(
       "div",
       { className: "vessel-metric-grid" },
@@ -311,7 +320,7 @@ export function VesselFocusPanel({
         "h3",
         null,
         React.createElement("span", null, "航母关联（历史）"),
-        snapshotTime && React.createElement("time", null, `快照：${snapshotTime}`),
+        snapshotLabel && React.createElement("time", null, `快照：${snapshotLabel}`),
       ),
       affiliationContent(affiliation, vesselMmsi(selectedTarget), vesselName(selectedTarget), allAffiliations, allTargets),
     ),

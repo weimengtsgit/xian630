@@ -22,6 +22,7 @@ const plotWidth = chartWidth - pad.left - pad.right;
 const plotHeight = chartHeight - pad.top - pad.bottom;
 
 function fmtNumber(value, digits = 0, fallback = "--") {
+  if (value === null || value === undefined || value === "") return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number.toFixed(digits).replace(/\.0$/, "") : fallback;
 }
@@ -383,13 +384,15 @@ function CompactConclusion({ summary, selectedTarget, gapCount }) {
   );
 }
 
-export function AnalysisPanel({ analysis, selectedTarget, coastData }) {
+export function AnalysisPanel({ analysis, selectedTarget, coastData, trackLoading = false, trackError = null }) {
   const summary = analysis?.summary;
   const alerts = selectedTarget?.alerts || [];
   const gapCount = selectedTarget?.aisGaps?.length || 0;
 
   return (
     <section className="analysis-panel simplified-analysis">
+      {trackLoading && <div className="track-query-status loading" role="status">本体轨迹统计加载中…</div>}
+      {!trackLoading && trackError && <div className="track-query-status error" role="alert">本体轨迹统计加载失败：{trackError}</div>}
       <AnalysisCharts selectedTarget={selectedTarget} coastData={coastData} />
 
       <article className="analysis-group evidence-group">

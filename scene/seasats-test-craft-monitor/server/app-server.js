@@ -1,6 +1,5 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import crypto from "node:crypto";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,9 +19,6 @@ const summarySnapshotFile = resolve(dataRoot, "fleet-summary-snapshot.json");
 const skillConfig = resolve(appRoot, "..", "..", ".claude", "skills", "carrier-affiliation-data-skill", "config", "ontology.env");
 const externalOntologyConfig = process.env.ONTOLOGY_ENV_FILE || null;
 const apiPort = Number(process.env.PORT || 5180);
-const remoteMapBaseUrl = "http://218.61.33.200:18000";
-// 此密钥由远程球面地图公开前端使用；仅在本服务端请求中使用，绝不返回浏览器。
-const remoteMapApiKey = process.env.REMOTE_MAP_API_KEY || "yAjFdLc$Mb76@9rC";
 // 用户指定的轨迹数据窗口：先从 2025-12-01 开始；满一年后仅保留最近一年。
 const trackBaselineStartMs = Date.UTC(2025, 11, 1);
 const trackWindowMs = 365 * 24 * 60 * 60 * 1000;
@@ -32,12 +28,15 @@ let summarySnapshot = null;
 let affiliationHistory = null;
 let fleetRefreshPromise = null;
 let affiliationRefreshPromise = null;
-// 服务刚启动时必须完成一次全量球形地图更新，避免页面先展示过期快照再逐项跳变。
+// 服务刚启动时必须完成一次全量本体轨迹更新，避免页面先展示过期快照再逐项跳变。
 let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
-const affiliationSnapshotVersion = "python-select-v3-map-fallback-distance-evidence";
+const affiliationSnapshotVersion = "python-select-v6-partial-source-errors";
+const trackCache = new Map();
+const trackInFlight = new Map();
+const monitoredMmsiSet = new Set(MONITORED_VESSELS.map((vessel) => vessel.mmsi));
 
 function affiliationRulesChanged(snapshot) {
   // 规则或轨迹来源升级后不能将旧快照误标为新口径，必须完成一次后台重算再对外展示。
@@ -84,13 +83,13 @@ async function requestRawAis(body) {
   const config = ontologyConfig();
   let lastError;
   // 个别大轨迹在本体繁忙时会超过常规响应时间，短暂重试避免整批快照被一艘船拖垮。
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const response = await fetch(`${config.baseUrl}/daasDMS/entity/RawAISData/list`, {
         method: "POST",
         headers: { Authorization: `Bearer ${config.token}`, Spaceid: config.spaceId, scopeType: config.scopeType, "Content-Type": "application/json" },
         body: JSON.stringify({ rowType: "map", ...body }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(120_000),
       });
       if (!response.ok) throw new Error(`ONTOLOGY_HTTP_${response.status}`);
       const data = await response.json();
@@ -99,7 +98,7 @@ async function requestRawAis(body) {
       return details;
     } catch (error) {
       lastError = error;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
     }
   }
   throw lastError;
@@ -124,7 +123,9 @@ function numberOrNull(value) {
 
 function normalizeTime(value) {
   if (!value) return null;
-  const date = new Date(value.includes("T") && !/[zZ]|[+-]\d\d:\d\d$/.test(value) ? `${value}Z` : value);
+  const text = String(value).trim();
+  const timestamp = /[zZ]|[+-]\d\d:\d\d$/.test(text) ? text : `${text.replace(" ", "T")}+08:00`;
+  const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
@@ -133,8 +134,8 @@ function currentTrackStartMs(nowMs = Date.now()) {
 }
 
 function formatOntologyTime(timeMs) {
-  // 本体接口使用无时区的 YYYY-MM-DD HH:mm:ss，统一按 UTC 传递以避免本地时区漂移。
-  return new Date(timeMs).toISOString().slice(0, 19).replace("T", " ");
+  // 本体接口的无时区时间按北京时间解释，查询边界也使用同一口径。
+  return new Date(timeMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
 }
 
 function normalizePoint(row, index = 0) {
@@ -179,141 +180,16 @@ async function fetchVesselIdentity(vessel) {
   };
 }
 
-function remoteMapCipherKey() {
-  // 与球面地图前端一致：按北京时间当天生成 AES 密钥。
-  const now = Date.now();
-  const dayStart = now - (now + 8 * 60 * 60 * 1000) % (24 * 60 * 60 * 1000);
-  return (String(dayStart).slice(0, 10) + String(dayStart).slice(0, 6)).slice(0, 16).padEnd(16, "0");
-}
-
-function decodeRemoteMapResponse(raw) {
-  const key = Buffer.from(remoteMapCipherKey());
-  const decipher = crypto.createDecipheriv("aes-128-cbc", key, key);
-  return JSON.parse(`${decipher.update(raw, "hex", "utf8")}${decipher.final("utf8")}`);
-}
-
-async function requestRemoteMapLatest(mmsi) {
-  const param = Buffer.from(JSON.stringify({ mmsi }), "utf8").toString("base64");
-  const signSource = `C#t36KclJs6JlT$yapi_key${remoteMapApiKey}cmd0x5101param${param}`;
-  const sign = crypto.createHash("sha1").update(signSource).digest("hex");
-  const url = new URL("/blmcgi", remoteMapBaseUrl);
-  url.searchParams.set("cmd", "0x5101");
-  url.searchParams.set("param", param);
-  url.searchParams.set("api_key", remoteMapApiKey);
-  url.searchParams.set("sign", sign);
-  url.searchParams.set("cipher", "1");
-  const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-  if (!response.ok) throw new Error(`REMOTE_MAP_HTTP_${response.status}`);
-  return decodeRemoteMapResponse(await response.text());
-}
-
-async function requestRemoteMapTrack(mmsi, startMs = currentTrackStartMs(), endMs = Date.now()) {
-  // 球形地图轨迹接口无需分页，按 MMSI 和时间窗口一次返回；用于点选舰艇的快速历史统计。
-  const body = {
-    uid: "",
-    mmsi,
-    startdt: String(Math.floor(startMs / 1000)),
-    enddt: String(Math.floor(endMs / 1000)),
-    news: true,
-  };
-  const url = new URL("/blmcgi", remoteMapBaseUrl);
-  url.searchParams.set("cmd", "0x0157");
-  url.searchParams.set("param", Buffer.from(JSON.stringify(body), "utf8").toString("base64"));
-  url.searchParams.set("cipher", "1");
-  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`REMOTE_MAP_TRACK_HTTP_${response.status}`);
-  const data = decodeRemoteMapResponse(await response.text());
-  if (Number(data?.eid) !== 0) throw new Error(`REMOTE_MAP_TRACK_RESULT_${data?.eid ?? "UNKNOWN"}`);
-  return data;
-}
-
-async function buildRemoteMapTrack(mmsi) {
-  if (!/^[0-9]{6,12}$/.test(mmsi)) throw new Error("INVALID_MMSI");
-  const startMs = currentTrackStartMs();
-  // 同时取历史轨迹和状态接口的最新单点，避免轨迹服务延迟时图表停留在旧报点。
-  const [trackRequest, latestRequest] = await Promise.allSettled([
-    requestRemoteMapTrack(mmsi, startMs),
-    fetchLatestVessel({ mmsi }),
-  ]);
-  // 两个球形地图接口互为降级：历史轨迹或最新单点任一成功都可完成该艇的本轮研判。
-  if (trackRequest.status === "rejected" && latestRequest.status === "rejected") {
-    throw new Error(`REMOTE_MAP_DATA_UNAVAILABLE_${mmsi}`);
-  }
-  const data = trackRequest.status === "fulfilled" ? trackRequest.value : { track: [] };
-  const latestResult = latestRequest.status === "fulfilled" ? latestRequest.value[1] : { trackPoints: [] };
-  const uniquePoints = new Map();
-  for (const [index, record] of (Array.isArray(data.track) ? data.track : []).entries()) {
-    const fields = String(record || "").split("|");
-    // 远程格式：经度、纬度、秒级时间、航向(×10)、速度(×10)…；部分后续行会省略 MMSI，使用请求的 MMSI 补齐。
-    const timeSeconds = Number(fields[3]);
-    const lon = Number(fields[1]);
-    const lat = Number(fields[2]);
-    if (!Number.isFinite(timeSeconds) || !Number.isFinite(lon) || !Number.isFinite(lat)) continue;
-    const point = {
-      id: `${mmsi}-${timeSeconds}-${index}`,
-      mmsi,
-      time: new Date(timeSeconds * 1000).toISOString(),
-      lon,
-      lat,
-      speedKn: Number.isFinite(Number(fields[5])) ? Number(fields[5]) / 10 : null,
-      courseDeg: Number.isFinite(Number(fields[4])) ? Number(fields[4]) / 10 : null,
-      orientation: Number.isFinite(Number(fields[4])) ? Number(fields[4]) / 10 : null,
-      heading: null,
-      navStatus: fields[12] || null,
-      aisSourceType: null,
-      name: null,
-      provider: "remote-map-track",
-      confidence: 1,
-    };
-    uniquePoints.set([point.time, point.lon, point.lat, point.speedKn, point.courseDeg].join("|"), point);
-  }
-  for (const point of latestResult.trackPoints || []) {
-    uniquePoints.set([point.time, point.lon, point.lat, point.speedKn, point.courseDeg].join("|"), point);
-  }
-  const trackPoints = [...uniquePoints.values()].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
-  return {
-    mmsi,
-    trackPoints,
-    meta: {
-      source: "remote-map-track+latest",
-      loadedCount: trackPoints.length,
-      startTime: new Date(startMs).toISOString(),
-      endTime: new Date().toISOString(),
-    },
-  };
-}
-
-async function fetchLatestVessel(vessel) {
-  // 球面地图状态接口按 MMSI 直接返回单条最新 AIS 点，避免从无排序的本体历史轨迹中反查。
-  const row = await requestRemoteMapLatest(vessel.mmsi);
-  const timeSeconds = Number(row.time);
-  const latest = Number.isFinite(timeSeconds) && Number.isFinite(Number(row.x)) && Number.isFinite(Number(row.y))
-    ? {
-      id: `${vessel.mmsi}-${timeSeconds}`, mmsi: vessel.mmsi, time: new Date(timeSeconds * 1000).toISOString(),
-      lon: Number(row.x), lat: Number(row.y), speedKn: Number.isFinite(Number(row.sog)) ? Number(row.sog) / 10 : null,
-      courseDeg: Number.isFinite(Number(row.cog)) ? Number(row.cog) / 10 : null,
-      orientation: Number.isFinite(Number(row.cog)) ? Number(row.cog) / 10 : null,
-      heading: Number.isFinite(Number(row.true_head)) ? Number(row.true_head) : null,
-      navStatus: row.nav_status ?? null, aisSourceType: row.ship_type ?? null,
-      name: String(row.shipname || row.shipnamecn || "").trim() || null,
-      length: Number.isFinite(Number(row.length)) ? Number(row.length) : null,
-      width: Number.isFinite(Number(row.width)) ? Number(row.width) : null,
-      provider: "remote-map-latest", confidence: 1,
-    }
-    : null;
-  return [vessel.mmsi, { trackPoints: latest ? [latest] : [] }];
-}
-
 async function buildTrack(mmsi) {
   if (!/^\d{6,12}$/.test(mmsi)) throw new Error("INVALID_MMSI");
   const columns = ["mmsi", "shipName", "latitude", "longitude", "sog", "courseOverGround", "trueHeading", "navigationalStatus", "typeCode", "startTime", "dataUpdateTime"];
   const windowStartMs = currentTrackStartMs();
-  const pageSize = 200_000;
+  const pageSize = 10_000;
   const filters = [
     { column: "mmsi", logic: "=", condition: mmsi, useCondition: true },
     { column: "startTime", logic: ">=", condition: formatOntologyTime(windowStartMs), useCondition: true },
   ];
-  // 单页最多拉 20 万条。接口分页没有可靠排序且可能重复，因此超过单页后仍须按业务字段去重。
+  // 将大轨迹拆成较小分页，避免本体对超大单页查询稳定超时；跨页结果仍按业务字段去重。
   const first = await requestRawAis({ columns, pageParam: { pageIndex: 1, limit: pageSize }, filters });
   const total = Number(first.pageParam?.recordTotal || 0);
   const pageCount = Math.ceil(total / pageSize);
@@ -333,28 +209,51 @@ async function buildTrack(mmsi) {
   return payload;
 }
 
-async function buildAffiliationTrack(mmsi) {
+function summarySnapshotUsable(snapshot) {
+  return snapshot?.metadata?.source === "ontology-daas"
+    && Array.isArray(snapshot?.targets)
+    && snapshot.targets.length > 0;
+}
+
+async function getOntologyTrack(mmsi, { force = false } = {}) {
+  if (trackInFlight.has(mmsi)) return trackInFlight.get(mmsi);
+  const cached = trackCache.get(mmsi);
+  if (!force && cached?.expiresAt > Date.now()) return cached.track;
+  if (cached) trackCache.delete(mmsi);
+
+  const request = buildTrack(mmsi)
+    .then((track) => {
+      trackCache.set(mmsi, { track, expiresAt: Date.now() + fleetRefreshMs });
+      return track;
+    })
+    .finally(() => trackInFlight.delete(mmsi));
+  trackInFlight.set(mmsi, request);
+  return request;
+}
+
+async function buildOntologyTrackOrEmpty(mmsi, context, options) {
   try {
-    const ontologyTrack = await buildTrack(mmsi);
-    if (ontologyTrack.trackPoints.length) return ontologyTrack;
-    // 本体存在脏数据清理或缺失时，不可把“0 条”误判成“无航母关联”。
-    console.warn(`本体未返回 ${mmsi} 的历史 AIS，回退至球形地图轨迹`);
+    return await getOntologyTrack(mmsi, options);
   } catch (error) {
-    // 关联快照是后台能力，本体单船暂时不可用时仍可用球形地图完成该船的历史研判。
-    console.warn(`本体拉取 ${mmsi} 历史 AIS 失败，回退至球形地图：${error instanceof Error ? error.message : error}`);
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`本体轨迹查询失败（${context}，MMSI ${mmsi}）：${message}`);
+    return {
+      mmsi,
+      trackPoints: [],
+      meta: { source: "ontology-daas", loadedCount: 0, error: message },
+    };
   }
-  const remoteTrack = await buildRemoteMapTrack(mmsi);
-  return {
-    ...remoteTrack,
-    meta: { ...remoteTrack.meta, source: "remote-map-affiliation-fallback" },
-  };
+}
+
+async function buildAffiliationTrack(mmsi) {
+  return buildOntologyTrackOrEmpty(mmsi, "affiliation");
 }
 
 async function buildFastSummary() {
   // 页面首屏只加载名单和默认关注船的完整轨迹，确保不被其他舰船的全量历史数据阻塞。
   const [identities, initialTrack] = await Promise.all([
     mapConcurrent(MONITORED_VESSELS, 6, fetchVesselIdentity),
-    buildTrack(MONITORED_VESSELS[0].mmsi),
+    getOntologyTrack(MONITORED_VESSELS[0].mmsi),
   ]);
   const identityByMmsi = new Map(identities.map((identity) => [identity.mmsi, identity]));
   const initialLatest = initialTrack.trackPoints.at(-1);
@@ -402,7 +301,7 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     const identity = identityByMmsi.get(mmsi);
     const rawTarget = {
       mmsi,
-      // 船名以本体 shipName 为准；北邮只补充实时点位及本体缺失时的名称，避免通用占位名覆盖真实名称。
+      // 船名和轨迹属性均来自本体，配置名称仅在本体名称缺失时兜底。
       name: identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
@@ -423,6 +322,12 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
       targets: [rawTarget], trackPoints,
     }, coastData);
     const target = analyzed.targets[0];
+    if (track.meta?.error) {
+      target.score = null;
+      target.status = "数据查询失败";
+      target.trackError = track.meta.error;
+      target.dataUnavailable = true;
+    }
     const { segments, aisGaps, alerts, ...compactTarget } = target;
     compactTargets.push(compactTarget);
     allAlerts.push(...analyzed.alerts);
@@ -477,16 +382,15 @@ async function writeSnapshot(file, value) {
 async function refreshFleetSnapshot() {
   if (fleetRefreshPromise) return fleetRefreshPromise;
   fleetRefreshPromise = (async () => {
-    // 使用球形地图的历史轨迹与最新点位，按原有完整规则计算威胁分，而非用单点降级评分。
-    // 球形地图并发过高会偶发超时；6 路实测可在首屏时限内稳定完成整批更新。
+    // 除远程地图 iframe 外，所有分析只使用本体 RawAISData 历史轨迹。
     const [tracks, identities] = await Promise.all([
-      mapConcurrent(MONITORED_VESSELS, 6, async (vessel) => [vessel.mmsi, await buildRemoteMapTrack(vessel.mmsi)]),
+      mapConcurrent(MONITORED_VESSELS, 3, async (vessel) => [vessel.mmsi, await buildOntologyTrackOrEmpty(vessel.mmsi, "fleet-summary", { force: true })]),
       // 仅查询姓名字段，控制并发以免本体查询影响 AIS 历史轨迹服务。
       mapConcurrent(MONITORED_VESSELS, 6, async (vessel) => {
         try {
           return await fetchVesselIdentity(vessel);
         } catch (error) {
-          // 单艘船名查询失败不得阻断整批点位与威胁分快照，继续使用北邮或配置名称。
+          // 单艘船名查询失败不得阻断整批点位与威胁分快照，继续使用配置名称。
           console.warn(`本体未返回 ${vessel.mmsi} 的船名：${error instanceof Error ? error.message : error}`);
           return { mmsi: vessel.mmsi, name: null, rawTypeCode: null };
         }
@@ -514,18 +418,43 @@ async function refreshAffiliationHistory() {
   if (affiliationRefreshPromise) return affiliationRefreshPromise;
   affiliationRefreshPromise = (async () => {
     // 关联计算只消费已完整落盘的态势快照，绝不读取本轮的中间轨迹数据。
-    if (!summarySnapshot) await refreshFleetSnapshot();
+    // 启动时先等待正在执行的 fleet 刷新，随后直接复用其轨迹缓存，避免两套全量查询争抢本体连接。
+    if (fleetRefreshPromise) await fleetRefreshPromise;
+    else if (!summarySnapshot) await refreshFleetSnapshot();
     // 航母归属需全轨迹，独立低频拉取，不能挤占 30 分钟一次的首屏态势刷新。
     const tracks = await mapConcurrent(MONITORED_VESSELS, 2, async (vessel) => [vessel.mmsi, await buildAffiliationTrack(vessel.mmsi)]);
     const tracksByMmsi = Object.fromEntries(tracks.map(([mmsi, track]) => [mmsi, track.trackPoints]));
     const trackSourcesByMmsi = Object.fromEntries(tracks.map(([mmsi, track]) => [mmsi, {
       source: track.meta?.source || "unknown",
       loadedCount: track.meta?.loadedCount || track.trackPoints.length,
+      error: track.meta?.error || null,
     }]));
     const carriers = MONITORED_VESSELS.filter((vessel) => vessel.role === "航母");
     const result = await analyzeAffiliationsInWorker({ vessels: MONITORED_VESSELS, carriers, tracksByMmsi });
     const refreshedAt = new Date().toISOString();
-    const nextAffiliation = { ...result, algorithmVersion: affiliationSnapshotVersion, trackSourcesByMmsi, refreshedAt, refreshIntervalHours: 5 };
+    const associationsByMmsi = { ...result.associationsByMmsi };
+    for (const [mmsi, source] of Object.entries(trackSourcesByMmsi)) {
+      if (!source.error) continue;
+      associationsByMmsi[mmsi] = {
+        ...(associationsByMmsi[mmsi] || {}),
+        status: "source-error",
+        error: source.error,
+      };
+    }
+    const failedCarrierMmsi = MONITORED_VESSELS
+      .filter((vessel) => vessel.role === "航母" && trackSourcesByMmsi[vessel.mmsi]?.error)
+      .map((vessel) => vessel.mmsi);
+    if (failedCarrierMmsi.length) {
+      for (const [mmsi, association] of Object.entries(associationsByMmsi)) {
+        if (trackSourcesByMmsi[mmsi]?.error || association.status === "carrier") continue;
+        associationsByMmsi[mmsi] = {
+          ...association,
+          status: "partial-source-error",
+          failedCarrierMmsi,
+        };
+      }
+    }
+    const nextAffiliation = { ...result, associationsByMmsi, algorithmVersion: affiliationSnapshotVersion, trackSourcesByMmsi, refreshedAt, refreshIntervalHours: 5 };
     await writeSnapshot(affiliationHistoryFile, nextAffiliation);
     affiliationHistory = nextAffiliation;
     console.log(`航母关联历史快照已更新：${refreshedAt}`);
@@ -556,17 +485,20 @@ createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
     if (request.method === "GET" && url.pathname === "/api/seasats/summary") {
-      // 首次打开必须等待所有舰艇完成球形地图轨迹研判，避免把半成品评分送入页面。
+      // 首次打开必须等待所有舰艇完成本体轨迹研判，避免把半成品评分送入页面。
       if (!summaryReady || !summarySnapshot) {
         void refreshFleetSnapshot().catch(() => {});
         return sendJson(response, 202, { status: "refreshing" });
       }
       return sendJson(response, 200, summarySnapshot);
     }
-    if (request.method === "GET" && url.pathname === "/api/seasats/affiliations") return sendJson(response, 200, affiliationHistory || { status: fleetRefreshPromise ? "refreshing" : "not-generated", refreshIntervalHours: 5 });
+    if (request.method === "GET" && url.pathname === "/api/seasats/affiliations") return sendJson(response, 200, affiliationHistory || { status: (fleetRefreshPromise || affiliationRefreshPromise) ? "refreshing" : "not-generated", refreshIntervalHours: 5 });
     const trackMatch = url.pathname.match(/^\/api\/seasats\/vessels\/(\d+)\/track$/);
-    // 点选统计走球形地图的快速轨迹，不再被本体无排序的全量分页查询拖慢。
-    if (request.method === "GET" && trackMatch) return sendJson(response, 200, await buildRemoteMapTrack(trackMatch[1]));
+    // 点选统计只使用本体轨迹；北邮历史轨迹仅由远程地图 iframe 自己加载。
+    if (request.method === "GET" && trackMatch) {
+      if (!monitoredMmsiSet.has(trackMatch[1])) throw new Error("MMSI_NOT_IN_SCOPE");
+      return sendJson(response, 200, await getOntologyTrack(trackMatch[1], { force: url.searchParams.get("fresh") === "1" }));
+    }
     serveStatic(request, response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
@@ -579,12 +511,14 @@ createServer(async (request, response) => {
     loadSnapshot(summarySnapshotFile, "舰船数据快照"),
     loadSnapshot(affiliationHistoryFile, "航母关联历史快照"),
   ]);
-  // 即使磁盘中存在旧快照，启动后也要用球形地图全量刷新后才允许首屏读取。
-  summaryReady = false;
+  // 已确认来源为本体的完整快照可立即用于首屏，后台刷新完成后再原子替换。
+  summaryReady = summarySnapshotUsable(summarySnapshot);
   // 每 30 分钟原子更新一次完整态势；已有历史关联快照时不因重启重复慢算。
   void refreshFleetSnapshot().catch(() => {});
-  // 重算期间保留上一份完整快照，避免页面先清空再显示新结果。
-  if (!affiliationHistory || affiliationRulesChanged(affiliationHistory)) {
+  // 数据源版本不一致的旧关联快照不得继续对外展示。
+  const affiliationNeedsRefresh = !affiliationHistory || affiliationRulesChanged(affiliationHistory);
+  if (affiliationNeedsRefresh) {
+    affiliationHistory = null;
     void refreshAffiliationHistory().catch(() => {});
   }
   setInterval(() => { void refreshFleetSnapshot().catch(() => {}); }, fleetRefreshMs);

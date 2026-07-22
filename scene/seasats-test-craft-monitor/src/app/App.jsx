@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Clock3, Database, Filter, Navigation, Search, Ship, X } from "lucide-react";
 import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
@@ -56,12 +56,14 @@ function TargetRow({ target, selected, onSelect }) {
     <button className={`target-row ${selected ? "selected" : ""}`} onClick={() => onSelect(target.mmsi)}>
       <span className={`status-dot ${target.status}`} />
       <span className="target-main"><strong>{target.name}</strong><small>{target.mmsi}</small></span>
-      {target.latestOnly
+      {target.dataUnavailable
+        ? <span className="track-mark error" title="本体轨迹查询失败">数据失败</span>
+        : target.latestOnly
         ? <span className="track-mark has" title="最新 AIS 点位">点位</span>
         : target.hasObservedTrack
         ? <span className="track-mark has" title="有轨迹"><Navigation size={12} />轨迹</span>
         : <span className="track-mark" title="仅最新位置">仅位置</span>}
-      <span className="target-score">{target.score}</span>
+      <span className="target-score" title={target.dataUnavailable ? "轨迹数据不可用，未计算威胁分" : "威胁分"}>{target.dataUnavailable ? "--" : target.score}</span>
     </button>
   );
 }
@@ -114,8 +116,10 @@ function Dashboard({ payload }) {
   const [livePayload, setLivePayload] = useState(payload);
   const [affiliationHistory, setAffiliationHistory] = useState(null);
   const [trackLoading, setTrackLoading] = useState(false);
-  // 每次点选均递增，用于即使重复点击同一艘舰艇也强制重新拉取实时 AIS 数据。
+  const [trackError, setTrackError] = useState(null);
+  // 只有重复点击当前舰艇才强制刷新；首次查看其他舰艇优先复用 fleet 缓存。
   const [trackRefreshVersion, setTrackRefreshVersion] = useState(0);
+  const forceRefreshMmsiRef = useRef(null);
   // 进入页面时以当前时刻生成远程地图结束时间，不在页面内定时重载地图。
   const [remoteMapEndTime] = useState(() => Math.floor(Date.now() / 1000));
   // 单船轨迹由服务端按窗口过滤；首屏评分只使用后端计算好的最新点位结果。
@@ -154,9 +158,14 @@ function Dashboard({ payload }) {
     if (!selectedMmsi) return undefined;
     let cancelled = false;
     setTrackLoading(true);
-    fetch(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/track`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    setTrackError(null);
+    const freshQuery = forceRefreshMmsiRef.current === selectedMmsi ? "?fresh=1" : "";
+    fetch(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/track${freshQuery}`)
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${response.status}`);
+        }
         return response.json();
       })
       .then((data) => {
@@ -174,9 +183,16 @@ function Dashboard({ payload }) {
         setLivePayload((current) => ({
           ...current,
           trackPoints: [...current.trackPoints.filter((point) => point.mmsi !== selectedMmsi), ...points],
-          targets: current.targets.map((target) => target.mmsi !== selectedMmsi || !latest ? target : {
+          targets: current.targets.map((target) => target.mmsi !== selectedMmsi ? target : !latest ? {
             ...target,
             ...detailedTarget,
+            dataUnavailable: false,
+            trackError: null,
+          } : {
+            ...target,
+            ...detailedTarget,
+            dataUnavailable: false,
+            trackError: null,
             // 球形地图轨迹不稳定提供船名；通用名或空值均不能覆盖首页已识别的标准船名。
             name: latest.name && !isGenericVesselName(latest.name) ? latest.name : target.name,
             latestTime: latest.time, lon: latest.lon, lat: latest.lat,
@@ -188,7 +204,9 @@ function Dashboard({ payload }) {
           alerts: [...current.alerts.filter((alert) => alert.targetMmsi !== selectedMmsi), ...(detailed?.alerts || [])],
         }));
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (!cancelled) setTrackError(error instanceof Error ? error.message : String(error));
+      })
       .finally(() => { if (!cancelled) setTrackLoading(false); });
     return () => { cancelled = true; };
   }, [selectedMmsi, trackRefreshVersion]);
@@ -242,9 +260,10 @@ function Dashboard({ payload }) {
   const summary = displayAnalysis.summary;
   const handleTargetSelect = (mmsi) => {
     const target = analysis.targets.find((item) => item.mmsi === mmsi);
+    const repeatedSelection = mmsi === selectedMmsi;
+    forceRefreshMmsiRef.current = repeatedSelection ? mmsi : null;
     setSelectedMmsi(mmsi);
-    // 每次点击都从服务端取最新 AIS 并在返回后一次性更新底部图表，绝不复用旧轨迹。
-    setTrackRefreshVersion((version) => version + 1);
+    if (repeatedSelection) setTrackRefreshVersion((version) => version + 1);
     setSelectedAlertId(target?.alerts?.[0]?.id || null);
     if (!target?.hasObservedTrack) setMapFocus(pointFocus("target", target, 11));
   };
@@ -341,7 +360,7 @@ function Dashboard({ payload }) {
         )}
       </section>
 
-      <AnalysisPanel analysis={displayAnalysis} selectedTarget={selectedTarget} coastData={coastData} />
+      <AnalysisPanel analysis={displayAnalysis} selectedTarget={selectedTarget} coastData={coastData} trackLoading={trackLoading} trackError={trackError} />
       <AlertCard alert={visibleCardAlert} onClose={() => setCardAlert(null)} />
     </main>
   );

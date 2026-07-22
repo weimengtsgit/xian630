@@ -101,6 +101,14 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /航向\/方向[\s\S]*--/);
 });
 
+test("renders snapshot generating status while affiliation refresh is pending", () => {
+  const markup = renderToStaticMarkup(React.createElement(VesselFocusPanel, {
+    selectedTarget,
+    affiliation: { status: "refreshing" },
+  }));
+  assert.match(markup, /快照：生成中/);
+});
+
 test("renders delay-aligned distance evidence only for a matched delay relation", () => {
   const markup = render({
     affiliation: {
