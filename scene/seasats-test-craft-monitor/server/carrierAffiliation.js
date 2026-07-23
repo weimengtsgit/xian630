@@ -79,14 +79,6 @@ function minimum(values) {
   return values.length ? Math.min(...values) : null;
 }
 
-function median(values) {
-  // 与 select0721.py 的 median_dist 一致：对判定采用的匹配距离取中位数，仅作展示，不影响命中。
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
 function range(times) {
   if (!times.length) return { startTime: null, endTime: null };
   let minTime = times[0];
@@ -131,17 +123,6 @@ function downsampleSeries(series, limit = 160) {
     sampled.push(series[Math.round(index * (series.length - 1) / (limit - 1))]);
   }
   return sampled;
-}
-
-function downsampleTrack(points, limit = 60) {
-  // 详情弹窗航迹对比图需要双方真实经纬度；对全量 AIS 抽稀并只保留时间/经纬度，控制快照体积。
-  if (!points.length) return [];
-  const sampled = points.length <= limit ? points : downsampleSeries(points, limit);
-  return sampled.map((point) => ({
-    time: new Date(point.timeMs).toISOString(),
-    lon: Math.round(point.lon * 1e4) / 1e4,
-    lat: Math.round(point.lat * 1e4) / 1e4,
-  }));
 }
 
 function analyzeSync(leader, follower) {
@@ -197,10 +178,6 @@ function analyzeLag(leader, follower) {
         lagMinutes,
         averageDistanceNm,
         minimumDistanceNm,
-        // median/withinThresholdRatio 与 select0721.py 的 median_dist/ratio 口径一致，
-        // 均由本轮判定已计算的距离聚合而来，纯展示字段，不参与命中判定。
-        medianDistanceNm: median(distances),
-        withinThresholdRatio: rawMatches.length ? rawMatches.filter((match) => match.distanceNm < RULES.lagDistThreshNm).length / rawMatches.length : null,
         matchedPoints: matches.length,
         courseFilterApplied,
         maxCourseDifferenceDeg: courseFilterApplied ? Math.max(...matches.map(({ point, interpolated }) => courseDifference(point.heading, interpolated.heading))) : null,
@@ -210,7 +187,7 @@ function analyzeLag(leader, follower) {
     }
   }
   if (!best || best.averageDistanceNm >= RULES.lagDistThreshNm) {
-    const { alignedDistanceSeries, ...lagResult } = best || { lagMinutes: null, averageDistanceNm: null, minimumDistanceNm: null, medianDistanceNm: null, withinThresholdRatio: null, matchedPoints: 0, courseFilterApplied: false, maxCourseDifferenceDeg: null, startTime: null, endTime: null };
+    const { alignedDistanceSeries, ...lagResult } = best || { lagMinutes: null, averageDistanceNm: null, minimumDistanceNm: null, matchedPoints: 0, courseFilterApplied: false, maxCourseDifferenceDeg: null, startTime: null, endTime: null };
     return { ...lagResult, distanceSeries: [], distanceSeriesSource: null, matched: false };
   }
 
@@ -259,13 +236,7 @@ export function analyzeVesselCarrierRelations({ vessels, carriers, tracksByMmsi 
       const sync = analyzeSync(vesselTrack, carrierTrack);
       const lag = analyzeLag(vesselTrack, carrierTrack);
       const relationType = sync.matched ? "同步伴随" : lag.matched ? "时延跟随" : "未命中";
-      const relation = { carrier, relationType, vesselPointCount: vesselTrack.length, carrierPointCount: carrierTrack.length, sync, lag };
-      // 命中关联才随快照下发双方抽稀航迹，供详情弹窗绘制航迹对比图；未命中不下发，控制响应体积。
-      if (relationType !== "未命中") {
-        relation.referenceTrackSeries = downsampleTrack(vesselTrack);
-        relation.carrierTrackSeries = downsampleTrack(carrierTrack);
-      }
-      return relation;
+      return { carrier, relationType, vesselPointCount: vesselTrack.length, carrierPointCount: carrierTrack.length, sync, lag };
     });
     associationsByMmsi[vessel.mmsi] = { status: vesselTrack.length ? "analyzed" : "no-track", reference: vessel, carriers: carriersResult };
   }

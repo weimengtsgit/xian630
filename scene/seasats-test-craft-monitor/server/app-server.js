@@ -34,9 +34,7 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
-// v7：详情弹窗航迹对比图需要双方抽稀航迹序列，analyzeLag 另输出中位距离与阈值内比例。
-// 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
-const affiliationSnapshotVersion = "python-select-v7-affiliation-detail-tracks";
+const affiliationSnapshotVersion = "python-select-v6-partial-source-errors";
 const trackCache = new Map();
 const trackInFlight = new Map();
 const monitoredMmsiSet = new Set(MONITORED_VESSELS.map((vessel) => vessel.mmsi));
