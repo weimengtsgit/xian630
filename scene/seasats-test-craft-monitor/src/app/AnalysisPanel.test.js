@@ -63,6 +63,8 @@ test("renders current-data AIS charts with Chinese speed units", () => {
 
   assert.match(markup, /AIS 轨迹图表/);
   assert.equal((markup.match(/class="analysis-chart-card(?: wide)?"/g) || []).length, 5);
+  // 速度变化、速度 vs 国土距离、每日活动趋势 三张图占整栏（wide），避免横坐标刻度重合。
+  assert.equal((markup.match(/class="analysis-chart-card wide"/g) || []).length, 3);
   assert.match(markup, /速度变化 · 全时段/);
   assert.doesNotMatch(markup, /低速停留/);
   assert.match(markup, /航向分布/);

@@ -1,5 +1,5 @@
-import React from "react";
-import { AlertTriangle } from "lucide-react";
+import React, { useEffect, useRef } from "react";
+import { AlertTriangle, ChevronLeft, ChevronRight, LineChart, X } from "lucide-react";
 
 const confirmedCarrierNames = {
   "368913000": "乔治·华盛顿号 (USS George Washington)",
@@ -13,6 +13,28 @@ function isGenericVesselName(name) {
 function carrierDisplayName(mmsi, name) {
   // 关联结果必须标明具体航母，不能将 AIS 通用占位名误展示成航母名称。
   return confirmedCarrierNames[mmsi] || (isGenericVesselName(name) ? null : name) || `航母 MMSI ${mmsi}`;
+}
+
+// 属舰 / 无人艇按公开舷号判定，不再依赖关联快照里的 role 字段。
+// 属舰：DDG/CG/CVN/SSN/LHD/LHA/T-AO/T-AKE/T-AOE；其余均为无人艇。
+const ESCORT_HULL_TYPES = new Set(["DDG", "CG", "CVN", "SSN", "LHA", "LHD", "T-AO", "T-AKE", "T-AOE"]);
+
+function hullTypePrefix(code) {
+  // "DDG-65" -> "DDG"，"T-AO-200" -> "T-AO"，"T-AKE-11" -> "T-AKE"。
+  return String(code || "").toUpperCase().replace(/-?\d+.*$/, "").replace(/-$/, "");
+}
+
+function isEscortVessel(code) {
+  return ESCORT_HULL_TYPES.has(hullTypePrefix(code));
+}
+
+function vesselKindLabel(code) {
+  return isEscortVessel(code) ? "属舰" : "无人艇";
+}
+
+function withVesselKind(name, code) {
+  const base = String(name || "");
+  return /\s(属舰|无人艇)$/.test(base) ? base : `${base} ${vesselKindLabel(code)}`;
 }
 
 function textOrFallback(value, fallback = "--") {
@@ -75,6 +97,15 @@ function formatDurationMinutes(value) {
   return `${sign}${parts.join("")}`;
 }
 
+function formatLagHours(lagMinutes) {
+  // 关联卡片中的时延统一按“小时（天）”呈现，如 308.0小时（12.83天）。
+  const minutes = numberOrNull(lagMinutes);
+  if (minutes === null) return "--";
+  const hours = minutes / 60;
+  const days = minutes / (60 * 24);
+  return `${hours.toFixed(1)}小时（${days.toFixed(2)}天）`;
+}
+
 function formatSnapshotTime(value) {
   if (!value) return null;
   const time = new Date(value);
@@ -100,9 +131,9 @@ function metric(label, value) {
   );
 }
 
-function relationEntry({ name, mmsi, relation, key, followerName, followerRole }) {
-  // 航母关联卡片中的另一方均以无人艇呈现；航母自身不重复添加类型标签。
-  const followerLabel = followerRole === "航母" || /\s无人艇$/.test(followerName) ? followerName : `${followerName} 无人艇`;
+function relationEntry({ name, mmsi, relation, key, followerName, followerCode }) {
+  // 卡片中的另一方按代号判定为属舰或无人艇；航母自身不重复添加类型标签。
+  const followerLabel = withVesselKind(followerName, followerCode);
   const relationship = relation.relationType === "同步伴随"
     ? `${followerLabel} 与 ${name} 同步伴随`
     // 与使用方 Python 程序的 Lead(参考艇) → Follow(航母) 输出口径一致。
@@ -129,7 +160,7 @@ function relationEntry({ name, mmsi, relation, key, followerName, followerRole }
     assessment = `研判依据：时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
   }
   // 无人艇与航母形成命中关联时给出保守任务研判，明确该结论仅是 AIS 行为线索而非任务确认。
-  const operationalAssessment = followerRole === "无人艇"
+  const operationalAssessment = !isEscortVessel(followerCode)
     ? `研判：${followerLabel} 疑似在 ${name} 航行活动中承担协同巡逻或侦察任务；仅据 AIS 无法确认具体任务。`
     : null;
   return React.createElement(
@@ -139,7 +170,7 @@ function relationEntry({ name, mmsi, relation, key, followerName, followerRole }
     React.createElement("small", null, `关联航母 ${mmsi} · ${relation.relationType}`),
     React.createElement("span", null, relation.relationType === "同步伴随"
       ? `同步最小距离 ${formatNumber(relation.sync.minimumDistanceNm, 2)} 海里`
-      : `时延 ${formatDurationMinutes(relation.lag.lagMinutes)}，最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里`),
+      : `延时时间 ${formatLagHours(relation.lag.lagMinutes)}，最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里`),
     React.createElement("p", { className: "affiliation-assessment" }, assessment),
     operationalAssessment ? React.createElement("p", { className: "affiliation-assessment" }, operationalAssessment) : null,
   );
@@ -153,12 +184,12 @@ function formatChartTime(value) {
   }).format(time).replace(",", " ");
 }
 
-function distanceEvidence({ relation, subjectName, subjectRole }) {
+function distanceEvidence({ relation, subjectName, subjectCode }) {
   const series = relation?.lag?.distanceSeries || [];
   if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
   const isInterpolated = relation?.lag?.distanceSeriesSource === "interpolated";
   const sourceLabel = isInterpolated ? "插值对齐距离" : "实测对齐距离";
-  const subjectLabel = subjectRole === "航母" || /\s无人艇$/.test(subjectName) ? subjectName : `${subjectName} 无人艇`;
+  const subjectLabel = withVesselKind(subjectName, subjectCode);
   const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
   if (values.length < 2) return null;
   const width = 300;
@@ -201,7 +232,7 @@ function distanceEvidence({ relation, subjectName, subjectRole }) {
       React.createElement("text", { x: width - plot.right, y: yFor(thresholdNm) - 3, textAnchor: "end", className: "affiliation-evidence-threshold-label" }, "阈值 100 海里"),
       React.createElement("text", { x: plot.left, y: 10, className: "affiliation-evidence-label title" }, "距离（海里）"),
       React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
-      React.createElement("text", { x: width / 2, y: height - 2, textAnchor: "middle", className: "affiliation-evidence-label title" }, "无人艇实际时间（北京时间）"),
+      React.createElement("text", { x: width / 2, y: height - 2, textAnchor: "middle", className: "affiliation-evidence-label title" }, `${vesselKindLabel(subjectCode)}实际时间（北京时间）`),
     ),
     React.createElement("span", null, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(observedMaxDistance, 2)} 海里；越低表示轨迹越接近。`),
   );
@@ -213,15 +244,16 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
   }
   if (affiliation.status === "carrier") {
     const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+    const codeByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.code]));
     const selectedCarrierName = carrierDisplayName(selectedMmsi, nameByMmsi.get(selectedMmsi));
     const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
       .filter((relation) => relation.carrier.mmsi === selectedMmsi && relation.relationType !== "未命中")
-      .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), role: item.reference?.role, relation })));
+      .map((relation) => ({ mmsi, name: carrierDisplayName(mmsi, nameByMmsi.get(mmsi)), code: codeByMmsi.get(mmsi), relation })));
     if (!relatedVessels.length) return React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的舰船。");
     return React.createElement(
       React.Fragment,
       null,
-      relatedVessels.map((item) => relationEntry({ name: selectedCarrierName, mmsi: selectedMmsi, followerName: item.name, followerRole: item.role, relation: item.relation, key: `${selectedMmsi}-${item.mmsi}` })),
+      relatedVessels.map((item) => relationEntry({ name: selectedCarrierName, mmsi: selectedMmsi, followerName: item.name, followerCode: item.code, relation: item.relation, key: `${selectedMmsi}-${item.mmsi}` })),
     );
   }
   if (affiliation.status === "source-error") return React.createElement("p", { className: "affiliation-empty error", role: "alert" }, "本体轨迹查询失败，暂不生成航母关联结论。");
@@ -232,7 +264,9 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
   const matched = (affiliation.carriers || []).filter((item) => item.relationType !== "未命中");
   if (!matched.length) return partialSourceWarning || React.createElement("p", { className: "affiliation-empty" }, "暂无满足历史关联阈值的航母关联。");
   const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+  const codeByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.code]));
   const followerName = selectedName || nameByMmsi.get(selectedMmsi) || `MMSI ${selectedMmsi}`;
+  const followerCode = codeByMmsi.get(selectedMmsi);
   return React.createElement(
     React.Fragment,
     null,
@@ -243,11 +277,55 @@ function affiliationContent(affiliation, selectedMmsi, selectedName, allAffiliat
       return React.createElement(
         React.Fragment,
         { key: item.carrier.mmsi },
-        relationEntry({ name, mmsi: item.carrier.mmsi, followerName, followerRole: affiliation.reference?.role, relation: item, key: item.carrier.mmsi }),
+        relationEntry({ name, mmsi: item.carrier.mmsi, followerName, followerCode, relation: item, key: item.carrier.mmsi }),
         // 只呈现命中的、时延已对齐的实测距离，避免全量轨迹图造成时间语义误读。
-        distanceEvidence({ relation: item, subjectName: followerName, subjectRole: affiliation.reference?.role }),
+        distanceEvidence({ relation: item, subjectName: followerName, subjectCode: followerCode }),
       );
     }),
+  );
+}
+
+// 预测区块独立渲染：预留 prediction 数据接口，当前无预测接口时展示空状态，不得用历史数据冒充。
+// 预留结构（待对接）：{ status, refreshedAt, entries: [{ carrier: { mmsi, name }, relationType, predictedWindow: { start, end }, confidence, note }] }
+function predictionEntry(entry, name, key) {
+  // 预测接口未上线，载荷可能含 null/畸形 entry；统一防御，缺字段用占位，绝不抛错。
+  if (!entry || typeof entry !== "object") return null;
+  const { carrier, relationType, predictedWindow, confidence, note } = entry;
+  const carrierName = carrier?.mmsi || carrier?.name
+    ? carrierDisplayName(carrier?.mmsi, carrier?.name)
+    : "未知关联对象";
+  const windowLabel = predictedWindow && (predictedWindow.start || predictedWindow.end)
+    ? `${formatSnapshotTime(predictedWindow.start) || "?"} ~ ${formatSnapshotTime(predictedWindow.end) || "?"}`
+    : null;
+  const confidenceLabel = confidence != null && Number.isFinite(Number(confidence))
+    ? `${Math.round(Number(confidence) * 100)}%`
+    : null;
+  return React.createElement(
+    "div",
+    { className: "affiliation-match", key },
+    React.createElement("strong", null, `${name} 预计与 ${carrierName} ${relationType || "关联"}`),
+    React.createElement("small", null, [windowLabel, confidenceLabel && `置信度 ${confidenceLabel}`].filter(Boolean).join(" · ")),
+    note ? React.createElement("p", { className: "affiliation-assessment" }, note) : null,
+  );
+}
+
+function predictionContent(prediction, selectedName) {
+  if (!prediction || prediction.status === "refreshing" || prediction.status === "not-generated") {
+    return React.createElement("p", { className: "affiliation-empty" }, "暂无可用的关联预测数据。");
+  }
+  if (prediction.status === "source-error") {
+    return React.createElement("p", { className: "affiliation-empty error", role: "alert" }, "本体轨迹查询失败，暂不生成关联预测。");
+  }
+  // 过滤 null/非对象 entry，避免渲染时解构抛错；全部无效时回落到空状态。
+  const entries = (prediction.entries || []).filter((entry) => entry && typeof entry === "object");
+  if (!entries.length) {
+    return React.createElement("p", { className: "affiliation-empty" }, "暂无可用的关联预测数据。");
+  }
+  return React.createElement(
+    React.Fragment,
+    null,
+    // key 仅用 index，保证多个同名 carrier entry 也不重复。
+    entries.map((entry, index) => predictionEntry(entry, selectedName, `prediction-${index}`)),
   );
 }
 
@@ -259,7 +337,25 @@ export function VesselFocusPanel({
   allTargets,
   visibleAlertCount = 0,
   onAlertToggle,
+  prediction,
+  analysisPanel,
+  showAnalysisOverlay = false,
+  onToggleAnalysisOverlay,
 }) {
+  const analysisToggleRef = useRef(null);
+  const analysisCloseRef = useRef(null);
+  const wasAnalysisOpenRef = useRef(false);
+  useEffect(() => {
+    if (showAnalysisOverlay) {
+      wasAnalysisOpenRef.current = true;
+      analysisCloseRef.current?.focus();
+      return;
+    }
+    if (wasAnalysisOpenRef.current) {
+      wasAnalysisOpenRef.current = false;
+      analysisToggleRef.current?.focus();
+    }
+  }, [showAnalysisOverlay]);
   const maxSpeed = valueFrom(selectedTarget, ["maxSpeedKn", "fastestSpeedKn", "maxSpeed"]) ?? selectedTarget?.maxSpeedSegment?.speedKn;
   const avgSpeed = valueFrom(selectedTarget, ["avgSpeedKn", "averageSpeedKn", "avgSpeed"]);
   const heading = valueFrom(selectedTarget, ["headingDeg", "courseDeg", "orientation", "heading"]);
@@ -277,10 +373,23 @@ export function VesselFocusPanel({
       "header",
       { className: "vessel-focus-header" },
       React.createElement(
+        "button",
+        {
+          type: "button",
+          ref: analysisToggleRef,
+          className: `analysis-overlay-toggle${showAnalysisOverlay ? " open" : ""}`,
+          onClick: onToggleAnalysisOverlay,
+          "aria-label": showAnalysisOverlay ? "收起分析面板" : "展开分析面板",
+          "aria-expanded": showAnalysisOverlay,
+          title: showAnalysisOverlay ? "收起分析面板" : "展开分析面板",
+        },
+        React.createElement(showAnalysisOverlay ? ChevronRight : ChevronLeft, { size: 16 }),
+      ),
+      React.createElement(
         "div",
         null,
         React.createElement("small", null, "关注舰艇"),
-        React.createElement("h2", null, vesselName(selectedTarget)),
+        React.createElement("h2", null, selectedTarget?.displayName || vesselName(selectedTarget)),
         React.createElement("p", null, "MMSI：", vesselMmsi(selectedTarget)),
       ),
       React.createElement(
@@ -319,11 +428,39 @@ export function VesselFocusPanel({
       React.createElement(
         "h3",
         null,
-        React.createElement("span", null, "航母关联（历史）"),
+        React.createElement("span", null, "与航母打击群关联分析（历史）"),
         snapshotLabel && React.createElement("time", null, `快照：${snapshotLabel}`),
       ),
       affiliationContent(affiliation, vesselMmsi(selectedTarget), vesselName(selectedTarget), allAffiliations, allTargets),
     ),
+    React.createElement(
+      "section",
+      { className: "vessel-affiliation vessel-prediction" },
+      React.createElement(
+        "h3",
+        null,
+        React.createElement("span", null, "与航母打击群关联分析（预测）"),
+      ),
+      predictionContent(prediction, vesselName(selectedTarget)),
+    ),
+    showAnalysisOverlay
+      ? React.createElement(
+          "div",
+          // 非模态浮动面板：地图与侧栏需保持可交互（无焦点陷阱/遮罩），aria-modal=false，避免对辅助技术谎称外部 inert。
+          { className: "analysis-overlay", role: "dialog", "aria-modal": "false", "aria-labelledby": "analysis-overlay-title" },
+          React.createElement(
+            "div",
+            { className: "analysis-overlay-head" },
+            React.createElement("strong", { id: "analysis-overlay-title" }, React.createElement(LineChart, { size: 15 }), " 舰艇综合分析"),
+            React.createElement(
+              "button",
+              { type: "button", ref: analysisCloseRef, className: "analysis-overlay-close", onClick: onToggleAnalysisOverlay, "aria-label": "收起分析面板", title: "收起分析面板" },
+              React.createElement(X, { size: 16 }),
+            ),
+          ),
+          React.createElement("div", { className: "analysis-overlay-body" }, analysisPanel || null),
+        )
+      : null,
   );
 }
 

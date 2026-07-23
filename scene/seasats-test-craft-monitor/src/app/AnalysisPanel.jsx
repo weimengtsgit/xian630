@@ -225,12 +225,12 @@ function dailyActivity(target, maxBuckets = 12) {
   return buckets;
 }
 
-function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon = BarChart3, stats = [] }) {
+function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon = BarChart3, stats = [], fullWidth }) {
   const max = Math.max(...data.map((item) => item[valueKey] || 0), 1);
-  if (!data.some((item) => item[valueKey] > 0)) return <ChartShell icon={icon} title={title}><EmptyChart /></ChartShell>;
+  if (!data.some((item) => item[valueKey] > 0)) return <ChartShell icon={icon} title={title} fullWidth={fullWidth}><EmptyChart /></ChartShell>;
 
   return (
-    <ChartShell icon={icon} title={title} stats={stats}>
+    <ChartShell icon={icon} title={title} stats={stats} fullWidth={fullWidth}>
       <div className="analysis-bar-chart" role="img" aria-label={title}>
         {data.map((item) => (
           <span key={item[labelKey]} style={{ "--bar": color, "--height": `${Math.max(4, (item[valueKey] / max) * 100)}%` }} title={`${item[labelKey]}：${item[valueKey]}`}>
@@ -355,6 +355,7 @@ function AnalysisCharts({ selectedTarget, coastData }) {
           valueKey="count"
           color="#a78bfa"
           icon={BarChart3}
+          fullWidth
           stats={[
             { label: "活动日", value: `${activeDayCount} 天` },
             { label: "最高日", value: `${busiestDay?.label || "--"}` },

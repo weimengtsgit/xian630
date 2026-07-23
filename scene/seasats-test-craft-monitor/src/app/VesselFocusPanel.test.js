@@ -70,6 +70,14 @@ test("renders focused vessel identity, threat score, and key metrics", () => {
   assert.match(markup, /4 条/);
 });
 
+test("header prefers the code-prefixed display name over the raw retrieved name", () => {
+  const markup = render({
+    selectedTarget: { ...selectedTarget, displayName: "CVN-73 华盛顿号", name: "USS George Washington(US GOV VESSEL)" },
+  });
+  assert.match(markup, /CVN-73 华盛顿号/);
+  assert.doesNotMatch(markup, /USS George Washington/);
+});
+
 test("renders association below metrics with snapshot time and fallback heading", () => {
   const markup = render({
     selectedTarget: {
@@ -87,7 +95,10 @@ test("renders association below metrics with snapshot time and fallback heading"
     affiliationRefreshedAt: "2026-07-18T07:41:01.382Z",
   });
 
-  assert.match(markup, /航母关联（历史）/);
+  assert.match(markup, /与航母打击群关联分析（历史）/);
+  assert.match(markup, /与航母打击群关联分析（预测）/);
+  assert.match(markup, /暂无可用的关联预测数据。/);
+  assert.doesNotMatch(markup, /航母关联（历史）/);
   assert.match(markup, /快照：/);
   assert.match(markup, /西奥多·罗斯福号/);
   assert.match(markup, /西奥多·罗斯福号.*跟随 海巡 630 无人艇/);
@@ -96,9 +107,23 @@ test("renders association below metrics with snapshot time and fallback heading"
   assert.match(markup, /最小距离 4\.20 海里/);
   assert.match(markup, /航向误差不超过45°/);
   assert.doesNotMatch(markup, /本次最大 32°/);
-  assert.match(markup, /时延 2小时/);
-  assert.ok(markup.indexOf("最快速度") < markup.indexOf("航母关联（历史）"));
+  assert.match(markup, /延时时间 2\.0小时（0\.08天）/);
+  assert.ok(markup.indexOf("最快速度") < markup.indexOf("与航母打击群关联分析（历史）"));
   assert.match(markup, /航向\/方向[\s\S]*--/);
+});
+
+test("formats the relation lag as hours and days, e.g. 延时时间 308.0小时（12.83天）", () => {
+  const markup = render({
+    affiliation: {
+      status: "analyzed",
+      carriers: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        lag: { lagMinutes: 18480, averageDistanceNm: 62.86, minimumDistanceNm: 4.2, matchedPoints: 8, courseFilterApplied: true },
+      }],
+    },
+  });
+  assert.match(markup, /延时时间 308\.0小时（12\.83天）/);
 });
 
 test("renders snapshot generating status while affiliation refresh is pending", () => {
@@ -133,7 +158,7 @@ test("renders delay-aligned distance evidence only for a matched delay relation"
   });
 
   assert.match(markup, /关联依据：海巡 630 无人艇 实际轨迹/);
-  assert.match(markup, /8天/);
+  assert.match(markup, /延时时间 192\.0小时（8\.00天）/);
   assert.doesNotMatch(markup, /11520 分钟/);
   assert.match(markup, /距离曲线/);
   assert.match(markup, /距离（海里）/);
@@ -183,6 +208,108 @@ test("renders a conservative patrol-or-reconnaissance assessment for an affiliat
   assert.match(markup, /仅据 AIS 无法确认具体任务/);
 });
 
+test("labels a coded escort follower as 属舰 and suppresses the USV task assessment", () => {
+  const markup = render({
+    selectedTarget: { ...selectedTarget, name: "霍珀", mmsi: "367197000", code: "DDG-70" },
+    allTargets: [{ mmsi: "367197000", name: "霍珀", code: "DDG-70" }],
+    affiliation: {
+      status: "analyzed",
+      // 快照 role 仍标无人艇，代号判定应覆盖为属舰。
+      reference: { mmsi: "367197000", name: "霍珀", role: "无人艇" },
+      carriers: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        lag: {
+          lagMinutes: 120, averageDistanceNm: 8, minimumDistanceNm: 4.2, matchedPoints: 30,
+          courseFilterApplied: true, distanceSeriesSource: "interpolated",
+          distanceSeries: [{ time: "2026-01-01T00:00:00.000Z", distanceNm: 4.2 }, { time: "2026-01-01T00:01:00.000Z", distanceNm: 4.8 }],
+        },
+      }],
+    },
+  });
+  assert.match(markup, /跟随 霍珀 属舰/);
+  assert.match(markup, /关联依据：霍珀 属舰 实际轨迹/);
+  assert.match(markup, /属舰实际时间（北京时间）/);
+  assert.doesNotMatch(markup, /霍珀 无人艇/);
+  assert.doesNotMatch(markup, /承担协同巡逻或侦察任务/);
+});
+
+test("treats a fleet oiler (T-AO) hull code as an escort", () => {
+  const markup = render({
+    selectedTarget: { ...selectedTarget, name: "瓜达卢佩", mmsi: "367219000", code: "T-AO-200" },
+    allTargets: [{ mmsi: "367219000", name: "瓜达卢佩", code: "T-AO-200" }],
+    affiliation: {
+      status: "analyzed",
+      reference: { mmsi: "367219000", name: "瓜达卢佩", role: "无人艇" },
+      carriers: [{ carrier: { mmsi: "366984000", name: "CVN-71" }, relationType: "时延跟随", lag: { lagMinutes: 120, averageDistanceNm: 8, minimumDistanceNm: 4.2, matchedPoints: 30, courseFilterApplied: true } }],
+    },
+  });
+  assert.match(markup, /跟随 瓜达卢佩 属舰/);
+  assert.doesNotMatch(markup, /瓜达卢佩 无人艇/);
+});
+
+test("keeps T-AKE and T-AOE hull types distinct and labels both as escorts", () => {
+  for (const [code, name, mmsi] of [
+    ["T-AKE-11", "钱伯斯", "367276000"],
+    ["T-AOE-6", "供应号", "367276001"],
+  ]) {
+    const markup = render({
+      selectedTarget: { ...selectedTarget, name, mmsi, code },
+      allTargets: [{ mmsi, name, code }],
+      affiliation: {
+        status: "analyzed",
+        reference: { mmsi, name, role: "无人艇" },
+        carriers: [{
+          carrier: { mmsi: "366984000", name: "CVN-71" },
+          relationType: "时延跟随",
+          lag: { lagMinutes: 120, averageDistanceNm: 8, minimumDistanceNm: 4.2, matchedPoints: 30, courseFilterApplied: true },
+        }],
+      },
+    });
+    assert.match(markup, new RegExp(`跟随 ${name} 属舰`));
+    assert.doesNotMatch(markup, new RegExp(`${name} 无人艇`));
+  }
+});
+
+test("labels an unknown or missing hull code as 无人艇 regardless of the snapshot role", () => {
+  for (const code of ["AO-123", undefined]) {
+    const markup = render({
+      selectedTarget: { ...selectedTarget, name: "测试艇", mmsi: "369000001", code },
+      allTargets: [{ mmsi: "369000001", name: "测试艇", code }],
+      affiliation: {
+        status: "analyzed",
+        reference: { mmsi: "369000001", name: "测试艇", role: "航母" },
+        carriers: [{
+          carrier: { mmsi: "366984000", name: "CVN-71" },
+          relationType: "时延跟随",
+          lag: { lagMinutes: 120, averageDistanceNm: 8, minimumDistanceNm: 4.2, matchedPoints: 30, courseFilterApplied: true },
+        }],
+      },
+    });
+    assert.match(markup, /跟随 测试艇 无人艇/);
+    assert.doesNotMatch(markup, /测试艇 属舰/);
+  }
+});
+
+test("labels related escorts as 属舰 when the selected vessel is a carrier", () => {
+  const markup = render({
+    selectedTarget: { ...selectedTarget, name: "西奥多·罗斯福号 (USS Theodore Roosevelt)", mmsi: "366984000", code: "CVN-71" },
+    allTargets: [
+      { mmsi: "366984000", name: "西奥多·罗斯福号 (USS Theodore Roosevelt)", code: "CVN-71" },
+      { mmsi: "367197000", name: "霍珀", code: "DDG-70" },
+    ],
+    affiliation: { status: "carrier" },
+    allAffiliations: {
+      "367197000": {
+        reference: { mmsi: "367197000", role: "无人艇" },
+        carriers: [{ carrier: { mmsi: "366984000" }, relationType: "时延跟随", lag: { lagMinutes: 120, averageDistanceNm: 8, minimumDistanceNm: 4.2, matchedPoints: 30, courseFilterApplied: true } }],
+      },
+    },
+  });
+  assert.match(markup, /跟随 霍珀 属舰/);
+  assert.doesNotMatch(markup, /霍珀 无人艇/);
+});
+
 test("does not render NaN for invalid numeric values", () => {
   const markup = render({
     selectedTarget: {
@@ -207,4 +334,76 @@ test("static markup never uses forbidden wording", () => {
   const markup = render();
 
   assert.doesNotMatch(markup, new RegExp("\\u76ee\\u6807"));
+});
+
+test("renders the analysis overlay toggle with correct aria state when closed and open", () => {
+  const closed = render();
+  assert.match(closed, /class="analysis-overlay-toggle"/);
+  assert.match(closed, /aria-label="展开分析面板"/);
+  assert.match(closed, /aria-expanded="false"/);
+  assert.match(closed, /title="展开分析面板"/);
+  // 关闭时悬浮框不入 DOM，AnalysisPanel 不提前渲染。
+  assert.doesNotMatch(closed, /class="analysis-overlay"/);
+  assert.doesNotMatch(closed, /analysis-overlay-body/);
+
+  const open = renderToStaticMarkup(React.createElement(VesselFocusPanel, {
+    selectedTarget,
+    showAnalysisOverlay: true,
+    onToggleAnalysisOverlay: () => {},
+    analysisPanel: React.createElement("div", { id: "fake-analysis" }, "FAKE_ANALYSIS_CONTENT"),
+  }));
+  assert.match(open, /aria-label="收起分析面板"/);
+  assert.match(open, /aria-expanded="true"/);
+  assert.match(open, /class="analysis-overlay"/);
+  assert.match(open, /role="dialog"/);
+  assert.match(open, /aria-modal="false"/);
+  assert.doesNotMatch(open, /aria-modal="true"/);
+  assert.match(open, /aria-labelledby="analysis-overlay-title"/);
+  assert.match(open, /id="analysis-overlay-title"/);
+  assert.match(open, /舰艇综合分析/);
+  assert.match(open, /FAKE_ANALYSIS_CONTENT/);
+  assert.match(open, /class="analysis-overlay-body"/);
+});
+
+test("renders prediction entries when a prediction payload is provided", () => {
+  const markup = render({
+    prediction: {
+      status: "analyzed",
+      entries: [{
+        carrier: { mmsi: "366984000", name: "CVN-71" },
+        relationType: "时延跟随",
+        predictedWindow: { start: "2026-08-01T00:00:00Z", end: "2026-08-02T00:00:00Z" },
+        confidence: 0.62,
+        note: "基于历史伴随规律推测，仅作参考。",
+      }],
+    },
+  });
+  assert.match(markup, /海巡 630 预计与 西奥多·罗斯福号 \(USS Theodore Roosevelt\) 时延跟随/);
+  assert.match(markup, /置信度 62%/);
+  assert.match(markup, /基于历史伴随规律推测，仅作参考。/);
+});
+
+test("prediction payload with null or carrier-less entries is handled safely", () => {
+  // null entry 被过滤、缺 carrier 的 entry 用占位名，不能抛错或出现 "航母 MMSI undefined"。
+  const markup = render({
+    prediction: {
+      status: "analyzed",
+      entries: [
+        null,
+        { carrier: { mmsi: "366984000", name: "CVN-71" }, relationType: "同步伴随", confidence: 0.5 },
+        { relationType: "时延跟随" },
+      ],
+    },
+  });
+  assert.match(markup, /海巡 630 预计与 西奥多·罗斯福号 \(USS Theodore Roosevelt\) 同步伴随/);
+  assert.match(markup, /海巡 630 预计与 未知关联对象 时延跟随/);
+  assert.doesNotMatch(markup, /航母 MMSI undefined/);
+});
+
+test("prediction payload with only null entries falls back to the empty state", () => {
+  const markup = render({
+    prediction: { status: "analyzed", entries: [null, null] },
+  });
+  assert.match(markup, /暂无可用的关联预测数据。/);
+  assert.doesNotMatch(markup, /预计与/);
 });

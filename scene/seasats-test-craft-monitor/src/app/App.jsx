@@ -3,6 +3,7 @@ import { AlertTriangle, Clock3, Database, Filter, Navigation, Search, Ship, X } 
 import { analyzePayload } from "../logic/domain.js";
 import { buildMapData } from "../logic/mapData.js";
 import { buildRemoteMapUrl, filterForFocusMode, resolveReplayWindow } from "../logic/playback.js";
+import { subscribeEscapeKey } from "../logic/escapeKey.js";
 import { buildSummary } from "../logic/summary.js";
 import { MapPanel } from "./MapPanel.jsx";
 import { AlertCard } from "./AlertCard.jsx";
@@ -55,7 +56,7 @@ function TargetRow({ target, selected, onSelect }) {
   return (
     <button className={`target-row ${selected ? "selected" : ""}`} onClick={() => onSelect(target.mmsi)}>
       <span className={`status-dot ${target.status}`} />
-      <span className="target-main"><strong>{target.name}</strong><small>{target.mmsi}</small></span>
+      <span className="target-main"><strong>{target.displayName || target.name}</strong><small>{target.mmsi}</small></span>
       {target.dataUnavailable
         ? <span className="track-mark error" title="本体轨迹查询失败">数据失败</span>
         : target.latestOnly
@@ -139,6 +140,8 @@ function Dashboard({ payload }) {
   const [focusOnly, setFocusOnly] = useState(true);
   const [cardAlert, setCardAlert] = useState(null);
   const [showAlertDrawer, setShowAlertDrawer] = useState(false);
+  // 悬浮综合分析框：由右侧栏第一栏左边缘箭头打开，复用 AnalysisPanel，不挤压地图与侧栏。
+  const [showAnalysisOverlay, setShowAnalysisOverlay] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const loadHistory = () => fetch("/api/seasats/affiliations")
@@ -210,12 +213,17 @@ function Dashboard({ payload }) {
       .finally(() => { if (!cancelled) setTrackLoading(false); });
     return () => { cancelled = true; };
   }, [selectedMmsi, trackRefreshVersion]);
+  // Escape 关闭悬浮分析框；仅在打开时挂载监听，避免影响其它快捷键逻辑。
+  useEffect(() => {
+    if (!showAnalysisOverlay) return undefined;
+    return subscribeEscapeKey(window, () => setShowAnalysisOverlay(false));
+  }, [showAnalysisOverlay]);
   const selectableTargets = useMemo(() => {
     const q = query.trim().toLowerCase();
     return analysis.targets.filter((target) => {
       if (statusFilter !== "全部状态" && target.status !== statusFilter) return false;
       if (sourceFilter !== "全部来源" && target.trackSource !== sourceFilter) return false;
-      if (q && !`${target.name} ${target.mmsi}`.toLowerCase().includes(q)) return false;
+      if (q && !`${target.displayName || ""} ${target.name} ${target.mmsi}`.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [analysis.targets, query, sourceFilter, statusFilter]);
@@ -281,6 +289,10 @@ function Dashboard({ payload }) {
     }
     if ((action.kind === "ais-gap" || action.kind === "segment") && action.targetMmsi) handleTargetSelect(action.targetMmsi);
   };
+  // AnalysisPanel 只在此处构建一次，作为悬浮框内容传入右侧栏；切换舰艇时其 props 随之更新。
+  const analysisPanel = (
+    <AnalysisPanel analysis={displayAnalysis} selectedTarget={selectedTarget} coastData={coastData} trackLoading={trackLoading} trackError={trackError} />
+  );
 
   return (
     <main className="stm-shell">
@@ -307,7 +319,7 @@ function Dashboard({ payload }) {
         <aside className="target-panel">
           <div className="panel-head"><h2><Ship size={15} />舰艇</h2><span>{selectableTargets.length}/{analysis.targets.length}</span></div>
           <div className="filters">
-            <label className="searchbox"><Search size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="船名 / MMSI" /></label>
+            <label className="searchbox"><Search size={13} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="代号 / 船名 / MMSI" /></label>
             <label><Filter size={13} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statusOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label><Filter size={13} /><select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>{sourceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
           </div>
@@ -344,6 +356,9 @@ function Dashboard({ payload }) {
           allTargets={analysis.targets}
           visibleAlertCount={visibleAlerts.length}
           onAlertToggle={() => setShowAlertDrawer((value) => !value)}
+          analysisPanel={analysisPanel}
+          showAnalysisOverlay={showAnalysisOverlay}
+          onToggleAnalysisOverlay={() => setShowAnalysisOverlay((value) => !value)}
         />
 
         {showAlertDrawer && (
@@ -360,7 +375,6 @@ function Dashboard({ payload }) {
         )}
       </section>
 
-      <AnalysisPanel analysis={displayAnalysis} selectedTarget={selectedTarget} coastData={coastData} trackLoading={trackLoading} trackError={trackError} />
       <AlertCard alert={visibleCardAlert} onClose={() => setCardAlert(null)} />
     </main>
   );

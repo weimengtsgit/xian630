@@ -8,6 +8,7 @@ import { MONITORED_VESSELS } from "./seasatsScope.js";
 import { JUDGEMENT_PARAMETERS, MONITORED_AREAS } from "./monitoringRules.js";
 import { CARRIER_AFFILIATION_RULES } from "./carrierAffiliation.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
+import { extractHullCode, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
 import coastData from "../src/data/chinaCoast.json" with { type: "json" };
 
 const here = resolve(fileURLToPath(new URL(".", import.meta.url)));
@@ -154,6 +155,17 @@ function isGenericVesselName(name) {
   return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
 }
 
+// 侧栏“代号 船名”标签：代号优先取名单配置，缺失时用 AIS 船名中提取的舷号兜底；
+// 船名优先取名单 shortName/中文名，再取本体识别名中的中文段，最后回退实际获取的名字。
+// 该标签供左右侧栏标题使用；航母关联卡片等仍使用 name 字段，显示方式不受影响。
+function sidebarFields(vessel, resolvedName, identityCode) {
+  const code = vessel.code ?? identityCode ?? null;
+  return {
+    code,
+    displayName: code ? vesselSidebarLabel({ code, name: vessel.shortName || vessel.name, fallbackName: resolvedName }) : null,
+  };
+}
+
 function selectPreferredVesselName(names, role = "") {
   return [...new Set(names.map((name) => String(name || "").trim()).filter(Boolean))]
     .sort((a, b) => {
@@ -176,6 +188,8 @@ async function fetchVesselIdentity(vessel) {
     mmsi: vessel.mmsi,
     // 本体同一船可能有别名，优先标准名称，排除“US GOV VESSEL”等通用占位名。
     name: selectPreferredVesselName(rows.map((item) => item.shipName), vessel.role),
+    // 美军舰 AIS 船名常自带舷号（如 USS Benfold DDG-65），提取后可供侧栏代号兜底。
+    code: rows.map((item) => extractHullCode(item.shipName)).find(Boolean) ?? null,
     rawTypeCode: rows.find((item) => item.typeCode)?.typeCode ?? null,
   };
 }
@@ -260,9 +274,11 @@ async function buildFastSummary() {
   const targets = MONITORED_VESSELS.map((vessel) => {
     const identity = identityByMmsi.get(vessel.mmsi);
     const latest = vessel.mmsi === initialTrack.mmsi ? initialLatest : null;
+    const resolvedName = latest?.name || identity?.name || `MMSI ${vessel.mmsi}`;
     return {
       mmsi: vessel.mmsi,
-      name: latest?.name || identity?.name || `MMSI ${vessel.mmsi}`,
+      name: resolvedName,
+      ...sidebarFields(vessel, resolvedName, identity?.code),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
@@ -299,10 +315,12 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     const trackPoints = track.trackPoints || [];
     const latest = trackPoints.at(-1);
     const identity = identityByMmsi.get(mmsi);
+    // 船名和轨迹属性均来自本体，配置名称仅在本体名称缺失时兜底。
+    const resolvedName = identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`);
     const rawTarget = {
       mmsi,
-      // 船名和轨迹属性均来自本体，配置名称仅在本体名称缺失时兜底。
-      name: identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`),
+      name: resolvedName,
+      ...sidebarFields(vessel, resolvedName, identity?.code),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
