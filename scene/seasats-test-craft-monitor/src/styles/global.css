@@ -438,6 +438,110 @@ html, body { overflow: auto; }
 .affiliation-evidence-threshold { stroke: rgba(251, 191, 36, 0.85); stroke-width: 1; stroke-dasharray: 4 3; }
 .affiliation-evidence-threshold-label { fill: #fcd34d; font-size: 8px; }
 .affiliation-evidence-line { fill: none; stroke: #4ade80; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+
+/* === 右侧栏：关联紧凑摘要 + 详情弹窗 === */
+/* 命中关联在右侧栏只展示一句摘要与“查看详情”，不再直接渲染研判依据与距离证据。 */
+.affiliation-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid rgba(125, 211, 252, 0.16); }
+.affiliation-summary-row:first-of-type { border-top: 0; }
+.affiliation-summary-text { margin: 0; color: #d6ecfa; font-size: 13px; line-height: 1.5; flex: 1 1 auto; min-width: 0; }
+.affiliation-summary-action { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 6px 10px; border: 1px solid #1685b5; border-radius: 7px; color: #e1f4ff; background: #075f88; cursor: pointer; font-size: 12px; transition: background-color .15s ease, border-color .15s ease; }
+.affiliation-summary-action:hover { background: #0a7ba8; border-color: #38bdf8; }
+.affiliation-summary-action:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+
+/* 详情弹窗：独立于综合分析悬浮框，遮罩覆盖视口、置于地图与悬浮框之上。 */
+.affiliation-detail-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(2, 10, 23, 0.66); backdrop-filter: blur(2px); overflow-y: auto; overscroll-behavior: contain; }
+.affiliation-detail-dialog { position: relative; z-index: 1; display: flex; flex-direction: column; width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 32px); background: rgba(8, 24, 44, 0.97); border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65); overflow: hidden; }
+.affiliation-detail-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid rgba(148, 163, 184, 0.22); background: rgba(15, 37, 64, 0.92); }
+.affiliation-detail-title { display: inline-flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.affiliation-detail-title strong { color: #f1f5f9; font-size: 15px; }
+.affiliation-detail-index { color: #67e8f9; font-size: 12px; font-weight: 600; }
+.affiliation-detail-tag { padding: 2px 8px; border-radius: 999px; font-size: 11px; background: rgba(56, 189, 248, 0.18); color: #bae6fd; }
+.affiliation-detail-tag.sync { background: rgba(74, 222, 128, 0.18); color: #bbf7d0; }
+.affiliation-detail-head-meta { display: flex; flex-direction: column; gap: 2px; color: #9cc5df; font-size: 11px; text-align: right; }
+.affiliation-detail-head-meta time { color: #7fb3d0; font-size: 10px; }
+.affiliation-detail-close { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: 0 0 auto; border: 0; border-radius: 7px; color: #94a3b8; background: transparent; cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.affiliation-detail-close:hover { color: #f8fafc; background: rgba(148, 163, 184, 0.18); }
+.affiliation-detail-close:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+.affiliation-detail-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px; display: grid; gap: 14px; scrollbar-width: thin; scrollbar-color: #2786ad transparent; }
+.affiliation-detail-body::-webkit-scrollbar { width: 10px; }
+.affiliation-detail-body::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(103, 232, 249, 0.4); }
+.affiliation-detail-body > section { padding: 12px; border-radius: 9px; background: rgba(15, 40, 66, 0.55); border: 1px solid rgba(56, 189, 248, 0.18); }
+.affiliation-detail-body h4 { margin: 0 0 9px; color: #bae6fd; font-size: 12px; letter-spacing: .03em; }
+/* 2. 关系方向区 */
+.affiliation-detail-direction { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.affiliation-detail-direction strong { color: #f0f9ff; font-size: 16px; }
+.affiliation-detail-lagtag { padding: 3px 10px; border-radius: 999px; font-size: 12px; color: #fcd34d; background: rgba(251, 191, 36, 0.16); border: 1px solid rgba(251, 191, 36, 0.4); }
+/* 3. 研判结论区 */
+.affiliation-detail-conclusion { display: grid; gap: 6px; font-size: 13px; color: #cbe7f7; }
+.affiliation-detail-conclusion span { display: block; }
+.affiliation-detail-strength { display: inline-block; width: fit-content; padding: 3px 10px; border-radius: 999px; color: #bbf7d0; background: rgba(74, 222, 128, 0.16); border: 1px solid rgba(74, 222, 128, 0.4); font-weight: 600; font-size: 12px; }
+/* 4. 关键证据指标卡 */
+.affiliation-evidence-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.affiliation-evidence-card { flex: 1 1 120px; min-width: 110px; padding: 8px 10px; border-radius: 7px; background: rgba(8, 47, 73, 0.5); border: 1px solid rgba(56, 189, 248, 0.16); }
+.affiliation-evidence-card span { display: block; color: #8fb6cf; font-size: 10px; }
+.affiliation-evidence-card strong { display: block; margin-top: 3px; color: #e6f6ff; font-size: 13px; overflow-wrap: anywhere; }
+/* 5. 可视化证据区：桌面两列，窄屏单列 */
+.affiliation-detail-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
+.affiliation-detail-chart { min-width: 0; height: 100%; margin: 0; padding: 10px; border-radius: 7px; background: rgba(15, 78, 107, 0.3); display: grid; grid-template-rows: auto auto minmax(220px, 1fr) auto auto; align-content: start; gap: 8px; }
+.affiliation-detail-chart figcaption { color: #d9f5ff; font-size: 12px; font-weight: 600; }
+.affiliation-chart-plot { min-width: 0; width: 100%; min-height: 220px; aspect-ratio: 18 / 11; align-self: end; }
+.affiliation-detail-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.affiliation-detail-chart span { min-width: 0; color: #9cc5df; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.affiliation-chart-description { min-width: 0; min-height: 58px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 3px 5px; color: #9cc5df; font-size: 10px; line-height: 1.45; }
+.affiliation-chart-description strong { color: #d9f5ff; font-size: 10px; }
+.affiliation-chart-description span { overflow-wrap: anywhere; }
+.affiliation-chart-description small { grid-column: 1 / -1; color: #9cc5df; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.affiliation-chart-note { min-height: 30px; }
+.affiliation-detail-empty { margin: 0; padding: 18px 10px; text-align: center; color: #9db1c9; font-size: 12px; border: 1px dashed rgba(148, 163, 184, 0.3); border-radius: 7px; background: rgba(15, 40, 66, 0.4); }
+/* 航迹图样式 */
+.affiliation-track-grid { stroke: rgba(186, 230, 253, 0.16); stroke-width: 1; }
+.affiliation-track-label { fill: #9cc5df; font-size: 8px; }
+.affiliation-track-axis { fill: #b7d9ed; font-size: 9px; font-weight: 600; }
+.affiliation-track-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.affiliation-track-line.ref { stroke: #60a5fa; stroke-width: 3; }
+.affiliation-track-line.carrier { stroke: #f87171; stroke-width: 2.2; stroke-dasharray: 8 5; }
+.affiliation-track-point { stroke: #f0f9ff; stroke-width: 1.3; vector-effect: non-scaling-stroke; }
+.affiliation-track-point.ref { fill: #60a5fa; }
+.affiliation-track-point.carrier { fill: #f87171; }
+.affiliation-track-point.end { stroke-width: 1.6; }
+.affiliation-track-html-legend { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 12px; }
+.affiliation-track-html-legend span { min-width: 0; display: flex; align-items: flex-start; gap: 7px; }
+.affiliation-track-html-legend i { flex: 0 0 22px; height: 0; margin-top: 7px; border-top: 3px solid #60a5fa; }
+.affiliation-track-html-legend .carrier i { border-top: 2px dashed #f87171; }
+.affiliation-track-html-legend b { min-width: 0; color: #b7d9ed; font-size: 10px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; word-break: break-word; }
+/* 距离图中位距离线 */
+.affiliation-evidence-median { stroke: rgba(94, 234, 212, 0.85); stroke-width: 1; stroke-dasharray: 5 4; }
+.affiliation-evidence-median-label { fill: #5eead4; font-size: 8px; }
+.affiliation-distance-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: #9cc5df; font-size: 10px; }
+.affiliation-distance-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.affiliation-distance-legend i { width: 20px; height: 0; border-top: 2px solid #4ade80; }
+.affiliation-distance-legend .threshold i { border-top: 2px dashed #fbbf24; }
+.affiliation-distance-legend .median i { border-top: 2px dashed #5eead4; }
+/* 6. 智能体研判区 */
+.affiliation-detail-judgement p { margin: 0 0 6px; color: #cbe7f7; font-size: 12px; line-height: 1.6; }
+.affiliation-detail-judgement p:last-child { margin: 0; }
+.affiliation-detail-limit { color: #8fb6cf !important; font-size: 11px !important; }
+
+/* 窄屏：图表纵向排列，标题/关闭保留 */
+@media (max-width: 900px) {
+  .affiliation-detail-charts { grid-template-columns: 1fr; }
+  .affiliation-detail-chart { grid-template-rows: auto auto minmax(220px, auto) auto auto; }
+  .affiliation-chart-plot { min-height: 220px; }
+}
+@media (max-width: 720px) {
+  .affiliation-detail-head-meta { display: none; }
+  .affiliation-summary-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  .affiliation-summary-action { align-self: flex-end; }
+}
+@media (max-width: 820px) {
+  .affiliation-detail-mask { padding: 10px; }
+}
+
+/* 尊重 reduced-motion：关闭弹窗与按钮的过渡动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .affiliation-summary-action, .affiliation-detail-close { transition: none; }
+  .affiliation-detail-mask { backdrop-filter: none; }
+}
 .simplified-analysis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .simplified-analysis .analysis-group { min-width: 0; min-height: 138px; padding: 10px; }
 .analysis-metric-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }

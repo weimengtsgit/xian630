@@ -27,7 +27,7 @@ test("ontology history uses bounded page and fleet concurrency", () => {
 });
 
 test("ontology-only snapshots, timezone handling, and shared requests are enforced", () => {
-  assert.match(serverSource, /python-select-v6-partial-source-errors/);
+  assert.match(serverSource, /python-select-v7-affiliation-detail-tracks/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);
   assert.match(serverSource, /trackInFlight\.has\(mmsi\)/);
