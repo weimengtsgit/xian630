@@ -216,7 +216,7 @@ test("dialog track chart draws both real tracks and keeps overlapping series dis
   assert.match(markup, /aria-label="航迹图例"/);
   assert.match(markup, /海猎号 无人艇/);
   assert.match(markup, /○ 起点　□ 终点/);
-  assert.match(markup, /虚线覆盖处表示两条航迹重合/);
+  assert.match(markup, /红线覆盖在蓝线之上/);
 });
 
 test("trajectory chart drops the middle longitude tick when projected labels would overlap", () => {

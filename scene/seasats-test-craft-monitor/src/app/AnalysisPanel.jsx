@@ -117,9 +117,9 @@ function ChartShell({ icon: Icon, title, children, legend, stats, fullWidth }) {
   );
 }
 
-function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", icon = LineChart, maxValue, extraStats = [] }) {
+function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", icon = LineChart, maxValue, extraStats = [], fullWidth = false }) {
   const values = data.map((item) => toNumber(item[valueKey])).filter((value) => value !== null);
-  if (values.length < 2) return <ChartShell icon={icon} title={title} fullWidth><EmptyChart /></ChartShell>;
+  if (values.length < 2) return <ChartShell icon={icon} title={title} fullWidth={fullWidth}><EmptyChart /></ChartShell>;
   const [min, max] = clampRange(Math.min(...values), maxValue ?? Math.max(...values));
   const first = fmtDay(data[0]?.t);
   const last = fmtDay(data[data.length - 1]?.t);
@@ -130,7 +130,7 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
     <ChartShell
       icon={icon}
       title={title}
-      fullWidth
+      fullWidth={fullWidth}
       legend={<><span style={{ "--dot": color }}>{unit}</span><strong>最高 {fmtNumber(peak, 1)} {unit}</strong></>}
       stats={[
         { label: "样本", value: `${values.length} 点` },
@@ -157,7 +157,7 @@ function SpeedDistanceChart({ target, coastData }) {
   const speedValues = data.map((item) => toNumber(item.speed)).filter((value) => value !== null);
   const distValues = data.map((item) => toNumber(item.dist)).filter((value) => value !== null);
   if (data.length < 2 || speedValues.length < 2) {
-    return <ChartShell icon={Activity} title="速度 vs 国土距离" fullWidth><EmptyChart /></ChartShell>;
+    return <ChartShell icon={Activity} title="速度 vs 国土距离"><EmptyChart /></ChartShell>;
   }
   const [speedMin, speedMax] = clampRange(Math.min(...speedValues), Math.max(...speedValues));
   const [distMin, distMax] = distValues.length ? clampRange(Math.min(...distValues), Math.max(...distValues)) : [0, 1];
@@ -171,7 +171,6 @@ function SpeedDistanceChart({ target, coastData }) {
     <ChartShell
       icon={Activity}
       title="速度 vs 国土距离"
-      fullWidth
       legend={<><span style={{ "--dot": "#fbbf24" }}>速度 节</span><span style={{ "--dot": "#38bdf8" }}>距离 海里</span></>}
       stats={[
         { label: "最高", value: `${fmtNumber(Math.max(...speedValues), 1)} 节` },

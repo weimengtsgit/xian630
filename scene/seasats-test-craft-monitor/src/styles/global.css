@@ -280,13 +280,14 @@ body { background: linear-gradient(180deg, #020617, #0b1220 60%, #020617); }
   .chart-grid { grid-template-columns: 1fr; }
 }
 
-/* === 可滚动布局（页面可下拉，不挤一屏）=== */
-html, body { overflow: auto; }
-.stm-shell { height: auto; min-height: 100vh; overflow: visible; display: flex; flex-direction: column; gap: 12px; }
-.workspace { min-height: auto; overflow: visible; align-items: stretch; }
-.map-stack { min-height: auto; }
-.map-canvas-wrap { min-height: 520px; }
-.target-panel { height: auto; max-height: 620px; }
+/* === 固定视口布局：整页不滚动，三栏填满屏幕高度，各栏内容按需内部滚动 === */
+html, body { overflow-x: auto; overflow-y: hidden; }
+.stm-shell { height: 100vh; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+.workspace { min-height: 0; overflow: hidden; align-items: stretch; flex: 1 1 auto; grid-template-rows: minmax(0, 1fr); }
+.map-stack { min-height: 0; }
+.map-canvas-wrap { min-height: 360px; }
+/* 左侧栏不设 max-height：随工作区（视口）高度拉伸，与右侧栏等高；舰艇列表仅在超出屏幕高度时才内部滚动。 */
+.target-panel { height: auto; }
 .analysis-panel { align-items: start; }
 .track-query-status { grid-column: 1 / -1; padding: 10px 12px; border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 8px; color: #bae6fd; background: rgba(14, 116, 144, 0.16); }
 .track-query-status.error { border-color: rgba(248, 113, 113, 0.45); color: #fecaca; background: rgba(127, 29, 29, 0.22); }
@@ -331,7 +332,9 @@ html, body { overflow: auto; }
 .stacked-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 
 /* === 回放中心：远程球面地图 + 关注舰艇 === */
+/* 三栏布局下限：视口窄于此值时整页横向滚动，避免左中右被挤压到不可用。仅作用于主面板，加载/错误态不受限。 */
 .stm-shell { padding: 14px; background: #071012; }
+.stm-shell:not(.loading-shell) { min-width: 960px; }
 .playback-control-bar {
   display: grid;
   grid-template-columns: auto auto minmax(220px, 1fr) minmax(260px, 1.3fr) auto;
@@ -376,9 +379,10 @@ html, body { overflow: auto; }
   align-items: stretch;
 }
 /* 左、中、右三个工作区模块共用同一网格高度，底边与中间提示条保持平齐。 */
-.workspace > .target-panel, .workspace > .map-stack, .workspace > .vessel-focus-panel { height: 100%; min-height: 0; }
-/* 中间提示条独占下一行；右侧详情只与中央地图卡片对齐，不延伸到提示条底部。 */
-.workspace > .vessel-focus-panel { align-self: start; height: calc(100% - 68px); }
+.workspace > .target-panel, .workspace > .map-stack { height: 100%; min-height: 0; }
+/* 右侧栏沿整列拉伸到底，与左侧栏、地图同高；min-height:0 使其不把网格行撑高，
+   行高由地图（minmax(600px,66vh)）决定，避免页面无限变高；内部关联区自滚动。 */
+.workspace > .vessel-focus-panel { align-self: stretch; min-height: 0; }
 .target-panel, .vessel-focus-panel, .remote-map-panel, .analysis-group, .insight-strip {
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -386,10 +390,10 @@ html, body { overflow: auto; }
 }
 /* 左侧列表与右侧详情同高，超出部分由列表自身滚动，保持两侧模块底边对齐。 */
 .target-panel { align-self: stretch; height: 100%; min-height: 0; }
-.map-stack { grid-template-rows: minmax(600px, 66vh) auto; }
+.map-stack { grid-template-rows: minmax(360px, 1fr) auto; }
 .map-stack { height: 100%; }
-.remote-map-panel { min-height: 600px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 12px; overflow: hidden; }
-.remote-map-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
+.remote-map-panel { min-height: 360px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 10px; padding: 12px; overflow: hidden; }
+.remote-map-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; padding-right: 16px; }
 .remote-map-header h2 { margin: 0 0 7px; color: #f8fafc; font-size: 15px; }
 .remote-map-frame-wrap { min-height: 0 !important; border-color: rgba(148, 163, 184, 0.2) !important; border-radius: 8px; overflow: hidden; background: #020617; }
 .remote-map-frame { min-height: 100% !important; }
@@ -397,9 +401,9 @@ html, body { overflow: auto; }
 .remote-map-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .insight-strip { padding: 10px 12px; }
 .insight-strip .advice-strip { margin: 0; }
-/* 与地图区域等高；航母关联紧接指标卡，不额外撑开垂直空白。 */
-.vessel-focus-panel { align-self: stretch; height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: #e2e8f0; position: relative; }
-.vessel-focus-header { display: flex; justify-content: space-between; gap: 12px; position: relative; }
+/* 右侧栏为 flex 列：拉伸到网格行高（与左栏、地图同高）；min-height:0 防止把行撑高，关联区内部自滚动。 */
+.vessel-focus-panel { align-self: stretch; min-height: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 12px; color: #e2e8f0; position: relative; }
+.vessel-focus-header { display: flex; justify-content: space-between; gap: 12px; position: relative; padding-left: 16px; }
 .vessel-header-actions { display: flex; align-items: flex-start; gap: 8px; }
 .vessel-alert-toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 0 9px; border: 1px solid rgba(148,163,184,0.3); border-radius: 999px; color: #e2e8f0; background: rgba(15,23,42,0.92); font-size: 13px; cursor: pointer; }
 .vessel-alert-toggle.has { border-color: #ef4444; color: #fca5a5; box-shadow: 0 0 14px rgba(239,68,68,0.35); }
@@ -415,6 +419,8 @@ html, body { overflow: auto; }
 .vessel-metric { min-width: 0; padding: 9px; border-radius: 7px; background: rgba(30, 41, 59, 0.58); border: 1px solid rgba(148, 163, 184, 0.13); }
 .vessel-metric strong { display: block; margin-top: 4px; color: #f8fafc; font-size: 16px; overflow-wrap: anywhere; }
 .vessel-affiliation { flex: 1 1 0; min-height: 0; margin-top: 0; padding: 10px; overflow-y: auto; overscroll-behavior: contain; border-radius: 7px; border: 1px solid rgba(56, 189, 248, 0.28); background: rgba(8, 47, 73, 0.32); scrollbar-width: thin; scrollbar-color: #2786ad transparent; }
+/* 预测区块暂无数据，仅占紧凑高度并自滚动，把垂直空间让给历史关联分析。 */
+.vessel-affiliation.vessel-prediction { flex: 0 0 auto; min-height: 0; max-height: 200px; }
 /* 关联对象较多时只滚动卡片内容，标题始终保留便于确认当前信息。 */
 .vessel-affiliation h3 { position: sticky; top: -10px; z-index: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 0 0 8px; padding: 10px 0 7px; color: #bae6fd; background: #082f49; font-size: 13px; }
 .vessel-affiliation h3 time { color: #9cc5df; font-size: 10px; font-weight: 400; white-space: nowrap; }
@@ -441,10 +447,10 @@ html, body { overflow: auto; }
 
 /* === 右侧栏：关联紧凑摘要 + 详情弹窗 === */
 /* 命中关联在右侧栏只展示一句摘要与“查看详情”，不再直接渲染研判依据与距离证据。 */
-.affiliation-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid rgba(125, 211, 252, 0.16); }
+.affiliation-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 11px 4px; border-top: 1px solid rgba(125, 211, 252, 0.16); }
 .affiliation-summary-row:first-of-type { border-top: 0; }
-.affiliation-summary-text { margin: 0; color: #d6ecfa; font-size: 13px; line-height: 1.5; flex: 1 1 auto; min-width: 0; }
-.affiliation-summary-action { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 6px 10px; border: 1px solid #1685b5; border-radius: 7px; color: #e1f4ff; background: #075f88; cursor: pointer; font-size: 12px; transition: background-color .15s ease, border-color .15s ease; }
+.affiliation-summary-text { margin: 0; color: #d6ecfa; font-size: 13px; line-height: 1.55; flex: 1 1 auto; min-width: 0; }
+.affiliation-summary-action { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 8px 13px; border: 1px solid #1685b5; border-radius: 7px; color: #e1f4ff; background: #075f88; cursor: pointer; font-size: 13px; font-weight: 600; transition: background-color .15s ease, border-color .15s ease; }
 .affiliation-summary-action:hover { background: #0a7ba8; border-color: #38bdf8; }
 .affiliation-summary-action:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
 
@@ -486,6 +492,13 @@ html, body { overflow: auto; }
 .affiliation-detail-chart figcaption { color: #d9f5ff; font-size: 12px; font-weight: 600; }
 .affiliation-chart-plot { min-width: 0; width: 100%; min-height: 220px; aspect-ratio: 18 / 11; align-self: end; }
 .affiliation-detail-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+/* 航迹对比图缩放容器：裁剪缩放溢出，承载滚轮缩放/拖拽平移交互。 */
+.affiliation-track-plot { position: relative; overflow: hidden; touch-action: none; }
+.affiliation-track-plot svg { will-change: transform; }
+.affiliation-track-reset { position: absolute; top: 6px; right: 6px; z-index: 2; min-height: 26px; padding: 0 9px; border: 1px solid rgba(103, 232, 249, 0.55); border-radius: 6px; color: #cffafe; background: rgba(8, 47, 73, 0.92); font-size: 11px; font-weight: 600; cursor: pointer; }
+.affiliation-track-reset:hover { background: #0e7490; color: #f0fdff; }
+.affiliation-track-reset:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
+.affiliation-track-zoom-hint { position: absolute; left: 6px; bottom: 4px; z-index: 2; padding: 2px 6px; border-radius: 5px; color: #9cc5df; background: rgba(2, 6, 23, 0.55); font-size: 10px; pointer-events: none; }
 .affiliation-detail-chart span { min-width: 0; color: #9cc5df; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .affiliation-chart-description { min-width: 0; min-height: 58px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 3px 5px; color: #9cc5df; font-size: 10px; line-height: 1.45; }
 .affiliation-chart-description strong { color: #d9f5ff; font-size: 10px; }
@@ -493,21 +506,22 @@ html, body { overflow: auto; }
 .affiliation-chart-description small { grid-column: 1 / -1; color: #9cc5df; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .affiliation-chart-note { min-height: 30px; }
 .affiliation-detail-empty { margin: 0; padding: 18px 10px; text-align: center; color: #9db1c9; font-size: 12px; border: 1px dashed rgba(148, 163, 184, 0.3); border-radius: 7px; background: rgba(15, 40, 66, 0.4); }
-/* 航迹图样式 */
-.affiliation-track-grid { stroke: rgba(186, 230, 253, 0.16); stroke-width: 1; }
-.affiliation-track-label { fill: #9cc5df; font-size: 8px; }
-.affiliation-track-axis { fill: #b7d9ed; font-size: 9px; font-weight: 600; }
-.affiliation-track-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-.affiliation-track-line.ref { stroke: #60a5fa; stroke-width: 3; }
-.affiliation-track-line.carrier { stroke: #f87171; stroke-width: 2.2; stroke-dasharray: 8 5; }
-.affiliation-track-point { stroke: #f0f9ff; stroke-width: 1.3; vector-effect: non-scaling-stroke; }
+/* 航迹图样式：--zoom 由航迹图 svg 内联设置（缩放倍数）。线宽/字号/描边按 1/--zoom 反向缩放，
+   配合 vector-effect:non-scaling-stroke，使放大时线条与刻度保持屏幕恒定粗细，露出真实航迹细节而非被粗线占满。 */
+.affiliation-track-grid { stroke: rgba(186, 230, 253, 0.16); stroke-width: calc(1 / var(--zoom, 1)); }
+.affiliation-track-label { fill: #9cc5df; font-size: calc(8px / var(--zoom, 1)); }
+.affiliation-track-axis { fill: #b7d9ed; font-size: calc(9px / var(--zoom, 1)); font-weight: 600; }
+.affiliation-track-line { fill: none; stroke-width: calc(2 / var(--zoom, 1)); stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.affiliation-track-line.ref { stroke: #60a5fa; stroke-width: calc(3 / var(--zoom, 1)); }
+.affiliation-track-line.carrier { stroke: #f87171; stroke-width: calc(2.2 / var(--zoom, 1)); }
+.affiliation-track-point { stroke: #f0f9ff; stroke-width: calc(1.3 / var(--zoom, 1)); vector-effect: non-scaling-stroke; }
 .affiliation-track-point.ref { fill: #60a5fa; }
 .affiliation-track-point.carrier { fill: #f87171; }
-.affiliation-track-point.end { stroke-width: 1.6; }
+.affiliation-track-point.end { stroke-width: calc(1.6 / var(--zoom, 1)); }
 .affiliation-track-html-legend { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 12px; }
 .affiliation-track-html-legend span { min-width: 0; display: flex; align-items: flex-start; gap: 7px; }
 .affiliation-track-html-legend i { flex: 0 0 22px; height: 0; margin-top: 7px; border-top: 3px solid #60a5fa; }
-.affiliation-track-html-legend .carrier i { border-top: 2px dashed #f87171; }
+.affiliation-track-html-legend .carrier i { border-top: 2px solid #f87171; }
 .affiliation-track-html-legend b { min-width: 0; color: #b7d9ed; font-size: 10px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; word-break: break-word; }
 /* 距离图中位距离线 */
 .affiliation-evidence-median { stroke: rgba(94, 234, 212, 0.85); stroke-width: 1; stroke-dasharray: 5 4; }
@@ -566,7 +580,7 @@ html, body { overflow: auto; }
 .analysis-charts-group { grid-column: 1 / -1; }
 .analysis-charts-group h3 { margin-bottom: 8px; }
 .analysis-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.analysis-chart-card { min-width: 0; min-height: 350px; padding: 9px; border-radius: 7px; background: rgba(15, 23, 42, 0.62); border: 1px solid rgba(148, 163, 184, 0.15); }
+.analysis-chart-card { min-width: 0; min-height: 260px; padding: 9px; border-radius: 7px; background: rgba(15, 23, 42, 0.62); border: 1px solid rgba(148, 163, 184, 0.15); }
 .analysis-chart-card.wide { grid-column: 1 / -1; }
 .analysis-chart-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
 .analysis-chart-card h4 { display: flex; align-items: center; gap: 6px; margin: 0; color: #e2e8f0; font-size: 12px; line-height: 1.25; }
@@ -615,8 +629,7 @@ html, body { overflow: auto; }
 @media (max-width: 1320px) {
   .playback-control-bar { grid-template-columns: auto auto minmax(220px, 1fr); }
   .original-map-link { justify-self: start; }
-  .workspace { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); }
-  .vessel-focus-panel { grid-column: 1 / -1; }
+  /* 左中右三栏始终维持一排：不再把右侧栏换行到第二行。 */
   .simplified-analysis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analysis-chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .advice-group { grid-column: 1 / -1; }
@@ -624,9 +637,10 @@ html, body { overflow: auto; }
 
 @media (max-width: 820px) {
   .stm-shell { padding: 10px; }
-  .playback-control-bar, .workspace, .simplified-analysis { grid-template-columns: 1fr; }
-  .map-stack { grid-template-rows: minmax(480px, 62vh) auto; }
-  .remote-map-panel { min-height: 480px; }
+  /* 右侧栏不再塌成单列；三栏始终保持一排，过窄时由 .stm-shell 的 min-width 触发横向滚动。 */
+  .playback-control-bar, .simplified-analysis { grid-template-columns: 1fr; }
+  .map-stack { grid-template-rows: minmax(360px, 1fr) auto; }
+  .remote-map-panel { min-height: 360px; }
   .remote-map-header, .vessel-focus-header { flex-direction: column; }
   .vessel-threat-score { text-align: left; }
   .vessel-metric-grid, .analysis-metric-row { grid-template-columns: 1fr; }
@@ -634,9 +648,15 @@ html, body { overflow: auto; }
 }
 
 /* === 右侧栏：综合分析悬浮框 + 预测区块 === */
-/* 第一栏左边缘的展开/收起箭头：关闭指向左，打开指向右。 */
-.analysis-overlay-toggle { position: absolute; left: -12px; top: 50%; transform: translate(-50%, -50%); z-index: 45; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 46px; padding: 0; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 7px; color: #cbd5e1; background: rgba(15, 23, 42, 0.96); cursor: pointer; }
-.analysis-overlay-toggle:hover, .analysis-overlay-toggle.open { color: #67e8f9; border-color: rgba(103, 232, 249, 0.6); }
+/* 展开按钮：贴在右侧栏左缘的竖排标签（绝对定位，脱离文档流，不挤压标题布局），箭头 + “展开/收起”文字。
+   打开悬浮框后隐藏（.open），关闭由 X 按钮、Escape、点击外部覆盖。 */
+.analysis-overlay-toggle { position: absolute; left: 0; top: 50%; transform: translate(-100%, -50%); z-index: 45; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; padding: 10px 7px; border: 1px solid rgba(103, 232, 249, 0.55); border-right: 0; border-radius: 9px 0 0 9px; color: #cffafe; background: linear-gradient(180deg, #0e7490, #0c4a6e); cursor: pointer; box-shadow: -4px 0 14px rgba(0, 0, 0, 0.45); transition: background-color .15s ease, color .15s ease, box-shadow .15s ease; }
+.analysis-overlay-toggle:hover { background: linear-gradient(180deg, #22d3ee, #0e7490); color: #042f2e; box-shadow: -4px 0 18px rgba(34, 211, 238, 0.5); border-color: rgba(103, 232, 249, 0.8); }
+/* 悬浮框打开后隐藏展开按钮：关闭已由弹窗内 X 按钮、Escape、点击外部覆盖，按钮仅在收起态作为入口出现。 */
+.analysis-overlay-toggle.open { display: none; }
+.analysis-overlay-toggle-text { writing-mode: vertical-rl; text-orientation: upright; font-size: 13px; font-weight: 700; letter-spacing: 2px; }
+.analysis-overlay-toggle svg { flex: 0 0 auto; }
+.analysis-overlay-toggle:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
 /* 悬浮框：桌面端从右侧栏向左展开，覆盖地图，不挤压布局；高度随右侧栏，内容纵向滚动。 */
 .analysis-overlay { position: absolute; top: 0; bottom: 0; right: calc(100% + 12px); z-index: 40; width: clamp(520px, 48vw, 900px); display: flex; flex-direction: column; max-height: 100%; background: rgba(8, 15, 30, 0.96); border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 10px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6); overflow: hidden; }
 .analysis-overlay-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(148, 163, 184, 0.2); background: rgba(15, 23, 42, 0.9); }

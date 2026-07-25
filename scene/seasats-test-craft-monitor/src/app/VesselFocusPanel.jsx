@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AlertTriangle, Anchor, ChevronLeft, ChevronRight, Eye, LineChart, X } from "lucide-react";
 import { subscribeEscapeKeyTopmost } from "../logic/escapeKey.js";
 
@@ -327,6 +327,60 @@ function formatRatio(value) {
 
 // 航迹对比图：横轴经度、纵轴纬度，两条真实航迹，区分起终点，等比例展示（参考 select0721.py）。
 function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel }) {
+  // 滚轮缩放 + 拖拽平移：transform 作用于 svg，外层 plot 容器裁剪溢出。
+  // hooks 必须在早退返回之前调用，保证渲染分支变化时 hook 顺序稳定。
+  const plotRef = useRef(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef(null);
+  const zoomStateRef = useRef({ zoom: 1, pan: { x: 0, y: 0 } });
+  zoomStateRef.current = { zoom, pan };
+  const resetView = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
+  // 用原生非被动 wheel 监听，才能 preventDefault 阻止弹窗纵向滚动，把滚轮交给缩放。
+  // onWheel 经 useCallback 固定身份，并通过 zoomStateRef 读最新值，避免闭包陈旧。
+  const onWheel = useCallback((event) => {
+    event.preventDefault();
+    const el = plotRef.current;
+    if (!el) return;
+    const { zoom: curZoom, pan: curPan } = zoomStateRef.current;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const cx = event.clientX - rect.left;
+    const cy = event.clientY - rect.top;
+    const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const next = Math.min(12, Math.max(1, curZoom * factor));
+    if (next === curZoom) return;
+    const ratio = next / curZoom;
+    // 以光标所在点为锚点缩放：保持该点屏幕位置不变。
+    setPan({ x: cx - (cx - curPan.x) * ratio, y: cy - (cy - curPan.y) * ratio });
+    setZoom(next);
+  }, []);
+  // 回调 ref：plot 容器挂载时挂监听、卸载时摘监听。即便从“无数据”早退切换到有数据，
+  // 容器重新出现时也会重新挂载监听，不会因 effect 只跑一次而漏挂。
+  const setPlotRef = useCallback((el) => {
+    const prev = plotRef.current;
+    if (prev === el) return;
+    if (prev) prev.removeEventListener("wheel", onWheel);
+    plotRef.current = el;
+    if (el) el.addEventListener("wheel", onWheel, { passive: false });
+  }, [onWheel]);
+  const onPointerDown = (event) => {
+    if (zoom <= 1) return;
+    dragRef.current = { x: event.clientX, y: event.clientY, pan: { ...pan } };
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
+  };
+  const onPointerMove = (event) => {
+    if (!dragRef.current) return;
+    setPan({
+      x: dragRef.current.pan.x + (event.clientX - dragRef.current.x),
+      y: dragRef.current.pan.y + (event.clientY - dragRef.current.y),
+    });
+  };
+  const endDrag = (event) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+  };
   const validTrack = (series) => (Array.isArray(series) ? series : [])
     .filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null)
     .map((item) => ({ ...item, lon: Number(item.lon), lat: Number(item.lat) }));
@@ -385,9 +439,12 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
     const first = series[0];
     const last = series[series.length - 1];
     if (!first || !last) return null;
+    // 起止点几何按 1/zoom 反向缩放，避免放大后被巨点占满；屏幕尺寸与未放大时一致。
+    const pr = 4 / zoom;
+    const ps = 7 / zoom;
     return React.createElement(React.Fragment, null,
-      React.createElement("circle", { cx: xFor(first.lon), cy: yFor(first.lat), r: 4, className: `affiliation-track-point ${seriesClass} start` }),
-      React.createElement("rect", { x: xFor(last.lon) - 3.5, y: yFor(last.lat) - 3.5, width: 7, height: 7, rx: 1, className: `affiliation-track-point ${seriesClass} end` }),
+      React.createElement("circle", { cx: xFor(first.lon), cy: yFor(first.lat), r: pr, className: `affiliation-track-point ${seriesClass} start` }),
+      React.createElement("rect", { x: xFor(last.lon) - ps / 2, y: yFor(last.lat) - ps / 2, width: ps, height: ps, rx: 1 / zoom, className: `affiliation-track-point ${seriesClass} end` }),
     );
   };
   return React.createElement(
@@ -399,12 +456,14 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
       { className: "affiliation-chart-description" },
       React.createElement("strong", null, "真实航迹："),
       React.createElement("span", null, "双方 AIS 经纬度序列按统一地理比例绘制"),
-      React.createElement("small", null, "红色虚线覆盖在蓝色实线上；轨迹重合时仍可辨识双方。"),
+      React.createElement("small", null, "红色实线覆盖在蓝色实线上；轨迹重合时仍可辨识双方。"),
     ),
-    React.createElement("div", { className: "affiliation-chart-plot" },
+    React.createElement("div", { className: "affiliation-chart-plot affiliation-track-plot", ref: setPlotRef, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerLeave: endDrag, onDoubleClick: resetView },
+      zoom > 1 ? React.createElement("button", { type: "button", className: "affiliation-track-reset", onClick: resetView, onPointerDown: (e) => e.stopPropagation(), "aria-label": "重置缩放", title: "重置缩放" }, "重置") : null,
+      React.createElement("span", { className: "affiliation-track-zoom-hint" }, "滚轮缩放 · 拖拽平移 · 双击复位"),
       React.createElement(
         "svg",
-        { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${referenceLabel} 与 ${carrierLabel} 航迹对比` },
+        { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${referenceLabel} 与 ${carrierLabel} 航迹对比`, style: { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "0 0", cursor: zoom > 1 ? "grab" : "default", "--zoom": String(zoom) } },
         lonTicks.map((tick, index) => React.createElement(React.Fragment, { key: `lon-${tick}` },
           React.createElement("line", { x1: xFor(tick), x2: xFor(tick), y1: padTop, y2: padTop + plotH, className: "affiliation-track-grid" }),
           React.createElement("text", {
@@ -418,7 +477,7 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
           React.createElement("line", { x1: padLeft, x2: width - padRight, y1: yFor(tick), y2: yFor(tick), className: "affiliation-track-grid" }),
           React.createElement("text", { x: padLeft - 7, y: yFor(tick) + 3, textAnchor: "end", className: "affiliation-track-label" }, tick.toFixed(3)),
         )),
-        // 红线采用虚线覆盖在蓝色实线上；轨迹完全重合时仍能从虚线间隙看到双方，坐标不做视觉偏移。
+        // 两条均为实线：蓝色本体航迹（较粗）在下，红色航母航迹覆盖其上；以颜色与线宽区分双方，坐标不做视觉偏移。
         ref.length >= 2 ? React.createElement("polyline", { points: refPoly, className: "affiliation-track-line ref", "data-series": "reference" }) : null,
         car.length >= 2 ? React.createElement("polyline", { points: carPoly, className: "affiliation-track-line carrier", "data-series": "carrier" }) : null,
         ref.length >= 2 ? endpoint(ref, "ref") : null,
@@ -433,7 +492,7 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
       React.createElement("span", { className: "ref", title: referenceLabel }, React.createElement("i"), React.createElement("b", null, referenceLabel)),
       React.createElement("span", { className: "carrier", title: carrierLabel }, React.createElement("i"), React.createElement("b", null, carrierLabel)),
     ),
-    React.createElement("span", { className: "affiliation-chart-note" }, "○ 起点　□ 终点　· 真实 AIS 航迹抽稀后绘制；虚线覆盖处表示两条航迹重合。"),
+    React.createElement("span", { className: "affiliation-chart-note" }, "○ 起点　□ 终点　· 真实 AIS 航迹抽稀后绘制；红线覆盖在蓝线之上，重合处仍可辨识双方。"),
   );
 }
 
@@ -718,7 +777,11 @@ export function VesselFocusPanel({
 }) {
   const analysisToggleRef = useRef(null);
   const analysisCloseRef = useRef(null);
+  const analysisOverlayRef = useRef(null);
   const wasAnalysisOpenRef = useRef(false);
+  // 收起回调存入 ref，避免 onToggleAnalysisOverlay 每次渲染重建导致监听反复重挂。
+  const toggleAnalysisRef = useRef(onToggleAnalysisOverlay);
+  toggleAnalysisRef.current = onToggleAnalysisOverlay;
   useEffect(() => {
     if (showAnalysisOverlay) {
       wasAnalysisOpenRef.current = true;
@@ -729,6 +792,21 @@ export function VesselFocusPanel({
       wasAnalysisOpenRef.current = false;
       analysisToggleRef.current?.focus();
     }
+  }, [showAnalysisOverlay]);
+
+  // 点击悬浮框之外的任意位置（右侧栏、地图、左侧栏、顶栏等）自动收起。
+  // 仅 mousedown：框内内容（含 X 按钮）不收起，关闭交由各自 onClick 触发，防止二次切换。
+  // 不再把右侧栏整体排除——否则小屏居中弹窗时点背后右侧栏无法收起，丢失“点其他位置收起”。
+  // 依赖仅 showAnalysisOverlay：打开/关闭切换时挂载/卸载监听，其余重渲染不重挂。
+  useEffect(() => {
+    if (!showAnalysisOverlay) return undefined;
+    const onPointerDown = (event) => {
+      const overlay = analysisOverlayRef.current;
+      if (overlay?.contains(event.target)) return;
+      toggleAnalysisRef.current?.();
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
   }, [showAnalysisOverlay]);
 
   // 关联详情弹窗状态：多条关联各自独立 key，切换舰艇/快照刷新后自动收起。
@@ -805,6 +883,7 @@ export function VesselFocusPanel({
           title: showAnalysisOverlay ? "收起分析面板" : "展开分析面板",
         },
         React.createElement(showAnalysisOverlay ? ChevronRight : ChevronLeft, { size: 16 }),
+        React.createElement("span", { className: "analysis-overlay-toggle-text" }, showAnalysisOverlay ? "收起" : "展开"),
       ),
       React.createElement(
         "div",
@@ -895,7 +974,7 @@ export function VesselFocusPanel({
       ? React.createElement(
           "div",
           // 非模态浮动面板：地图与侧栏需保持可交互（无焦点陷阱/遮罩），aria-modal=false，避免对辅助技术谎称外部 inert。
-          { className: "analysis-overlay", role: "dialog", "aria-modal": "false", "aria-labelledby": "analysis-overlay-title" },
+          { ref: analysisOverlayRef, className: "analysis-overlay", role: "dialog", "aria-modal": "false", "aria-labelledby": "analysis-overlay-title" },
           React.createElement(
             "div",
             { className: "analysis-overlay-head" },
