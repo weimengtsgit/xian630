@@ -119,6 +119,14 @@ test("buildAffiliationSummary produces a sync sentence without a faked lag", () 
   assert.doesNotMatch(summary.sentence, /时延/);
 });
 
+test("buildAffiliationSummary treats a 0-day lag follow as sync, dropping 时延0天", () => {
+  const zeroLagRelation = { ...lagRelation, lag: { ...lagRelation.lag, lagMinutes: 0 } };
+  const summary = buildAffiliationSummary({ relation: zeroLagRelation, name: "西奥多·罗斯福号 (USS Theodore Roosevelt)", followerName: "海猎号", followerCode: undefined });
+  assert.match(summary.relationship, /海猎号 无人艇 与 西奥多·罗斯福号.*同步伴随/);
+  assert.match(summary.sentence, /同步伴随。$/);
+  assert.doesNotMatch(summary.sentence, /时延0|0\.00天|\+0\.0d/);
+});
+
 // === 纯逻辑：弹窗状态机 ===
 test("reduceActiveAffiliationKey opens, switches, closes, and auto-closes on vessel switch / stale snapshot", () => {
   const valid = new Set(["a", "b"]);
@@ -180,13 +188,28 @@ test("dialog renders conclusion strength, relationship, lag hours/days, and thre
   assert.match(markup, /阈值内比例：75%/);
 });
 
+test("dialog renders a 0-day lag follow as sync without 时延0天", () => {
+  const zeroLagRelation = { ...lagRelation, lag: { ...lagRelation.lag, lagMinutes: 0 } };
+  const markup = renderDialog({ relation: zeroLagRelation });
+  assert.match(markup, /class="affiliation-detail-tag sync"/);
+  assert.match(markup, /同步伴随（无时延）/);
+  assert.doesNotMatch(markup, /时延0天|0\.00天|\+0\.0d 时延跟随|延迟 0分钟/);
+});
+
+test("dialog assessment uses 同步匹配 instead of 时延匹配 for a 0-day lag follow", () => {
+  const zeroLagRelation = { ...lagRelation, lag: { ...lagRelation.lag, lagMinutes: 0 } };
+  const markup = renderDialog({ relation: zeroLagRelation });
+  assert.match(markup, /同步匹配/);
+  assert.doesNotMatch(markup, /时延匹配/);
+});
+
 test("dialog evidence cards show real values and time range from the relation", () => {
   const markup = renderDialog();
   assert.match(markup, /匹配点数[\s\S]*?<strong>48<\/strong>/);
   assert.match(markup, /最小距离[\s\S]*?1\.30 海里/);
   assert.match(markup, /平均距离[\s\S]*?21\.90 海里/);
   assert.match(markup, /中位距离[\s\S]*?18\.50 海里/);
-  assert.match(markup, /航向[\s\S]*?本次最大偏差 12°（阈值 ≤45°）/);
+  assert.match(markup, /航向[\s\S]*?<strong>≤45°<\/strong>/);
   assert.match(markup, /阈值内比例[\s\S]*?75%/);
   assert.match(markup, /关联时间范围/);
 });

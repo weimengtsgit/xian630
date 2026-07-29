@@ -393,6 +393,8 @@ export function AnalysisPanel({ analysis, selectedTarget, coastData, trackLoadin
     <section className="analysis-panel simplified-analysis">
       {trackLoading && <div className="track-query-status loading" role="status">本体轨迹统计加载中…</div>}
       {!trackLoading && trackError && <div className="track-query-status error" role="alert">本体轨迹统计加载失败：{trackError}</div>}
+      <CompactConclusion summary={summary} selectedTarget={selectedTarget} gapCount={gapCount} />
+
       <AnalysisCharts selectedTarget={selectedTarget} coastData={coastData} />
 
       <article className="analysis-group evidence-group">
@@ -409,8 +411,6 @@ export function AnalysisPanel({ analysis, selectedTarget, coastData, trackLoadin
         <h3><ShieldAlert size={15} />建议动作</h3>
         <AdviceList summary={summary} />
       </article>
-
-      <CompactConclusion summary={summary} selectedTarget={selectedTarget} gapCount={gapCount} />
     </section>
   );
 }

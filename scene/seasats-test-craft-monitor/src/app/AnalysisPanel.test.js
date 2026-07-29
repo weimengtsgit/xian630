@@ -81,11 +81,11 @@ test("renders current-data AIS charts with Chinese speed units", () => {
   assert.doesNotMatch(markup, /\bkt\b/i);
 });
 
-test("places concise conclusion after charts and supporting panels", () => {
+test("places concise conclusion at the top of the analysis panel", () => {
   const markup = renderToStaticMarkup(React.createElement(AnalysisPanel, { analysis, selectedTarget, coastData }));
 
-  assert.ok(markup.indexOf("AIS 轨迹图表") < markup.indexOf("研判结论"));
-  assert.ok(markup.indexOf("建议动作") < markup.indexOf("研判结论"));
+  assert.ok(markup.indexOf("研判结论") < markup.indexOf("AIS 轨迹图表"));
+  assert.ok(markup.indexOf("研判结论") < markup.indexOf("建议动作"));
   assert.doesNotMatch(markup, /analysis-metric-row/);
 });
 

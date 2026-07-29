@@ -7,6 +7,7 @@ import { Worker } from "node:worker_threads";
 import { MONITORED_VESSELS } from "./seasatsScope.js";
 import { JUDGEMENT_PARAMETERS, MONITORED_AREAS } from "./monitoringRules.js";
 import { CARRIER_AFFILIATION_RULES } from "./carrierAffiliation.js";
+import { getVesselOverride, applyVesselOverride } from "./vesselNames.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
 import { extractHullCode, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
 import coastData from "../src/data/chinaCoast.json" with { type: "json" };
@@ -160,7 +161,7 @@ function isGenericVesselName(name) {
 // 侧栏“代号 船名”标签：代号优先取名单配置，缺失时用 AIS 船名中提取的舷号兜底；
 // 船名优先取名单 shortName/中文名，再取本体识别名中的中文段，最后回退实际获取的名字。
 // 该标签供左右侧栏标题使用；航母关联卡片等仍使用 name 字段，显示方式不受影响。
-function sidebarFields(vessel, resolvedName, identityCode) {
+export function sidebarFields(vessel, resolvedName, identityCode) {
   const code = vessel.code ?? identityCode ?? null;
   return {
     code,
@@ -276,11 +277,13 @@ async function buildFastSummary() {
   const targets = MONITORED_VESSELS.map((vessel) => {
     const identity = identityByMmsi.get(vessel.mmsi);
     const latest = vessel.mmsi === initialTrack.mmsi ? initialLatest : null;
-    const resolvedName = latest?.name || identity?.name || `MMSI ${vessel.mmsi}`;
+    // 登记表覆盖优先：本体/名单均无真实船名时，回退到手动登记的舷号/船名。
+    const overrideName = getVesselOverride(vessel.mmsi)?.name || null;
+    const resolvedName = overrideName || latest?.name || identity?.name || `MMSI ${vessel.mmsi}`;
     return {
       mmsi: vessel.mmsi,
       name: resolvedName,
-      ...sidebarFields(vessel, resolvedName, identity?.code),
+      ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
@@ -317,12 +320,13 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     const trackPoints = track.trackPoints || [];
     const latest = trackPoints.at(-1);
     const identity = identityByMmsi.get(mmsi);
-    // 船名和轨迹属性均来自本体，配置名称仅在本体名称缺失时兜底。
-    const resolvedName = identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`);
+    // 船名和轨迹属性均来自本体，配置名称仅在本体名称缺失时兜底；登记表覆盖优先于以上全部。
+    const overrideName = getVesselOverride(mmsi)?.name || null;
+    const resolvedName = overrideName || identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`);
     const rawTarget = {
       mmsi,
       name: resolvedName,
-      ...sidebarFields(vessel, resolvedName, identity?.code),
+      ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
@@ -501,6 +505,9 @@ function serveStatic(request, response) {
   createReadStream(filePath).pipe(response);
 }
 
+// 仅作为主模块直接运行时启动 HTTP 服务（npm start / node server/app-server.js）；
+// 被 test 通过 import 引入时不监听端口、不触发后台刷新，便于单测 sidebarFields 等。
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
 createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
@@ -544,3 +551,4 @@ createServer(async (request, response) => {
   setInterval(() => { void refreshFleetSnapshot().catch(() => {}); }, fleetRefreshMs);
   setInterval(() => { void refreshAffiliationHistory().catch(() => {}); }, affiliationRefreshMs);
 });
+}

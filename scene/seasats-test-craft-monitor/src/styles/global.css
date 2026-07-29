@@ -447,12 +447,13 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 
 /* === 右侧栏：关联紧凑摘要 + 详情弹窗 === */
 /* 命中关联在右侧栏只展示一句摘要与“查看详情”，不再直接渲染研判依据与距离证据。 */
-.affiliation-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 11px 4px; border-top: 1px solid rgba(125, 211, 252, 0.16); }
+.affiliation-summary-row { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 48px; padding: 11px 10px; border: 0; border-top: 1px solid rgba(125, 211, 252, 0.16); background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; transition: background-color .15s ease; }
 .affiliation-summary-row:first-of-type { border-top: 0; }
+.affiliation-summary-row:hover { background: rgba(56, 189, 248, 0.08); }
+.affiliation-summary-row:focus-visible { outline: 2px solid #67e8f9; outline-offset: -2px; }
+.affiliation-summary-arrow { flex: 0 0 auto; color: #67e8f9; transition: transform .15s ease; }
+.affiliation-summary-row:hover .affiliation-summary-arrow { transform: translateX(2px); }
 .affiliation-summary-text { margin: 0; color: #d6ecfa; font-size: 13px; line-height: 1.55; flex: 1 1 auto; min-width: 0; }
-.affiliation-summary-action { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 8px 13px; border: 1px solid #1685b5; border-radius: 7px; color: #e1f4ff; background: #075f88; cursor: pointer; font-size: 13px; font-weight: 600; transition: background-color .15s ease, border-color .15s ease; }
-.affiliation-summary-action:hover { background: #0a7ba8; border-color: #38bdf8; }
-.affiliation-summary-action:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
 
 /* 详情弹窗：独立于综合分析悬浮框，遮罩覆盖视口、置于地图与悬浮框之上。 */
 .affiliation-detail-mask { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(2, 10, 23, 0.66); backdrop-filter: blur(2px); overflow-y: auto; overscroll-behavior: contain; }
@@ -544,8 +545,6 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 }
 @media (max-width: 720px) {
   .affiliation-detail-head-meta { display: none; }
-  .affiliation-summary-row { flex-direction: column; align-items: stretch; gap: 6px; }
-  .affiliation-summary-action { align-self: flex-end; }
 }
 @media (max-width: 820px) {
   .affiliation-detail-mask { padding: 10px; }
@@ -553,7 +552,7 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 
 /* 尊重 reduced-motion：关闭弹窗与按钮的过渡动画。 */
 @media (prefers-reduced-motion: reduce) {
-  .affiliation-summary-action, .affiliation-detail-close { transition: none; }
+  .affiliation-summary-row, .affiliation-summary-arrow, .affiliation-detail-close { transition: none; }
   .affiliation-detail-mask { backdrop-filter: none; }
 }
 .simplified-analysis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

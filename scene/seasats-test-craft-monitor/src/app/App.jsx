@@ -108,7 +108,7 @@ export function App() {
     return <main className="stm-shell loading-shell"><section className="loading-panel error"><AlertTriangle size={22} /><h1>数据加载失败</h1><p>{loadError.message}</p></section></main>;
   }
   if (!payloadData) {
-    return <main className="stm-shell loading-shell"><section className="loading-panel"><Database size={22} /><h1>“光鱼”无人艇跟监告警智能体</h1><p>{loadingMessage}</p></section></main>;
+    return <main className="stm-shell loading-shell"><section className="loading-panel"><Database size={22} /><h1>无人艇跟监告警智能体</h1><p>{loadingMessage}</p></section></main>;
   }
   return <Dashboard payload={payloadData} />;
 }
@@ -297,7 +297,7 @@ function Dashboard({ payload }) {
   return (
     <main className="stm-shell">
       <header className="topbar">
-        <div className="brand"><Ship size={22} /><div><h1>“光鱼”无人艇跟监告警智能体</h1></div></div>
+        <div className="brand"><Ship size={22} /><div><h1>无人艇跟监告警智能体</h1></div></div>
         <div className="top-metrics">
           <span><Database size={14} />舰艇 {analysis.metadata.targetCount}</span>
           <span><AlertTriangle size={14} />告警 {analysis.alerts.length}</span>

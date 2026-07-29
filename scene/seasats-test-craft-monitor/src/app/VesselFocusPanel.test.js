@@ -103,7 +103,8 @@ test("renders a compact affiliation summary below metrics with snapshot time", (
   assert.match(markup, /存在中等强度关联/);
   assert.match(markup, /关系为 西奥多·罗斯福号.*跟随 海巡 630 无人艇/);
   assert.match(markup, /时延0\.08天/);
-  assert.match(markup, /查看详情/);
+  assert.match(markup, /<button[^>]*affiliation-summary-row/);
+  assert.match(markup, /affiliation-summary-arrow/);
   assert.match(markup, /aria-label="查看海巡 630 无人艇与西奥多·罗斯福号.*的关联详情"/);
   // 右侧栏不再直接输出完整研判依据与距离证据。
   assert.doesNotMatch(markup, /研判依据：/);
@@ -184,8 +185,8 @@ test("renders a distinct, stable aria-label per relation so each button opens it
     },
   });
   // 两条摘要各含双方名称，aria-label 可区分。
-  assert.match(markup, /海猎号 无人艇 与 乔治·华盛顿号.*存在中等强度关联[\s\S]*查看详情/);
-  assert.match(markup, /海猎号 无人艇 与 西奥多·罗斯福号.*存在中等强度关联[\s\S]*查看详情/);
+  assert.match(markup, /海猎号 无人艇 与 乔治·华盛顿号.*存在中等强度关联[\s\S]*<\/button>/);
+  assert.match(markup, /海猎号 无人艇 与 西奥多·罗斯福号.*存在中等强度关联[\s\S]*<\/button>/);
   const labels = [...markup.matchAll(/aria-label="查看[^"]*的关联详情"/g)].map((m) => m[0]);
   assert.equal(labels.length, 2);
   assert.notEqual(labels[0], labels[1]);

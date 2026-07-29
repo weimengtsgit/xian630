@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { AlertTriangle, Anchor, ChevronLeft, ChevronRight, Eye, LineChart, X } from "lucide-react";
+import { AlertTriangle, Anchor, ChevronLeft, ChevronRight, LineChart, X } from "lucide-react";
 import { subscribeEscapeKeyTopmost } from "../logic/escapeKey.js";
 
 const confirmedCarrierNames = {
@@ -151,15 +151,24 @@ export function affiliationDetailKey({ selectedMmsi, otherMmsi, relationType, la
   return `${selectedMmsi || "?"}::${otherMmsi || "?"}::${relationType || "?"}::${lag}`;
 }
 
+// 时延为 0 天的“时延跟随”实际为同步伴随：展示按同步处理，避免出现“时延0天”这类自相矛盾的文案。
+// 证据仍取 lag 字段（命中来自时延分析，sync 字段未必命中），不切换到 sync 证据。
+function isZeroLagFollow(relation) {
+  const lagMinutes = relation?.lag?.lagMinutes;
+  return relation?.relationType === "时延跟随" && isValidLag(lagMinutes) && Number(lagMinutes) === 0;
+}
+
 // 摘要文案：固定“存在中等强度关联”，沿用现有“航母 跟随 另一方”业务方向，时延按天两位小数。
 export function buildAffiliationSummary({ relation, name, followerName, followerCode }) {
   const followerLabel = withVesselKind(followerName, followerCode);
   const isSync = relation?.relationType === "同步伴随";
+  // 0 天时延按同步展示，摘要不再出现“时延0天”。
+  const displayAsSync = isSync || isZeroLagFollow(relation);
   const lagMinutes = relation?.lag?.lagMinutes;
   const lagValid = isValidLag(lagMinutes);
-  const relationship = isSync ? `${followerLabel} 与 ${name} 同步伴随` : `${name} 跟随 ${followerLabel}`;
+  const relationship = displayAsSync ? `${followerLabel} 与 ${name} 同步伴随` : `${name} 跟随 ${followerLabel}`;
   // 同步伴随没有有效时延，摘要不带“时延X天”；时延跟随缺失/非法时显示“时延未知”。
-  const lagSuffix = isSync ? "" : (lagValid ? `，时延${formatLagDays(lagMinutes)}` : "，时延未知");
+  const lagSuffix = displayAsSync ? "" : (lagValid ? `，时延${formatLagDays(lagMinutes)}` : "，时延未知");
   const sentence = `${followerLabel} 与 ${name} 存在中等强度关联，关系为 ${relationship}${lagSuffix}。`;
   return { followerLabel, carrierName: name, relationship, lagMinutes, lagValid, isSync, sentence };
 }
@@ -172,6 +181,10 @@ export function buildAffiliationAssessment({ relation, name, followerLabel, foll
   const courseEvidence = relation?.lag?.courseFilterApplied
     ? "航向误差不超过45°"
     : "航向数据不足，未纳入45°过滤";
+  // 0 天时延已按同步展示，研判依据里不再用“时延匹配”与之矛盾，改用“同步匹配”。
+  const zeroLag = isZeroLagFollow(relation);
+  const closeMatchLabel = zeroLag ? "近距离同步匹配" : "近距离时延匹配";
+  const matchLabel = zeroLag ? "同步匹配" : "时延匹配";
   let assessment;
   if (relation?.relationType === "同步伴随") {
     const syncDistance = numberOrNull(relation?.sync?.averageDistanceNm);
@@ -181,11 +194,11 @@ export function buildAffiliationAssessment({ relation, name, followerLabel, foll
       ? `研判依据：同期近距离匹配 ${formatCount(syncPoints)} 点、最小距离 ${formatNumber(syncMinimumDistance, 2)} 海里，存在较强协同伴随线索。`
       : `研判依据：存在同期轨迹匹配，但证据强度有限；仅凭 AIS 不能推断具体任务。`;
   } else if (averageDistance !== null && averageDistance <= 10 && matchedPoints >= 30) {
-    assessment = `研判依据：近距离时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}，存在较强协同伴随线索。`;
+    assessment = `研判依据：${closeMatchLabel} ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}，存在较强协同伴随线索。`;
   } else if (averageDistance !== null && averageDistance <= 30 && matchedPoints >= 50) {
-    assessment = `研判依据：时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}，存在中等强度关联线索。`;
+    assessment = `研判依据：${matchLabel} ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}，存在中等强度关联线索。`;
   } else {
-    assessment = `研判依据：时延匹配 ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
+    assessment = `研判依据：${matchLabel} ${formatCount(matchedPoints)} 点、最小距离 ${formatNumber(minimumDistance, 2)} 海里、${courseEvidence}；未达到近距离伴随水平，尚不支持仅据 AIS 定性具体任务。`;
   }
   // 无人艇与航母形成命中关联时给出保守任务研判，明确该结论仅是 AIS 行为线索而非任务确认。
   const operationalAssessment = !isEscortVessel(followerCode)
@@ -501,6 +514,7 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   const series = relation?.lag?.distanceSeries || [];
   if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
   const isInterpolated = relation?.lag?.distanceSeriesSource === "interpolated";
+  const zeroLag = isZeroLagFollow(relation);
   const sourceLabel = isInterpolated ? "插值对齐距离" : "实测对齐距离";
   const subjectLabel = withVesselKind(subjectName, subjectCode);
   const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
@@ -532,7 +546,7 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
     React.createElement("div", { className: "affiliation-chart-description" },
       React.createElement("strong", null, "关联依据："),
       React.createElement("span", { title: `${subjectLabel} 实际轨迹的${sourceLabel}` }, `${subjectLabel} 实际轨迹的${sourceLabel}`),
-      React.createElement("small", null, `${subjectLabel} 实际报点时间 · ${isInterpolated ? "航母报点稀疏，按关联算法插值对齐" : "原始 AIS 报点对齐"} · 延迟 ${formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点`),
+      React.createElement("small", null, `${subjectLabel} 实际报点时间 · ${isInterpolated ? "航母报点稀疏，按关联算法插值对齐" : "原始 AIS 报点对齐"} · 延迟 ${zeroLag ? "同步" : formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点`),
     ),
     React.createElement("div", { className: "affiliation-chart-plot" },
     React.createElement(
@@ -575,27 +589,22 @@ function evidenceCard(label, value) {
   );
 }
 
-// 右侧栏紧凑摘要行：仅一句摘要 + “查看详情”按钮，不再直接渲染研判依据与距离证据。
+// 右侧栏紧凑摘要行：整行为触发器，左侧箭头展开关联详情弹窗（与综合分析悬浮框的展开箭头风格一致）。
 function AffiliationSummaryRow({ relation, name, followerName, followerCode, rowKey, onOpen, setTriggerRef }) {
   const summary = buildAffiliationSummary({ relation, name, followerName, followerCode });
   const ariaLabel = `查看${summary.followerLabel}与${name}的关联详情`;
   return React.createElement(
-    "div",
-    { className: "affiliation-summary-row" },
-    React.createElement("p", { className: "affiliation-summary-text" }, summary.sentence),
-    React.createElement(
-      "button",
-      {
-        type: "button",
-        className: "affiliation-summary-action",
-        onClick: onOpen,
-        "aria-label": ariaLabel,
-        title: ariaLabel,
-        ref: (el) => setTriggerRef(rowKey, el),
-      },
-      React.createElement(Eye, { size: 14, "aria-hidden": "true" }),
-      "查看详情",
-    ),
+    "button",
+    {
+      type: "button",
+      className: "affiliation-summary-row",
+      onClick: onOpen,
+      "aria-label": ariaLabel,
+      title: ariaLabel,
+      ref: (el) => setTriggerRef(rowKey, el),
+    },
+    React.createElement(ChevronRight, { size: 16, className: "affiliation-summary-arrow", "aria-hidden": "true" }),
+    React.createElement("span", { className: "affiliation-summary-text" }, summary.sentence),
   );
 }
 
@@ -604,6 +613,9 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
   if (!relation) return null;
   const followerLabel = withVesselKind(followerName, followerCode);
   const isSync = relation.relationType === "同步伴随";
+  // 0 天时延按同步展示（标签/时延值），证据仍走 lag 字段。
+  const zeroLag = isZeroLagFollow(relation);
+  const displayAsSync = isSync || zeroLag;
   const summary = buildAffiliationSummary({ relation, name, followerName, followerCode });
   const { assessment, operationalAssessment } = buildAffiliationAssessment({ relation, name, followerLabel, followerCode });
   const evidence = evidenceFields(relation);
@@ -612,10 +624,10 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
   const lagValid = isValidLag(relation.lag?.lagMinutes);
   const lagMinutes = lagValid ? Number(relation.lag.lagMinutes) : null;
   const courseEvidenceText = isSync
-    ? "同步航向阈值 ≤30°"
-    : (evidence.courseFilterApplied ? `本次最大偏差 ${formatNumber(evidence.maxCourseDifferenceDeg, 0)}°（阈值 ≤45°）` : "航向数据不足，未纳入 45° 过滤");
+    ? "≤30°"
+    : (evidence.courseFilterApplied ? "≤45°" : "航向数据不足");
   const direction = `${name} → ${followerLabel}`;
-  const lagTag = isSync ? "同步伴随" : `+${lagValid ? (lagMinutes / 60 / 24).toFixed(1) : "?"}d 时延跟随`;
+  const lagTag = displayAsSync ? "同步伴随" : `+${lagValid ? (lagMinutes / 60 / 24).toFixed(1) : "?"}d 时延跟随`;
   const hasDistanceChart = !isSync && Array.isArray(relation.lag?.distanceSeries) && relation.lag.distanceSeries.length >= 2;
   return React.createElement(
     "div",
@@ -640,7 +652,7 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
           React.createElement(Anchor, { size: 16, "aria-hidden": "true" }),
           React.createElement("strong", { id: titleId }, "航母关联分析"),
           React.createElement("span", { className: "affiliation-detail-index" }, `#${index}`),
-          React.createElement("span", { className: `affiliation-detail-tag ${isSync ? "sync" : "lag"}` }, isSync ? "同步伴随" : "时延跟随"),
+          React.createElement("span", { className: `affiliation-detail-tag ${displayAsSync ? "sync" : "lag"}` }, displayAsSync ? "同步伴随" : "时延跟随"),
         ),
         React.createElement(
           "div",
@@ -672,7 +684,9 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
           React.createElement("span", null, "关系描述：", summary.relationship),
           isSync
             ? React.createElement("span", null, "同步伴随无有效时延。")
-            : React.createElement("span", null, "时延：", lagValid ? formatLagHours(relation.lag.lagMinutes) : "--"),
+            : zeroLag
+              ? React.createElement("span", null, "同步伴随（无时延）")
+              : React.createElement("span", null, "时延：", lagValid ? formatLagHours(relation.lag.lagMinutes) : "--"),
           React.createElement("span", null, "阈值内比例：", formatRatio(evidence.withinThresholdRatio)),
         ),
         // 4. 关键证据指标卡
