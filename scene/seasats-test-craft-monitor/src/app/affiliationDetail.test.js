@@ -180,6 +180,13 @@ test("dialog renders title, index, tag, direction, and lag tag from real relatio
   assert.match(markup, /快照：2026-07-18 15:41:01/);
 });
 
+test("dialog lag tag uses a single sign for negative lags (no +-)", () => {
+  const negLagRelation = { ...lagRelation, lag: { ...lagRelation.lag, lagMinutes: -7200 } };
+  const markup = renderDialog({ relation: negLagRelation });
+  assert.match(markup, /-5\.0d 时延跟随/);
+  assert.doesNotMatch(markup, /\+-/);
+});
+
 test("dialog renders conclusion strength, relationship, lag hours/days, and threshold ratio", () => {
   const markup = renderDialog();
   assert.match(markup, /中等关联/);
@@ -360,7 +367,7 @@ test("dialog does not fake a 0-day lag when a delay relation is missing lagMinut
   };
   const markup = renderDialog({ relation: missingLagRelation });
   assert.match(markup, /时延：--/);
-  assert.match(markup, /\+\?d 时延跟随/);
+  assert.match(markup, /\?d 时延跟随/);
   assert.doesNotMatch(markup, /\+0\.0d/);
   assert.doesNotMatch(markup, /0\.0小时（0\.00天）/);
 });

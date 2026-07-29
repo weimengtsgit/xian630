@@ -627,7 +627,7 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
     ? "≤30°"
     : (evidence.courseFilterApplied ? "≤45°" : "航向数据不足");
   const direction = `${name} → ${followerLabel}`;
-  const lagTag = displayAsSync ? "同步伴随" : `+${lagValid ? (lagMinutes / 60 / 24).toFixed(1) : "?"}d 时延跟随`;
+  const lagTag = displayAsSync ? "同步伴随" : `${lagValid ? `${lagMinutes >= 0 ? "+" : ""}${(lagMinutes / 60 / 24).toFixed(1)}` : "?"}d 时延跟随`;
   const hasDistanceChart = !isSync && Array.isArray(relation.lag?.distanceSeries) && relation.lag.distanceSeries.length >= 2;
   return React.createElement(
     "div",
