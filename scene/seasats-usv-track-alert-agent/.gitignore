@@ -1,0 +1,3 @@
+server/data/
+# 已废弃的旧 CSV/Excel 静态产物，运行时改由服务端实时获取 AIS 数据。
+src/data/seasatsPayload.json
