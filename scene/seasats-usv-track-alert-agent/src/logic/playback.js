@@ -1,5 +1,6 @@
 export const DEFAULT_REMOTE_MAP_BASE_URL = "http://218.61.33.200:18000/";
-export const DEFAULT_REPLAY_WINDOW = { start: 1764979200, end: 1784131200 };
+// 远程球面地图的回放窗口与服务端轨迹基准一致：2025-01-01 起；end 由 App 用当前时间覆盖。
+export const DEFAULT_REPLAY_WINDOW = { start: 1735689600, end: 1784131200 };
 
 export function toEpochSeconds(value) {
   if (value === null || value === undefined || value === "") return null;

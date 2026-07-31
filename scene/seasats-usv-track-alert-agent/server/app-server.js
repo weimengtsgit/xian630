@@ -10,6 +10,7 @@ import { CARRIER_AFFILIATION_RULES } from "./carrierAffiliation.js";
 import { getVesselOverride, applyVesselOverride } from "./vesselNames.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
 import { extractHullCode, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
+import { FETCH_LIMIT, SAFE_RECORD_THRESHOLD, mergeTrackPoints, splitWindow, trackPointKey } from "./trackWindows.js";
 import coastData from "../src/data/chinaCoast.json" with { type: "json" };
 
 const here = resolve(fileURLToPath(new URL(".", import.meta.url)));
@@ -21,8 +22,9 @@ const summarySnapshotFile = resolve(dataRoot, "fleet-summary-snapshot.json");
 const skillConfig = resolve(appRoot, "..", "..", ".claude", "skills", "carrier-affiliation-data-skill", "config", "ontology.env");
 const externalOntologyConfig = process.env.ONTOLOGY_ENV_FILE || null;
 const apiPort = Number(process.env.PORT || 5180);
-// 用户指定的轨迹数据窗口：从 2025-12-06 起，不设近一年滚动限制，一直可查看到当前时间。
-const trackBaselineStartMs = Date.UTC(2025, 11, 6);
+// 用户指定的轨迹数据窗口：从 2025-01-01 起，不设滚动限制，一直可查看到当前时间。
+// 本体单次查询匹配量超 20w 行会静默截断（分页模式不可用），历史数据按 trackWindows 分批拉全量。
+const trackBaselineStartMs = Date.UTC(2025, 0, 1);
 const mimeTypes = { ".css": "text/css", ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2" };
 
 let summarySnapshot = null;
@@ -34,9 +36,14 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
+// v8：轨迹窗口从 2025-12-06 扩到 2025-01-01，旧快照由更短窗口算出，口径不一致必须后台重算。
 // v7：详情弹窗航迹对比图需要双方抽稀航迹序列，analyzeLag 另输出中位距离与阈值内比例。
 // 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
-const affiliationSnapshotVersion = "python-select-v7-affiliation-detail-tracks";
+const affiliationSnapshotVersion = "python-select-v8-track-window-2025-01-01";
+// 轨迹落盘目录：去重后的全量轨迹按 MMSI 持久化，重启后只补增量，不再全量重拉。
+const trackStoreRoot = resolve(dataRoot, "tracks");
+// 增量刷新时从水位线回退的重叠窗口，吸收迟到/乱序报点。
+const TRACK_OVERLAP_MS = 2 * 60 * 60 * 1000;
 const trackCache = new Map();
 const trackInFlight = new Map();
 const monitoredMmsiSet = new Set(MONITORED_VESSELS.map((vessel) => vessel.mmsi));
@@ -196,37 +203,138 @@ async function fetchVesselIdentity(vessel) {
   };
 }
 
+const AIS_COLUMNS = ["mmsi", "shipName", "latitude", "longitude", "sog", "courseOverGround", "trueHeading", "navigationalStatus", "typeCode", "startTime", "dataUpdateTime"];
+
+function aisTimeFilters(mmsi, startMs, endMs) {
+  // 所有窗口都带上界：防止异常未来时间报点把增量水位线推到 now 之后，导致增量窗口永久为空。
+  return [
+    { column: "mmsi", logic: "=", condition: mmsi, useCondition: true },
+    { column: "startTime", logic: ">=", condition: formatOntologyTime(startMs), useCondition: true },
+    { column: "startTime", logic: "<", condition: formatOntologyTime(endMs), useCondition: true },
+  ];
+}
+
+// 轻量探测（只取 1 行、1 个字段），从 pageParam.recordTotal 读窗口匹配总量。
+async function probeRecordCount(mmsi, startMs, endMs) {
+  const details = await requestRawAis({
+    columns: ["mmsi"],
+    pageParam: { pageIndex: 1, limit: 1 },
+    filters: aisTimeFilters(mmsi, startMs, endMs),
+  });
+  return Number(details.pageParam?.recordTotal || 0);
+}
+
+// 单请求拿全量：前提是窗口 recordTotal ≤ FETCH_LIMIT（20w），否则接口静默截断。
+async function fetchWindowRows(mmsi, startMs, endMs) {
+  const details = await requestRawAis({
+    columns: AIS_COLUMNS,
+    pageParam: { pageIndex: 1, limit: FETCH_LIMIT },
+    filters: aisTimeFilters(mmsi, startMs, endMs),
+  });
+  const recordTotal = Number(details.pageParam?.recordTotal || 0);
+  const rows = details.rows || [];
+  return { rows, recordTotal, complete: recordTotal <= FETCH_LIMIT && rows.length >= recordTotal };
+}
+
+// 把一个窗口的原始行规范化后流入去重 Map，原始行随即释放；
+// 热点船全历史可达 200w+ 原始行，攒齐再去重会有数百 MB 峰值内存。
+function absorbRows(rows, windowStartMs, nowMs, collector, stats) {
+  stats.fetched += rows.length;
+  for (const row of rows) {
+    const point = normalizePoint(row, collector.size);
+    const timeMs = Date.parse(point.time);
+    // 时钟漂移容忍 10 分钟；更远的未来时间视为坏数据丢弃。
+    if (!Number.isFinite(timeMs) || timeMs < windowStartMs || timeMs > nowMs + 10 * 60 * 1000) continue;
+    collector.set(trackPointKey(point), point);
+  }
+}
+
+// 递归细分拉取：探测 ≤ 阈值则单请求拿全；超限按 月→日→二分（下限 1 小时）细分。
+async function collectWindowedPoints(mmsi, startMs, endMs, windowStartMs, nowMs, collector, stats, depth = 0) {
+  const total = await probeRecordCount(mmsi, startMs, endMs);
+  stats.windows += 1;
+  if (total === 0) return;
+  if (total <= SAFE_RECORD_THRESHOLD) {
+    const window = await fetchWindowRows(mmsi, startMs, endMs);
+    // 探测到拉取之间数据突增导致截断时，按超限继续细分，绝不接受不完整结果。
+    if (window.complete) {
+      absorbRows(window.rows, windowStartMs, nowMs, collector, stats);
+      return;
+    }
+  }
+  const subWindows = depth < 20 ? splitWindow(startMs, endMs) : null;
+  if (!subWindows) {
+    // 已细分到 1 小时仍超安全阈值：在 20w 硬上限内硬拉是完整的，仅真正被截断时才标记告警。
+    const window = await fetchWindowRows(mmsi, startMs, endMs);
+    if (!window.complete) {
+      stats.truncated = true;
+      console.warn(`本体窗口数据超上限被截断（MMSI ${mmsi}，${formatOntologyTime(startMs)} 起，recordTotal ${window.recordTotal}）`);
+    }
+    absorbRows(window.rows, windowStartMs, nowMs, collector, stats);
+    return;
+  }
+  for (const [subStart, subEnd] of subWindows) {
+    await collectWindowedPoints(mmsi, subStart, subEnd, windowStartMs, nowMs, collector, stats, depth + 1);
+  }
+}
+
+function trackStoreFile(mmsi) {
+  return join(trackStoreRoot, `${mmsi}.json`);
+}
+
+async function loadTrackStore(mmsi) {
+  const store = await loadSnapshot(trackStoreFile(mmsi), `轨迹缓存（MMSI ${mmsi}）`);
+  // 基准窗口变更后旧缓存口径不一致，判废触发全量重拉，避免新旧报点混排。
+  if (store?.windowStart !== new Date(trackBaselineStartMs).toISOString()) return null;
+  return Array.isArray(store?.trackPoints) ? store : null;
+}
+
+async function saveTrackStore(mmsi, trackPoints) {
+  await writeSnapshot(trackStoreFile(mmsi), {
+    mmsi,
+    windowStart: new Date(trackBaselineStartMs).toISOString(),
+    updatedAt: new Date().toISOString(),
+    trackPoints,
+  });
+}
+
 async function buildTrack(mmsi) {
   if (!/^\d{6,12}$/.test(mmsi)) throw new Error("INVALID_MMSI");
-  const columns = ["mmsi", "shipName", "latitude", "longitude", "sog", "courseOverGround", "trueHeading", "navigationalStatus", "typeCode", "startTime", "dataUpdateTime"];
   const windowStartMs = currentTrackStartMs();
-  const pageSize = 10_000;
-  const filters = [
-    { column: "mmsi", logic: "=", condition: mmsi, useCondition: true },
-    { column: "startTime", logic: ">=", condition: formatOntologyTime(windowStartMs), useCondition: true },
-  ];
-  // 将大轨迹拆成较小分页，避免本体对超大单页查询稳定超时；跨页结果仍按业务字段去重。
-  const first = await requestRawAis({ columns, pageParam: { pageIndex: 1, limit: pageSize }, filters });
-  const total = Number(first.pageParam?.recordTotal || 0);
-  const pageCount = Math.ceil(total / pageSize);
-  const pages = await mapConcurrent(Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) => index + 2), 2, (pageIndex) => requestRawAis({ columns, pageParam: { pageIndex, limit: pageSize }, filters }));
-  const rows = [ ...(first.rows || []), ...pages.flatMap((page) => page.rows || []) ];
-  const uniquePoints = new Map();
-  for (const [index, row] of rows.entries()) {
-    const point = normalizePoint(row, index);
-    const timeMs = Date.parse(point.time);
-    if (!Number.isFinite(timeMs) || timeMs < windowStartMs || point.lon === null || point.lat === null) continue;
-    // 接口会返回重复页/重复记录；组合业务字段后保留唯一报点。
-    const key = [point.mmsi, point.time, point.lon, point.lat, point.speedKn, point.courseDeg, point.heading, point.navStatus].join("|");
-    uniquePoints.set(key, point);
-  }
-  const trackPoints = [...uniquePoints.values()].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
-  const payload = { mmsi, trackPoints, meta: { source: "ontology-daas", recordTotal: total, fetchedRowCount: rows.length, loadedCount: trackPoints.length, startTime: new Date(windowStartMs).toISOString(), truncated: false } };
+  const nowMs = Date.now();
+  const cached = trackCache.get(mmsi)?.track || await loadTrackStore(mmsi);
+  const existingPoints = cached?.trackPoints || [];
+  // 增量水位线：已有轨迹的最新报点回退 2 小时重叠拉取；钳制到 now 防止未来时间卡死增量。
+  const lastTimeMs = existingPoints.length ? Date.parse(existingPoints.at(-1).time) : null;
+  const watermarkMs = Number.isFinite(lastTimeMs) ? Math.min(lastTimeMs, nowMs) : null;
+  const fetchStartMs = watermarkMs === null ? windowStartMs : Math.max(windowStartMs, watermarkMs - TRACK_OVERLAP_MS);
+  const incremental = watermarkMs !== null;
+  // 已有报点先入去重 Map，增量/全量新报点按业务键覆盖，重叠窗口天然去重。
+  const collector = new Map(existingPoints.map((point) => [trackPointKey(point), point]));
+  const stats = { windows: 0, fetched: 0, truncated: false };
+  await collectWindowedPoints(mmsi, fetchStartMs, nowMs, windowStartMs, nowMs, collector, stats);
+  const trackPoints = [...collector.values()].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+  await saveTrackStore(mmsi, trackPoints);
+  const payload = {
+    mmsi,
+    trackPoints,
+    meta: {
+      source: "ontology-daas",
+      fetchedRowCount: stats.fetched,
+      windowCount: stats.windows,
+      loadedCount: trackPoints.length,
+      startTime: new Date(windowStartMs).toISOString(),
+      incremental,
+      truncated: stats.truncated,
+    },
+  };
   return payload;
 }
 
 function summarySnapshotUsable(snapshot) {
   return snapshot?.metadata?.source === "ontology-daas"
+    // 轨迹窗口不一致的旧快照不得用于首屏（例如窗口从 2025-12-06 扩到 2025-01-01 后）。
+    && snapshot?.metadata?.trackWindowStart === new Date(trackBaselineStartMs).toISOString()
     && Array.isArray(snapshot?.targets)
     && snapshot.targets.length > 0;
 }
@@ -234,12 +342,12 @@ function summarySnapshotUsable(snapshot) {
 async function getOntologyTrack(mmsi, { force = false } = {}) {
   if (trackInFlight.has(mmsi)) return trackInFlight.get(mmsi);
   const cached = trackCache.get(mmsi);
-  if (!force && cached?.expiresAt > Date.now()) return cached.track;
-  if (cached) trackCache.delete(mmsi);
+  // 缓存不再设 TTL：buildTrack 本身是水位线增量，force 重取也是低成本增量合并。
+  if (!force && cached) return cached.track;
 
   const request = buildTrack(mmsi)
     .then((track) => {
-      trackCache.set(mmsi, { track, expiresAt: Date.now() + fleetRefreshMs });
+      trackCache.set(mmsi, { track });
       return track;
     })
     .finally(() => trackInFlight.delete(mmsi));
@@ -296,6 +404,7 @@ async function buildFastSummary() {
   return {
     metadata: {
       source: "ontology-daas", generatedAt: new Date().toISOString(), targetCount: targets.length,
+      trackWindowStart: new Date(trackBaselineStartMs).toISOString(),
       trackPointCount: points.length, trackMmsiCount: points.length ? 1 : 0,
       vesselTypes: [...new Set(targets.map((target) => target.vesselCategory))],
       rawTypeCodes: [...new Set(targets.map((target) => target.rawTypeCode).filter(Boolean))],
@@ -353,8 +462,9 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     }
     const { segments, aisGaps, alerts, ...compactTarget } = target;
     compactTargets.push(compactTarget);
-    allAlerts.push(...analyzed.alerts);
-    allTimes.push(...trackPoints.map((point) => point.time).filter(Boolean));
+    // 大轨迹（10w+ 点）下展开传参会触发 V8 参数上限（Maximum call stack size exceeded），改逐个 push。
+    for (const alert of analyzed.alerts) allAlerts.push(alert);
+    for (const point of trackPoints) { if (point.time) allTimes.push(point.time); }
     if (mmsi === initialMmsi) {
       initialTrackPoints = trackPoints;
       initialSegments = analyzed.segments;
@@ -368,6 +478,7 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
       source: "ontology-daas",
       generatedAt: new Date().toISOString(),
       targetCount: targets.length,
+      trackWindowStart: new Date(trackBaselineStartMs).toISOString(),
       trackPointCount: allTimes.length,
       trackMmsiCount: compactTargets.filter((target) => target.hasObservedTrack).length,
       vesselTypes: [...new Set(targets.map((target) => target.vesselCategory))],
@@ -396,7 +507,7 @@ async function loadSnapshot(file, label) {
 }
 
 async function writeSnapshot(file, value) {
-  await mkdir(dataRoot, { recursive: true });
+  await mkdir(resolve(file, ".."), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   await writeFile(temporary, JSON.stringify(value));
   await rename(temporary, file);

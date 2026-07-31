@@ -13,7 +13,9 @@ Preset scene app for monitoring SEASATS test-craft candidates from customer-prov
 
 - 运行时数据源为本体 `RawAISData`，浏览器不会再加载 `src/data/seasatsPayload.json` 或解析 CSV/Excel。
 - `server/app-server.js` 在服务端注入本体鉴权信息，提供同源的摘要接口和按 MMSI 轨迹接口；令牌不会发送给浏览器。
-- 页面打开时，仅对部署配置 `MONITORED_MMSI` 中的船只从本体获取完整 AIS；服务端仅保留 `2025-12-06`（含）之后的报点，按业务字段去重并排序。多个 MMSI 使用逗号分隔，例如 `MONITORED_MMSI=338555318,338414915`。
+- 页面打开时，仅对部署配置 `MONITORED_MMSI` 中的船只从本体获取完整 AIS；服务端仅保留 `2025-01-01`（含）之后的报点，按业务字段去重并排序。多个 MMSI 使用逗号分隔，例如 `MONITORED_MMSI=338555318,338414915`。
+- 本体接口单次查询匹配量超过 20w 行会静默截断（其分页模式返回重复/错误页，不可用）。服务端先轻量探测窗口 `recordTotal`，≤15w 单请求拿全量，超限按 月→日→二分（下限 1 小时）递归细分，绝不使用分页。
+- 去重后的轨迹按 MMSI 落盘到 `server/data/tracks/`，重启后只从水位线回退 2 小时拉增量合并；后台每 30 分钟增量刷新一次，避免每次全量重拉。
 - `RawAISData` 的字段为 `mmsi`、`latitude`、`longitude`、`sog`、`courseOverGround`、`trueHeading`、`navigationalStatus`、`typeCode`、`startTime`、`dataUpdateTime`。它不提供 CSV 中的 `LENGTH/width`，界面会如实显示“接口未提供尺寸”。
 - `server/seasatsScope.js` 只保存受监测 MMSI 范围，不保存位置或轨迹；新增受监测艇时更新此范围即可。
 

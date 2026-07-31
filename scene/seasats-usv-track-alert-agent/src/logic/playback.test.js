@@ -67,7 +67,7 @@ test("resolveReplayWindow falls back to metadata then fixed window", () => {
   );
 
   assert.deepEqual(resolveReplayWindow({ selectedTarget: {}, metadata: {} }), {
-    start: 1764979200,
+    start: 1735689600,
     end: 1784131200,
     source: "fallback",
   });
@@ -97,7 +97,7 @@ test("buildRemoteMapUrl encodes mmsi and replay window", () => {
       startTime: DEFAULT_REPLAY_WINDOW.start,
       endTime: DEFAULT_REPLAY_WINDOW.end,
     }),
-    "http://218.61.33.200:18000/?mmsi=338414915&start_time=1764979200&end_time=1784131200"
+    "http://218.61.33.200:18000/?mmsi=338414915&start_time=1735689600&end_time=1784131200"
   );
 
   assert.equal(
@@ -107,7 +107,7 @@ test("buildRemoteMapUrl encodes mmsi and replay window", () => {
       startTime: DEFAULT_REPLAY_WINDOW.start * 1000,
       endTime: DEFAULT_REPLAY_WINDOW.end * 1000,
     }),
-    "http://218.61.33.200:18000/?foo=bar&mmsi=338414915&start_time=1764979200&end_time=1784131200"
+    "http://218.61.33.200:18000/?foo=bar&mmsi=338414915&start_time=1735689600&end_time=1784131200"
   );
 });
 
