@@ -18,7 +18,8 @@ import { nearestValidPointIndex } from "./analysisChartInteraction.js";
 
 const chartWidth = 760;
 const chartHeight = 280;
-const pad = { top: 18, right: 34, bottom: 34, left: 90 };
+const pad = { top: 22, right: 76, bottom: 40, left: 76 };
+const axisTitleX = 18;
 const plotWidth = chartWidth - pad.left - pad.right;
 const plotHeight = chartHeight - pad.top - pad.bottom;
 
@@ -161,7 +162,7 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
       ]}
     >
       <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title} onPointerLeave={() => setHover(null)}>
-        {yAxisLabel && <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
+        {yAxisLabel && <text x={axisTitleX} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${axisTitleX} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
         <g className="chart-grid">
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
@@ -183,8 +184,8 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
         />
         <text x={pad.left} y={chartHeight - 7}>{first}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{last}</text>
-        <text x={pad.left - 8} y={pad.top + 4} textAnchor="end">{fmtNumber(max, 0)}</text>
-        <text x={pad.left - 8} y={pad.top + plotHeight} textAnchor="end">{fmtNumber(min, 0)}</text>
+        <text x={pad.left - 8} y={pad.top + 4} textAnchor="end" className="chart-y-tick">{fmtNumber(max, 0)}</text>
+        <text x={pad.left - 8} y={pad.top + plotHeight} textAnchor="end" className="chart-y-tick">{fmtNumber(min, 0)}</text>
         {hover && <circle cx={hover.x} cy={hover.y} r="4" fill={color} stroke="#fff" strokeWidth="1.5" pointerEvents="none" />}
         {hover && <SvgValueTooltip {...hover} />}
       </svg>
@@ -231,8 +232,8 @@ function SpeedDistanceChart({ target, coastData }) {
       ]}
     >
       <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="速度与国土距离关系" onPointerLeave={() => setHover(null)}>
-        <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">速度（节）</text>
-        <text x={chartWidth - 4} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${chartWidth - 4} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">距离（海里）</text>
+        <text x={axisTitleX} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${axisTitleX} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">速度（节）</text>
+        <text x={chartWidth - axisTitleX} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${chartWidth - axisTitleX} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">距离（海里）</text>
         <g className="chart-grid">
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
@@ -241,8 +242,8 @@ function SpeedDistanceChart({ target, coastData }) {
         {distValues.length > 1 && <path d={distancePath} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />}
         <path className="chart-line-hit-area" data-series="distance" d={distancePath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "dist", distMin, distMax, "海里", 0, "#38bdf8")} />
         <circle cx={peakPoint[0]} cy={peakPoint[1]} r="4" fill="#fb7185" stroke="#fff" strokeWidth="1.5" />
-        <text x={pad.left - 8} y={pad.top + 4} textAnchor="end">{fmtNumber(speedMax, 0)}</text>
-        <text x={chartWidth - 4} y={pad.top + 4} textAnchor="end">{fmtNumber(distMax, 0)}</text>
+        <text x={pad.left - 8} y={pad.top + 4} textAnchor="end" className="chart-y-tick">{fmtNumber(speedMax, 0)}</text>
+        <text x={chartWidth - pad.right + 10} y={pad.top + 4} className="chart-y-tick">{fmtNumber(distMax, 0)}</text>
         <text x={pad.left} y={chartHeight - 7}>{fmtDay(data[0]?.t)}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{fmtDay(data[data.length - 1]?.t)}</text>
         {hover && <circle cx={hover.x} cy={hover.y} r="4" fill={hover.color} stroke="#fff" strokeWidth="1.5" pointerEvents="none" />}
@@ -283,6 +284,7 @@ function dailyActivity(target, maxBuckets = 12) {
 }
 
 function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon = BarChart3, stats = [], fullWidth, yAxisLabel }) {
+  const [hover, setHover] = useState(null);
   const max = Math.max(...data.map((item) => item[valueKey] || 0), 1);
   if (!data.some((item) => item[valueKey] > 0)) return <ChartShell icon={icon} title={title} fullWidth={fullWidth}><EmptyChart /></ChartShell>;
 
@@ -292,32 +294,37 @@ function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon
 
   return (
     <ChartShell icon={icon} title={title} stats={stats} fullWidth={fullWidth}>
-      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title}>
-        {yAxisLabel && <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
+      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title} onPointerLeave={() => setHover(null)}>
+        {yAxisLabel && <text x={axisTitleX} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${axisTitleX} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
         {ticks.map((tick, i) => {
           const y = pad.top + (plotHeight * i) / 4;
           return (
             <g key={i}>
               <line x1={pad.left} x2={chartWidth - pad.right} y1={y} y2={y} className="chart-grid" />
-              <text x={pad.left - 8} y={y + 4} textAnchor="end">{tick}</text>
+              <text x={pad.left - 8} y={y + 4} textAnchor="end" className="chart-y-tick">{tick}</text>
             </g>
           );
         })}
         {data.map((item, index) => {
           const value = item[valueKey] || 0;
           const barH = (value / max) * plotHeight;
+          const barHeight = Math.max(4, barH);
           const x = pad.left + index * barSlot + (barSlot - barWidth) / 2;
-          const y = pad.top + plotHeight - barH;
+          const y = pad.top + plotHeight - barHeight;
+          const showValue = () => setHover({
+            x: x + barWidth / 2,
+            y,
+            value: fmtNumber(value, 0),
+          });
           return (
             <g key={index}>
-              <rect x={x} y={y} width={barWidth} height={Math.max(2, barH)} fill={color} rx={2} opacity={0.85}>
-                <title>{`${item[labelKey]}：${value}`}</title>
-              </rect>
+              <rect className="chart-bar-hit-area" x={x} y={y} width={barWidth} height={barHeight} fill={color} rx={2} opacity={0.85} onPointerEnter={showValue} onPointerMove={showValue} />
               <text x={x + barWidth / 2} y={chartHeight - 7} textAnchor="middle" className="analysis-bar-svg-label">{item[labelKey]}</text>
               {item.total > 0 && <text x={x + barWidth / 2} y={y - 5} textAnchor="middle" className="analysis-bar-svg-pct">{percentage(item[valueKey], item.total)}%</text>}
             </g>
           );
         })}
+        {hover && <SvgValueTooltip {...hover} />}
       </svg>
     </ChartShell>
   );

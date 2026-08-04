@@ -80,6 +80,7 @@ test("renders current-data AIS charts with Chinese speed units", () => {
   assert.doesNotMatch(markup, /\bkt\b/i);
   assert.equal((markup.match(/class="chart-axis-label"/g) || []).length, 5);
   assert.equal((markup.match(/class="chart-line-hit-area"/g) || []).length, 3);
+  assert.ok((markup.match(/class="chart-bar-hit-area"/g) || []).length > 0);
   assert.match(markup, /\u901f\u5ea6\uff08\u8282\uff09/);
   assert.match(markup, /\u8ddd\u79bb\uff08\u6d77\u91cc\uff09/);
   assert.match(markup, /\u70b9\u4f4d\u6570/);
