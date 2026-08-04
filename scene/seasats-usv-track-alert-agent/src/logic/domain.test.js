@@ -136,7 +136,7 @@ test("computeTrackMetrics aggregates a small track", () => {
   const points = [
     { mmsi: "1", time: "2026-01-01T00:00:00Z", lon: 110.0, lat: 21.0, speedKn: 1 },
     { mmsi: "1", time: "2026-01-01T01:00:00Z", lon: 110.1, lat: 21.0, speedKn: 5 },
-    { mmsi: "1", time: "2026-01-02T02:00:00Z", lon: 111.0, lat: 22.0, speedKn: 3 },
+    { mmsi: "1", time: "2026-01-02T02:00:00Z", lon: 111.0, lat: 22.0, speedKn: 3, heading: 511, orientation: 148 },
   ];
   const coast = { type: "FeatureCollection", features: [
     { type: "Feature", properties: { id: "c" }, geometry: { type: "LineString", coordinates: [[109, 20]] } },
@@ -149,6 +149,8 @@ test("computeTrackMetrics aggregates a small track", () => {
   assert.ok(m.minCoastDistanceNm > 50, `got ${m.minCoastDistanceNm}`);
   assert.equal(m.nearestCoastPoint.segmentId, "c");
   assert.ok(m.avgSpeedKn > 0);
+  assert.equal(m.heading, 511);
+  assert.equal(m.orientation, 148);
 });
 
 test("computeTrackMetrics empty track returns nulls/zeros", () => {
@@ -158,6 +160,8 @@ test("computeTrackMetrics empty track returns nulls/zeros", () => {
   assert.equal(m.maxSpeedSegment, null);
   assert.equal(m.trackOrigin, null);
   assert.equal(m.minCoastDistanceNm, null);
+  assert.equal(m.heading, null);
+  assert.equal(m.orientation, null);
 });
 
 test("analyzePayload attaches coast metrics and proximity alert", () => {

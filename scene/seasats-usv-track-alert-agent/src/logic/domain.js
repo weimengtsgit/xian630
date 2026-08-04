@@ -158,7 +158,7 @@ function summarizeSegment(points, index, areas, targetMmsi, params) {
 export function computeTrackMetrics(points = [], coast = null) {
   const sorted = sortedTrack(points);
   if (sorted.length === 0) {
-    return { minCoastDistanceNm: null, nearestCoastPoint: null, maxSpeedSegment: null, activeDays: 0, reportCount: 0, avgSpeedKn: null, trackOrigin: null };
+    return { minCoastDistanceNm: null, nearestCoastPoint: null, maxSpeedSegment: null, activeDays: 0, reportCount: 0, avgSpeedKn: null, heading: null, orientation: null, trackOrigin: null };
   }
   let minCoast = Infinity;
   let nearestCoastPoint = null;
@@ -203,7 +203,8 @@ export function computeTrackMetrics(points = [], coast = null) {
     activeDays: days.size,
     reportCount: sorted.length,
     avgSpeedKn: speedCount > 0 ? Number((speedSum / speedCount).toFixed(2)) : null,
-    orientation: toNumber(last.orientation) ?? toNumber(last.heading) ?? null,
+    heading: toNumber(last.heading) ?? null,
+    orientation: toNumber(last.orientation) ?? null,
     trackOrigin: { lon: toNumber(first.lon), lat: toNumber(first.lat), time: first.time },
   };
 }

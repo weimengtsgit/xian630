@@ -79,6 +79,35 @@ test("renders focused vessel identity, threat score, and key metrics", () => {
   assert.match(markup, /4 条/);
 });
 
+test("falls back to orientation when the selected heading is customer error code 511", () => {
+  const numericMarkup = render({
+    selectedTarget: { ...selectedTarget, heading: 511, courseDeg: 148, orientation: 148 },
+  });
+  assert.match(numericMarkup, /<span>航向\/方向<\/span><strong>148°<\/strong>/);
+  assert.doesNotMatch(numericMarkup, /<span>航向\/方向<\/span><strong>511°<\/strong>/);
+
+  const stringMarkup = render({
+    selectedTarget: { ...selectedTarget, headingDeg: "511", orientation: 72 },
+  });
+  assert.match(stringMarkup, /<span>航向\/方向<\/span><strong>72°<\/strong>/);
+});
+
+test("does not broaden the customer fallback rule beyond 511", () => {
+  const markup = render({
+    selectedTarget: { ...selectedTarget, heading: 456, courseDeg: 148, orientation: 148 },
+  });
+  assert.match(markup, /<span>航向\/方向<\/span><strong>456°<\/strong>/);
+});
+
+test("shows the existing empty value when heading is 511 and orientation is unusable", () => {
+  for (const orientation of [undefined, "", "invalid", Infinity]) {
+    const markup = render({
+      selectedTarget: { ...selectedTarget, heading: 511, courseDeg: 148, orientation },
+    });
+    assert.match(markup, /<span>航向\/方向<\/span><strong>--<\/strong>/);
+  }
+});
+
 test("header prefers the code-prefixed display name over the raw retrieved name", () => {
   const markup = render({
     selectedTarget: { ...selectedTarget, displayName: "CVN-73 华盛顿号", name: "USS George Washington(US GOV VESSEL)" },

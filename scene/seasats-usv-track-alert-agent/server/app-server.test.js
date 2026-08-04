@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 // app-server 仅作为主模块运行时才 listen（见文件尾的 import.meta 守卫），import 时不启动服务，
 // 因此可在单测中直接引入 sidebarFields，验证登记表覆盖优先级这条 wiring。
-import { sidebarFields } from "./app-server.js";
+import * as appServer from "./app-server.js";
 import { getVesselOverride, applyVesselOverride } from "./vesselNames.js";
+
+const { sidebarFields } = appServer;
 
 // 镜像 app-server.js 中 buildFastSummary / buildSummaryFromTracks 的船名解析优先级：
 // 登记表覆盖 > 本体名 > (非通用)最新点名 > 名单名 > 最新点名 > MMSI 占位。
@@ -21,6 +23,51 @@ function resolveTarget(vessel, { identityName = null, identityCode = null, lates
 }
 
 const placeholderVessel = (mmsi) => ({ mmsi, code: null, name: `MMSI ${mmsi}`, shortName: null, role: "候选舰船" });
+
+test("normalizes true heading and course orientation without collapsing the fields", () => {
+  const point = appServer.normalizePoint?.({
+    mmsi: "123",
+    startTime: "2026-08-04T09:00:00",
+    longitude: 120,
+    latitude: 30,
+    sog: 5,
+    trueHeading: 511,
+    courseOverGround: 148,
+  });
+
+  assert.deepEqual(
+    { heading: point?.heading, orientation: point?.orientation, courseDeg: point?.courseDeg },
+    { heading: 511, orientation: 148, courseDeg: 148 },
+  );
+});
+
+test("keeps a non-511 true heading even when it is greater than 359", () => {
+  const point = appServer.normalizePoint?.({
+    mmsi: "456",
+    startTime: "2026-08-04T09:00:00",
+    trueHeading: 456,
+    courseOverGround: 148,
+  });
+
+  assert.equal(point?.heading, 456);
+  assert.equal(point?.orientation, 148);
+});
+
+test("rejects legacy summary snapshots that collapsed heading and orientation", () => {
+  const snapshot = {
+    metadata: {
+      source: "ontology-daas",
+      trackWindowStart: "2025-01-01T00:00:00.000Z",
+    },
+    targets: [{ mmsi: "123" }],
+  };
+
+  assert.equal(appServer.summarySnapshotUsable?.(snapshot), false);
+  assert.equal(appServer.summarySnapshotUsable?.({
+    ...snapshot,
+    metadata: { ...snapshot.metadata, headingFieldVersion: "independent-heading-orientation-v1" },
+  }), true);
+});
 
 test("override supplies code + short name and yields a code-prefixed sidebar label", () => {
   const vessel = placeholderVessel("123");

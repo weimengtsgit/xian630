@@ -40,6 +40,7 @@ const affiliationRefreshMs = 5 * 60 * 60 * 1000;
 // v7：详情弹窗航迹对比图需要双方抽稀航迹序列，analyzeLag 另输出中位距离与阈值内比例。
 // 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
 const affiliationSnapshotVersion = "python-select-v8-track-window-2025-01-01";
+const headingFieldVersion = "independent-heading-orientation-v1";
 // 轨迹落盘目录：去重后的全量轨迹按 MMSI 持久化，重启后只补增量，不再全量重拉。
 const trackStoreRoot = resolve(dataRoot, "tracks");
 // 增量刷新时从水位线回退的重叠窗口，吸收迟到/乱序报点。
@@ -148,7 +149,7 @@ function formatOntologyTime(timeMs) {
   return new Date(timeMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 19).replace("T", " ");
 }
 
-function normalizePoint(row, index = 0) {
+export function normalizePoint(row, index = 0) {
   return {
     id: `${row.mmsi}-${row.startTime || row.dataUpdateTime || index}`,
     mmsi: String(row.mmsi),
@@ -331,8 +332,9 @@ async function buildTrack(mmsi) {
   return payload;
 }
 
-function summarySnapshotUsable(snapshot) {
+export function summarySnapshotUsable(snapshot) {
   return snapshot?.metadata?.source === "ontology-daas"
+    && snapshot?.metadata?.headingFieldVersion === headingFieldVersion
     // 轨迹窗口不一致的旧快照不得用于首屏（例如窗口从 2025-12-06 扩到 2025-01-01 后）。
     && snapshot?.metadata?.trackWindowStart === new Date(trackBaselineStartMs).toISOString()
     && Array.isArray(snapshot?.targets)
@@ -404,6 +406,7 @@ async function buildFastSummary() {
   return {
     metadata: {
       source: "ontology-daas", generatedAt: new Date().toISOString(), targetCount: targets.length,
+      headingFieldVersion,
       trackWindowStart: new Date(trackBaselineStartMs).toISOString(),
       trackPointCount: points.length, trackMmsiCount: points.length ? 1 : 0,
       vesselTypes: [...new Set(targets.map((target) => target.vesselCategory))],
@@ -476,6 +479,7 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
   return {
     metadata: {
       source: "ontology-daas",
+      headingFieldVersion,
       generatedAt: new Date().toISOString(),
       targetCount: targets.length,
       trackWindowStart: new Date(trackBaselineStartMs).toISOString(),

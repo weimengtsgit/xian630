@@ -61,6 +61,12 @@ function valueFrom(selectedTarget, keys) {
   return undefined;
 }
 
+export function resolveDisplayedHeading(selectedTarget) {
+  const heading = valueFrom(selectedTarget, ["headingDeg", "heading", "courseDeg", "orientation"]);
+  if (Number(heading) !== 511) return heading;
+  return numberOrNull(selectedTarget?.orientation);
+}
+
 function vesselName(selectedTarget) {
   return textOrFallback(
     valueFrom(selectedTarget, ["name", "vesselName", "shipName"]),
@@ -877,7 +883,7 @@ export function VesselFocusPanel({
 
   const maxSpeed = valueFrom(selectedTarget, ["maxSpeedKn", "fastestSpeedKn", "maxSpeed"]) ?? selectedTarget?.maxSpeedSegment?.speedKn;
   const avgSpeed = valueFrom(selectedTarget, ["avgSpeedKn", "averageSpeedKn", "avgSpeed"]);
-  const heading = valueFrom(selectedTarget, ["headingDeg", "courseDeg", "orientation", "heading"]);
+  const heading = resolveDisplayedHeading(selectedTarget);
   const activeDays = valueFrom(selectedTarget, ["activeDays", "activityDays"]);
   const aisGapCount = countFrom(selectedTarget, ["aisGapCount", "aisGapsCount", "gapCount"], ["aisGaps"]);
   const alertCount = countFrom(selectedTarget, ["alertCount", "alertsCount"], ["alerts"]);
