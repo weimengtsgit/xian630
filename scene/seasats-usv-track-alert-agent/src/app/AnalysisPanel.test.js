@@ -78,6 +78,12 @@ test("renders current-data AIS charts with Chinese speed units", () => {
   assert.match(markup, /低速占比/);
   assert.match(markup, /55\.4 节/);
   assert.doesNotMatch(markup, /\bkt\b/i);
+  assert.equal((markup.match(/class="chart-axis-label"/g) || []).length, 5);
+  assert.equal((markup.match(/class="chart-line-hit-area"/g) || []).length, 3);
+  assert.match(markup, /\u901f\u5ea6\uff08\u8282\uff09/);
+  assert.match(markup, /\u8ddd\u79bb\uff08\u6d77\u91cc\uff09/);
+  assert.match(markup, /\u70b9\u4f4d\u6570/);
+  assert.match(markup, /\u62a5\u70b9\u6570/);
 });
 
 test("places concise conclusion at the top of the analysis panel", () => {

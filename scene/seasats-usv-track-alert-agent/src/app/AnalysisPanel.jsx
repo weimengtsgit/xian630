@@ -11,9 +11,10 @@ import {
   Radio,
   ShieldAlert,
 } from "lucide-react";
-import React from "react";
+import React, { useState } from "react";
 import { combinedSpeedDistanceSeries, headingDistribution, hourDistribution, speedSeries } from "../logic/analytics.js";
 import { fmtDuration, toNumber } from "../logic/domain.js";
+import { nearestValidPointIndex } from "./analysisChartInteraction.js";
 
 const chartWidth = 760;
 const chartHeight = 280;
@@ -87,6 +88,25 @@ function linePath(data, key, min, max) {
   return points.length ? `M ${points.join(" L ")}` : "";
 }
 
+function pointerXInViewBox(event) {
+  const svg = event.currentTarget.ownerSVGElement;
+  const bounds = svg?.getBoundingClientRect();
+  if (!bounds?.width) return null;
+  return ((event.clientX - bounds.left) / bounds.width) * chartWidth;
+}
+
+function SvgValueTooltip({ x, y, value }) {
+  const width = Math.max(72, value.length * 15 + 24);
+  const centerX = Math.min(chartWidth - pad.right - width / 2, Math.max(pad.left + width / 2, x));
+  const top = y - 42 < pad.top ? y + 14 : y - 36;
+  return (
+    <g className="chart-value-tooltip" transform={`translate(${centerX - width / 2} ${top})`} pointerEvents="none">
+      <rect width={width} height="28" rx="5" />
+      <text x={width / 2} y="19" textAnchor="middle">{value}</text>
+    </g>
+  );
+}
+
 function EmptyChart() {
   return <div className="analysis-chart-empty">当前时间段没有足够轨迹点</div>;
 }
@@ -118,6 +138,7 @@ function ChartShell({ icon: Icon, title, children, legend, stats, fullWidth }) {
 }
 
 function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", icon = LineChart, maxValue, extraStats = [], fullWidth = false, yAxisLabel }) {
+  const [hover, setHover] = useState(null);
   const values = data.map((item) => toNumber(item[valueKey])).filter((value) => value !== null);
   if (values.length < 2) return <ChartShell icon={icon} title={title} fullWidth={fullWidth}><EmptyChart /></ChartShell>;
   const [min, max] = clampRange(Math.min(...values), maxValue ?? Math.max(...values));
@@ -125,6 +146,7 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
   const last = fmtDay(data[data.length - 1]?.t);
   const peak = Math.max(...values);
   const avg = average(values);
+  const path = linePath(data, valueKey, min, max);
 
   return (
     <ChartShell
@@ -138,28 +160,40 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
         ...extraStats,
       ]}
     >
-      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title}>
+      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title} onPointerLeave={() => setHover(null)}>
         {yAxisLabel && <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
         <g className="chart-grid">
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
-        <path d={linePath(data, valueKey, min, max)} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-        {data.map((item, index) => {
-          const v = toNumber(item[valueKey]);
-          if (v === null) return null;
-          const [cx, cy] = chartPoint(index, data.length, v, min, max).split(",");
-          return <circle key={`pt-${index}`} cx={cx} cy={cy} r="15" fill="rgba(0,0,0,0)" style={{ pointerEvents: "all" }}><title>{`${fmtDay(item.t)}：${fmtNumber(v, 1)} ${unit}`}</title></circle>;
-        })}
+        <path d={path} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          className="chart-line-hit-area"
+          d={path}
+          fill="none"
+          stroke="transparent"
+          strokeWidth="18"
+          onPointerMove={(event) => {
+            const pointerX = pointerXInViewBox(event);
+            const index = pointerX === null ? null : nearestValidPointIndex(data, valueKey, pointerX, pad.left, plotWidth);
+            if (index === null) return;
+            const value = toNumber(data[index][valueKey]);
+            const [x, y] = chartPoint(index, data.length, value, min, max).split(",").map(Number);
+            setHover({ x, y, value: `${fmtNumber(value, 1)} ${unit}` });
+          }}
+        />
         <text x={pad.left} y={chartHeight - 7}>{first}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{last}</text>
         <text x={pad.left - 8} y={pad.top + 4} textAnchor="end">{fmtNumber(max, 0)}</text>
         <text x={pad.left - 8} y={pad.top + plotHeight} textAnchor="end">{fmtNumber(min, 0)}</text>
+        {hover && <circle cx={hover.x} cy={hover.y} r="4" fill={color} stroke="#fff" strokeWidth="1.5" pointerEvents="none" />}
+        {hover && <SvgValueTooltip {...hover} />}
       </svg>
     </ChartShell>
   );
 }
 
 function SpeedDistanceChart({ target, coastData }) {
+  const [hover, setHover] = useState(null);
   const data = combinedSpeedDistanceSeries(target, coastData, 90).filter((item) => item.speed !== null || item.dist !== null);
   const speedValues = data.map((item) => toNumber(item.speed)).filter((value) => value !== null);
   const distValues = data.map((item) => toNumber(item.dist)).filter((value) => value !== null);
@@ -173,6 +207,17 @@ function SpeedDistanceChart({ target, coastData }) {
   const peakPoint = chartPoint(peakIndex, data.length, peakSpeed, speedMin, speedMax).split(",");
   const minDistance = distValues.length ? Math.min(...distValues) : null;
   const latestDistance = toNumber([...data].reverse().find((item) => item.dist !== null)?.dist);
+  const speedPath = linePath(data, "speed", speedMin, speedMax);
+  const distancePath = linePath(data, "dist", distMin, distMax);
+
+  function showSeriesValue(event, key, min, max, unit, digits, color) {
+    const pointerX = pointerXInViewBox(event);
+    const index = pointerX === null ? null : nearestValidPointIndex(data, key, pointerX, pad.left, plotWidth);
+    if (index === null) return;
+    const value = toNumber(data[index][key]);
+    const [x, y] = chartPoint(index, data.length, value, min, max).split(",").map(Number);
+    setHover({ x, y, value: `${fmtNumber(value, digits)} ${unit}`, color });
+  }
 
   return (
     <ChartShell
@@ -185,28 +230,23 @@ function SpeedDistanceChart({ target, coastData }) {
         { label: "末点距离", value: `${fmtNumber(latestDistance, 0)} 海里` },
       ]}
     >
-      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="速度与国土距离关系">
+      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="速度与国土距离关系" onPointerLeave={() => setHover(null)}>
         <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">速度（节）</text>
         <text x={chartWidth - 4} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${chartWidth - 4} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">距离（海里）</text>
         <g className="chart-grid">
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
-        <path d={linePath(data, "speed", speedMin, speedMax)} fill="none" stroke="#fbbf24" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-        {distValues.length > 1 && <path d={linePath(data, "dist", distMin, distMax)} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />}
+        <path d={speedPath} fill="none" stroke="#fbbf24" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        <path className="chart-line-hit-area" data-series="speed" d={speedPath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "speed", speedMin, speedMax, "节", 1, "#fbbf24")} />
+        {distValues.length > 1 && <path d={distancePath} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />}
+        <path className="chart-line-hit-area" data-series="distance" d={distancePath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "dist", distMin, distMax, "海里", 0, "#38bdf8")} />
         <circle cx={peakPoint[0]} cy={peakPoint[1]} r="4" fill="#fb7185" stroke="#fff" strokeWidth="1.5" />
-        {data.map((item, index) => {
-          const speed = toNumber(item.speed);
-          if (speed === null) return null;
-          const [cx, cy] = chartPoint(index, data.length, speed, speedMin, speedMax).split(",");
-          const dist = toNumber(item.dist);
-          const parts = [`速度 ${fmtNumber(speed, 1)} 节`];
-          if (dist !== null) parts.push(`距离 ${fmtNumber(dist, 0)} 海里`);
-          return <circle key={`pt-${index}`} cx={cx} cy={cy} r="15" fill="rgba(0,0,0,0)" style={{ pointerEvents: "all" }}><title>{`${fmtDay(item.t)}\n${parts.join("，")}`}</title></circle>;
-        })}
         <text x={pad.left - 8} y={pad.top + 4} textAnchor="end">{fmtNumber(speedMax, 0)}</text>
         <text x={chartWidth - 4} y={pad.top + 4} textAnchor="end">{fmtNumber(distMax, 0)}</text>
         <text x={pad.left} y={chartHeight - 7}>{fmtDay(data[0]?.t)}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{fmtDay(data[data.length - 1]?.t)}</text>
+        {hover && <circle cx={hover.x} cy={hover.y} r="4" fill={hover.color} stroke="#fff" strokeWidth="1.5" pointerEvents="none" />}
+        {hover && <SvgValueTooltip {...hover} />}
       </svg>
     </ChartShell>
   );
