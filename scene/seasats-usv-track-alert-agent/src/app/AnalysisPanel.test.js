@@ -62,16 +62,15 @@ test("renders current-data AIS charts with Chinese speed units", () => {
   const markup = renderToStaticMarkup(React.createElement(AnalysisPanel, { analysis, selectedTarget, coastData }));
 
   assert.match(markup, /AIS 轨迹图表/);
-  assert.equal((markup.match(/class="analysis-chart-card(?: wide)?"/g) || []).length, 5);
-  // 速度变化与速度 vs 国土距离并排成一行（非 wide），仅每日活动趋势占整栏（wide）。
-  assert.equal((markup.match(/class="analysis-chart-card wide"/g) || []).length, 1);
+  assert.equal((markup.match(/class="analysis-chart-card(?: wide)?"/g) || []).length, 4);
+  // 速度变化、速度 vs 国土距离、航向分布、活动时段四个图，均不占整栏（无 wide）。
+  assert.equal((markup.match(/class="analysis-chart-card wide"/g) || []).length, 0);
   assert.match(markup, /速度变化 · 全时段/);
   assert.doesNotMatch(markup, /低速停留/);
   assert.match(markup, /航向分布/);
   assert.doesNotMatch(markup, /速度分布直方图/);
   assert.match(markup, /速度 vs 国土距离/);
   assert.match(markup, /活动时段/);
-  assert.match(markup, /每日活动趋势/);
   assert.match(markup, /样本/);
   assert.match(markup, /均值/);
   assert.match(markup, /最高/);
@@ -92,27 +91,7 @@ test("places concise conclusion at the top of the analysis panel", () => {
 test("uses a larger chart viewBox so line charts fill the card", () => {
   const markup = renderToStaticMarkup(React.createElement(AnalysisPanel, { analysis, selectedTarget, coastData }));
 
-  assert.match(markup, /viewBox="0 0 760 260"/);
-});
-
-test("groups daily activity labels into readable date ranges", () => {
-  const manyDayTarget = {
-    ...selectedTarget,
-    segments: [{
-      points: Array.from({ length: 18 }, (_, index) => ({
-        time: new Date(Date.UTC(2025, 11, 6 + index)).toISOString(),
-        lon: 120 + index * 0.1,
-        lat: 30,
-        speedKn: 1 + (index % 4),
-      })),
-    }],
-  };
-  const markup = renderToStaticMarkup(React.createElement(AnalysisPanel, { analysis, selectedTarget: manyDayTarget, coastData }));
-
-  assert.match(markup, /12\/06-12\/07/);
-  assert.match(markup, /12\/22-12\/23/);
-  assert.doesNotMatch(markup, />0\.\.\.</);
-  assert.doesNotMatch(markup, />1\.\.\.</);
+  assert.match(markup, /viewBox="0 0 760 280"/);
 });
 
 test("static markup never uses forbidden wording", () => {

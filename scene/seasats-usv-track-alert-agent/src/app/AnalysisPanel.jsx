@@ -16,8 +16,8 @@ import { combinedSpeedDistanceSeries, headingDistribution, hourDistribution, spe
 import { fmtDuration, toNumber } from "../logic/domain.js";
 
 const chartWidth = 760;
-const chartHeight = 260;
-const pad = { top: 18, right: 34, bottom: 34, left: 42 };
+const chartHeight = 280;
+const pad = { top: 18, right: 34, bottom: 34, left: 90 };
 const plotWidth = chartWidth - pad.left - pad.right;
 const plotHeight = chartHeight - pad.top - pad.bottom;
 
@@ -117,7 +117,7 @@ function ChartShell({ icon: Icon, title, children, legend, stats, fullWidth }) {
   );
 }
 
-function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", icon = LineChart, maxValue, extraStats = [], fullWidth = false }) {
+function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", icon = LineChart, maxValue, extraStats = [], fullWidth = false, yAxisLabel }) {
   const values = data.map((item) => toNumber(item[valueKey])).filter((value) => value !== null);
   if (values.length < 2) return <ChartShell icon={icon} title={title} fullWidth={fullWidth}><EmptyChart /></ChartShell>;
   const [min, max] = clampRange(Math.min(...values), maxValue ?? Math.max(...values));
@@ -139,10 +139,17 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
       ]}
     >
       <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title}>
+        {yAxisLabel && <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
         <g className="chart-grid">
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
         <path d={linePath(data, valueKey, min, max)} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        {data.map((item, index) => {
+          const v = toNumber(item[valueKey]);
+          if (v === null) return null;
+          const [cx, cy] = chartPoint(index, data.length, v, min, max).split(",");
+          return <circle key={`pt-${index}`} cx={cx} cy={cy} r="15" fill="rgba(0,0,0,0)" style={{ pointerEvents: "all" }}><title>{`${fmtDay(item.t)}：${fmtNumber(v, 1)} ${unit}`}</title></circle>;
+        })}
         <text x={pad.left} y={chartHeight - 7}>{first}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{last}</text>
         <text x={pad.left - 8} y={pad.top + 4} textAnchor="end">{fmtNumber(max, 0)}</text>
@@ -179,14 +186,25 @@ function SpeedDistanceChart({ target, coastData }) {
       ]}
     >
       <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="速度与国土距离关系">
+        <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">速度（节）</text>
+        <text x={chartWidth - 4} y={pad.top + plotHeight / 2} transform={`rotate(-90 ${chartWidth - 4} ${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">距离（海里）</text>
         <g className="chart-grid">
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
         <path d={linePath(data, "speed", speedMin, speedMax)} fill="none" stroke="#fbbf24" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
         {distValues.length > 1 && <path d={linePath(data, "dist", distMin, distMax)} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />}
         <circle cx={peakPoint[0]} cy={peakPoint[1]} r="4" fill="#fb7185" stroke="#fff" strokeWidth="1.5" />
+        {data.map((item, index) => {
+          const speed = toNumber(item.speed);
+          if (speed === null) return null;
+          const [cx, cy] = chartPoint(index, data.length, speed, speedMin, speedMax).split(",");
+          const dist = toNumber(item.dist);
+          const parts = [`速度 ${fmtNumber(speed, 1)} 节`];
+          if (dist !== null) parts.push(`距离 ${fmtNumber(dist, 0)} 海里`);
+          return <circle key={`pt-${index}`} cx={cx} cy={cy} r="15" fill="rgba(0,0,0,0)" style={{ pointerEvents: "all" }}><title>{`${fmtDay(item.t)}\n${parts.join("，")}`}</title></circle>;
+        })}
         <text x={pad.left - 8} y={pad.top + 4} textAnchor="end">{fmtNumber(speedMax, 0)}</text>
-        <text x={chartWidth - pad.right + 6} y={pad.top + 4}>{fmtNumber(distMax, 0)}</text>
+        <text x={chartWidth - 4} y={pad.top + 4} textAnchor="end">{fmtNumber(distMax, 0)}</text>
         <text x={pad.left} y={chartHeight - 7}>{fmtDay(data[0]?.t)}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{fmtDay(data[data.length - 1]?.t)}</text>
       </svg>
@@ -224,21 +242,43 @@ function dailyActivity(target, maxBuckets = 12) {
   return buckets;
 }
 
-function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon = BarChart3, stats = [], fullWidth }) {
+function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon = BarChart3, stats = [], fullWidth, yAxisLabel }) {
   const max = Math.max(...data.map((item) => item[valueKey] || 0), 1);
   if (!data.some((item) => item[valueKey] > 0)) return <ChartShell icon={icon} title={title} fullWidth={fullWidth}><EmptyChart /></ChartShell>;
 
+  const ticks = Array.from({ length: 5 }, (_, i) => Math.round((max * (4 - i)) / 4));
+  const barSlot = plotWidth / data.length;
+  const barWidth = Math.max(2, barSlot * 0.7);
+
   return (
     <ChartShell icon={icon} title={title} stats={stats} fullWidth={fullWidth}>
-      <div className="analysis-bar-chart" role="img" aria-label={title}>
-        {data.map((item) => (
-          <span key={item[labelKey]} style={{ "--bar": color, "--height": `${Math.max(4, (item[valueKey] / max) * 100)}%` }} title={`${item[labelKey]}：${item[valueKey]}`}>
-            <i />
-            <em>{item[labelKey]}</em>
-            {item.total > 0 && <b>{percentage(item[valueKey], item.total)}%</b>}
-          </span>
-        ))}
-      </div>
+      <svg className="analysis-line-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={title}>
+        {yAxisLabel && <text x={25} y={pad.top + plotHeight / 2} transform={`rotate(-90 25${pad.top + plotHeight / 2})`} textAnchor="middle" className="chart-axis-label">{yAxisLabel}</text>}
+        {ticks.map((tick, i) => {
+          const y = pad.top + (plotHeight * i) / 4;
+          return (
+            <g key={i}>
+              <line x1={pad.left} x2={chartWidth - pad.right} y1={y} y2={y} className="chart-grid" />
+              <text x={pad.left - 8} y={y + 4} textAnchor="end">{tick}</text>
+            </g>
+          );
+        })}
+        {data.map((item, index) => {
+          const value = item[valueKey] || 0;
+          const barH = (value / max) * plotHeight;
+          const x = pad.left + index * barSlot + (barSlot - barWidth) / 2;
+          const y = pad.top + plotHeight - barH;
+          return (
+            <g key={index}>
+              <rect x={x} y={y} width={barWidth} height={Math.max(2, barH)} fill={color} rx={2} opacity={0.85}>
+                <title>{`${item[labelKey]}：${value}`}</title>
+              </rect>
+              <text x={x + barWidth / 2} y={chartHeight - 7} textAnchor="middle" className="analysis-bar-svg-label">{item[labelKey]}</text>
+              {item.total > 0 && <text x={x + barWidth / 2} y={y - 5} textAnchor="middle" className="analysis-bar-svg-pct">{percentage(item[valueKey], item.total)}%</text>}
+            </g>
+          );
+        })}
+      </svg>
     </ChartShell>
   );
 }
@@ -303,10 +343,7 @@ function AnalysisCharts({ selectedTarget, coastData }) {
   const hours = hourDistribution(selectedTarget).map((item) => ({ ...item, label: String(item.h) }));
   const heading = headingDistribution(selectedTarget).map((item) => ({ ...item, label: item.dir }));
   const dominantHeading = [...heading].sort((a, b) => b.count - a.count)[0];
-  const days = dailyActivity(selectedTarget);
-  const activeDayCount = days.reduce((sum, item) => sum + (item.rawDays || 1), 0);
   const busiestHour = [...hours].sort((a, b) => b.count - a.count)[0];
-  const busiestDay = [...days].sort((a, b) => b.count - a.count)[0];
   const nightReports = hours.filter((item) => item.h <= 5 || item.h >= 20).reduce((sum, item) => sum + item.count, 0);
   const totalReports = hours.reduce((sum, item) => sum + item.count, 0);
 
@@ -320,6 +357,7 @@ function AnalysisCharts({ selectedTarget, coastData }) {
           unit="节"
           color="#fbbf24"
           icon={Gauge}
+          yAxisLabel="速度（节）"
           extraStats={[{ label: "低速占比", value: `${percentage(lowSpeedCount, speedValues.length)}%` }]}
         />
         <SpeedDistanceChart target={selectedTarget} coastData={coastData} />
@@ -330,6 +368,7 @@ function AnalysisCharts({ selectedTarget, coastData }) {
           valueKey="count"
           color="#22d3ee"
           icon={Navigation}
+          yAxisLabel="点位数"
           stats={[
             { label: "有效航向", value: `${heading.reduce((sum, item) => sum + item.count, 0)} 点` },
             { label: "主方向", value: dominantHeading?.count ? dominantHeading.label : "--" },
@@ -342,22 +381,10 @@ function AnalysisCharts({ selectedTarget, coastData }) {
           valueKey="count"
           color="#fbbf24"
           icon={Clock3}
+          yAxisLabel="报点数"
           stats={[
             { label: "最活跃", value: `${busiestHour?.h ?? "--"} 时` },
             { label: "夜间占比", value: `${percentage(nightReports, totalReports)}%` },
-          ]}
-        />
-        <BarMiniChart
-          title="每日活动趋势"
-          data={days}
-          labelKey="label"
-          valueKey="count"
-          color="#a78bfa"
-          icon={BarChart3}
-          fullWidth
-          stats={[
-            { label: "活动日", value: `${activeDayCount} 天` },
-            { label: "最高日", value: `${busiestDay?.label || "--"}` },
           ]}
         />
       </div>
@@ -368,13 +395,12 @@ function AnalysisCharts({ selectedTarget, coastData }) {
 function CompactConclusion({ summary, selectedTarget, gapCount }) {
   const threatLabel = summary?.threatLabel || "未研判";
   const narrative = vesselText(summary?.narrative || "暂无可用研判。");
-  const shortNarrative = narrative.length > 96 ? `${narrative.slice(0, 96)}...` : narrative;
 
   return (
     <article className="analysis-group conclusion-group compact-conclusion">
       <h3><ShieldAlert size={15} />研判结论</h3>
       <div className={`threat-line ${summary?.threatLevel || "none"}`}>威胁等级 <strong>{threatLabel}</strong></div>
-      <p className="narrative">{shortNarrative}</p>
+      <p className="narrative">{narrative}</p>
       <div className="conclusion-chips">
         <span><Gauge size={12} />最快 {fmtNumber(selectedTarget?.maxSpeedSegment?.speedKn, 1)} 节</span>
         <span><MapPin size={12} />最近 {fmtNumber(selectedTarget?.minCoastDistanceNm)} 海里</span>
@@ -395,8 +421,6 @@ export function AnalysisPanel({ analysis, selectedTarget, coastData, trackLoadin
       {!trackLoading && trackError && <div className="track-query-status error" role="alert">本体轨迹统计加载失败：{trackError}</div>}
       <CompactConclusion summary={summary} selectedTarget={selectedTarget} gapCount={gapCount} />
 
-      <AnalysisCharts selectedTarget={selectedTarget} coastData={coastData} />
-
       <article className="analysis-group evidence-group">
         <h3><CheckCircle2 size={15} />关键证据</h3>
         <EvidenceList selectedTarget={selectedTarget} />
@@ -411,6 +435,8 @@ export function AnalysisPanel({ analysis, selectedTarget, coastData, trackLoadin
         <h3><ShieldAlert size={15} />建议动作</h3>
         <AdviceList summary={summary} />
       </article>
+
+      <AnalysisCharts selectedTarget={selectedTarget} coastData={coastData} />
     </section>
   );
 }
