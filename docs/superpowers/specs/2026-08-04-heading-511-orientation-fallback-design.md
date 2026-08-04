@@ -20,7 +20,9 @@ RawAISData 的原始字段契约没有直接名为 heading/orientation 的列。
 
 ## 实现边界
 
-`app-server.js` 的归一化函数独立保留 `heading` 与 `orientation`，构建首页摘要和点选详情时同时传递两者。`App.jsx` 用最新轨迹点更新选中舰艇时也同步这两个字段。
+`app-server.js` 的归一化函数独立保留 `heading` 与 `orientation`；轨迹指标层从最新点输出这两个字段，使首页摘要和点选详情沿用同一条数据链，不在 `App.jsx` 复制字段映射规则。
+
+首页摘要快照增加航向字段语义版本；服务重启时拒绝缺少该版本的旧快照，等待基于新字段映射完成一次增量刷新后再对外返回摘要，避免刷新页面继续短暂读取旧的合并值。
 
 `VesselFocusPanel.jsx` 的纯函数只负责客户展示规则：读取 heading，且仅对 `511` 回退 orientation；现有 `formatHeading` 继续负责角度格式化。
 
@@ -35,4 +37,5 @@ RawAISData 的原始字段契约没有直接名为 heading/orientation 的列。
 - 航向为正常值时保持原有显示。
 - 航向为 `511` 且 orientation 缺失或无效时显示 `--`。
 - 点选详情刷新后仍保留独立的 heading/orientation。
+- 缺少新航向字段版本的旧摘要快照不可用于首屏，新版本快照可正常加载。
 - 运行服务端字段映射测试、`VesselFocusPanel` 定向测试、项目完整测试及生产构建，并重启本地 API 后在页面验证。

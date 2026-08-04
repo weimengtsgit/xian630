@@ -146,25 +146,39 @@ Expected: 所有 VesselFocusPanel 测试通过。
 - Consumes: 本地 API `http://127.0.0.1:5180` 与 Vite 页面 `http://127.0.0.1:5179`。
 - Produces: 当前本地分支上的可验证修复提交。
 
-- [ ] **Step 1: 运行完整测试和构建**
+- [ ] **Step 1: 写失败的旧快照拒绝测试**
+
+为 `summarySnapshotUsable` 增加测试接口，断言缺少 `headingFieldVersion` 的旧快照返回 `false`，包含当前版本且其他元数据完整的快照返回 `true`。
+
+- [ ] **Step 2: 运行测试确认正确失败**
+
+Run: `node --test server/app-server.test.js`
+
+Expected: 旧快照仍被判为可用或测试接口尚未导出。
+
+- [ ] **Step 3: 写最小快照版本实现**
+
+定义固定 `headingFieldVersion`，写入两种摘要 metadata，并令 `summarySnapshotUsable` 要求版本严格一致。
+
+- [ ] **Step 4: 运行完整测试和构建**
 
 Run: `npm test`，随后 `npm run build`
 
 Expected: 0 failed，Vite 构建成功。
 
-- [ ] **Step 2: 检查差异边界**
+- [ ] **Step 5: 检查差异边界**
 
 Run: `git diff --check -- <本次目标文件>`，并核对没有夹带无关改动。
 
-- [ ] **Step 3: 重启本地 API 服务并验证接口**
+- [ ] **Step 6: 重启本地 API 服务并验证接口**
 
 停止当前 `server/app-server.js` 进程后从应用目录执行 `npm start`；接口 target/track point 必须保留独立 heading/orientation。
 
-- [ ] **Step 4: 在本地页面验证**
+- [ ] **Step 7: 在本地页面验证**
 
 刷新页面，点选有 `heading=511, orientation!=511` 的记录时显示 orientation；若原始同条记录两列都是 `511`，页面按客户规则仍会显示 orientation 的实际值 `511°`，不得伪造替代角度。
 
-- [ ] **Step 5: 提交本次修复**
+- [ ] **Step 8: 提交本次修复**
 
 只暂存本次修复文件或精确索引补丁，提交信息：
 
