@@ -181,6 +181,7 @@ function LineMiniChart({ title, data, valueKey = "v", unit, color = "#fbbf24", i
             const [x, y] = chartPoint(index, data.length, value, min, max).split(",").map(Number);
             setHover({ x, y, value: `${fmtNumber(value, 1)} ${unit}` });
           }}
+          onPointerLeave={() => setHover(null)}
         />
         <text x={pad.left} y={chartHeight - 7}>{first}</text>
         <text x={chartWidth - pad.right} y={chartHeight - 7} textAnchor="end">{last}</text>
@@ -238,9 +239,9 @@ function SpeedDistanceChart({ target, coastData }) {
           {[0, 1, 2].map((row) => <line key={row} x1={pad.left} x2={chartWidth - pad.right} y1={pad.top + row * plotHeight / 2} y2={pad.top + row * plotHeight / 2} />)}
         </g>
         <path d={speedPath} fill="none" stroke="#fbbf24" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-        <path className="chart-line-hit-area" data-series="speed" d={speedPath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "speed", speedMin, speedMax, "节", 1, "#fbbf24")} />
+        <path className="chart-line-hit-area" data-series="speed" d={speedPath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "speed", speedMin, speedMax, "节", 1, "#fbbf24")} onPointerLeave={() => setHover(null)} />
         {distValues.length > 1 && <path d={distancePath} fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.85" />}
-        <path className="chart-line-hit-area" data-series="distance" d={distancePath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "dist", distMin, distMax, "海里", 0, "#38bdf8")} />
+        <path className="chart-line-hit-area" data-series="distance" d={distancePath} fill="none" stroke="transparent" strokeWidth="18" onPointerMove={(event) => showSeriesValue(event, "dist", distMin, distMax, "海里", 0, "#38bdf8")} onPointerLeave={() => setHover(null)} />
         <circle cx={peakPoint[0]} cy={peakPoint[1]} r="4" fill="#fb7185" stroke="#fff" strokeWidth="1.5" />
         <text x={pad.left - 8} y={pad.top + 4} textAnchor="end" className="chart-y-tick">{fmtNumber(speedMax, 0)}</text>
         <text x={chartWidth - pad.right + 10} y={pad.top + 4} className="chart-y-tick">{fmtNumber(distMax, 0)}</text>
@@ -318,7 +319,7 @@ function BarMiniChart({ title, data, labelKey, valueKey, color = "#fbbf24", icon
           });
           return (
             <g key={index}>
-              <rect className="chart-bar-hit-area" x={x} y={y} width={barWidth} height={barHeight} fill={color} rx={2} opacity={0.85} onPointerEnter={showValue} onPointerMove={showValue} />
+              <rect className="chart-bar-hit-area" x={x} y={y} width={barWidth} height={barHeight} fill={color} rx={2} opacity={0.85} onPointerEnter={showValue} onPointerMove={showValue} onPointerLeave={() => setHover(null)} />
               <text x={x + barWidth / 2} y={chartHeight - 7} textAnchor="middle" className="analysis-bar-svg-label">{item[labelKey]}</text>
               {item.total > 0 && <text x={x + barWidth / 2} y={y - 5} textAnchor="middle" className="analysis-bar-svg-pct">{percentage(item[valueKey], item.total)}%</text>}
             </g>

@@ -25,6 +25,7 @@ registerHooks({
 });
 
 const { AnalysisPanel } = await import("./AnalysisPanel.jsx");
+const analysisPanelSource = readFileSync(new URL("./AnalysisPanel.jsx", import.meta.url), "utf8");
 
 const selectedTarget = {
   name: "SEASATS 55",
@@ -99,6 +100,18 @@ test("uses a larger chart viewBox so line charts fill the card", () => {
   const markup = renderToStaticMarkup(React.createElement(AnalysisPanel, { analysis, selectedTarget, coastData }));
 
   assert.match(markup, /viewBox="0 0 760 280"/);
+});
+
+test("clears hover when the pointer leaves each chart hit area", () => {
+  const lineHitArea = analysisPanelSource.match(/<path\s+className="chart-line-hit-area"[\s\S]*?^\s*\/>/m)?.[0];
+  const speedHitArea = analysisPanelSource.match(/<path className="chart-line-hit-area" data-series="speed"[^\r\n]+\/>/)?.[0];
+  const distanceHitArea = analysisPanelSource.match(/<path className="chart-line-hit-area" data-series="distance"[^\r\n]+\/>/)?.[0];
+  const barHitArea = analysisPanelSource.match(/<rect className="chart-bar-hit-area"[^\r\n]+\/>/)?.[0];
+
+  assert.match(lineHitArea || "", /onPointerLeave=\{\(\) => setHover\(null\)\}/);
+  assert.match(speedHitArea || "", /onPointerLeave=\{\(\) => setHover\(null\)\}/);
+  assert.match(distanceHitArea || "", /onPointerLeave=\{\(\) => setHover\(null\)\}/);
+  assert.match(barHitArea || "", /onPointerLeave=\{\(\) => setHover\(null\)\}/);
 });
 
 test("static markup never uses forbidden wording", () => {
