@@ -10,7 +10,7 @@ import { AlertCard } from "./AlertCard.jsx";
 import { AnalysisPanel } from "./AnalysisPanel.jsx";
 import { PlaybackControlBar } from "./PlaybackControlBar.jsx";
 import { RemotePlaybackMap } from "./RemotePlaybackMap.jsx";
-import { VesselFocusPanel } from "./VesselFocusPanel.jsx";
+import { VesselFocusPanel, isEscortVessel } from "./VesselFocusPanel.jsx";
 import coastData from "../data/chinaCoast.json";
 
 const statusOptions = ["全部状态", "异常行为舰艇", "高可信舰艇", "待核验舰艇", "仅最新位置"];
@@ -193,7 +193,10 @@ function Dashboard({ payload }) {
             name: latest.name && !isGenericVesselName(latest.name) ? latest.name : target.name,
             latestTime: latest.time, lon: latest.lon, lat: latest.lat,
             speedKn: latest.speedKn, speedRawDiv10: latest.speedKn == null ? null : latest.speedKn * 10,
-            courseDeg: latest.courseDeg, rawTypeCode: latest.aisSourceType || target.rawTypeCode,
+            courseDeg: latest.courseDeg,
+            orientation: latest.orientation ?? latest.courseDeg,
+            heading: latest.heading,
+            rawTypeCode: latest.aisSourceType || target.rawTypeCode,
           }),
           segments: [...current.segments.filter((segment) => segment.targetMmsi !== selectedMmsi), ...(detailed?.segments || [])],
           aisGaps: [...current.aisGaps.filter((gap) => gap.targetMmsi !== selectedMmsi), ...(detailed?.aisGaps || [])],
@@ -214,6 +217,8 @@ function Dashboard({ payload }) {
   const selectableTargets = useMemo(() => {
     const q = query.trim().toLowerCase();
     return analysis.targets.filter((target) => {
+      // 左侧栏只展示无人艇（非属舰），分类逻辑与右侧栏一致。
+      if (isEscortVessel(target.code)) return false;
       if (statusFilter !== "全部状态" && target.status !== statusFilter) return false;
       if (sourceFilter !== "全部来源" && target.trackSource !== sourceFilter) return false;
       if (q && !`${target.displayName || ""} ${target.name} ${target.mmsi}`.toLowerCase().includes(q)) return false;
@@ -226,13 +231,15 @@ function Dashboard({ payload }) {
     return selectableTargets;
   }, [focusOnly, selectableTargets, selectedTarget]);
   const displayMmsi = useMemo(() => new Set(displaySeedTargets.map((target) => target.mmsi)), [displaySeedTargets]);
+  // AIS 开闭报警只展示最近 1 周（toTime/告警 time 在 7 天内）。
+  const aisGapSinceMs = remoteMapEndTime * 1000 - 7 * 24 * 60 * 60 * 1000;
   const displaySeedAnalysis = useMemo(() => ({
     ...analysis,
     targets: displaySeedTargets,
     segments: analysis.segments.filter((segment) => displayMmsi.has(segment.targetMmsi)),
-    aisGaps: analysis.aisGaps.filter((gap) => displayMmsi.has(gap.targetMmsi)),
-    alerts: analysis.alerts.filter((alert) => displayMmsi.has(alert.targetMmsi)),
-  }), [analysis, displayMmsi, displaySeedTargets]);
+    aisGaps: analysis.aisGaps.filter((gap) => displayMmsi.has(gap.targetMmsi) && (!gap.toTime || new Date(gap.toTime).getTime() >= aisGapSinceMs)),
+    alerts: analysis.alerts.filter((alert) => displayMmsi.has(alert.targetMmsi) && (alert.type !== "ais-gap" || !alert.time || new Date(alert.time).getTime() >= aisGapSinceMs)),
+  }), [analysis, displayMmsi, displaySeedTargets, aisGapSinceMs]);
   const displayAnalysis = useMemo(() => {
     const filtered = filterForFocusMode({ analysis: displaySeedAnalysis, selectedMmsi: selectedTarget?.mmsi, focusOnly });
     return { ...filtered, summary: buildSummary(filtered, filtered.parameters) };

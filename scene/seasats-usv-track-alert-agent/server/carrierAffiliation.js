@@ -4,7 +4,7 @@ export const CARRIER_AFFILIATION_RULES = Object.freeze({
   syncCourseThreshDeg: 30,
   lagMaxMinutes: 30 * 24 * 60,
   lagStepMinutes: 24 * 60,
-  lagDistThreshNm: 100,
+  lagDistThreshNm: 500,
   lagCourseThreshDeg: 45,
   minMatchedPoints: 8,
   timeMatchWindowSyncSec: 30 * 60,

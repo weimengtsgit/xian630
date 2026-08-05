@@ -1,5 +1,6 @@
 import { ArrowUp, Clock3, Gauge, MapPin, X } from "lucide-react";
 import { fmtDuration } from "../logic/domain.js";
+import { resolveHeadingValue } from "../logic/heading.js";
 
 function speedTier(min) {
   if (min == null) return "info";
@@ -16,7 +17,7 @@ export function AlertCard({ alert, onClose }) {
   const maxBar = Math.max(pre, post, avg, 1);
   const tier = speedTier(alert.gapMinutes);
   const origin = alert.trackOrigin;
-  const heading = alert.orientation ?? alert.courseDeg;
+  const heading = resolveHeadingValue(alert);
 
   return (
     <div className="alert-card" role="dialog" aria-label="AIS 开闭异常详情">

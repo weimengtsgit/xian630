@@ -203,11 +203,11 @@ test("dialog renders a 0-day lag follow as sync without 时延0天", () => {
   assert.doesNotMatch(markup, /时延0天|0\.00天|\+0\.0d 时延跟随|延迟 0分钟/);
 });
 
-test("dialog assessment uses 同步匹配 instead of 时延匹配 for a 0-day lag follow", () => {
+test("buildAffiliationAssessment uses 同步匹配 for a 0-day lag follow", () => {
   const zeroLagRelation = { ...lagRelation, lag: { ...lagRelation.lag, lagMinutes: 0 } };
-  const markup = renderDialog({ relation: zeroLagRelation });
-  assert.match(markup, /同步匹配/);
-  assert.doesNotMatch(markup, /时延匹配/);
+  const { assessment } = buildAffiliationAssessment({ relation: zeroLagRelation, name: "西奥多·罗斯福号", followerLabel: "海猎号 无人艇", followerCode: undefined });
+  assert.match(assessment, /同步匹配/);
+  assert.doesNotMatch(assessment, /时延匹配/);
 });
 
 test("dialog evidence cards show real values and time range from the relation", () => {
@@ -226,7 +226,7 @@ test("dialog distance chart keeps the threshold line, interpolation note, Beijin
   assert.match(markup, /距离曲线图/);
   assert.match(markup, /关联依据：/);
   assert.match(markup, /海猎号 无人艇 实际轨迹的实测对齐距离/);
-  assert.match(markup, /阈值 100 海里/);
+  assert.match(markup, /阈值 500 海里/);
   assert.match(markup, /中位距离 18\.50 海里/);
   assert.match(markup, /无人艇实际时间（北京时间）/);
   assert.match(markup, /原始 AIS 报点对齐/);
@@ -272,9 +272,8 @@ test("trajectory chart drops the middle longitude tick when projected labels wou
 
 test("dialog renders the migrated agent assessment and the USV conservative task assessment", () => {
   const markup = renderDialog();
-  assert.match(markup, /研判依据：时延匹配 48 点/);
-  assert.match(markup, /研判：海猎号 无人艇 疑似在 西奥多·罗斯福号.*航行活动中承担协同巡逻或侦察任务/);
-  assert.match(markup, /仅据 AIS 无法确认具体任务/);
+  assert.match(markup, /海猎号 无人艇 疑似在 西奥多·罗斯福号.*航行活动中承担协同巡逻或侦察任务/);
+  assert.doesNotMatch(markup, /研判：|仅据 AIS 无法确认具体任务/);
 });
 
 test("dialog suppresses the USV task assessment for an escort follower", () => {

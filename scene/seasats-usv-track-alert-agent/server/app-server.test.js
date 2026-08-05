@@ -65,7 +65,7 @@ test("rejects legacy summary snapshots that collapsed heading and orientation", 
   assert.equal(appServer.summarySnapshotUsable?.(snapshot), false);
   assert.equal(appServer.summarySnapshotUsable?.({
     ...snapshot,
-    metadata: { ...snapshot.metadata, headingFieldVersion: "independent-heading-orientation-v1" },
+    metadata: { ...snapshot.metadata, headingFieldVersion: "independent-heading-orientation-v2" },
   }), true);
 });
 

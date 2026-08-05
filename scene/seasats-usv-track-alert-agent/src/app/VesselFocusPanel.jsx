@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AlertTriangle, Anchor, ChevronLeft, ChevronRight, LineChart, X } from "lucide-react";
 import { subscribeEscapeKeyTopmost } from "../logic/escapeKey.js";
+import { resolveHeadingValue } from "../logic/heading.js";
 
 const confirmedCarrierNames = {
   "368913000": "乔治·华盛顿号",
@@ -25,7 +26,7 @@ function hullTypePrefix(code) {
   return String(code || "").toUpperCase().replace(/-?\d+.*$/, "").replace(/-$/, "");
 }
 
-function isEscortVessel(code) {
+export function isEscortVessel(code) {
   return ESCORT_HULL_TYPES.has(hullTypePrefix(code));
 }
 
@@ -62,9 +63,7 @@ function valueFrom(selectedTarget, keys) {
 }
 
 export function resolveDisplayedHeading(selectedTarget) {
-  const heading = valueFrom(selectedTarget, ["headingDeg", "heading", "courseDeg", "orientation"]);
-  if (Number(heading) !== 511) return heading;
-  return numberOrNull(selectedTarget?.orientation);
+  return resolveHeadingValue(selectedTarget);
 }
 
 function vesselName(selectedTarget) {
@@ -208,7 +207,7 @@ export function buildAffiliationAssessment({ relation, name, followerLabel, foll
   }
   // 无人艇与航母形成命中关联时给出保守任务研判，明确该结论仅是 AIS 行为线索而非任务确认。
   const operationalAssessment = !isEscortVessel(followerCode)
-    ? `研判：${followerLabel} 疑似在 ${name} 航行活动中承担协同巡逻或侦察任务；仅据 AIS 无法确认具体任务。`
+    ? `${followerLabel} 疑似在 ${name} 航行活动中承担协同巡逻或侦察任务。`
     : null;
   return { assessment, operationalAssessment };
 }
@@ -528,7 +527,7 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   const width = 360;
   const height = 220;
   const plot = { left: 50, right: 18, top: 22, bottom: 172 };
-  const thresholdNm = 100;
+  const thresholdNm = 500;
   const medianNm = numberOrNull(relation?.lag?.medianDistanceNm);
   const observedMaxDistance = Math.max(...values);
   const referenceMax = Math.max(observedMaxDistance, thresholdNm, medianNm ?? 0, 1);
@@ -567,8 +566,10 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
         React.createElement("text", { x: xFor(index), y: plot.bottom + 18, textAnchor: index === 0 ? "start" : index === series.length - 1 ? "end" : "middle", className: "affiliation-evidence-label" }, formatChartTime(series[index]?.time)),
       )),
       React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(thresholdNm), y2: yFor(thresholdNm), className: "affiliation-evidence-threshold" }),
+      React.createElement("text", { x: plot.left - 4, y: yFor(thresholdNm) + 3, textAnchor: "end", className: "affiliation-evidence-label threshold" }, formatNumber(thresholdNm, 0)),
       medianNm !== null ? React.createElement(React.Fragment, null,
         React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(medianNm), y2: yFor(medianNm), className: "affiliation-evidence-median" }),
+        React.createElement("text", { x: plot.left - 4, y: yFor(medianNm) + 3, textAnchor: "end", className: "affiliation-evidence-label median" }, formatNumber(medianNm, 2)),
       ) : null,
       React.createElement("text", { x: plot.left, y: 13, className: "affiliation-evidence-label title" }, "距离（海里）"),
       React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
@@ -579,7 +580,7 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
       "div",
       { className: "affiliation-distance-legend", "aria-label": "距离图例" },
       React.createElement("span", { className: "distance" }, React.createElement("i"), "距离"),
-      React.createElement("span", { className: "threshold" }, React.createElement("i"), "阈值 100 海里"),
+      React.createElement("span", { className: "threshold" }, React.createElement("i"), "阈值 500 海里"),
       medianNm !== null ? React.createElement("span", { className: "median" }, React.createElement("i"), `中位距离 ${formatNumber(medianNm, 2)} 海里`) : null,
     ),
     React.createElement("span", { className: "affiliation-chart-note" }, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(observedMaxDistance, 2)} 海里；越低表示轨迹越接近。${medianNm !== null ? "" : "（无中位距离数据）"}`),
@@ -609,7 +610,7 @@ function AffiliationSummaryRow({ relation, name, followerName, followerCode, row
       title: ariaLabel,
       ref: (el) => setTriggerRef(rowKey, el),
     },
-    React.createElement(ChevronRight, { size: 16, className: "affiliation-summary-arrow", "aria-hidden": "true" }),
+    React.createElement(ChevronLeft, { size: 16, className: "affiliation-summary-arrow", "aria-hidden": "true" }),
     React.createElement(
       "span",
       { className: "affiliation-summary-text" },
@@ -701,7 +702,16 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
               : React.createElement("span", null, "时延：", lagValid ? formatLagHours(relation.lag.lagMinutes) : "--"),
           React.createElement("span", null, "阈值内比例：", formatRatio(evidence.withinThresholdRatio)),
         ),
-        // 4. 关键证据指标卡
+        // 4. 智能体研判区（只给研判结论句，移到关键证据之上）
+        operationalAssessment
+          ? React.createElement(
+              "section",
+              { className: "affiliation-detail-judgement" },
+              React.createElement("h4", null, "智能体研判"),
+              React.createElement("p", null, operationalAssessment),
+            )
+          : null,
+        // 5. 关键证据指标卡
         React.createElement(
           "section",
           { className: "affiliation-detail-evidence" },
@@ -718,7 +728,7 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
             evidenceCard("关联时间范围", formatTimeRange(evidence.startTime, evidence.endTime)),
           ),
         ),
-        // 5. 可视化证据区
+        // 6. 可视化证据区
         React.createElement(
           "section",
           { className: "affiliation-detail-charts" },
@@ -729,15 +739,6 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
           hasDistanceChart
             ? React.createElement(DistanceEvidenceChart, { relation, subjectName: followerName, subjectCode: followerCode })
             : React.createElement("p", { className: "affiliation-detail-empty" }, isSync ? "同步伴随不产生时延距离曲线。" : "暂无可用的距离曲线数据。"),
-        ),
-        // 6. 智能体研判区
-        React.createElement(
-          "section",
-          { className: "affiliation-detail-judgement" },
-          React.createElement("h4", null, "智能体研判"),
-          React.createElement("p", null, assessment),
-          operationalAssessment ? React.createElement("p", null, operationalAssessment) : null,
-          React.createElement("p", { className: "affiliation-detail-limit" }, "以上为基于 AIS 行为的关联线索，仅据 AIS 无法确认具体任务。"),
         ),
       ),
     ),

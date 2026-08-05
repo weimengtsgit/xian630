@@ -40,7 +40,7 @@ const affiliationRefreshMs = 5 * 60 * 60 * 1000;
 // v7：详情弹窗航迹对比图需要双方抽稀航迹序列，analyzeLag 另输出中位距离与阈值内比例。
 // 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
 const affiliationSnapshotVersion = "python-select-v8-track-window-2025-01-01";
-const headingFieldVersion = "independent-heading-orientation-v1";
+const headingFieldVersion = "independent-heading-orientation-v2";
 // 轨迹落盘目录：去重后的全量轨迹按 MMSI 持久化，重启后只补增量，不再全量重拉。
 const trackStoreRoot = resolve(dataRoot, "tracks");
 // 增量刷新时从水位线回退的重叠窗口，吸收迟到/乱序报点。
@@ -399,6 +399,8 @@ async function buildFastSummary() {
       speedKn: latest?.speedKn ?? null,
       speedRawDiv10: latest?.speedKn == null ? null : latest.speedKn * 10,
       courseDeg: latest?.courseDeg ?? null,
+      orientation: latest?.orientation ?? latest?.courseDeg ?? null,
+      heading: latest?.heading ?? null,
       length: null, width: null, vesselCategory: vessel.role, rawTypeCode: latest?.aisSourceType ?? identity?.rawTypeCode ?? null,
     };
   });
@@ -444,6 +446,8 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
       speedKn: latest?.speedKn ?? null,
       speedRawDiv10: latest?.speedKn == null ? null : latest.speedKn * 10,
       courseDeg: latest?.courseDeg ?? null,
+      orientation: latest?.orientation ?? latest?.courseDeg ?? null,
+      heading: latest?.heading ?? null,
       length: latest?.length ?? null,
       width: latest?.width ?? null,
       // 只有一个最新点时才标记“点位”；取得两个及以上有效报点即为真实轨迹。

@@ -100,7 +100,7 @@ test("does not broaden the customer fallback rule beyond 511", () => {
 });
 
 test("shows the existing empty value when heading is 511 and orientation is unusable", () => {
-  for (const orientation of [undefined, "", "invalid", Infinity]) {
+  for (const orientation of [undefined, "", "invalid", Infinity, 511]) {
     const markup = render({
       selectedTarget: { ...selectedTarget, heading: 511, courseDeg: 148, orientation },
     });
