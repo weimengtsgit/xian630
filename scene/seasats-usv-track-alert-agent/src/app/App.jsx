@@ -45,11 +45,15 @@ function pointFocus(kind, item, zoom) {
   return { key: `${kind}:${item.id || item.mmsi || item.time || item.lon},${item.lat}`, kind, lon: item.lon, lat: item.lat, zoom };
 }
 
+function leftPanelWidthBounds() {
+  return { min: 240, max: Math.min(520, Math.max(300, window.innerWidth - 580)) };
+}
+
 function TargetRow({ target, selected, onSelect }) {
   return (
     <button className={`target-row ${selected ? "selected" : ""}`} onClick={() => onSelect(target.mmsi)}>
       <span className={`status-dot ${target.status}`} />
-      <span className="target-main"><strong>{target.displayName || target.name}</strong><small>{target.mmsi}</small></span>
+      <span className="target-main"><strong>{target.sidebarDisplayName || target.displayName || target.name}</strong><small>{target.mmsi}</small></span>
       {target.dataUnavailable
         ? <span className="track-mark error" title="本体轨迹查询失败">数据失败</span>
         : target.latestOnly
@@ -114,6 +118,7 @@ function Dashboard({ payload }) {
   // 只有重复点击当前舰艇才强制刷新；首次查看其他舰艇优先复用 fleet 缓存。
   const [trackRefreshVersion, setTrackRefreshVersion] = useState(0);
   const forceRefreshMmsiRef = useRef(null);
+  const resizeCleanupRef = useRef(null);
   // 进入页面时以当前时刻生成远程地图结束时间，不在页面内定时重载地图。
   const [remoteMapEndTime] = useState(() => Math.floor(Date.now() / 1000));
   // 单船轨迹由服务端按窗口过滤；首屏评分只使用后端计算好的最新点位结果。
@@ -128,6 +133,20 @@ function Dashboard({ payload }) {
   const [statusFilter, setStatusFilter] = useState(statusOptions[0]);
   const [sourceFilter, setSourceFilter] = useState(sourceOptions[0]);
   const [query, setQuery] = useState("");
+  const [leftPanelWidth, setLeftPanelWidth] = useState(290);
+  const [leftPanelBounds, setLeftPanelBounds] = useState({ min: 240, max: 520 });
+
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
+  useEffect(() => {
+    const syncLeftPanelBounds = () => {
+      const bounds = leftPanelWidthBounds();
+      setLeftPanelBounds(bounds);
+      setLeftPanelWidth((width) => Math.max(bounds.min, Math.min(bounds.max, width)));
+    };
+    syncLeftPanelBounds();
+    window.addEventListener("resize", syncLeftPanelBounds);
+    return () => window.removeEventListener("resize", syncLeftPanelBounds);
+  }, []);
   const [mapFocus, setMapFocus] = useState(null);
   const [mapMode, setMapMode] = useState("remote");
   const [focusOnly, setFocusOnly] = useState(true);
@@ -173,7 +192,12 @@ function Dashboard({ payload }) {
         const detailed = currentTarget ? analyzePayload({
           metadata: {}, parameters: livePayload.parameters, monitoredAreas: livePayload.monitoredAreas,
           // 至少两个有效报点才称为轨迹；仅返回最新单点时须继续标记为“点位”。
-          targets: [{ ...currentTarget, latestOnly: points.length <= 1 }], trackPoints: points,
+          targets: [{
+            ...currentTarget,
+            // 告警文本也属于右侧详情：有独立中文名时不能跟随最新 AIS 英文名回退。
+            name: currentTarget.rightDisplayName || currentTarget.displayName || currentTarget.name,
+            latestOnly: points.length <= 1,
+          }], trackPoints: points,
         }, coastData) : null;
         const detailedTarget = detailed?.targets?.[0] || null;
         setLivePayload((current) => ({
@@ -182,11 +206,19 @@ function Dashboard({ payload }) {
           targets: current.targets.map((target) => target.mmsi !== selectedMmsi ? target : !latest ? {
             ...target,
             ...detailedTarget,
+            // 左侧栏双语标签来自首屏的本地名单与本体身份合并结果，不能被轨迹最新点的 shipName 覆盖。
+            displayName: target.displayName,
+            rightDisplayName: target.rightDisplayName,
+            sidebarDisplayName: target.sidebarDisplayName,
             dataUnavailable: false,
             trackError: null,
           } : {
             ...target,
             ...detailedTarget,
+            // 左侧栏双语标签来自首屏的本地名单与本体身份合并结果，不能被轨迹最新点的 shipName 覆盖。
+            displayName: target.displayName,
+            rightDisplayName: target.rightDisplayName,
+            sidebarDisplayName: target.sidebarDisplayName,
             dataUnavailable: false,
             trackError: null,
             // 球形地图轨迹不稳定提供船名；通用名或空值均不能覆盖首页已识别的标准船名。
@@ -221,7 +253,7 @@ function Dashboard({ payload }) {
       if (isEscortVessel(target.code)) return false;
       if (statusFilter !== "全部状态" && target.status !== statusFilter) return false;
       if (sourceFilter !== "全部来源" && target.trackSource !== sourceFilter) return false;
-      if (q && !`${target.displayName || ""} ${target.name} ${target.mmsi}`.toLowerCase().includes(q)) return false;
+      if (q && !`${target.sidebarDisplayName || ""} ${target.displayName || ""} ${target.name} ${target.mmsi}`.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [analysis.targets, query, sourceFilter, statusFilter]);
@@ -289,6 +321,39 @@ function Dashboard({ payload }) {
     }
     if ((action.kind === "ais-gap" || action.kind === "segment") && action.targetMmsi) handleTargetSelect(action.targetMmsi);
   };
+  const handleLeftPanelResizeStart = (event) => {
+    if (window.matchMedia("(max-width: 1180px)").matches) return;
+    event.preventDefault();
+    resizeCleanupRef.current?.();
+    const startX = event.clientX;
+    const startWidth = leftPanelWidth;
+    const onMove = (moveEvent) => {
+      const { min, max } = leftPanelWidthBounds();
+      setLeftPanelWidth(Math.max(min, Math.min(max, startWidth + moveEvent.clientX - startX)));
+    };
+    const onEnd = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
+      resizeCleanupRef.current = null;
+    };
+    resizeCleanupRef.current = onEnd;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onEnd, { once: true });
+    window.addEventListener("pointercancel", onEnd, { once: true });
+  };
+  const handleLeftPanelResizeKeyDown = (event) => {
+    if (window.matchMedia("(max-width: 1180px)").matches) return;
+    const { min, max } = leftPanelWidthBounds();
+    const step = event.shiftKey ? 32 : 12;
+    const nextWidth = event.key === "ArrowLeft" ? leftPanelWidth - step
+      : event.key === "ArrowRight" ? leftPanelWidth + step
+        : event.key === "Home" ? min
+          : event.key === "End" ? max : null;
+    if (nextWidth == null) return;
+    event.preventDefault();
+    setLeftPanelWidth(Math.max(min, Math.min(max, nextWidth)));
+  };
   // AnalysisPanel 只在此处构建一次，作为悬浮框内容传入右侧栏；切换舰艇时其 props 随之更新。
   const analysisPanel = (
     <AnalysisPanel analysis={displayAnalysis} selectedTarget={selectedTarget} coastData={coastData} trackLoading={trackLoading} trackError={trackError} />
@@ -314,7 +379,7 @@ function Dashboard({ payload }) {
         remoteMapUrl={remoteMapUrl}
       />
 
-      <section className="workspace">
+      <section className="workspace" style={{ "--target-panel-width": `${leftPanelWidth}px` }}>
         <aside className="target-panel">
           <div className="panel-head"><h2><Ship size={15} />舰艇</h2><span>{selectableTargets.length}/{analysis.targets.length}</span></div>
           <div className="filters">
@@ -323,6 +388,7 @@ function Dashboard({ payload }) {
             <label><Filter size={13} /><select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>{sourceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
           </div>
           <div className="target-list">{selectableTargets.map((target) => <TargetRow key={target.mmsi} target={target} selected={target.mmsi === selectedTarget?.mmsi} onSelect={handleTargetSelect} />)}</div>
+          <div className="target-resize-handle" role="separator" tabIndex={0} aria-label="调整左侧舰艇栏宽度" aria-orientation="vertical" aria-valuemin={leftPanelBounds.min} aria-valuemax={leftPanelBounds.max} aria-valuenow={leftPanelWidth} onPointerDown={handleLeftPanelResizeStart} onKeyDown={handleLeftPanelResizeKeyDown} />
         </aside>
 
         <div className="map-stack">

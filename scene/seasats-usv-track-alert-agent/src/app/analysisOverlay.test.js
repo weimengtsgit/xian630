@@ -39,7 +39,7 @@ test("overlay switches to a viewport-bounded fixed panel on narrow screens", () 
 });
 
 test("focus panel reserves a prediction data interface and never fakes prediction data", () => {
-  assert.match(focusSource, /function predictionContent\(prediction, selectedName\)/);
+  assert.match(focusSource, /function predictionContent\(prediction, selectedName, allTargets\)/);
   assert.match(focusSource, /暂无可用的关联预测数据。/);
   // 预测区块只接收 prediction 入参，不挪用历史 affiliation 数据冒充预测。
   assert.doesNotMatch(focusSource, /predictionContent\(affiliation/);

@@ -62,7 +62,7 @@ export function buildMapData({ targets = [], areas = [], segments = [], aisGaps 
     .map((target) =>
       pointFeature(
         target.mmsi,
-        { mmsi: target.mmsi, name: target.name, status: target.status, score: target.score, trackSource: target.trackSource, latestTime: target.latestTime },
+        { mmsi: target.mmsi, name: target.rightDisplayName || target.displayName || target.name, status: target.status, score: target.score, trackSource: target.trackSource, latestTime: target.latestTime },
         toNumber(target.lon),
         toNumber(target.lat)
       )

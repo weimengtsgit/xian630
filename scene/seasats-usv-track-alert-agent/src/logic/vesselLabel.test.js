@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { chineseShipName, extractHullCode, vesselSidebarLabel } from "./vesselLabel.js";
+import { chineseShipName, englishShipName, extractHullCode, vesselPreferredLabel, vesselSidebarLabel } from "./vesselLabel.js";
 
 const appSource = readFileSync(new URL("../app/App.jsx", import.meta.url), "utf8");
 const scopeSource = readFileSync(new URL("../../server/seasatsScope.js", import.meta.url), "utf8");
@@ -34,6 +34,36 @@ test("combines code and Chinese ship name for the sidebar label", () => {
   assert.equal(vesselSidebarLabel({ code: "CVN-71", name: "罗斯福号" }), "CVN-71 罗斯福号");
 });
 
+test("combines the ontology English name and the roster Chinese name into a stable bilingual label", () => {
+  assert.equal(
+    vesselSidebarLabel({ name: "海鹰号", fallbackName: "海鹰号", englishName: "SEAHAWK" }),
+    "SEAHAWK（海鹰号）",
+  );
+  assert.equal(
+    vesselSidebarLabel({ code: "CVN-73", name: "华盛顿号", englishName: "USS George Washington（乔治·华盛顿号）" }),
+    "CVN-73 USS George Washington（华盛顿号）",
+  );
+  assert.equal(englishShipName("USS George Washington（乔治·华盛顿号）"), "USS George Washington");
+});
+
+test("keeps the right-side label Chinese-first when an English fallback is also available", () => {
+  assert.equal(
+    vesselPreferredLabel({ code: "CVN-73", name: "华盛顿号", fallbackName: "USS George Washington（乔治·华盛顿号）" }),
+    "CVN-73 华盛顿号",
+  );
+  assert.equal(
+    vesselPreferredLabel({ code: "DDG-76", name: "MMSI 111111111", fallbackName: "USS Higgins DDG-76(US GOV VESSEL)" }),
+    "USS Higgins DDG-76(US GOV VESSEL)",
+  );
+});
+
+test("accepts separate roster name fields so future vessels do not need per-vessel label code", () => {
+  assert.equal(
+    vesselSidebarLabel({ englishName: "SEA HUNTER", chineseName: "海猎号" }),
+    "SEA HUNTER（海猎号）",
+  );
+});
+
 test("uses the ontology-identified Chinese name when the scope only has a placeholder", () => {
   assert.equal(vesselSidebarLabel({ code: "DDG-70", name: "MMSI 367197000", fallbackName: "霍珀" }), "DDG-70 霍珀");
   assert.equal(vesselSidebarLabel({ code: "T-AO-200", name: "MMSI 367219000", fallbackName: "瓜达卢佩" }), "T-AO-200 瓜达卢佩");
@@ -41,14 +71,14 @@ test("uses the ontology-identified Chinese name when the scope only has a placeh
   assert.equal(vesselSidebarLabel({ code: "DDG-76", name: "MMSI 111111111", fallbackName: "希金斯" }), "DDG-76 希金斯");
 });
 
-test("prefers the scope short name over the ontology name for curated vessels", () => {
+test("combines the ontology English name with the scope short name for curated vessels", () => {
   assert.equal(
     vesselSidebarLabel({ code: "CVN-73", name: "华盛顿号", fallbackName: "USS George Washington（乔治·华盛顿号）" }),
-    "CVN-73 华盛顿号",
+    "CVN-73 USS George Washington（华盛顿号）",
   );
   assert.equal(
     vesselSidebarLabel({ code: "CVN-71", name: "罗斯福号", fallbackName: "USS Theodore Roosevelt CVN-71(US GOV VESSEL)" }),
-    "CVN-71 罗斯福号",
+    "USS Theodore Roosevelt CVN-71(US GOV VESSEL)（罗斯福号）",
   );
 });
 
@@ -98,11 +128,23 @@ test("scope maintains public hull codes and actual retrieved names for identifie
 test("server auto-extracts hull codes from AIS names and prefers scope codes", () => {
   assert.match(serverSource, /code: rows\.map\(\(item\) => extractHullCode\(item\.shipName\)\)\.find\(Boolean\) \?\? null/);
   assert.match(serverSource, /const code = vessel\.code \?\? identityCode \?\? null/);
-  assert.match(serverSource, /vesselSidebarLabel\(\{ code, name: vessel\.shortName \|\| vessel\.name, fallbackName: resolvedName \}\)/);
+  assert.match(serverSource, /displayName: code \? vesselPreferredLabel/);
+  assert.match(serverSource, /englishName: identityEnglishName \|\| vessel\.englishName/);
+  assert.match(serverSource, /chineseName: vessel\.chineseName \|\| identityChineseName/);
 });
 
-test("sidebar rows render the code-prefixed label and search matches it", () => {
-  assert.match(appSource, /<strong>\{target\.displayName \|\| target\.name\}<\/strong>/);
-  assert.match(appSource, /`\$\{target\.displayName \|\| ""\} \$\{target\.name\} \$\{target\.mmsi\}`/);
+test("left sidebar renders its dedicated bilingual label and search matches it", () => {
+  assert.match(appSource, /<strong>\{target\.sidebarDisplayName \|\| target\.displayName \|\| target\.name\}<\/strong>/);
+  assert.match(appSource, /`\$\{target\.sidebarDisplayName \|\| ""\} \$\{target\.displayName \|\| ""\} \$\{target\.name\} \$\{target\.mmsi\}`/);
   assert.match(appSource, /placeholder="代号 \/ 船名 \/ MMSI"/);
+});
+
+test("sidebar cache version includes the manual vessel-name override registry", () => {
+  assert.match(serverSource, /import \{ VESSEL_NAME_OVERRIDES, getVesselOverride, applyVesselOverride \} from "\.\/vesselNames\.js"/);
+  assert.match(serverSource, /overrides: Object\.entries\(VESSEL_NAME_OVERRIDES\)/);
+});
+
+test("resize separator exposes the same dynamic maximum width used by the handler", () => {
+  assert.match(appSource, /const \[leftPanelBounds, setLeftPanelBounds\] = useState\(\{ min: 240, max: 520 \}\)/);
+  assert.match(appSource, /aria-valuemax=\{leftPanelBounds\.max\}/);
 });

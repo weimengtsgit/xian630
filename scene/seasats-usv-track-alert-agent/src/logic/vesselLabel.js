@@ -9,6 +9,14 @@ export function chineseShipName(name) {
   return matched ? matched[0] : null;
 }
 
+// 从本体 AIS 名称中保留英文部分；若名称本身带有中文括注，则去掉括注，避免在双语标签中重复。
+export function englishShipName(name) {
+  const text = String(name || "").trim();
+  if (!text || isPlaceholderName(text) || isGenericVesselName(text) || !/[A-Za-z]/.test(text)) return null;
+  const withoutChineseNote = text.replace(/[（(]\s*[一-鿿][^）)]*[）)]/g, "").trim();
+  return withoutChineseNote || null;
+}
+
 // 从 AIS 船名中提取舷号（如 USS Benfold DDG-65、CVN-71、USNS Guadalupe T-AO-200）。
 const HULL_CODE_PATTERN = /\b((?:T-AOE|T-AKE|T-AO|T-AE|T-ARS|T-ATF|T-AGOS|T-EPF|T-ESD|T-ESB|CVN|DDG|SSBN|SSGN|LHA|LHD|LPD|LSD|LCS|SSN|FFG|AOE|CG|AO|AE|AKE)-?\d{1,4}[A-Z]?)\b/i;
 
@@ -26,14 +34,33 @@ function isGenericVesselName(name) {
   return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
 }
 
-export function vesselSidebarLabel({ code, name, fallbackName } = {}) {
+// 右侧栏沿用旧规则：中文名优先；没有中文名时才展示实际获取到的英文名。
+export function vesselPreferredLabel({ code, name, fallbackName } = {}) {
   const trimmedCode = String(code || "").trim();
   const primary = String(name || "").trim();
   const fallback = String(fallbackName || "").trim();
-  // 中文船名优先取使用方名单（航母等已指定短名），再取本体识别名。
   const chinese = chineseShipName(primary) || chineseShipName(fallback);
   const text = [primary, fallback].find((value) => value && !isPlaceholderName(value) && !isGenericVesselName(value)) || "";
   const shipName = chinese || text || null;
+  if (!trimmedCode) return shipName || primary || fallback;
+  if (!shipName) return trimmedCode;
+  if (shipName.toUpperCase().includes(trimmedCode.toUpperCase())) return shipName;
+  return `${trimmedCode} ${shipName}`;
+}
+
+// 左侧栏使用双语格式：英文（中文）。
+export function vesselSidebarLabel({ code, name, fallbackName, englishName, chineseName } = {}) {
+  const trimmedCode = String(code || "").trim();
+  const primary = String(name || "").trim();
+  const fallback = String(fallbackName || "").trim();
+  const identity = String(englishName || "").trim();
+  const configuredChinese = String(chineseName || "").trim();
+  // 中文船名优先取使用方名单（航母等已指定短名），再取本体识别名；英文名优先取本体识别名。
+  const chinese = chineseShipName(configuredChinese) || chineseShipName(primary) || chineseShipName(fallback);
+  const english = [identity, fallback, primary].map(englishShipName).find(Boolean) || null;
+  const fallbackText = [primary, fallback, identity].find((value) => value && !isPlaceholderName(value) && !isGenericVesselName(value)) || "";
+  // 仅在存在独立中文船名时展示“英文（中文）”；代码型或仅英文船名保持英文，不重复伪造中文名。
+  const shipName = english && chinese ? `${english}（${chinese}）` : english || chinese || fallbackText || null;
   if (!trimmedCode) return shipName || primary || fallback;
   // 没有实际船名时只写代号。
   if (!shipName) return trimmedCode;

@@ -393,6 +393,18 @@ test("renders prediction entries when a prediction payload is provided", () => {
   assert.match(markup, /基于历史伴随规律推测，仅作参考。/);
 });
 
+test("prediction entries prefer a configured Chinese name for any future carrier", () => {
+  const markup = render({
+    allTargets: [{ mmsi: "999000001", name: "FUTURE CARRIER", rightDisplayName: "未来航母号" }],
+    prediction: {
+      status: "analyzed",
+      entries: [{ carrier: { mmsi: "999000001", name: "FUTURE CARRIER" }, relationType: "同步伴随" }],
+    },
+  });
+  assert.match(markup, /海巡 630 预计与 未来航母号 同步伴随/);
+  assert.doesNotMatch(markup, /FUTURE CARRIER/);
+});
+
 test("prediction payload with null or carrier-less entries is handled safely", () => {
   const markup = render({
     prediction: {

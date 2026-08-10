@@ -1,15 +1,16 @@
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { MONITORED_VESSELS } from "./seasatsScope.js";
 import { JUDGEMENT_PARAMETERS, MONITORED_AREAS } from "./monitoringRules.js";
 import { CARRIER_AFFILIATION_RULES } from "./carrierAffiliation.js";
-import { getVesselOverride, applyVesselOverride } from "./vesselNames.js";
+import { VESSEL_NAME_OVERRIDES, getVesselOverride, applyVesselOverride } from "./vesselNames.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
-import { extractHullCode, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
+import { chineseShipName, englishShipName, extractHullCode, vesselPreferredLabel, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
 import { FETCH_LIMIT, SAFE_RECORD_THRESHOLD, mergeTrackPoints, splitWindow, trackPointKey } from "./trackWindows.js";
 import coastData from "../src/data/chinaCoast.json" with { type: "json" };
 
@@ -41,6 +42,18 @@ const affiliationRefreshMs = 5 * 60 * 60 * 1000;
 // 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
 const affiliationSnapshotVersion = "python-select-v8-track-window-2025-01-01";
 const headingFieldVersion = "independent-heading-orientation-v2";
+// 船名展示规则变更后，旧的持久化首屏快照不得继续下发。
+const summarySnapshotVersion = "sidebar-vessel-name-v6";
+// 名单的中英文名称发生变化时自动使持久化快照失效，新增船只无需手动修改快照版本。
+export const vesselLabelConfigVersion = createHash("sha256")
+  .update(JSON.stringify({
+    vessels: MONITORED_VESSELS.map(({ mmsi, code, name, shortName, englishName, chineseName }) => ({ mmsi, code, name, shortName, englishName, chineseName })),
+    overrides: Object.entries(VESSEL_NAME_OVERRIDES)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([mmsi, entry]) => ({ mmsi, ...entry })),
+  }))
+  .digest("hex")
+  .slice(0, 12);
 // 轨迹落盘目录：去重后的全量轨迹按 MMSI 持久化，重启后只补增量，不再全量重拉。
 const trackStoreRoot = resolve(dataRoot, "tracks");
 // 增量刷新时从水位线回退的重叠窗口，吸收迟到/乱序报点。
@@ -165,14 +178,33 @@ function isGenericVesselName(name) {
   return /^(?:US\s+GOV(?:ERNMENT)?(?:\s+VESSEL)?|US\s+WARSHIP|WARSHIP|美国政府船只)$/i.test(String(name || "").trim());
 }
 
-// 侧栏“代号 船名”标签：代号优先取名单配置，缺失时用 AIS 船名中提取的舷号兜底；
-// 船名优先取名单 shortName/中文名，再取本体识别名中的中文段，最后回退实际获取的名字。
+// 侧栏船名标签：代号优先取名单配置，缺失时用 AIS 船名中提取的舷号兜底；
+// 已知中英文名称组合为“英文（中文）”，缺少其中一侧时使用已确认名称。
 // 该标签供左右侧栏标题使用；航母关联卡片等仍使用 name 字段，显示方式不受影响。
-export function sidebarFields(vessel, resolvedName, identityCode) {
+export function sidebarFields(vessel, resolvedName, identityCode, identityEnglishName = null, identityChineseName = null) {
   const code = vessel.code ?? identityCode ?? null;
   return {
     code,
-    displayName: code ? vesselSidebarLabel({ code, name: vessel.shortName || vessel.name, fallbackName: resolvedName }) : null,
+    // displayName 继续供右侧栏使用，保持旧规则：中文优先，无中文时再回退英文。
+    displayName: code ? vesselPreferredLabel({
+      code,
+      name: vessel.shortName || vessel.name,
+      fallbackName: resolvedName,
+    }) : null,
+    // 右侧所有详情、关联结论和弹窗共用的稳定中文优先名称。
+    rightDisplayName: vesselPreferredLabel({
+      code,
+      name: vessel.shortName || vessel.name,
+      fallbackName: resolvedName,
+    }),
+    // 左侧栏专用双语标签，不能被点选后的最新 AIS shipName 覆盖。
+    sidebarDisplayName: vesselSidebarLabel({
+      code,
+      name: vessel.shortName || vessel.name,
+      fallbackName: resolvedName,
+      englishName: identityEnglishName || vessel.englishName,
+      chineseName: vessel.chineseName || identityChineseName,
+    }),
   };
 }
 
@@ -194,10 +226,14 @@ async function fetchVesselIdentity(vessel) {
     filters: [{ column: "mmsi", logic: "=", condition: vessel.mmsi, useCondition: true }],
   });
   const rows = (details.rows || []).filter((item) => String(item.mmsi) === vessel.mmsi);
+  const names = rows.map((item) => item.shipName);
   return {
     mmsi: vessel.mmsi,
     // 本体同一船可能有别名，优先标准名称，排除“US GOV VESSEL”等通用占位名。
-    name: selectPreferredVesselName(rows.map((item) => item.shipName), vessel.role),
+    name: selectPreferredVesselName(names, vessel.role),
+    // 同一 MMSI 在本体可能存在中英文别名；分别保留，供侧栏通用地组装双语标签。
+    englishName: names.map(englishShipName).find(Boolean) ?? null,
+    chineseName: names.map(chineseShipName).find(Boolean) ?? null,
     // 美军舰 AIS 船名常自带舷号（如 USS Benfold DDG-65），提取后可供侧栏代号兜底。
     code: rows.map((item) => extractHullCode(item.shipName)).find(Boolean) ?? null,
     rawTypeCode: rows.find((item) => item.typeCode)?.typeCode ?? null,
@@ -335,6 +371,8 @@ async function buildTrack(mmsi) {
 export function summarySnapshotUsable(snapshot) {
   return snapshot?.metadata?.source === "ontology-daas"
     && snapshot?.metadata?.headingFieldVersion === headingFieldVersion
+    && snapshot?.metadata?.summarySnapshotVersion === summarySnapshotVersion
+    && snapshot?.metadata?.vesselLabelConfigVersion === vesselLabelConfigVersion
     // 轨迹窗口不一致的旧快照不得用于首屏（例如窗口从 2025-12-06 扩到 2025-01-01 后）。
     && snapshot?.metadata?.trackWindowStart === new Date(trackBaselineStartMs).toISOString()
     && Array.isArray(snapshot?.targets)
@@ -392,7 +430,7 @@ async function buildFastSummary() {
     return {
       mmsi: vessel.mmsi,
       name: resolvedName,
-      ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code),
+      ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code, identity?.englishName, identity?.chineseName),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
@@ -408,7 +446,7 @@ async function buildFastSummary() {
   return {
     metadata: {
       source: "ontology-daas", generatedAt: new Date().toISOString(), targetCount: targets.length,
-      headingFieldVersion,
+      headingFieldVersion, summarySnapshotVersion, vesselLabelConfigVersion,
       trackWindowStart: new Date(trackBaselineStartMs).toISOString(),
       trackPointCount: points.length, trackMmsiCount: points.length ? 1 : 0,
       vesselTypes: [...new Set(targets.map((target) => target.vesselCategory))],
@@ -439,7 +477,7 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     const rawTarget = {
       mmsi,
       name: resolvedName,
-      ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code),
+      ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code, identity?.englishName, identity?.chineseName),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
       lat: latest?.lat ?? null,
@@ -483,7 +521,7 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
   return {
     metadata: {
       source: "ontology-daas",
-      headingFieldVersion,
+      headingFieldVersion, summarySnapshotVersion, vesselLabelConfigVersion,
       generatedAt: new Date().toISOString(),
       targetCount: targets.length,
       trackWindowStart: new Date(trackBaselineStartMs).toISOString(),

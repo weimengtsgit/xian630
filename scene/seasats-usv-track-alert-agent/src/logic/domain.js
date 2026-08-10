@@ -274,7 +274,8 @@ function areaNames(areaIds, areas) {
 
 export function buildAlerts({ target, segments = [], aisGaps = [], areas = [], params = DEFAULT_PARAMETERS }) {
   const alerts = [];
-  const targetName = target?.name || target?.mmsi || "舰艇";
+  // 告警会出现在右侧分析栏、地图气泡和弹窗；与详情标题保持同一中文优先规则。
+  const targetName = target?.rightDisplayName || target?.displayName || target?.name || target?.mmsi || "舰艇";
   for (const segment of segments) {
     if (segment.areaIds.length === 0) continue;
     const names = areaNames(segment.areaIds, areas).join(" / ");

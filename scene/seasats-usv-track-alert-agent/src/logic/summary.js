@@ -1,5 +1,9 @@
 const THREAT_LABEL = { critical: "紧急", high: "高危", medium: "中危", low: "低危", none: "平稳" };
 
+function preferredTargetName(target) {
+  return target?.rightDisplayName || target?.displayName || target?.name || target?.mmsi || "舰艇";
+}
+
 function fmtDuration(totalMin) {
   const minutes = Math.max(0, Math.round(totalMin || 0));
   const days = Math.floor(minutes / 1440);
@@ -36,7 +40,7 @@ export function buildSummary(analysis = {}, params = {}) {
   if (nearest) findings.push({ icon: "shore", label: "离国土最近", value: `${nearest.minCoastDistanceNm.toFixed(0)} 海里` });
   const fastest = targets
     .filter((t) => t.maxSpeedSegment)
-    .map((t) => ({ name: t.name, sp: t.maxSpeedSegment.speedKn }))
+    .map((t) => ({ name: preferredTargetName(t), sp: t.maxSpeedSegment.speedKn }))
     .sort((a, b) => b.sp - a.sp)[0];
   if (fastest) findings.push({ icon: "gauge", label: "最快航速", value: `${fastest.sp.toFixed(1)} 节` });
   findings.push({ icon: "ship", label: "活跃舰艇", value: `${targets.length}` });
@@ -55,7 +59,7 @@ export function buildSummary(analysis = {}, params = {}) {
   } else {
     const primary = [...tracked].sort((a, b) => (b.reportCount || 0) - (a.reportCount || 0))[0];
     const parts = [];
-    parts.push(`${primary.name} 记录 ${(primary.reportCount || 0).toLocaleString()} 个 AIS 报点，分布于 ${primary.activeDays || 0} 个活动日。`);
+    parts.push(`${preferredTargetName(primary)} 记录 ${(primary.reportCount || 0).toLocaleString()} 个 AIS 报点，分布于 ${primary.activeDays || 0} 个活动日。`);
     if (aisGaps.length > 0) {
       const longest = Math.max(...aisGaps.map((g) => g.gapMinutes || 0));
       parts.push(`检测到 ${aisGaps.length} 起 AIS 信号中断，最长 ${fmtDuration(longest)}${longest > 360 ? "（超 6 小时，需关注）" : ""}。`);
@@ -63,7 +67,7 @@ export function buildSummary(analysis = {}, params = {}) {
     const nearestT = targets.filter((t) => t.minCoastDistanceNm != null).sort((a, b) => a.minCoastDistanceNm - b.minCoastDistanceNm)[0];
     if (nearestT) {
       const inZone = nearestT.minCoastDistanceNm < (params.coastAlertRangeNm || 200);
-      parts.push(`离国土最近 ${nearestT.minCoastDistanceNm.toFixed(0)} 海里（${nearestT.name}）${inZone ? "，已进入 200 海里警戒区" : "，未进入警戒区"}。`);
+      parts.push(`离国土最近 ${nearestT.minCoastDistanceNm.toFixed(0)} 海里（${preferredTargetName(nearestT)}）${inZone ? "，已进入 200 海里警戒区" : "，未进入警戒区"}。`);
     }
     if (primary.maxSpeedSegment) parts.push(`最快航速 ${primary.maxSpeedSegment.speedKn.toFixed(1)} 节。`);
     parts.push(`综合研判威胁等级：${THREAT_LABEL[threatLevel]}。`);

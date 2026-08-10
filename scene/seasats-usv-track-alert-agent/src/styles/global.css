@@ -389,6 +389,14 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 /* 右侧栏沿整列拉伸到底，与左侧栏、地图同高；min-height:0 使其不把网格行撑高，
    行高由地图（minmax(600px,66vh)）决定，避免页面无限变高；内部关联区自滚动。 */
 .workspace > .vessel-focus-panel { align-self: stretch; min-height: 0; }
+.target-panel { position: relative; }
+@media (min-width: 1181px) {
+  .workspace { grid-template-columns: minmax(240px, var(--target-panel-width, 290px)) minmax(0, 1fr) minmax(280px, 340px); }
+  .target-resize-handle { position: absolute; z-index: 3; top: 0; right: -7px; width: 14px; height: 100%; padding: 0; border: 0; background: transparent; cursor: col-resize; touch-action: none; }
+  .target-resize-handle::after { content: ""; position: absolute; top: 35%; bottom: 35%; left: 6px; width: 2px; border-radius: 99px; background: rgba(148, 163, 184, 0); transition: background 120ms ease; }
+  .target-resize-handle:hover::after, .target-resize-handle:focus-visible::after { background: rgba(94, 234, 212, 0.9); }
+}
+@media (max-width: 1180px) { .target-resize-handle { display: none; } }
 .target-panel, .vessel-focus-panel, .remote-map-panel, .analysis-group, .insight-strip {
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(148, 163, 184, 0.22);

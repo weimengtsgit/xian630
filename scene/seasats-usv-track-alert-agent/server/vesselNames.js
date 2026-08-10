@@ -10,8 +10,8 @@ export const VESSEL_NAME_OVERRIDES = {
   // 已登记示例：直接显示真实舷号与船名。
   // "368926540": { code: "DDG-118", name: "丹尼尔·井上号", shortName: "井上号" },
 
-  // SEAHAWK 有中文名“海鹰”：关联结论与界面统一显示中文，覆盖本体可能返回的英文 shipName。
-  "368926574": { code: null, name: "海鹰", shortName: null },
+  // SEAHAWK 有中文名“海鹰号”：关联结论与界面统一显示中文，覆盖本体可能返回的英文 shipName。
+  "368926574": { code: null, name: "海鹰号", shortName: null },
 
   // 以下 5 艘暂无公开船名，待在 marinetraffic 查询后补全 code/name/shortName（留空则仍显示 MMSI）：
   "369970641": { code: null, name: null, shortName: null },

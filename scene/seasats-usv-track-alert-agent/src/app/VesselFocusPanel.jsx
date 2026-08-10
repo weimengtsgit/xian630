@@ -68,7 +68,7 @@ export function resolveDisplayedHeading(selectedTarget) {
 
 function vesselName(selectedTarget) {
   return textOrFallback(
-    valueFrom(selectedTarget, ["name", "vesselName", "shipName"]),
+    valueFrom(selectedTarget, ["rightDisplayName", "displayName", "name", "vesselName", "shipName"]),
     "未选择舰艇",
   );
 }
@@ -282,7 +282,7 @@ function resolveAffiliationRelations(affiliation, selectedMmsi, selectedName, al
     return { preamble: { text: "暂无可用的航母关联历史快照。", variant: "empty" }, relations: [] };
   }
   if (affiliation.status === "carrier") {
-    const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+    const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, vesselName(target)]));
     const codeByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.code]));
     const selectedCarrierName = carrierDisplayName(selectedMmsi, nameByMmsi.get(selectedMmsi));
     const relatedVessels = Object.entries(allAffiliations || {}).flatMap(([mmsi, item]) => (item.carriers || [])
@@ -305,7 +305,7 @@ function resolveAffiliationRelations(affiliation, selectedMmsi, selectedName, al
   if (!matched.length) {
     return { preamble: partial ? { text: "部分航母轨迹查询失败，当前关联结论不完整。", variant: "error" } : { text: "暂无满足历史关联阈值的航母关联。", variant: "empty" }, relations: [] };
   }
-  const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.name]));
+  const nameByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, vesselName(target)]));
   const codeByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, target.code]));
   const followerName = selectedName || nameByMmsi.get(selectedMmsi) || `MMSI ${selectedMmsi}`;
   const followerCode = codeByMmsi.get(selectedMmsi);
@@ -747,12 +747,12 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
 
 // 预测区块独立渲染：预留 prediction 数据接口，当前无预测接口时展示空状态，不得用历史数据冒充。
 // 预留结构（待对接）：{ status, refreshedAt, entries: [{ carrier: { mmsi, name }, relationType, predictedWindow: { start, end }, confidence, note }] }
-function predictionEntry(entry, name, key) {
+function predictionEntry(entry, name, carrierNamesByMmsi, key) {
   // 预测接口未上线，载荷可能含 null/畸形 entry；统一防御，缺字段用占位，绝不抛错。
   if (!entry || typeof entry !== "object") return null;
   const { carrier, relationType, predictedWindow, confidence, note } = entry;
   const carrierName = carrier?.mmsi || carrier?.name
-    ? carrierDisplayName(carrier?.mmsi, carrier?.name)
+    ? carrierDisplayName(carrier?.mmsi, carrierNamesByMmsi.get(carrier?.mmsi) || carrier?.name)
     : "未知关联对象";
   const windowLabel = predictedWindow && (predictedWindow.start || predictedWindow.end)
     ? `${formatSnapshotTime(predictedWindow.start) || "?"} ~ ${formatSnapshotTime(predictedWindow.end) || "?"}`
@@ -769,7 +769,7 @@ function predictionEntry(entry, name, key) {
   );
 }
 
-function predictionContent(prediction, selectedName) {
+function predictionContent(prediction, selectedName, allTargets) {
   if (!prediction || prediction.status === "refreshing" || prediction.status === "not-generated") {
     return React.createElement("p", { className: "affiliation-empty" }, "暂无可用的关联预测数据。");
   }
@@ -781,11 +781,17 @@ function predictionContent(prediction, selectedName) {
   if (!entries.length) {
     return React.createElement("p", { className: "affiliation-empty" }, "暂无可用的关联预测数据。");
   }
+  const carrierNamesByMmsi = new Map((allTargets || []).map((target) => [target.mmsi, vesselName(target)]));
   return React.createElement(
     React.Fragment,
     null,
     // key 仅用 index，保证多个同名 carrier entry 也不重复。
-    entries.map((entry, index) => predictionEntry(entry, selectedName, `prediction-${index}`)),
+    entries.map((entry, index) => predictionEntry(
+      entry,
+      selectedName,
+      carrierNamesByMmsi,
+      `prediction-${index}`,
+    )),
   );
 }
 
@@ -850,7 +856,7 @@ export function VesselFocusPanel({
   }, []);
 
   const selectedMmsi = valueFrom(selectedTarget, ["mmsi", "MMSI"]);
-  const selectedName = selectedTarget?.displayName || vesselName(selectedTarget);
+  const selectedName = vesselName(selectedTarget);
   const { preamble, relations } = useMemo(
     () => resolveAffiliationRelations(affiliation, selectedMmsi, selectedName, allAffiliations, allTargets),
     [affiliation, selectedMmsi, selectedName, allAffiliations, allTargets],
@@ -916,7 +922,7 @@ export function VesselFocusPanel({
         "div",
         null,
         React.createElement("small", null, "关注舰艇"),
-        React.createElement("h2", { ref: vesselHeadingRef, tabIndex: -1 }, selectedTarget?.displayName || vesselName(selectedTarget)),
+        React.createElement("h2", { ref: vesselHeadingRef, tabIndex: -1 }, vesselName(selectedTarget)),
         React.createElement("p", null, "MMSI：", vesselMmsi(selectedTarget)),
       ),
       React.createElement(
@@ -995,7 +1001,7 @@ export function VesselFocusPanel({
         null,
         React.createElement("span", null, "与航母打击群关联分析（预测）"),
       ),
-      predictionContent(prediction, vesselName(selectedTarget)),
+      predictionContent(prediction, vesselName(selectedTarget), allTargets),
     ),
     showAnalysisOverlay
       ? React.createElement(

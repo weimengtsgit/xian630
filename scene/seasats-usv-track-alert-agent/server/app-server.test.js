@@ -18,7 +18,7 @@ function resolveName(vessel, identityName, latestName, registry) {
 // 复刻服务端构建 target 时的 name / code / displayName 组装（登记表覆盖优先）。
 function resolveTarget(vessel, { identityName = null, identityCode = null, latestName = null, registry = {} } = {}) {
   const resolvedName = resolveName(vessel, identityName, latestName, registry);
-  const { code, displayName } = sidebarFields(applyVesselOverride(vessel, registry), resolvedName, identityCode);
+  const { code, displayName } = sidebarFields(applyVesselOverride(vessel, registry), resolvedName, identityCode, identityName);
   return { name: resolvedName, code, displayName };
 }
 
@@ -65,7 +65,12 @@ test("rejects legacy summary snapshots that collapsed heading and orientation", 
   assert.equal(appServer.summarySnapshotUsable?.(snapshot), false);
   assert.equal(appServer.summarySnapshotUsable?.({
     ...snapshot,
-    metadata: { ...snapshot.metadata, headingFieldVersion: "independent-heading-orientation-v2" },
+    metadata: {
+      ...snapshot.metadata,
+      headingFieldVersion: "independent-heading-orientation-v2",
+      summarySnapshotVersion: "sidebar-vessel-name-v6",
+      vesselLabelConfigVersion: appServer.vesselLabelConfigVersion,
+    },
   }), true);
 });
 
@@ -75,7 +80,7 @@ test("override supplies code + short name and yields a code-prefixed sidebar lab
   assert.deepEqual(resolveTarget(vessel, { registry }), { name: "真实号", code: "DDG-1", displayName: "DDG-1 真" });
 });
 
-test("override with name only (no code) keeps name and leaves displayName null", () => {
+test("override with name only (no code) keeps the right-side display name unset", () => {
   const vessel = placeholderVessel("456");
   const registry = { "456": { code: null, name: "US NAVY SUBMARINE", shortName: null } };
   assert.deepEqual(resolveTarget(vessel, { registry }), { name: "US NAVY SUBMARINE", code: null, displayName: null });
@@ -90,7 +95,17 @@ test("override takes priority over ontology identity name and code", () => {
   assert.equal(out.code, "DDG-2");
 });
 
-test("without an override the resolution is unchanged (keeps MMSI placeholder, ontology name still wins)", () => {
+test("sidebar label keeps both the ontology English name and the registered Chinese name", () => {
+  const vessel = { ...placeholderVessel("368926574"), englishName: "SEAHAWK" };
+  const registry = { "368926574": { code: null, name: "海鹰号", shortName: null } };
+  const out = resolveTarget(vessel, { registry });
+  const fields = sidebarFields(applyVesselOverride(vessel, registry), out.name, null, null, "海鹰号");
+  assert.equal(out.name, "海鹰号");
+  assert.equal(out.displayName, null);
+  assert.equal(fields.sidebarDisplayName, "SEAHAWK（海鹰号）");
+});
+
+test("without an override the right-side display name remains unset without a hull code", () => {
   const vessel = placeholderVessel("123");
   assert.deepEqual(resolveTarget(vessel), { name: "MMSI 123", code: null, displayName: null });
   assert.equal(resolveTarget(vessel, { identityName: "霍珀", identityCode: "DDG-70" }).name, "霍珀");

@@ -1,6 +1,10 @@
 import { toNumber } from "./domain.js";
 import { nearestPointOnCoastNm } from "./coast.js";
 
+function preferredTargetName(target) {
+  return target?.rightDisplayName || target?.displayName || target?.name || target?.mmsi || "舰艇";
+}
+
 function targetPoints(target) {
   if (!target?.segments) return [];
   return target.segments.flatMap((s) => s.points || []);
@@ -111,7 +115,7 @@ export function headingDistribution(target) {
 export function targetDistanceDistribution(targets) {
   return targets
     .filter((t) => t.minCoastDistanceNm != null)
-    .map((t) => ({ name: t.name, mmsi: t.mmsi, dist: t.minCoastDistanceNm, status: t.status }))
+    .map((t) => ({ name: preferredTargetName(t), mmsi: t.mmsi, dist: t.minCoastDistanceNm, status: t.status }))
     .sort((a, b) => a.dist - b.dist);
 }
 
@@ -119,7 +123,7 @@ export function targetDistanceDistribution(targets) {
 export function activityDaysTop(targets, n = 6) {
   return targets
     .filter((t) => t.activeDays != null)
-    .map((t) => ({ name: t.name, days: t.activeDays }))
+    .map((t) => ({ name: preferredTargetName(t), days: t.activeDays }))
     .sort((a, b) => b.days - a.days)
     .slice(0, n);
 }
@@ -175,7 +179,7 @@ export function perTargetAlertBreakdown(targets, n = 8) {
   const rows = targets.map((t) => {
     const counts = {};
     for (const a of t.alerts || []) counts[a.type] = (counts[a.type] || 0) + 1;
-    return { mmsi: t.mmsi, name: t.name, counts, total: (t.alerts || []).length };
+    return { mmsi: t.mmsi, name: preferredTargetName(t), counts, total: (t.alerts || []).length };
   }).filter((r) => r.total > 0).sort((a, b) => b.total - a.total).slice(0, n);
   return { rows, types: ALERT_TYPE_META };
 }

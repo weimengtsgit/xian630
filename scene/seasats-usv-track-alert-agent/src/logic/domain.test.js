@@ -21,6 +21,17 @@ test("normalizes target-list speed by dividing by 10", () => {
   assert.equal(normalizeTargetSpeedKn("bad"), null);
 });
 
+test("uses the stable Chinese-preferred label in alert text", () => {
+  const alerts = buildAlerts({
+    target: { mmsi: "368926574", name: "SEAHAWK", rightDisplayName: "海鹰号" },
+    aisGaps: [{ id: "gap", targetMmsi: "368926574", gapMinutes: 60, severity: "warning", nearAreaIds: [], fromTime: "2026-01-01T00:00:00Z", toTime: "2026-01-01T01:00:00Z", lon: 120, lat: 20 }],
+    areas,
+  });
+  assert.equal(alerts[0].targetName, "海鹰号");
+  assert.match(alerts[0].summary, /海鹰号/);
+  assert.doesNotMatch(alerts[0].summary, /SEAHAWK/);
+});
+
 test("matches SEASAT or SEASATS followed by TEST or a number", () => {
   assert.equal(isNameHit("SEASATS 55"), true);
   assert.equal(isNameHit("seasat TEST"), true);

@@ -10,6 +10,16 @@ test("buildSummary threat=none when nothing happens", () => {
   assert.ok(Array.isArray(s.findings));
 });
 
+test("uses the Chinese-preferred display name in expanded analysis narrative", () => {
+  const summary = buildSummary({
+    targets: [{ mmsi: "368926574", name: "SEAHAWK", rightDisplayName: "海鹰号", hasObservedTrack: true, reportCount: 12, activeDays: 2, minCoastDistanceNm: 300 }],
+    alerts: [],
+    aisGaps: [],
+  }, PARAMS);
+  assert.match(summary.narrative, /海鹰号/);
+  assert.doesNotMatch(summary.narrative, /SEAHAWK/);
+});
+
 test("buildSummary threat=critical on coast high", () => {
   const analysis = {
     targets: [{ mmsi: "X", name: "SEASATS 1", minCoastDistanceNm: 50, status: "异常行为舰艇", score: 90 }],
