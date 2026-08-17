@@ -504,7 +504,10 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 .affiliation-evidence-card strong { display: block; margin-top: 3px; color: #e6f6ff; font-size: 13px; overflow-wrap: anywhere; }
 /* 5. 可视化证据区：桌面两列，窄屏单列 */
 .affiliation-detail-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
-.affiliation-detail-chart { min-width: 0; height: 100%; margin: 0; padding: 10px; border-radius: 7px; background: rgba(15, 78, 107, 0.3); display: grid; grid-template-rows: auto auto minmax(220px, 1fr) auto auto; align-content: start; gap: 8px; }
+/* 关联依据：独立一横栏（body 级整行卡片），参照智能体研判的显示方式，位于航迹对比图与距离曲线图之上。 */
+.affiliation-detail-basis p { margin: 0 0 6px; color: #cbe7f7; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.affiliation-detail-basis p:last-child { margin: 0; }
+.affiliation-detail-chart { min-width: 0; height: 100%; margin: 0; padding: 10px; border-radius: 7px; background: rgba(15, 78, 107, 0.3); display: grid; grid-template-rows: auto minmax(220px, 1fr) auto auto; align-content: start; gap: 8px; }
 .affiliation-detail-chart figcaption { color: #d9f5ff; font-size: 12px; font-weight: 600; }
 .affiliation-chart-plot { min-width: 0; width: 100%; min-height: 220px; aspect-ratio: 18 / 11; align-self: end; }
 .affiliation-detail-chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -516,11 +519,9 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 .affiliation-track-reset:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; }
 .affiliation-track-zoom-hint { position: absolute; left: 6px; bottom: 4px; z-index: 2; padding: 2px 6px; border-radius: 5px; color: #9cc5df; background: rgba(2, 6, 23, 0.55); font-size: 10px; pointer-events: none; }
 .affiliation-detail-chart span { min-width: 0; color: #9cc5df; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
-.affiliation-chart-description { min-width: 0; min-height: 58px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 3px 5px; color: #9cc5df; font-size: 10px; line-height: 1.45; }
-.affiliation-chart-description strong { color: #d9f5ff; font-size: 10px; }
-.affiliation-chart-description span { overflow-wrap: anywhere; }
-.affiliation-chart-description small { grid-column: 1 / -1; color: #9cc5df; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .affiliation-chart-note { min-height: 30px; }
+/* 航迹图加载占位：loading 期间不挂载 SVG，杜绝两阶段跳变。 */
+.affiliation-track-loading { display: flex; align-items: center; justify-content: center; color: #9cc5df; font-size: 12px; letter-spacing: .04em; }
 .affiliation-detail-empty { margin: 0; padding: 18px 10px; text-align: center; color: #9db1c9; font-size: 12px; border: 1px dashed rgba(148, 163, 184, 0.3); border-radius: 7px; background: rgba(15, 40, 66, 0.4); }
 /* 航迹图样式：--zoom 由航迹图 svg 内联设置（缩放倍数）。线宽/字号/描边按 1/--zoom 反向缩放，
    配合 vector-effect:non-scaling-stroke，使放大时线条与刻度保持屏幕恒定粗细，露出真实航迹细节而非被粗线占满。 */
@@ -555,7 +556,7 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 /* 窄屏：图表纵向排列，标题/关闭保留 */
 @media (max-width: 900px) {
   .affiliation-detail-charts { grid-template-columns: 1fr; }
-  .affiliation-detail-chart { grid-template-rows: auto auto minmax(220px, auto) auto auto; }
+  .affiliation-detail-chart { grid-template-rows: auto minmax(220px, auto) auto auto; }
   .affiliation-chart-plot { min-height: 220px; }
 }
 @media (max-width: 720px) {

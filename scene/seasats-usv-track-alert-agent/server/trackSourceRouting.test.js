@@ -48,10 +48,20 @@ test("time-windowed batching and incremental refresh are enforced", () => {
   assert.match(serverSource, /trackBaselineStartMs = Date\.UTC\(2025, 0, 1\)/);
   assert.match(serverSource, /metadata\?\.trackWindowStart === new Date\(trackBaselineStartMs\)\.toISOString\(\)/);
   assert.match(serverSource, /store\?\.windowStart !== new Date\(trackBaselineStartMs\)\.toISOString\(\)/);
+  // 轨迹存储版本判废：本体回填"水位线之前"的历史报点后，旧缓存必须全量重拉（增量拉不到回填段）。
+  assert.match(serverSource, /const trackStoreVersion = "v2-20260816-ontology-backfill"/);
+  assert.match(serverSource, /store\?\.trackStoreVersion !== trackStoreVersion/);
+  assert.match(serverSource, /trackStoreVersion,\s*\n\s*updatedAt: new Date\(\)\.toISOString\(\),\s*\n\s*trackPoints,/);
 });
 
 test("ontology-only snapshots, timezone handling, and shared requests are enforced", () => {
-  assert.match(serverSource, /python-select-v8-track-window-2025-01-01/);
+  assert.match(serverSource, /customer-confirmed-v12-20260815/);
+  // 快照判废必须同时比较算法版本、RULES 与 dataRules（航向来源/时间精度/去重规则）。
+  assert.match(serverSource, /JSON\.stringify\(snapshot\?\.dataRules \|\| \{\}\) !== JSON\.stringify\(CARRIER_AFFILIATION_DATA_RULES\)/);
+  // 航迹图渲染序列接口：服务端从全量轨迹生成分桶抽稀序列，前端不再下载十万级点数组。
+  assert.match(serverSource, /url\.searchParams\.get\("render"\) === "1"/);
+  assert.match(serverSource, /buildTrackRenderSeries\(track\.trackPoints\)/);
+  assert.match(serverSource, /renderedFromFullTrack: true/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);
   assert.match(serverSource, /trackInFlight\.has\(mmsi\)/);

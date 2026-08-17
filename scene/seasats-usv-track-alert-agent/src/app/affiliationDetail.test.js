@@ -28,7 +28,9 @@ const {
   reduceActiveAffiliationKey,
   isDialogMaskClick,
   trapDialogFocus,
+  trackSourceNote,
 } = await import("./VesselFocusPanel.jsx");
+const { decimateTrackForRender, decimateDistanceForRender, buildTrackRenderSeries, RENDER_POINT_LIMIT } = await import("../logic/renderDecimation.js");
 
 const lagRelation = {
   carrier: { mmsi: "366984000", name: "CVN-71" },
@@ -37,7 +39,7 @@ const lagRelation = {
     lagMinutes: 19008, averageDistanceNm: 21.9, minimumDistanceNm: 1.3, medianDistanceNm: 18.5,
     withinThresholdRatio: 0.75, matchedPoints: 48, courseFilterApplied: true, maxCourseDifferenceDeg: 12,
     startTime: "2026-07-13T16:00:00.000Z", endTime: "2026-07-16T02:57:00.000Z",
-    distanceSeriesSource: "observed",
+    distanceSeriesSource: "interpolated",
     distanceSeries: [
       { time: "2026-07-13T16:00:00.000Z", distanceNm: 564.6 },
       { time: "2026-07-14T16:00:00.000Z", distanceNm: 80 },
@@ -216,7 +218,7 @@ test("dialog evidence cards show real values and time range from the relation", 
   assert.match(markup, /最小距离[\s\S]*?1\.30 海里/);
   assert.match(markup, /平均距离[\s\S]*?21\.90 海里/);
   assert.match(markup, /中位距离[\s\S]*?18\.50 海里/);
-  assert.match(markup, /航向[\s\S]*?<strong>≤45°<\/strong>/);
+  assert.match(markup, /航向偏差[\s\S]*?<strong>≤45°<\/strong>/);
   assert.match(markup, /阈值内比例[\s\S]*?75%/);
   assert.match(markup, /关联时间范围/);
 });
@@ -224,14 +226,28 @@ test("dialog evidence cards show real values and time range from the relation", 
 test("dialog distance chart keeps the threshold line, interpolation note, Beijing time, and median line", () => {
   const markup = renderDialog();
   assert.match(markup, /距离曲线图/);
-  assert.match(markup, /关联依据：/);
-  assert.match(markup, /海猎号 无人艇 实际轨迹的实测对齐距离/);
+  assert.match(markup, /海猎号 无人艇 实际轨迹的插值对齐距离/);
   assert.match(markup, /阈值 500 海里/);
   assert.match(markup, /中位距离 18\.50 海里/);
   assert.match(markup, /无人艇实际时间（北京时间）/);
-  assert.match(markup, /原始 AIS 报点对齐/);
+  assert.match(markup, /航母轨迹按关联算法插值对齐/);
   assert.match(markup, /class="affiliation-chart-plot"/);
   assert.match(markup, /aria-label="距离图例"/);
+});
+
+test("dialog shows 关联依据 as a standalone full-width section above both charts", () => {
+  const markup = renderDialog();
+  assert.match(markup, /class="affiliation-detail-basis"[\s\S]*?<h4>关联依据<\/h4>/);
+  // 关联依据是独立 section，不与图表同卡片：自身 section 闭合后才是图表区。
+  assert.match(markup, /affiliation-detail-basis[\s\S]*?<\/section>[\s\S]*?class="affiliation-detail-charts"/);
+  // 关联依据必须位于航迹对比图与距离曲线图之上。
+  const basisIndex = markup.indexOf("affiliation-detail-basis");
+  const trackIndex = markup.indexOf("航迹对比图");
+  const distanceIndex = markup.indexOf("距离曲线图");
+  assert.ok(basisIndex !== -1 && trackIndex !== -1 && distanceIndex !== -1);
+  assert.ok(basisIndex < trackIndex && basisIndex < distanceIndex);
+  // 关联依据不再嵌在距离曲线图内部。
+  assert.doesNotMatch(markup, /关联依据：/);
 });
 
 test("dialog track chart draws both real tracks and keeps overlapping series distinguishable", () => {
@@ -247,6 +263,11 @@ test("dialog track chart draws both real tracks and keeps overlapping series dis
   assert.match(markup, /海猎号 无人艇/);
   assert.match(markup, /○ 起点　□ 终点/);
   assert.match(markup, /红线覆盖在蓝线之上/);
+  // “真实航迹”开头的两行说明文字已删除。
+  assert.doesNotMatch(markup, /真实航迹：/);
+  assert.doesNotMatch(markup, /双方 AIS 经纬度序列按统一地理比例绘制/);
+  // SSR/全量轨迹未就绪时回退快照抽稀序列，注释如实标注抽稀。
+  assert.match(markup, /真实 AIS 航迹抽稀后绘制/);
 });
 
 test("trajectory chart drops the middle longitude tick when projected labels would overlap", () => {
@@ -296,7 +317,7 @@ test("dialog shows -- and never NaN/undefined for missing evidence fields", () =
   const sparseRelation = {
     carrier: { mmsi: "366984000", name: "CVN-71" },
     relationType: "时延跟随",
-    lag: { lagMinutes: 19008, matchedPoints: 48, distanceSeriesSource: "observed", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 5 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 6 }] },
+    lag: { lagMinutes: 19008, matchedPoints: 48, distanceSeriesSource: "interpolated", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 5 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 6 }] },
   };
   const markup = renderDialog({ relation: sparseRelation });
   assert.match(markup, /最小距离[\s\S]*?--/);
@@ -336,14 +357,14 @@ test("dialog shows an explicit empty state when no real track series is availabl
   const noTrackRelation = {
     carrier: { mmsi: "366984000", name: "CVN-71" },
     relationType: "时延跟随",
-    lag: { lagMinutes: 19008, matchedPoints: 48, distanceSeriesSource: "observed", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 5 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 6 }] },
+    lag: { lagMinutes: 19008, matchedPoints: 48, distanceSeriesSource: "interpolated", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 5 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 6 }] },
   };
   const markup = renderDialog({ relation: noTrackRelation });
   assert.match(markup, /暂无可用的航迹对比数据。/);
   assert.doesNotMatch(markup, /class="affiliation-track-line/);
 });
 
-test("dialog distance chart labels interpolation when raw AIS points are sparse", () => {
+test("dialog labels the distance series as algorithm-interpolated (0721 口径)", () => {
   const interpolatedRelation = {
     carrier: { mmsi: "366984000", name: "CVN-71" },
     relationType: "时延跟随",
@@ -355,14 +376,14 @@ test("dialog distance chart labels interpolation when raw AIS points are sparse"
   };
   const markup = renderDialog({ relation: interpolatedRelation });
   assert.match(markup, /插值对齐距离/);
-  assert.match(markup, /航母报点稀疏，按关联算法插值对齐/);
+  assert.match(markup, /航母轨迹按关联算法插值对齐/);
 });
 
 test("dialog does not fake a 0-day lag when a delay relation is missing lagMinutes", () => {
   const missingLagRelation = {
     carrier: { mmsi: "366984000", name: "CVN-71" },
     relationType: "时延跟随",
-    lag: { lagMinutes: null, matchedPoints: 8, distanceSeriesSource: "observed", distanceSeries: [{ time: "2026-01-01T00:00:00.000Z", distanceNm: 5 }, { time: "2026-01-01T00:01:00.000Z", distanceNm: 6 }] },
+    lag: { lagMinutes: null, matchedPoints: 8, distanceSeriesSource: "interpolated", distanceSeries: [{ time: "2026-01-01T00:00:00.000Z", distanceNm: 5 }, { time: "2026-01-01T00:01:00.000Z", distanceNm: 6 }] },
   };
   const markup = renderDialog({ relation: missingLagRelation });
   assert.match(markup, /时延：--/);
@@ -372,8 +393,8 @@ test("dialog does not fake a 0-day lag when a delay relation is missing lagMinut
 });
 
 test("each relation renders its own detail data when the dialog is bound to it", () => {
-  const relationA = { carrier: { mmsi: "368913000", name: "CVN-71" }, relationType: "时延跟随", lag: { lagMinutes: 19008, matchedPoints: 48, averageDistanceNm: 21.9, distanceSeriesSource: "observed", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 5 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 6 }] } };
-  const relationB = { carrier: { mmsi: "366984000", name: "CVN-72" }, relationType: "时延跟随", lag: { lagMinutes: 41760, matchedPoints: 40, averageDistanceNm: 33.1, distanceSeriesSource: "observed", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 8 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 9 }] } };
+  const relationA = { carrier: { mmsi: "368913000", name: "CVN-71" }, relationType: "时延跟随", lag: { lagMinutes: 19008, matchedPoints: 48, averageDistanceNm: 21.9, distanceSeriesSource: "interpolated", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 5 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 6 }] } };
+  const relationB = { carrier: { mmsi: "366984000", name: "CVN-72" }, relationType: "时延跟随", lag: { lagMinutes: 41760, matchedPoints: 40, averageDistanceNm: 33.1, distanceSeriesSource: "interpolated", distanceSeries: [{ time: "2026-07-13T16:00:00.000Z", distanceNm: 8 }, { time: "2026-07-14T16:00:00.000Z", distanceNm: 9 }] } };
   const markupA = renderDialog({ relation: relationA, name: "乔治·华盛顿号", index: 1 });
   const markupB = renderDialog({ relation: relationB, name: "西奥多·罗斯福号", index: 2 });
   assert.match(markupA, /乔治·华盛顿号.* → 海猎号 无人艇/);
@@ -385,6 +406,112 @@ test("each relation renders its own detail data when the dialog is bound to it",
   // 两条关联各自展示自己的平均距离，互不串数据。
   assert.match(markupA, /平均距离[\s\S]*?21\.90 海里/);
   assert.match(markupB, /平均距离[\s\S]*?33\.10 海里/);
+});
+
+// === 2026-08-15 客户确认规则的前端落实 ===
+
+test("trackSourceNote only claims server-rendered series when both sides loaded", () => {
+  assert.match(trackSourceNote("full"), /服务端自 2025-01-01 起全量轨迹生成的渲染序列/);
+  // 单侧失败/未完成：必须明确标注快照回退，不得宣称双侧渲染序列。
+  assert.match(trackSourceNote("partial"), /快照抽稀回退/);
+  assert.doesNotMatch(trackSourceNote("partial"), /双方航迹为服务端/);
+  assert.match(trackSourceNote("snapshot"), /抽稀后绘制/);
+});
+
+test("dialog shows a loading placeholder and no SVG while track render series loads", () => {
+  // 传入 MMSI 时弹窗进入 loading 态：只显示占位、不挂载航迹 SVG，杜绝“快照图→全量图”两阶段跳变。
+  const markup = renderDialog({ followerMmsi: "413000630" });
+  assert.match(markup, /正在加载航迹数据…/);
+  assert.match(markup, /class="affiliation-chart-plot affiliation-track-loading"/);
+  assert.doesNotMatch(markup, /class="affiliation-track-line/);
+});
+
+test("decimateTrackForRender keeps first/last and per-bucket extremes within the limit", () => {
+  const series = Array.from({ length: 150_000 }, (_, index) => ({
+    lon: 120 + Math.sin(index / 1000) * 5,
+    lat: 20 + Math.cos(index / 997) * 3,
+  }));
+  const decimated = decimateTrackForRender(series);
+  assert.ok(decimated.length <= RENDER_POINT_LIMIT + 2, `抽稀后 ${decimated.length} 点应在上限内`);
+  assert.equal(decimated[0], series[0]);
+  assert.equal(decimated[decimated.length - 1], series[series.length - 1]);
+  // 全局经纬度极值点必是其所在桶的极值，必须保留。
+  const globalMaxLat = series.reduce((best, point) => (point.lat > best.lat ? point : best), series[0]);
+  const globalMinLon = series.reduce((best, point) => (point.lon < best.lon ? point : best), series[0]);
+  assert.ok(decimated.includes(globalMaxLat));
+  assert.ok(decimated.includes(globalMinLon));
+  // 小序列原样返回（同一引用，不复制）。
+  const small = [{ lon: 120, lat: 20 }, { lon: 121, lat: 21 }];
+  assert.equal(decimateTrackForRender(small), small);
+});
+
+test("decimateDistanceForRender keeps first/last and distance extremes within the limit", () => {
+  const entries = Array.from({ length: 150_000 }, (_, index) => ({ index, distance: 100 + Math.sin(index / 500) * 90 }));
+  const decimated = decimateDistanceForRender(entries);
+  assert.ok(decimated.length <= RENDER_POINT_LIMIT + 2);
+  assert.equal(decimated[0], entries[0]);
+  assert.equal(decimated[decimated.length - 1], entries[entries.length - 1]);
+  const globalMax = entries.reduce((best, entry) => (entry.distance > best.distance ? entry : best), entries[0]);
+  const globalMin = entries.reduce((best, entry) => (entry.distance < best.distance ? entry : best), entries[0]);
+  assert.ok(decimated.includes(globalMax));
+  assert.ok(decimated.includes(globalMin));
+});
+
+test("buildTrackRenderSeries filters invalid coords and reports source/render counts", () => {
+  const points = [];
+  for (let index = 0; index < 150_000; index += 1) {
+    points.push({ time: new Date(index * 1000).toISOString(), lon: 120 + Math.sin(index / 1000) * 5, lat: 20 + Math.cos(index / 997) * 3 });
+  }
+  // 混入非法经纬度点，必须在生成渲染序列前被过滤。
+  points.push({ time: "2026-01-01T00:00:00.000Z", lon: 0, lat: 0 });
+  points.push({ time: "2026-01-01T00:00:01.000Z", lon: null, lat: 20 });
+  points.push({ time: "2026-01-01T00:00:02.000Z", lon: 200, lat: 20 });
+  const rendered = buildTrackRenderSeries(points);
+  assert.equal(rendered.sourcePointCount, points.length);
+  assert.ok(rendered.points.length <= RENDER_POINT_LIMIT + 2);
+  assert.ok(rendered.points.every((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat)));
+});
+
+test("dialog renders 150k-point full tracks and distance series without RangeError", () => {
+  const big = Array.from({ length: 150_000 }, (_, index) => ({
+    time: new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString(),
+    lon: 120 + (index % 5000) * 0.001,
+    lat: 20 + (index % 3000) * 0.001,
+  }));
+  const relation = {
+    carrier: { mmsi: "366984000", name: "CVN-71" },
+    relationType: "时延跟随",
+    lag: {
+      lagMinutes: 19008, matchedPoints: 150_000, minimumDistanceNm: 0.5, medianDistanceNm: 120,
+      distanceSeriesSource: "interpolated",
+      distanceSeries: big.map((point, index) => ({ time: point.time, distanceNm: index % 400 })),
+    },
+    referenceTrackSeries: big,
+    carrierTrackSeries: big,
+  };
+  const markup = renderDialog({ relation });
+  assert.match(markup, /航迹对比图/);
+  assert.match(markup, /距离曲线图/);
+  assert.match(markup, /class="affiliation-track-line ref"/);
+  assert.doesNotMatch(markup, /NaN/);
+});
+
+test("关联依据在字段缺失时显示 -- 而非 NaN/undefined", () => {
+  const sparseRelation = {
+    carrier: { mmsi: "366984000", name: "CVN-71" },
+    relationType: "时延跟随",
+    lag: {
+      lagMinutes: null, matchedPoints: null, minimumDistanceNm: null,
+      distanceSeriesSource: "interpolated",
+      distanceSeries: [{ time: "2026-01-01T00:00:00.000Z", distanceNm: 5 }, { time: "2026-01-01T00:01:00.000Z", distanceNm: 6 }],
+    },
+  };
+  const markup = renderDialog({ relation: sparseRelation });
+  assert.match(markup, /affiliation-detail-basis/);
+  assert.match(markup, /延迟 --/);
+  assert.match(markup, /最小距离 -- 海里/);
+  assert.match(markup, /-- 个匹配点/);
+  assert.doesNotMatch(markup, /NaN|undefined/);
 });
 
 test("buildAffiliationAssessment keeps the medium/strong grading and the conservative USV note", () => {

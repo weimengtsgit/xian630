@@ -1,0 +1,25 @@
+{
+  "dataRules": {
+    "version": "v12-20260815",
+    "timePrecision": "utc-second-truncate",
+    "sameSecondRule": "keep-first-by-current-store-order",
+    "headingSource": "legacy-pre-v11-field-precedence",
+    "headingFieldPrecedence": [
+      "heading",
+      "courseDeg"
+    ],
+    "invalidHeading": "null-empty-nonfinite-or-511",
+    "headingRecovery": "unwrap-skips-missing-and-resumes",
+    "unwrapBoundary": "correct-only-when-abs-delta-gt-180",
+    "lagDistThreshNm": 500
+  },
+  "lagMinutes": 18420,
+  "lagHours": 307,
+  "averageDistanceNm": 43.947267014064884,
+  "medianDistanceNm": 32.73725208737339,
+  "minimumDistanceNm": 0.05429200304748546,
+  "matchedPoints": 94092,
+  "withinThresholdRatio": 1,
+  "startTime": "2025-07-07T23:55:00.000Z",
+  "endTime": "2026-05-22T05:56:00.000Z"
+}

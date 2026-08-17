@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { MONITORED_VESSELS } from "./seasatsScope.js";
 import { JUDGEMENT_PARAMETERS, MONITORED_AREAS } from "./monitoringRules.js";
-import { CARRIER_AFFILIATION_RULES } from "./carrierAffiliation.js";
+import { CARRIER_AFFILIATION_RULES, CARRIER_AFFILIATION_DATA_RULES } from "./carrierAffiliation.js";
+import { buildTrackRenderSeries, RENDER_POINT_LIMIT } from "../src/logic/renderDecimation.js";
 import { VESSEL_NAME_OVERRIDES, getVesselOverride, applyVesselOverride } from "./vesselNames.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
 import { chineseShipName, englishShipName, extractHullCode, vesselPreferredLabel, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
@@ -37,10 +38,20 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
+// v12（customer-confirmed-v12-20260815）：航向来源恢复修改前生产版本的字段优先级（heading → courseDeg 兜底，
+// 弃用 v11 的 orientation-only），缺失规则（511/null/空/非数值）作用于解析结果；reason 改为
+// insufficient_heading_data；新增 track?render=1 服务端渲染序列接口；sourceOrder 按数据源限制如实记录。
+// v11（customer-confirmed-v11-20260815）：0721 基线 + 客户 2026-08-15 确认的数据规则——UTC 秒级截断、
+// 同秒保留输入第一条、航向仅取 orientation（511/空/非有限视为缺失）、缺失可恢复 unwrap、±180° 严格边界、
+// 整轨无有效 orientation 的配对不分析（insufficient_orientation_data）；距离阈值保持客户 500 海里口径。
+// v10：关联口径与 select0721.py 全面对齐（粗扫+1 小时细扫、70% 占比门槛、航向筛选后不足 8 点该时延作废、
+// 航向取 COG 并按时间 unwrap、距离曲线改为判定用插值序列）；距离阈值保持客户 500 海里口径不变。
+// v9：距离曲线序列不再抽稀（保留全部匹配点），航迹对比图改由前端按需拉取全量轨迹；
+// 旧快照的抽稀序列口径不一致，必须后台重算后再对外展示。
 // v8：轨迹窗口从 2025-12-06 扩到 2025-01-01，旧快照由更短窗口算出，口径不一致必须后台重算。
 // v7：详情弹窗航迹对比图需要双方抽稀航迹序列，analyzeLag 另输出中位距离与阈值内比例。
 // 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
-const affiliationSnapshotVersion = "python-select-v8-track-window-2025-01-01";
+const affiliationSnapshotVersion = "customer-confirmed-v12-20260815";
 const headingFieldVersion = "independent-heading-orientation-v2";
 // 船名展示规则变更后，旧的持久化首屏快照不得继续下发。
 const summarySnapshotVersion = "sidebar-vessel-name-v6";
@@ -56,6 +67,9 @@ export const vesselLabelConfigVersion = createHash("sha256")
   .slice(0, 12);
 // 轨迹落盘目录：去重后的全量轨迹按 MMSI 持久化，重启后只补增量，不再全量重拉。
 const trackStoreRoot = resolve(dataRoot, "tracks");
+// 轨迹存储版本：窗口起点、拉取口径变化或本体回填了"水位线之前"的历史报点时递增，判废旧缓存全量重拉。
+// v2（2026-08-16）：本体回填历史报点，增量拉取（最新报点回退 2h 起）永远拉不到回填段，必须全量重拉。
+const trackStoreVersion = "v2-20260816-ontology-backfill";
 // 增量刷新时从水位线回退的重叠窗口，吸收迟到/乱序报点。
 const TRACK_OVERLAP_MS = 2 * 60 * 60 * 1000;
 const trackCache = new Map();
@@ -63,9 +77,11 @@ const trackInFlight = new Map();
 const monitoredMmsiSet = new Set(MONITORED_VESSELS.map((vessel) => vessel.mmsi));
 
 function affiliationRulesChanged(snapshot) {
-  // 规则或轨迹来源升级后不能将旧快照误标为新口径，必须完成一次后台重算再对外展示。
+  // 规则（判定阈值）或数据规则（时间精度/去重/航向来源等）变化后不能将旧快照误标为新口径，
+  // 必须完成一次后台重算再对外展示；算法版本、RULES、dataRules 三者任一不一致即判废。
   return snapshot?.algorithmVersion !== affiliationSnapshotVersion
-    || JSON.stringify(snapshot?.rules || {}) !== JSON.stringify(CARRIER_AFFILIATION_RULES);
+    || JSON.stringify(snapshot?.rules || {}) !== JSON.stringify(CARRIER_AFFILIATION_RULES)
+    || JSON.stringify(snapshot?.dataRules || {}) !== JSON.stringify(CARRIER_AFFILIATION_DATA_RULES);
 }
 
 function analyzeAffiliationsInWorker(input) {
@@ -321,8 +337,9 @@ function trackStoreFile(mmsi) {
 
 async function loadTrackStore(mmsi) {
   const store = await loadSnapshot(trackStoreFile(mmsi), `轨迹缓存（MMSI ${mmsi}）`);
-  // 基准窗口变更后旧缓存口径不一致，判废触发全量重拉，避免新旧报点混排。
-  if (store?.windowStart !== new Date(trackBaselineStartMs).toISOString()) return null;
+  // 基准窗口或存储版本变更后旧缓存口径不一致，判废触发全量重拉：
+  // 避免新旧报点混排，也让本体回填的"水位线之前"历史数据能被重新拉全。
+  if (store?.windowStart !== new Date(trackBaselineStartMs).toISOString() || store?.trackStoreVersion !== trackStoreVersion) return null;
   return Array.isArray(store?.trackPoints) ? store : null;
 }
 
@@ -330,6 +347,7 @@ async function saveTrackStore(mmsi, trackPoints) {
   await writeSnapshot(trackStoreFile(mmsi), {
     mmsi,
     windowStart: new Date(trackBaselineStartMs).toISOString(),
+    trackStoreVersion,
     updatedAt: new Date().toISOString(),
     trackPoints,
   });
@@ -680,7 +698,24 @@ createServer(async (request, response) => {
     // 点选统计只使用本体轨迹；北邮历史轨迹仅由远程地图 iframe 自己加载。
     if (request.method === "GET" && trackMatch) {
       if (!monitoredMmsiSet.has(trackMatch[1])) throw new Error("MMSI_NOT_IN_SCOPE");
-      return sendJson(response, 200, await getOntologyTrack(trackMatch[1], { force: url.searchParams.get("fresh") === "1" }));
+      const track = await getOntologyTrack(trackMatch[1], { force: url.searchParams.get("fresh") === "1" });
+      // 航迹对比图专用渲染序列：服务端从全量轨迹生成分桶抽稀序列（保留首尾与极值，上限 RENDER_POINT_LIMIT），
+      // 前端弹窗只消费该序列，不再下载/扫描十万级完整点数组。仅影响显示，不改变关联计算与完整数据导出。
+      if (url.searchParams.get("render") === "1") {
+        const rendered = buildTrackRenderSeries(track.trackPoints);
+        return sendJson(response, 200, {
+          ...track,
+          trackPoints: rendered.points,
+          meta: {
+            ...track.meta,
+            sourcePointCount: rendered.sourcePointCount,
+            renderPointCount: rendered.points.length,
+            renderLimit: RENDER_POINT_LIMIT,
+            renderedFromFullTrack: true,
+          },
+        });
+      }
+      return sendJson(response, 200, track);
     }
     serveStatic(request, response);
   } catch (error) {

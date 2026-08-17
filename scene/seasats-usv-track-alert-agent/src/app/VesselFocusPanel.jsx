@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } 
 import { AlertTriangle, Anchor, ChevronLeft, ChevronRight, LineChart, X } from "lucide-react";
 import { subscribeEscapeKeyTopmost } from "../logic/escapeKey.js";
 import { resolveHeadingValue } from "../logic/heading.js";
+import { decimateDistanceForRender, decimateTrackForRender } from "../logic/renderDecimation.js";
+import { cancelTrackRender, readSettledTrackRender, requestTrackRender } from "../logic/trackRenderCache.js";
 
 const confirmedCarrierNames = {
   "368913000": "乔治·华盛顿号",
@@ -294,7 +296,7 @@ function resolveAffiliationRelations(affiliation, selectedMmsi, selectedName, al
       // 航母被选中时的反向关联：仍以“航母 跟随 另一方”方向展示，key 含另一方 MMSI 以保证唯一。
       relations: relatedVessels.map((item, index) => ({
         key: affiliationDetailKey({ selectedMmsi, otherMmsi: item.mmsi, relationType: item.relation.relationType, lagMinutes: item.relation.lag?.lagMinutes }),
-        relation: item.relation, name: selectedCarrierName, followerName: item.name, followerCode: item.code, index,
+        relation: item.relation, name: selectedCarrierName, followerName: item.name, followerCode: item.code, followerMmsi: item.mmsi, unanalyzed: item.relation.relationType === "未分析", index,
       })),
     };
   }
@@ -316,7 +318,7 @@ function resolveAffiliationRelations(affiliation, selectedMmsi, selectedName, al
       const name = carrierDisplayName(item.carrier.mmsi, nameByMmsi.get(item.carrier.mmsi) || item.carrier.name);
       return {
         key: affiliationDetailKey({ selectedMmsi, otherMmsi: item.carrier.mmsi, relationType: item.relationType, lagMinutes: item.lag?.lagMinutes }),
-        relation: item, name, followerName, followerCode, index,
+        relation: item, name, followerName, followerCode, followerMmsi: selectedMmsi, unanalyzed: item.relationType === "未分析", index,
       };
     }),
   };
@@ -343,8 +345,17 @@ function formatRatio(value) {
   return `${(number * 100).toFixed(number >= 0.1 ? 0 : 1)}%`;
 }
 
+// 航迹图注：文案必须与数据状态一致，不得把服务端抽稀生成的渲染序列说成浏览器“全量逐点绘制”。
+export function trackSourceNote(dataState) {
+  const prefix = "○ 起点　□ 终点　· ";
+  if (dataState === "full") return `${prefix}双方航迹为服务端自 2025-01-01 起全量轨迹生成的渲染序列（保留首尾与分桶极值）；红线覆盖在蓝线之上，重合处仍可辨识双方。`;
+  if (dataState === "partial") return `${prefix}一侧航迹为服务端全量渲染序列，另一侧为快照抽稀回退（拉取未完成或失败）；红线覆盖在蓝线之上。`;
+  return `${prefix}真实 AIS 航迹抽稀后绘制；红线覆盖在蓝线之上，重合处仍可辨识双方。`;
+}
+
 // 航迹对比图：横轴经度、纵轴纬度，两条真实航迹，区分起终点，等比例展示（参考 select0721.py）。
-function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel }) {
+// dataState：full=双方 2025-01-01 起全量报点；partial=一侧全量一侧快照回退；snapshot=快照抽稀序列。
+function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel, dataState = "snapshot" }) {
   // 滚轮缩放 + 拖拽平移：transform 作用于 svg，外层 plot 容器裁剪溢出。
   // hooks 必须在早退返回之前调用，保证渲染分支变化时 hook 顺序稳定。
   const plotRef = useRef(null);
@@ -399,33 +410,6 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
     dragRef.current = null;
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
   };
-  const validTrack = (series) => (Array.isArray(series) ? series : [])
-    .filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null)
-    .map((item) => ({ ...item, lon: Number(item.lon), lat: Number(item.lat) }));
-  const ref = validTrack(referenceSeries);
-  const car = validTrack(carrierSeries);
-  const points = [...ref, ...car].filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null);
-  if (points.length < 2 || (ref.length < 2 && car.length < 2)) {
-    return React.createElement("p", { className: "affiliation-detail-empty" }, "暂无可用的航迹对比数据。");
-  }
-  const lons = points.map((item) => item.lon);
-  const lats = points.map((item) => item.lat);
-  const minLon = Math.min(...lons);
-  const maxLon = Math.max(...lons);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const centerLat = (minLat + maxLat) / 2;
-  const longitudeFactor = Math.max(Math.cos(centerLat * Math.PI / 180), 0.2);
-  const rawLonRange = Math.max(maxLon - minLon, 1e-4);
-  const rawLatRange = Math.max(maxLat - minLat, 1e-4);
-  const lonPadding = Math.max(rawLonRange * 0.1, 5e-5);
-  const latPadding = Math.max(rawLatRange * 0.1, 5e-5);
-  const domainMinLon = minLon - lonPadding;
-  const domainMaxLon = maxLon + lonPadding;
-  const domainMinLat = minLat - latPadding;
-  const domainMaxLat = maxLat + latPadding;
-  const lonRange = (domainMaxLon - domainMinLon) * longitudeFactor;
-  const latRange = domainMaxLat - domainMinLat;
   const width = 360;
   const height = 220;
   const padLeft = 52;
@@ -434,25 +418,65 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
   const padBottom = 44;
   const plotW = width - padLeft - padRight;
   const plotH = height - padTop - padBottom;
-  // 经度按中心纬度修正后等比例缩放，避免高纬区域被横向拉伸。
-  const scale = Math.min(plotW / lonRange, plotH / latRange);
-  const offsetX = padLeft + (plotW - lonRange * scale) / 2;
-  const offsetY = padTop + (plotH - latRange * scale) / 2;
-  const xFor = (lon) => offsetX + (lon - domainMinLon) * longitudeFactor * scale;
-  const yFor = (lat) => offsetY + (domainMaxLat - lat) * scale;
-  const toPolyline = (series) => series
-    .filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null)
-    .map((item) => `${xFor(item.lon).toFixed(1)},${yFor(item.lat).toFixed(1)}`)
-    .join(" ");
-  const refPoly = toPolyline(ref);
-  const carPoly = toPolyline(car);
-  const allLonTicks = [minLon, (minLon + maxLon) / 2, maxLon];
-  // 等比例地理投影可能让实际经度范围只占绘图区中部；像素间距不足时隐藏中间刻度，
-  // 并让首尾标签向外展开，避免三个长小数标签挤在一起。
-  const lonTicks = xFor(maxLon) - xFor(minLon) < 120
-    ? [minLon, maxLon]
-    : allLonTicks;
-  const latTicks = [maxLat, (minLat + maxLat) / 2, minLat];
+  // 几何与折线只依赖轨迹序列：全量轨迹（2025-01-01 起所有报点）单船可达十万级，
+  // 滚轮缩放/拖拽引起的高频重渲染不得重复构建折线字符串，故整体放入 useMemo。
+  const geometry = useMemo(() => {
+    const validTrack = (series) => (Array.isArray(series) ? series : [])
+      .filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null)
+      .map((item) => ({ ...item, lon: Number(item.lon), lat: Number(item.lat) }));
+    const ref = validTrack(referenceSeries);
+    const car = validTrack(carrierSeries);
+    const points = [...ref, ...car].filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null);
+    if (points.length < 2 || (ref.length < 2 && car.length < 2)) return null;
+    // 全量轨迹点数远超 V8 展开传参上限，min/max 必须用循环而非 Math.min(...spread)。
+    let minLon = Infinity;
+    let maxLon = -Infinity;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    for (const item of points) {
+      if (item.lon < minLon) minLon = item.lon;
+      if (item.lon > maxLon) maxLon = item.lon;
+      if (item.lat < minLat) minLat = item.lat;
+      if (item.lat > maxLat) maxLat = item.lat;
+    }
+    const centerLat = (minLat + maxLat) / 2;
+    const longitudeFactor = Math.max(Math.cos(centerLat * Math.PI / 180), 0.2);
+    const rawLonRange = Math.max(maxLon - minLon, 1e-4);
+    const rawLatRange = Math.max(maxLat - minLat, 1e-4);
+    const lonPadding = Math.max(rawLonRange * 0.1, 5e-5);
+    const latPadding = Math.max(rawLatRange * 0.1, 5e-5);
+    const domainMinLon = minLon - lonPadding;
+    const domainMaxLon = maxLon + lonPadding;
+    const domainMinLat = minLat - latPadding;
+    const domainMaxLat = maxLat + latPadding;
+    const lonRange = (domainMaxLon - domainMinLon) * longitudeFactor;
+    const latRange = domainMaxLat - domainMinLat;
+    // 经度按中心纬度修正后等比例缩放，避免高纬区域被横向拉伸。
+    const scale = Math.min(plotW / lonRange, plotH / latRange);
+    const offsetX = padLeft + (plotW - lonRange * scale) / 2;
+    const offsetY = padTop + (plotH - latRange * scale) / 2;
+    const xFor = (lon) => offsetX + (lon - domainMinLon) * longitudeFactor * scale;
+    const yFor = (lat) => offsetY + (domainMaxLat - lat) * scale;
+    const toPolyline = (series) => series
+      .filter((item) => numberOrNull(item?.lon) !== null && numberOrNull(item?.lat) !== null)
+      .map((item) => `${xFor(item.lon).toFixed(1)},${yFor(item.lat).toFixed(1)}`)
+      .join(" ");
+    // 折线只走渲染层抽稀后的序列（保留首尾与分桶极值）；统计与端点标记仍用全量序列。
+    const refPoly = toPolyline(decimateTrackForRender(ref));
+    const carPoly = toPolyline(decimateTrackForRender(car));
+    const allLonTicks = [minLon, (minLon + maxLon) / 2, maxLon];
+    // 等比例地理投影可能让实际经度范围只占绘图区中部；像素间距不足时隐藏中间刻度，
+    // 并让首尾标签向外展开，避免三个长小数标签挤在一起。
+    const lonTicks = xFor(maxLon) - xFor(minLon) < 120
+      ? [minLon, maxLon]
+      : allLonTicks;
+    const latTicks = [maxLat, (minLat + maxLat) / 2, minLat];
+    return { ref, car, refPoly, carPoly, lonTicks, latTicks, xFor, yFor };
+  }, [referenceSeries, carrierSeries, plotW, plotH]);
+  if (!geometry) {
+    return React.createElement("p", { className: "affiliation-detail-empty" }, "暂无可用的航迹对比数据。");
+  }
+  const { ref, car, refPoly, carPoly, lonTicks, latTicks, xFor, yFor } = geometry;
   const endpoint = (series, seriesClass) => {
     const first = series[0];
     const last = series[series.length - 1];
@@ -469,13 +493,6 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
     "figure",
     { className: "affiliation-detail-chart affiliation-trajectory-chart" },
     React.createElement("figcaption", null, "航迹对比图"),
-    React.createElement(
-      "div",
-      { className: "affiliation-chart-description" },
-      React.createElement("strong", null, "真实航迹："),
-      React.createElement("span", null, "双方 AIS 经纬度序列按统一地理比例绘制"),
-      React.createElement("small", null, "红色实线覆盖在蓝色实线上；轨迹重合时仍可辨识双方。"),
-    ),
     React.createElement("div", { className: "affiliation-chart-plot affiliation-track-plot", ref: setPlotRef, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerLeave: endDrag, onDoubleClick: resetView },
       zoom > 1 ? React.createElement("button", { type: "button", className: "affiliation-track-reset", onClick: resetView, onPointerDown: (e) => e.stopPropagation(), "aria-label": "重置缩放", title: "重置缩放" }, "重置") : null,
       React.createElement("span", { className: "affiliation-track-zoom-hint" }, "滚轮缩放 · 拖拽平移 · 双击复位"),
@@ -510,26 +527,45 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
       React.createElement("span", { className: "ref", title: referenceLabel }, React.createElement("i"), React.createElement("b", null, referenceLabel)),
       React.createElement("span", { className: "carrier", title: carrierLabel }, React.createElement("i"), React.createElement("b", null, carrierLabel)),
     ),
-    React.createElement("span", { className: "affiliation-chart-note" }, "○ 起点　□ 终点　· 真实 AIS 航迹抽稀后绘制；红线覆盖在蓝线之上，重合处仍可辨识双方。"),
+    React.createElement("span", { className: "affiliation-chart-note" }, trackSourceNote(dataState)),
   );
+}
+
+// 关联依据：独立横栏展示在航迹对比图与距离曲线图上方（参照智能体研判的显示方式）。
+// 距离曲线与 select0721.py 一致，恒为判定采用的插值对齐序列（航母轨迹插值到无人艇报点时刻）。
+function distanceBasisLines(relation, subjectLabel) {
+  const series = relation?.lag?.distanceSeries || [];
+  if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
+  const zeroLag = isZeroLagFollow(relation);
+  return {
+    title: `${subjectLabel} 实际轨迹的插值对齐距离`,
+    detail: `${subjectLabel} 实际报点时间 · 航母轨迹按关联算法插值对齐 · 延迟 ${zeroLag ? "同步" : formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点`,
+  };
 }
 
 // 距离曲线图：迁移自 distanceEvidence，保留阈值线/插值说明/北京时间；新增中位距离线（如有）。
 function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   const series = relation?.lag?.distanceSeries || [];
   if (relation?.relationType !== "时延跟随" || series.length < 2) return null;
-  const isInterpolated = relation?.lag?.distanceSeriesSource === "interpolated";
-  const zeroLag = isZeroLagFollow(relation);
-  const sourceLabel = isInterpolated ? "插值对齐距离" : "实测对齐距离";
   const subjectLabel = withVesselKind(subjectName, subjectCode);
-  const values = series.map((item) => numberOrNull(item.distanceNm)).filter((value) => value !== null);
-  if (values.length < 2) return null;
+  // 循环统计最大/最小值并保留原始索引：禁止 Math.min(...values) 这类展开传参，
+  // 全量距离序列可达十万级以上，展开会触发 V8 参数上限 RangeError。
+  const entries = [];
+  let minValue = Infinity;
+  let observedMaxDistance = -Infinity;
+  for (let index = 0; index < series.length; index += 1) {
+    const distance = numberOrNull(series[index]?.distanceNm);
+    if (distance === null) continue;
+    entries.push({ index, distance });
+    if (distance < minValue) minValue = distance;
+    if (distance > observedMaxDistance) observedMaxDistance = distance;
+  }
+  if (entries.length < 2) return null;
   const width = 360;
   const height = 220;
   const plot = { left: 50, right: 18, top: 22, bottom: 172 };
   const thresholdNm = 500;
   const medianNm = numberOrNull(relation?.lag?.medianDistanceNm);
-  const observedMaxDistance = Math.max(...values);
   const referenceMax = Math.max(observedMaxDistance, thresholdNm, medianNm ?? 0, 1);
   const magnitude = 10 ** Math.floor(Math.log10(referenceMax));
   const maxDistance = Math.ceil((referenceMax * 1.1) / magnitude) * magnitude;
@@ -537,22 +573,16 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   const plotHeight = plot.bottom - plot.top;
   const xFor = (index) => plot.left + (index / (series.length - 1)) * plotWidth;
   const yFor = (distance) => plot.bottom - (distance / maxDistance) * plotHeight;
-  const points = series.map((item, index) => {
-    const distance = numberOrNull(item.distanceNm);
-    if (distance === null) return null;
-    return `${xFor(index).toFixed(1)},${yFor(distance).toFixed(1)}`;
-  }).filter(Boolean).join(" ");
+  // 折线只走渲染层抽稀（分桶保留距离极值与首尾）；横轴刻度/范围统计仍基于全量序列。
+  const points = decimateDistanceForRender(entries)
+    .map((entry) => `${xFor(entry.index).toFixed(1)},${yFor(entry.distance).toFixed(1)}`)
+    .join(" ");
   const timeIndexes = [...new Set([0, Math.round((series.length - 1) / 2), series.length - 1])];
   const yTicks = [maxDistance, maxDistance / 2, 0];
   return React.createElement(
     "figure",
     { className: "affiliation-detail-chart affiliation-evidence affiliation-distance-chart" },
     React.createElement("figcaption", null, "距离曲线图"),
-    React.createElement("div", { className: "affiliation-chart-description" },
-      React.createElement("strong", null, "关联依据："),
-      React.createElement("span", { title: `${subjectLabel} 实际轨迹的${sourceLabel}` }, `${subjectLabel} 实际轨迹的${sourceLabel}`),
-      React.createElement("small", null, `${subjectLabel} 实际报点时间 · ${isInterpolated ? "航母报点稀疏，按关联算法插值对齐" : "原始 AIS 报点对齐"} · 延迟 ${zeroLag ? "同步" : formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点`),
-    ),
     React.createElement("div", { className: "affiliation-chart-plot" },
     React.createElement(
       "svg",
@@ -583,7 +613,7 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
       React.createElement("span", { className: "threshold" }, React.createElement("i"), "阈值 500 海里"),
       medianNm !== null ? React.createElement("span", { className: "median" }, React.createElement("i"), `中位距离 ${formatNumber(medianNm, 2)} 海里`) : null,
     ),
-    React.createElement("span", { className: "affiliation-chart-note" }, `曲线范围 ${formatNumber(Math.min(...values), 2)}–${formatNumber(observedMaxDistance, 2)} 海里；越低表示轨迹越接近。${medianNm !== null ? "" : "（无中位距离数据）"}`),
+    React.createElement("span", { className: "affiliation-chart-note" }, `曲线范围 ${formatNumber(minValue, 2)}–${formatNumber(observedMaxDistance, 2)} 海里；越低表示轨迹越接近。${medianNm !== null ? "" : "（无中位距离数据）"}`),
   );
 }
 
@@ -622,7 +652,40 @@ function AffiliationSummaryRow({ relation, name, followerName, followerCode, row
 }
 
 // 每条关联自己的详情弹窗：迁移原右侧栏全部详细内容，分区排版。
-export function AffiliationDetailDialog({ relation, name, followerName, followerCode, index, snapshotTime, onClose, closeRef, dialogRef, onMaskClick }) {
+export function AffiliationDetailDialog({ relation, name, followerName, followerCode, followerMmsi, index, snapshotTime, onClose, closeRef, dialogRef, onMaskClick }) {
+  // 航迹对比图数据状态机（不“先画快照再静默替换”，消除打开后一两秒的跳变）：
+  // loading 期间只显示占位、不挂载 SVG；双侧渲染序列（track?render=1）都到位或确定回退后，一次性绘制终图。
+  const carrierMmsi = relation?.carrier?.mmsi;
+  const canLoadTracks = Boolean(followerMmsi && carrierMmsi && typeof fetch === "function");
+  // 快照更新后渲染轨迹也必须更新；该 key 同时隔离浏览器缓存，避免长会话展示旧轨迹。
+  const trackRenderCacheKey = snapshotTime || "";
+  const [trackLoad, setTrackLoad] = useState(() => {
+    // 双侧已有缓存结果（上次打开成功）时直接进入就绪态，重复打开不闪 loading。
+    const settled = canLoadTracks ? readSettledTrackRender(followerMmsi, carrierMmsi, trackRenderCacheKey) : null;
+    if (settled) return { status: "settled", reference: settled.reference, carrier: settled.carrier };
+    return { status: canLoadTracks ? "loading" : "settled", reference: null, carrier: null };
+  });
+  useEffect(() => {
+    if (!canLoadTracks) return undefined;
+    const settled = readSettledTrackRender(followerMmsi, carrierMmsi, trackRenderCacheKey);
+    if (settled) {
+      setTrackLoad({ status: "settled", reference: settled.reference, carrier: settled.carrier });
+      return undefined;
+    }
+    setTrackLoad({ status: "loading", reference: null, carrier: null });
+    let cancelled = false;
+    const referenceEntry = requestTrackRender(followerMmsi, globalThis.fetch, trackRenderCacheKey);
+    const carrierEntry = requestTrackRender(carrierMmsi, globalThis.fetch, trackRenderCacheKey);
+    Promise.all([referenceEntry.promise, carrierEntry.promise]).then(([reference, carrier]) => {
+      if (!cancelled) setTrackLoad({ status: "settled", reference, carrier });
+    });
+    // 关闭弹窗/切换关联对象/MMSI 变化时取消未完成请求；已完成结果留在缓存中复用，不重复请求。
+    return () => {
+      cancelled = true;
+      cancelTrackRender(followerMmsi, trackRenderCacheKey);
+      cancelTrackRender(carrierMmsi, trackRenderCacheKey);
+    };
+  }, [followerMmsi, carrierMmsi, canLoadTracks, trackRenderCacheKey]);
   if (!relation) return null;
   const followerLabel = withVesselKind(followerName, followerCode);
   const isSync = relation.relationType === "同步伴随";
@@ -642,6 +705,12 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
   const direction = `${name} → ${followerLabel}`;
   const lagTag = displayAsSync ? "同步伴随" : `${lagValid ? `${lagMinutes >= 0 ? "+" : ""}${(lagMinutes / 60 / 24).toFixed(1)}` : "?"}d 时延跟随`;
   const hasDistanceChart = !isSync && Array.isArray(relation.lag?.distanceSeries) && relation.lag.distanceSeries.length >= 2;
+  const basis = distanceBasisLines(relation, followerLabel);
+  // 航迹序列优先使用服务端渲染序列（track?render=1），失败侧回退快照抽稀序列；双侧都失败为快照态。
+  const referenceSeries = trackLoad.reference || evidence.referenceTrackSeries;
+  const carrierSeries = trackLoad.carrier || evidence.carrierTrackSeries;
+  // 只有双侧渲染序列都拉取成功才标注“服务端全量渲染”；任一侧失败/为空必须明确标注回退。
+  const trackDataState = trackLoad.reference && trackLoad.carrier ? "full" : trackLoad.reference || trackLoad.carrier ? "partial" : "snapshot";
   return React.createElement(
     "div",
     { className: "affiliation-detail-mask", role: "presentation", onClick: onMaskClick },
@@ -723,19 +792,37 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
             evidenceCard("最小距离", `${formatNumber(evidence.minimumDistanceNm, 2)} 海里`),
             evidenceCard("平均距离", `${formatNumber(evidence.averageDistanceNm, 2)} 海里`),
             evidenceCard("中位距离", `${formatNumber(evidence.medianDistanceNm, 2)} 海里`),
-            evidenceCard("航向", courseEvidenceText),
+            evidenceCard("航向偏差", courseEvidenceText),
             evidenceCard("阈值内比例", formatRatio(evidence.withinThresholdRatio)),
             evidenceCard("关联时间范围", formatTimeRange(evidence.startTime, evidence.endTime)),
           ),
         ),
-        // 6. 可视化证据区
+        // 6. 关联依据区：独立一横栏（与智能体研判同级的整行卡片），不与图表放在同一区块。
+        basis
+          ? React.createElement(
+              "section",
+              { className: "affiliation-detail-basis" },
+              React.createElement("h4", null, "关联依据"),
+              React.createElement("p", { title: basis.title }, basis.title),
+              React.createElement("p", null, basis.detail),
+            )
+          : null,
+        // 7. 可视化证据区
         React.createElement(
           "section",
           { className: "affiliation-detail-charts" },
-          React.createElement(
-            TrackComparisonChart,
-            { referenceSeries: evidence.referenceTrackSeries, carrierSeries: evidence.carrierTrackSeries, referenceLabel: followerLabel, carrierLabel: name },
-          ),
+          trackLoad.status !== "settled"
+            // loading：占位且不挂载 SVG，杜绝“快照图→全量图”的两阶段展示跳变。
+            ? React.createElement(
+                "figure",
+                { className: "affiliation-detail-chart affiliation-trajectory-chart" },
+                React.createElement("figcaption", null, "航迹对比图"),
+                React.createElement("div", { className: "affiliation-chart-plot affiliation-track-loading", role: "status" }, "正在加载航迹数据…"),
+              )
+            : React.createElement(
+                TrackComparisonChart,
+                { referenceSeries, carrierSeries, referenceLabel: followerLabel, carrierLabel: name, dataState: trackDataState },
+              ),
           hasDistanceChart
             ? React.createElement(DistanceEvidenceChart, { relation, subjectName: followerName, subjectCode: followerCode })
             : React.createElement("p", { className: "affiliation-detail-empty" }, isSync ? "同步伴随不产生时延距离曲线。" : "暂无可用的距离曲线数据。"),
@@ -968,22 +1055,28 @@ export function VesselFocusPanel({
         ? React.createElement("p", { className: preamble.variant === "error" ? "affiliation-empty error" : "affiliation-empty", role: preamble.variant === "error" ? "alert" : undefined }, preamble.text)
         : null,
       // 命中关联：每条只展示紧凑摘要 + “查看详情”，完整研判与距离证据进入各自弹窗。
-      relations.map((item) => React.createElement(AffiliationSummaryRow, {
-        key: item.key,
-        rowKey: item.key,
-        relation: item.relation,
-        name: item.name,
-        followerName: item.followerName,
-        followerCode: item.followerCode,
-        onOpen: () => dispatch({ type: "open", key: item.key }),
-        setTriggerRef,
-      })),
+      relations.map((item) => (item.unanalyzed
+        // 整轨无有效航向的配对不做关联分析（客户 2026-08-15 确认）：静态行说明原因，不可点开详情。
+        ? React.createElement("p", { key: item.key, className: "affiliation-empty affiliation-unanalyzed" }, `${withVesselKind(item.followerName, item.followerCode)} 与 ${item.name}：航向数据不足，未进行关联分析。`)
+        : React.createElement(AffiliationSummaryRow, {
+          key: item.key,
+          rowKey: item.key,
+          relation: item.relation,
+          name: item.name,
+          followerName: item.followerName,
+          followerCode: item.followerCode,
+          onOpen: () => dispatch({ type: "open", key: item.key }),
+          setTriggerRef,
+        }))),
       activeRelation
         ? React.createElement(AffiliationDetailDialog, {
+            // 按关联 key 重建弹窗：切换关联对象时航迹加载状态机从头开始，不残留上一条的渲染序列。
+            key: `${activeRelation.key}::${snapshotTime || ""}`,
             relation: activeRelation.relation,
             name: activeRelation.name,
             followerName: activeRelation.followerName,
             followerCode: activeRelation.followerCode,
+            followerMmsi: activeRelation.followerMmsi,
             index: activeRelation.index + 1,
             snapshotTime: snapshotLabel,
             onClose: () => dispatch({ type: "close" }),

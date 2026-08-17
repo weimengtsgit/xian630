@@ -143,6 +143,17 @@ test("renders a compact affiliation summary below metrics with snapshot time", (
   assert.match(markup, /航向\/方向[\s\S]*--/);
 });
 
+test("renders unanalyzed pairs (insufficient orientation) as a static reason row without a clickable summary", () => {
+  const markup = render({
+    affiliation: {
+      status: "analyzed",
+      carriers: [{ carrier: { mmsi: "366984000", name: "CVN-71" }, relationType: "未分析", reason: "insufficient_orientation_data", sync: null, lag: null }],
+    },
+  });
+  assert.match(markup, /航向数据不足，未进行关联分析/);
+  assert.doesNotMatch(markup, /affiliation-summary-row/);
+});
+
 test("shows the empty state text exactly when no affiliation matches the threshold", () => {
   const markup = render({
     affiliation: { status: "analyzed", carriers: [{ carrier: { mmsi: "366984000" }, relationType: "未命中", lag: { matched: false } }] },
