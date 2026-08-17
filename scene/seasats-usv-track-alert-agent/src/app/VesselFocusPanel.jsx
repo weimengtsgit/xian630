@@ -324,11 +324,12 @@ function resolveAffiliationRelations(affiliation, selectedMmsi, selectedName, al
   };
 }
 
-function formatChartTime(value) {
+function formatChartTime(value, withYear = false) {
   const time = new Date(value);
   if (Number.isNaN(time.getTime())) return "--";
+  // 客户确认：距离曲线横轴刻度一律带两位年份（避免“07/01”被误读为当年 7 月）。
   return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    timeZone: "Asia/Shanghai", ...(withYear ? { year: "2-digit" } : {}), month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).format(time).replace(",", " ");
 }
 
@@ -492,7 +493,26 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
   return React.createElement(
     "figure",
     { className: "affiliation-detail-chart affiliation-trajectory-chart" },
-    React.createElement("figcaption", null, "航迹对比图"),
+    // 标题行：起止时间与“航迹对比图”标题齐平（右对齐）；浮层内船名不带“无人艇/属舰”后缀。
+    React.createElement(
+      "div",
+      { className: "affiliation-track-head" },
+      React.createElement("figcaption", null, "航迹对比图"),
+      React.createElement(
+        "div",
+        { className: "affiliation-track-timerange", "aria-label": "航迹起止时间" },
+        ref.length
+          ? React.createElement("div", null,
+              React.createElement("span", { className: "ref" }, String(referenceLabel || "").replace(/\s(属舰|无人艇)$/, "")),
+              React.createElement("span", null, `${formatChartTime(ref[0].time, true)} ~ ${formatChartTime(ref[ref.length - 1].time, true)}`))
+          : null,
+        car.length
+          ? React.createElement("div", null,
+              React.createElement("span", { className: "carrier" }, String(carrierLabel || "").replace(/\s(属舰|无人艇)$/, "")),
+              React.createElement("span", null, `${formatChartTime(car[0].time, true)} ~ ${formatChartTime(car[car.length - 1].time, true)}`))
+          : null,
+      ),
+    ),
     React.createElement("div", { className: "affiliation-chart-plot affiliation-track-plot", ref: setPlotRef, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerLeave: endDrag, onDoubleClick: resetView },
       zoom > 1 ? React.createElement("button", { type: "button", className: "affiliation-track-reset", onClick: resetView, onPointerDown: (e) => e.stopPropagation(), "aria-label": "重置缩放", title: "重置缩放" }, "重置") : null,
       React.createElement("span", { className: "affiliation-track-zoom-hint" }, "滚轮缩放 · 拖拽平移 · 双击复位"),
@@ -555,8 +575,10 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   let observedMaxDistance = -Infinity;
   for (let index = 0; index < series.length; index += 1) {
     const distance = numberOrNull(series[index]?.distanceNm);
-    if (distance === null) continue;
-    entries.push({ index, distance });
+    const timeMs = Date.parse(series[index]?.time);
+    // 距离或时间非法的点不参与绘制：横轴按时间定位，NaN 坐标会导致整条折线渲染失败。
+    if (distance === null || !Number.isFinite(timeMs)) continue;
+    entries.push({ index, timeMs, distance });
     if (distance < minValue) minValue = distance;
     if (distance > observedMaxDistance) observedMaxDistance = distance;
   }
@@ -571,13 +593,20 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   const maxDistance = Math.ceil((referenceMax * 1.1) / magnitude) * magnitude;
   const plotWidth = width - plot.left - plot.right;
   const plotHeight = plot.bottom - plot.top;
-  const xFor = (index) => plot.left + (index / (series.length - 1)) * plotWidth;
+  // 横轴按真实时间线性比例（不再按点序号等距）：报点密集/稀疏时段的曲线形状与时间成正比，
+  // 刻度取起始/中间时刻/结束，时间等距。
+  const timeStart = entries[0].timeMs;
+  const timeEnd = entries[entries.length - 1].timeMs;
+  const timeSpan = Math.max(timeEnd - timeStart, 1);
+  const xFor = (timeMs) => plot.left + ((timeMs - timeStart) / timeSpan) * plotWidth;
   const yFor = (distance) => plot.bottom - (distance / maxDistance) * plotHeight;
   // 折线只走渲染层抽稀（分桶保留距离极值与首尾）；横轴刻度/范围统计仍基于全量序列。
   const points = decimateDistanceForRender(entries)
-    .map((entry) => `${xFor(entry.index).toFixed(1)},${yFor(entry.distance).toFixed(1)}`)
+    .map((entry) => `${xFor(entry.timeMs).toFixed(1)},${yFor(entry.distance).toFixed(1)}`)
     .join(" ");
-  const timeIndexes = [...new Set([0, Math.round((series.length - 1) / 2), series.length - 1])];
+  const timeTicks = [timeStart, timeStart + timeSpan / 2, timeEnd];
+  // 客户确认：横轴刻度一律带两位年份。
+  const withYear = true;
   const yTicks = [maxDistance, maxDistance / 2, 0];
   return React.createElement(
     "figure",
@@ -591,9 +620,9 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
         React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(tick), y2: yFor(tick), className: "affiliation-evidence-grid" }),
         React.createElement("text", { x: plot.left - 4, y: yFor(tick) + 3, textAnchor: "end", className: "affiliation-evidence-label" }, formatNumber(tick, tick >= 10 ? 0 : 1)),
       )),
-      timeIndexes.map((index) => React.createElement(React.Fragment, { key: `x-${index}` },
-        React.createElement("line", { x1: xFor(index), x2: xFor(index), y1: plot.top, y2: plot.bottom, className: "affiliation-evidence-grid vertical" }),
-        React.createElement("text", { x: xFor(index), y: plot.bottom + 18, textAnchor: index === 0 ? "start" : index === series.length - 1 ? "end" : "middle", className: "affiliation-evidence-label" }, formatChartTime(series[index]?.time)),
+      timeTicks.map((tick, tickIndex) => React.createElement(React.Fragment, { key: `x-${tickIndex}` },
+        React.createElement("line", { x1: xFor(tick), x2: xFor(tick), y1: plot.top, y2: plot.bottom, className: "affiliation-evidence-grid vertical" }),
+        React.createElement("text", { x: xFor(tick), y: plot.bottom + 18, textAnchor: tickIndex === 0 ? "start" : tickIndex === timeTicks.length - 1 ? "end" : "middle", className: "affiliation-evidence-label" }, formatChartTime(new Date(tick).toISOString(), withYear)),
       )),
       React.createElement("line", { x1: plot.left, x2: width - plot.right, y1: yFor(thresholdNm), y2: yFor(thresholdNm), className: "affiliation-evidence-threshold" }),
       React.createElement("text", { x: plot.left - 4, y: yFor(thresholdNm) + 3, textAnchor: "end", className: "affiliation-evidence-label threshold" }, formatNumber(thresholdNm, 0)),

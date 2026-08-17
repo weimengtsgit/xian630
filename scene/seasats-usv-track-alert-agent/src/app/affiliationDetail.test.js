@@ -263,6 +263,12 @@ test("dialog track chart draws both real tracks and keeps overlapping series dis
   assert.match(markup, /海猎号 无人艇/);
   assert.match(markup, /○ 起点　□ 终点/);
   assert.match(markup, /红线覆盖在蓝线之上/);
+  // 起止时间与“航迹对比图”标题同行（标题行内右对齐），且浮层船名不带“无人艇”后缀。
+  assert.match(markup, /class="affiliation-track-head"[\s\S]*?航迹对比图[\s\S]*?aria-label="航迹起止时间"/);
+  assert.match(markup, /aria-label="航迹起止时间"/);
+  assert.match(markup, /<span class="ref">海猎号<\/span>/);
+  assert.doesNotMatch(markup, /<span class="ref">海猎号 无人艇<\/span>/);
+  assert.match(markup, /26\/07\/14 00:00 ~ 26\/07\/16 00:00/);
   // “真实航迹”开头的两行说明文字已删除。
   assert.doesNotMatch(markup, /真实航迹：/);
   assert.doesNotMatch(markup, /双方 AIS 经纬度序列按统一地理比例绘制/);
@@ -470,6 +476,35 @@ test("buildTrackRenderSeries filters invalid coords and reports source/render co
   assert.equal(rendered.sourcePointCount, points.length);
   assert.ok(rendered.points.length <= RENDER_POINT_LIMIT + 2);
   assert.ok(rendered.points.every((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat)));
+});
+
+test("distance chart x-axis shows the year when the series spans multiple years", () => {
+  // 海鹰实际场景：匹配区间 2025-06-30 ~ 2026-08-08，跨 13 个月；刻度必须带年份避免误读为当年 7 月。
+  const longSpanRelation = {
+    carrier: { mmsi: "366984000", name: "CVN-71" },
+    relationType: "时延跟随",
+    lag: {
+      lagMinutes: -4900, matchedPoints: 5038, minimumDistanceNm: 2.26, medianDistanceNm: 2.34,
+      distanceSeriesSource: "interpolated",
+      distanceSeries: [
+        { time: "2025-06-30T23:25:00.000Z", distanceNm: 2.3 },
+        { time: "2026-08-06T16:34:00.000Z", distanceNm: 65 },
+        { time: "2026-08-08T04:57:00.000Z", distanceNm: 2.3 },
+      ],
+    },
+  };
+  const markup = renderDialog({ relation: longSpanRelation });
+  assert.match(markup, /25\/07\/01 07:25/);
+  assert.match(markup, /26\/08\/08 12:57/);
+  // 横轴按真实时间线性比例：中间刻度是日历中点（2026-01-18），不是点数中点（2026-08-06）。
+  assert.match(markup, /26\/01\/18 22:11/);
+});
+
+test("distance chart x-axis always shows the year (customer-confirmed)", () => {
+  // 默认 lagRelation 序列在 2026-07-14 ~ 07-16（北京时间）内：同样带两位年份。
+  const markup = renderDialog();
+  assert.match(markup, /26\/07\/14 00:00/);
+  assert.match(markup, /26\/07\/16 10:57/);
 });
 
 test("dialog renders 150k-point full tracks and distance series without RangeError", () => {
