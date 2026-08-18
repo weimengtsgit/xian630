@@ -38,6 +38,8 @@ let summaryReady = false;
 // 态势分数需及时反映 AIS 新报点，关联计算则单独按较低频率执行。
 const fleetRefreshMs = 30 * 60 * 1000;
 const affiliationRefreshMs = 5 * 60 * 60 * 1000;
+// v13（customer-confirmed-v13-20260818）：本体 8/18 二次补录历史数据（海猎号/CG-62/DDG-65/86/T-AO-20 等早期报点），
+// 算法口径不变（同 v12），仅因输入数据变化判废旧快照强制后台重算。
 // v12（customer-confirmed-v12-20260815）：航向来源恢复修改前生产版本的字段优先级（heading → courseDeg 兜底，
 // 弃用 v11 的 orientation-only），缺失规则（511/null/空/非数值）作用于解析结果；reason 改为
 // insufficient_heading_data；新增 track?render=1 服务端渲染序列接口；sourceOrder 按数据源限制如实记录。
@@ -51,7 +53,7 @@ const affiliationRefreshMs = 5 * 60 * 60 * 1000;
 // v8：轨迹窗口从 2025-12-06 扩到 2025-01-01，旧快照由更短窗口算出，口径不一致必须后台重算。
 // v7：详情弹窗航迹对比图需要双方抽稀航迹序列，analyzeLag 另输出中位距离与阈值内比例。
 // 仅新增可选展示字段，命中算法/阈值/结论不变；旧快照口径不一致，重启后触发一次后台重算填充新字段。
-const affiliationSnapshotVersion = "customer-confirmed-v12-20260815";
+const affiliationSnapshotVersion = "customer-confirmed-v13-20260818";
 const headingFieldVersion = "independent-heading-orientation-v2";
 // 船名展示规则变更后，旧的持久化首屏快照不得继续下发。
 const summarySnapshotVersion = "sidebar-vessel-name-v6";
@@ -68,8 +70,9 @@ export const vesselLabelConfigVersion = createHash("sha256")
 // 轨迹落盘目录：去重后的全量轨迹按 MMSI 持久化，重启后只补增量，不再全量重拉。
 const trackStoreRoot = resolve(dataRoot, "tracks");
 // 轨迹存储版本：窗口起点、拉取口径变化或本体回填了"水位线之前"的历史报点时递增，判废旧缓存全量重拉。
+// v3（2026-08-18）：本体二次补录（海猎号/CG-62/DDG-65/86/T-AO-20 等 2025 早期报点），增量拉取拉不到回填段。
 // v2（2026-08-16）：本体回填历史报点，增量拉取（最新报点回退 2h 起）永远拉不到回填段，必须全量重拉。
-const trackStoreVersion = "v2-20260816-ontology-backfill";
+const trackStoreVersion = "v3-20260818-ontology-backfill";
 // 增量刷新时从水位线回退的重叠窗口，吸收迟到/乱序报点。
 const TRACK_OVERLAP_MS = 2 * 60 * 60 * 1000;
 const trackCache = new Map();
