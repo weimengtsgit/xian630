@@ -65,6 +65,10 @@ test("ontology-only snapshots, timezone handling, and shared requests are enforc
   // 空窗信息由服务端在全量轨迹上检测并随渲染序列下发（前端断线/虚线/标注）。
   assert.match(serverSource, /renderGaps: rendered\.gaps/);
   assert.match(serverSource, /renderGapCount: rendered\.gapCount/);
+  // 大快照接口 ETag/304：If-None-Match 命中返回 304 空响应，避免 30 秒轮询全量下载 30MB+。
+  assert.match(serverSource, /if-none-match/);
+  assert.match(serverSource, /writeHead\(304/);
+  assert.match(serverSource, /"Cache-Control": "no-cache", ETag: etag/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);
   assert.match(serverSource, /trackInFlight\.has\(mmsi\)/);

@@ -674,6 +674,20 @@ function sendJson(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
+// 大快照接口（关联快照 30MB+、态势快照 22MB+，前端 30 秒轮询）支持 ETag/304：
+// 内容未变时返回 304 空响应，浏览器复用本地缓存，避免每次全量下载。
+// Cache-Control: no-cache = 允许缓存但每次先向源站验证（If-None-Match），与“轮询拿最新快照”语义一致。
+function sendSnapshotJson(request, response, data, etagSource) {
+  const etag = `"${createHash("sha256").update(String(etagSource)).digest("hex").slice(0, 16)}"`;
+  if (request.headers["if-none-match"] === etag) {
+    response.writeHead(304, { ETag: etag, "Cache-Control": "no-cache" });
+    response.end();
+    return;
+  }
+  response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-cache", ETag: etag });
+  response.end(JSON.stringify(data));
+}
+
 function serveStatic(request, response) {
   const requested = request.url === "/" ? "/index.html" : request.url.split("?")[0];
   const pathname = normalize(requested).replace(/^([.][.][/\\])+/, "");
@@ -696,9 +710,12 @@ createServer(async (request, response) => {
         void refreshFleetSnapshot().catch(() => {});
         return sendJson(response, 202, { status: "refreshing" });
       }
-      return sendJson(response, 200, summarySnapshot);
+      return sendSnapshotJson(request, response, summarySnapshot, `summary-${summarySnapshot.metadata?.refreshedAt}-${summarySnapshotVersion}-${headingFieldVersion}`);
     }
-    if (request.method === "GET" && url.pathname === "/api/seasats/affiliations") return sendJson(response, 200, affiliationHistory || { status: (fleetRefreshPromise || affiliationRefreshPromise) ? "refreshing" : "not-generated", refreshIntervalHours: 5 });
+    if (request.method === "GET" && url.pathname === "/api/seasats/affiliations") {
+      if (!affiliationHistory) return sendJson(response, 200, { status: (fleetRefreshPromise || affiliationRefreshPromise) ? "refreshing" : "not-generated", refreshIntervalHours: 5 });
+      return sendSnapshotJson(request, response, affiliationHistory, `aff-${affiliationHistory.refreshedAt}-${affiliationHistory.algorithmVersion}`);
+    }
     const trackMatch = url.pathname.match(/^\/api\/seasats\/vessels\/(\d+)\/track$/);
     // 点选统计只使用本体轨迹；北邮历史轨迹仅由远程地图 iframe 自己加载。
     if (request.method === "GET" && trackMatch) {
