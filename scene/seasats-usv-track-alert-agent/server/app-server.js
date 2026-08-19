@@ -679,7 +679,9 @@ function sendJson(response, status, data) {
 // Cache-Control: no-cache = 允许缓存但每次先向源站验证（If-None-Match），与“轮询拿最新快照”语义一致。
 function sendSnapshotJson(request, response, data, etagSource) {
   const etag = `"${createHash("sha256").update(String(etagSource)).digest("hex").slice(0, 16)}"`;
-  if (request.headers["if-none-match"] === etag) {
+  // gzip 会按 RFC 将强 ETag 降级为弱 ETag（W/"…"）：比较须按弱比较语义（忽略 W/ 前缀，兼容多值与 *）。
+  const candidates = String(request.headers["if-none-match"] || "").split(",").map((tag) => tag.trim().replace(/^W\//, ""));
+  if (candidates.includes(etag.replace(/^W\//, "")) || candidates.includes("*")) {
     response.writeHead(304, { ETag: etag, "Cache-Control": "no-cache" });
     response.end();
     return;

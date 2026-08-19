@@ -66,8 +66,10 @@ test("ontology-only snapshots, timezone handling, and shared requests are enforc
   assert.match(serverSource, /renderGaps: rendered\.gaps/);
   assert.match(serverSource, /renderGapCount: rendered\.gapCount/);
   // 大快照接口 ETag/304：If-None-Match 命中返回 304 空响应，避免 30 秒轮询全量下载 30MB+。
+  // 弱比较语义：忽略 W/ 前缀（gzip 会将强 ETag 降级为弱 ETag），兼容多值与 *。
   assert.match(serverSource, /if-none-match/);
   assert.match(serverSource, /writeHead\(304/);
+  assert.match(serverSource, /W\\\//);
   assert.match(serverSource, /"Cache-Control": "no-cache", ETag: etag/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);
