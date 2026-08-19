@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } 
 import { AlertTriangle, Anchor, ChevronLeft, ChevronRight, LineChart, X } from "lucide-react";
 import { subscribeEscapeKeyTopmost } from "../logic/escapeKey.js";
 import { resolveHeadingValue } from "../logic/heading.js";
-import { decimateDistanceForRender, decimateTrackForRender } from "../logic/renderDecimation.js";
+import { decimateDistanceForRender, decimateTrackForRender, GAP_BREAK_MS } from "../logic/renderDecimation.js";
 import { cancelTrackRender, readSettledTrackRender, requestTrackRender } from "../logic/trackRenderCache.js";
 
 const confirmedCarrierNames = {
@@ -333,6 +333,37 @@ function formatChartTime(value, withYear = false) {
   }).format(time).replace(",", " ");
 }
 
+// 空窗标注用的日期格式（北京时间，两位年份，无时分）。
+function formatChartDate(value) {
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) return "--";
+  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "2-digit", month: "2-digit", day: "2-digit" }).format(time);
+}
+
+// 把渲染序列在服务端给出的空窗时刻处断开：实线段（真实航迹）+ 虚线连接（空窗跳变）。
+// 空窗两端坐标取服务端在全量轨迹上检测到的真实报点，不用渲染序列近似点代替。
+function splitTrackAtGaps(series, gaps) {
+  if (!Array.isArray(gaps) || !gaps.length || series.length < 2) return { segments: series.length ? [series] : [], connectors: [] };
+  const sorted = [...gaps].sort((a, b) => Date.parse(a.fromTime) - Date.parse(b.fromTime));
+  const segments = [];
+  const connectors = [];
+  let start = 0;
+  for (const gap of sorted) {
+    const fromMs = Date.parse(gap.fromTime);
+    const toMs = Date.parse(gap.toTime);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) continue;
+    let end = start;
+    while (end < series.length && Date.parse(series[end].time) <= fromMs) end += 1;
+    if (end > start) segments.push(series.slice(start, end));
+    connectors.push(gap);
+    start = end;
+    // 空窗区间内渲染序列本应无点；防御性跳过残留点，避免把空窗画成实线。
+    while (start < series.length && Date.parse(series[start].time) < toMs) start += 1;
+  }
+  if (start < series.length) segments.push(series.slice(start));
+  return { segments: segments.filter((segment) => segment.length), connectors };
+}
+
 function formatTimeRange(start, end) {
   const s = formatSnapshotTime(start);
   const e = formatSnapshotTime(end);
@@ -349,19 +380,49 @@ function formatRatio(value) {
 // 航迹图注：文案必须与数据状态一致，不得把服务端抽稀生成的渲染序列说成浏览器“全量逐点绘制”。
 export function trackSourceNote(dataState) {
   const prefix = "○ 起点　□ 终点　· ";
-  if (dataState === "full") return `${prefix}双方航迹为服务端自 2025-01-01 起全量轨迹生成的渲染序列（保留首尾与分桶极值）；红线覆盖在蓝线之上，重合处仍可辨识双方。`;
-  if (dataState === "partial") return `${prefix}一侧航迹为服务端全量渲染序列，另一侧为快照抽稀回退（拉取未完成或失败）；红线覆盖在蓝线之上。`;
-  return `${prefix}真实 AIS 航迹抽稀后绘制；红线覆盖在蓝线之上，重合处仍可辨识双方。`;
+  if (dataState === "full") return `${prefix}双方航迹为服务端自 2025-01-01 起全量轨迹生成的渲染序列（保留首尾与分桶极值）；蓝线覆盖在红线之上，重合处仍可辨识双方。`;
+  if (dataState === "partial") return `${prefix}一侧航迹为服务端全量渲染序列，另一侧为快照抽稀回退（拉取未完成或失败）；蓝线覆盖在红线之上。`;
+  return `${prefix}真实 AIS 航迹抽稀后绘制；蓝线覆盖在红线之上，重合处仍可辨识双方。`;
+}
+
+// 悬停命中检测：在两条航迹的绘制序列中找距 (ux, uy) 最近的点，超过阈值返回 null。
+// 纯函数便于单测；threshold 已由调用方换算到 svg 用户坐标系（屏幕 10px）。
+export function findNearestTrackPoint({ ref, car, ux, uy, xFor, yFor, threshold, referenceLabel, carrierLabel }) {
+  let best = null;
+  const consider = (series, seriesClass, label) => {
+    for (const point of series) {
+      const dx = xFor(point.lon) - ux;
+      const dy = yFor(point.lat) - uy;
+      const d2 = dx * dx + dy * dy;
+      if (best === null || d2 < best.d2) best = { d2, point, seriesClass, label };
+    }
+  };
+  consider(ref, "ref", referenceLabel);
+  consider(car, "carrier", carrierLabel);
+  return best && best.d2 <= threshold * threshold ? best : null;
 }
 
 // 航迹对比图：横轴经度、纵轴纬度，两条真实航迹，区分起终点，等比例展示（参考 select0721.py）。
+// 空窗（相邻报点 >7 天）处实线断开，端点间同色虚线连接表示跳变，图注标明最大空窗。
 // dataState：full=双方 2025-01-01 起全量报点；partial=一侧全量一侧快照回退；snapshot=快照抽稀序列。
-function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel, dataState = "snapshot" }) {
+export function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel, dataState = "snapshot", referenceGaps = [], carrierGaps = [] }) {
   // 滚轮缩放 + 拖拽平移：transform 作用于 svg，外层 plot 容器裁剪溢出。
   // hooks 必须在早退返回之前调用，保证渲染分支变化时 hook 顺序稳定。
   const plotRef = useRef(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [hoverPoint, setHoverPoint] = useState(null);
+  // 图例点击切换单显：hiddenSeries 含 "ref"/"carrier" 时对应侧不绘制（仅影响显示，坐标域仍按双方计算，不会跳变）。
+  const [hiddenSeries, setHiddenSeries] = useState(() => new Set());
+  const toggleSeries = useCallback((seriesClass) => {
+    setHiddenSeries((current) => {
+      const next = new Set(current);
+      if (next.has(seriesClass)) next.delete(seriesClass);
+      else next.add(seriesClass);
+      return next;
+    });
+    setHoverPoint(null);
+  }, []);
   const dragRef = useRef(null);
   const zoomStateRef = useRef({ zoom: 1, pan: { x: 0, y: 0 } });
   zoomStateRef.current = { zoom, pan };
@@ -400,13 +461,38 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* noop */ }
   };
   const onPointerMove = (event) => {
-    if (!dragRef.current) return;
-    setPan({
-      x: dragRef.current.pan.x + (event.clientX - dragRef.current.x),
-      y: dragRef.current.pan.y + (event.clientY - dragRef.current.y),
+    if (dragRef.current) {
+      setPan({
+        x: dragRef.current.pan.x + (event.clientX - dragRef.current.x),
+        y: dragRef.current.pan.y + (event.clientY - dragRef.current.y),
+      });
+      return;
+    }
+    // 悬停命中：把光标换算回 svg 用户坐标。pan 为屏幕像素（transform: translate(px) scale），
+    // 必须先减 pan、除 zoom 得布局像素，再换算 viewBox 用户坐标——否则放大平移后命中错位。
+    const el = plotRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const { zoom: curZoom, pan: curPan } = zoomStateRef.current;
+    const ux = ((event.clientX - rect.left - curPan.x) / curZoom) * (width / rect.width);
+    const uy = ((event.clientY - rect.top - curPan.y) / curZoom) * (height / rect.height);
+    const threshold = 10 * (width / rect.width) / curZoom;
+    // 已隐藏侧不参与悬停命中。
+    const hit = findNearestTrackPoint({
+      ref: hiddenSeries.has("ref") ? [] : ref,
+      car: hiddenSeries.has("carrier") ? [] : car,
+      ux, uy, xFor, yFor, threshold, referenceLabel, carrierLabel,
     });
+    // null → null 赋值 React 会跳过重渲染，可安全逐次调用。
+    setHoverPoint(hit ? {
+      ...hit,
+      x: Math.min(event.clientX - rect.left + 12, rect.width - 168),
+      y: Math.min(event.clientY - rect.top + 12, rect.height - 64),
+    } : null);
   };
   const endDrag = (event) => {
+    if (hoverPoint) setHoverPoint(null);
     if (!dragRef.current) return;
     dragRef.current = null;
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* noop */ }
@@ -463,8 +549,13 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
       .map((item) => `${xFor(item.lon).toFixed(1)},${yFor(item.lat).toFixed(1)}`)
       .join(" ");
     // 折线只走渲染层抽稀后的序列（保留首尾与分桶极值）；统计与端点标记仍用全量序列。
-    const refPoly = toPolyline(decimateTrackForRender(ref));
-    const carPoly = toPolyline(decimateTrackForRender(car));
+    // 空窗在服务端全量检测结果（gaps）处断线；快照回退态 gaps 为空，保持整条实线。
+    const refSplit = splitTrackAtGaps(ref, referenceGaps);
+    const carSplit = splitTrackAtGaps(car, carrierGaps);
+    const refPolylines = refSplit.segments.map((segment) => toPolyline(decimateTrackForRender(segment)));
+    const carPolylines = carSplit.segments.map((segment) => toPolyline(decimateTrackForRender(segment)));
+    const refBiggestGap = refSplit.connectors.reduce((biggest, gap) => (gap.gapMs > biggest.gapMs ? gap : biggest), refSplit.connectors[0] || null);
+    const carBiggestGap = carSplit.connectors.reduce((biggest, gap) => (gap.gapMs > biggest.gapMs ? gap : biggest), carSplit.connectors[0] || null);
     const allLonTicks = [minLon, (minLon + maxLon) / 2, maxLon];
     // 等比例地理投影可能让实际经度范围只占绘图区中部；像素间距不足时隐藏中间刻度，
     // 并让首尾标签向外展开，避免三个长小数标签挤在一起。
@@ -472,12 +563,12 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
       ? [minLon, maxLon]
       : allLonTicks;
     const latTicks = [maxLat, (minLat + maxLat) / 2, minLat];
-    return { ref, car, refPoly, carPoly, lonTicks, latTicks, xFor, yFor };
-  }, [referenceSeries, carrierSeries, plotW, plotH]);
+    return { ref, car, refSplit, carSplit, refPolylines, carPolylines, refBiggestGap, carBiggestGap, lonTicks, latTicks, xFor, yFor };
+  }, [referenceSeries, carrierSeries, referenceGaps, carrierGaps, plotW, plotH]);
   if (!geometry) {
     return React.createElement("p", { className: "affiliation-detail-empty" }, "暂无可用的航迹对比数据。");
   }
-  const { ref, car, refPoly, carPoly, lonTicks, latTicks, xFor, yFor } = geometry;
+  const { ref, car, refSplit, carSplit, refPolylines, carPolylines, refBiggestGap, carBiggestGap, lonTicks, latTicks, xFor, yFor } = geometry;
   const endpoint = (series, seriesClass) => {
     const first = series[0];
     const last = series[series.length - 1];
@@ -516,6 +607,16 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
     React.createElement("div", { className: "affiliation-chart-plot affiliation-track-plot", ref: setPlotRef, onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerLeave: endDrag, onDoubleClick: resetView },
       zoom > 1 ? React.createElement("button", { type: "button", className: "affiliation-track-reset", onClick: resetView, onPointerDown: (e) => e.stopPropagation(), "aria-label": "重置缩放", title: "重置缩放" }, "重置") : null,
       React.createElement("span", { className: "affiliation-track-zoom-hint" }, "滚轮缩放 · 拖拽平移 · 双击复位"),
+      // 悬停命中浮层：显示最近点的船名、日期时间（北京时间带年份）与经纬度（两位小数）。
+      hoverPoint
+        ? React.createElement(
+            "div",
+            { className: `affiliation-track-tooltip ${hoverPoint.seriesClass}`, role: "status", style: { left: hoverPoint.x, top: hoverPoint.y } },
+            React.createElement("b", null, hoverPoint.label),
+            React.createElement("span", null, formatChartTime(hoverPoint.point.time, true)),
+            React.createElement("span", null, `经度 ${hoverPoint.point.lon.toFixed(2)}°，纬度 ${hoverPoint.point.lat.toFixed(2)}°`),
+          )
+        : null,
       React.createElement(
         "svg",
         { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${referenceLabel} 与 ${carrierLabel} 航迹对比`, style: { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "0 0", cursor: zoom > 1 ? "grab" : "default", "--zoom": String(zoom) } },
@@ -532,11 +633,27 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
           React.createElement("line", { x1: padLeft, x2: width - padRight, y1: yFor(tick), y2: yFor(tick), className: "affiliation-track-grid" }),
           React.createElement("text", { x: padLeft - 7, y: yFor(tick) + 3, textAnchor: "end", className: "affiliation-track-label" }, tick.toFixed(3)),
         )),
-        // 两条均为实线：蓝色本体航迹（较粗）在下，红色航母航迹覆盖其上；以颜色与线宽区分双方，坐标不做视觉偏移。
-        ref.length >= 2 ? React.createElement("polyline", { points: refPoly, className: "affiliation-track-line ref", "data-series": "reference" }) : null,
-        car.length >= 2 ? React.createElement("polyline", { points: carPoly, className: "affiliation-track-line carrier", "data-series": "carrier" }) : null,
-        ref.length >= 2 ? endpoint(ref, "ref") : null,
-        car.length >= 2 ? endpoint(car, "carrier") : null,
+        // 两条均为实线段（真实航迹）：红色航母航迹（较粗）在下，蓝色无人艇航迹覆盖其上（客户确认：蓝盖红）。
+        // 空窗（服务端全量检测 >7 天）处实线断开，端点间同色虚线连接表示跳变、不冒充航程。
+        // 图例隐藏的侧不绘制（含虚线、孤立点与起终点标记），坐标域仍按双方计算不跳变。
+        hiddenSeries.has("carrier") ? null : carPolylines.map((segment, segIndex) => (carSplit.segments[segIndex].length >= 2
+          ? React.createElement("polyline", { key: `car-seg-${segIndex}`, points: segment, className: "affiliation-track-line carrier", "data-series": "carrier" })
+          : React.createElement("circle", { key: `car-seg-${segIndex}`, cx: xFor(carSplit.segments[segIndex][0].lon), cy: yFor(carSplit.segments[segIndex][0].lat), r: 3 / zoom, className: "affiliation-track-point carrier" }))),
+        hiddenSeries.has("carrier") ? null : carSplit.connectors.map((gap, gapIndex) => React.createElement("line", {
+          key: `car-gap-${gapIndex}`,
+          x1: xFor(gap.from.lon), y1: yFor(gap.from.lat), x2: xFor(gap.to.lon), y2: yFor(gap.to.lat),
+          className: "affiliation-track-gap carrier", "aria-hidden": "true",
+        })),
+        hiddenSeries.has("carrier") || car.length < 2 ? null : endpoint(car, "carrier"),
+        hiddenSeries.has("ref") ? null : refPolylines.map((segment, segIndex) => (refSplit.segments[segIndex].length >= 2
+          ? React.createElement("polyline", { key: `ref-seg-${segIndex}`, points: segment, className: "affiliation-track-line ref", "data-series": "reference" })
+          : React.createElement("circle", { key: `ref-seg-${segIndex}`, cx: xFor(refSplit.segments[segIndex][0].lon), cy: yFor(refSplit.segments[segIndex][0].lat), r: 3 / zoom, className: "affiliation-track-point ref" }))),
+        hiddenSeries.has("ref") ? null : refSplit.connectors.map((gap, gapIndex) => React.createElement("line", {
+          key: `ref-gap-${gapIndex}`,
+          x1: xFor(gap.from.lon), y1: yFor(gap.from.lat), x2: xFor(gap.to.lon), y2: yFor(gap.to.lat),
+          className: "affiliation-track-gap ref", "aria-hidden": "true",
+        })),
+        hiddenSeries.has("ref") || ref.length < 2 ? null : endpoint(ref, "ref"),
         React.createElement("text", { x: width / 2, y: height - 5, textAnchor: "middle", className: "affiliation-track-axis" }, "经度"),
         React.createElement("text", { x: 14, y: height / 2, textAnchor: "middle", className: "affiliation-track-axis", transform: `rotate(-90 14 ${height / 2})` }, "纬度"),
       ),
@@ -544,9 +661,49 @@ function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, 
     React.createElement(
       "div",
       { className: "affiliation-track-html-legend", "aria-label": "航迹图例" },
-      React.createElement("span", { className: "ref", title: referenceLabel }, React.createElement("i"), React.createElement("b", null, referenceLabel)),
-      React.createElement("span", { className: "carrier", title: carrierLabel }, React.createElement("i"), React.createElement("b", null, carrierLabel)),
+      // 图例可点击：单独显示/隐藏对应侧航迹（仅影响显示，坐标域不变）。
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          className: `ref${hiddenSeries.has("ref") ? " off" : ""}`,
+          title: hiddenSeries.has("ref") ? `显示 ${referenceLabel}` : `隐藏 ${referenceLabel}`,
+          "aria-pressed": hiddenSeries.has("ref"),
+          onClick: () => toggleSeries("ref"),
+        },
+        React.createElement("i"), React.createElement("b", null, referenceLabel),
+      ),
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          className: `carrier${hiddenSeries.has("carrier") ? " off" : ""}`,
+          title: hiddenSeries.has("carrier") ? `显示 ${carrierLabel}` : `隐藏 ${carrierLabel}`,
+          "aria-pressed": hiddenSeries.has("carrier"),
+          onClick: () => toggleSeries("carrier"),
+        },
+        React.createElement("i"), React.createElement("b", null, carrierLabel),
+      ),
     ),
+    // 空窗标注：各船最大空窗时段（>7 天，服务端全量检测）；虚线为跳变连接。
+    (refBiggestGap || carBiggestGap)
+      ? React.createElement(
+          "div",
+          { className: "affiliation-track-gaps", "aria-label": "空窗时段" },
+          refBiggestGap
+            ? React.createElement("span", null,
+                React.createElement("b", { className: "ref" }, String(referenceLabel || "").replace(/\s(属舰|无人艇)$/, "")),
+                `空窗 ${formatChartDate(refBiggestGap.fromTime)} ~ ${formatChartDate(refBiggestGap.toTime)}（${(refBiggestGap.gapMs / 86400000).toFixed(1)} 天）${refSplit.connectors.length > 1 ? `，另有 ≥7 天空窗 ${refSplit.connectors.length - 1} 处` : ""}`,
+              )
+            : null,
+          carBiggestGap
+            ? React.createElement("span", null,
+                React.createElement("b", { className: "carrier" }, String(carrierLabel || "").replace(/\s(属舰|无人艇)$/, "")),
+                `空窗 ${formatChartDate(carBiggestGap.fromTime)} ~ ${formatChartDate(carBiggestGap.toTime)}（${(carBiggestGap.gapMs / 86400000).toFixed(1)} 天）${carSplit.connectors.length > 1 ? `，另有 ≥7 天空窗 ${carSplit.connectors.length - 1} 处` : ""}`,
+              )
+            : null,
+        )
+      : null,
     React.createElement("span", { className: "affiliation-chart-note" }, trackSourceNote(dataState)),
   );
 }
@@ -562,6 +719,9 @@ function distanceBasisLines(relation, subjectLabel) {
     detail: `${subjectLabel} 实际报点时间 · 航母轨迹按关联算法插值对齐 · 延迟 ${zeroLag ? "同步" : formatDurationMinutes(relation.lag.lagMinutes)} · 最小距离 ${formatNumber(relation.lag.minimumDistanceNm, 2)} 海里 · ${formatCount(relation.lag.matchedPoints)} 个匹配点`,
   };
 }
+
+// 距离曲线相邻点间隔超过该值时断线（与航迹空窗虚线共用同一阈值，定义在 renderDecimation.js）。
+export const DISTANCE_GAP_BREAK_MS = GAP_BREAK_MS;
 
 // 距离曲线图：迁移自 distanceEvidence，保留阈值线/插值说明/北京时间；新增中位距离线（如有）。
 function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
@@ -601,9 +761,14 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
   const xFor = (timeMs) => plot.left + ((timeMs - timeStart) / timeSpan) * plotWidth;
   const yFor = (distance) => plot.bottom - (distance / maxDistance) * plotHeight;
   // 折线只走渲染层抽稀（分桶保留距离极值与首尾）；横轴刻度/范围统计仍基于全量序列。
-  const points = decimateDistanceForRender(entries)
-    .map((entry) => `${xFor(entry.timeMs).toFixed(1)},${yFor(entry.distance).toFixed(1)}`)
-    .join(" ");
+  const renderEntries = decimateDistanceForRender(entries);
+  // 相邻点间隔超过 GAP_BREAK_MS 时断开线段：数据空窗显示为真实空白，不用斜线连线冒充渐变数据。
+  const segments = [[]];
+  for (const entry of renderEntries) {
+    const current = segments[segments.length - 1];
+    if (current.length && entry.timeMs - current[current.length - 1].timeMs > DISTANCE_GAP_BREAK_MS) segments.push([]);
+    segments[segments.length - 1].push(entry);
+  }
   const timeTicks = [timeStart, timeStart + timeSpan / 2, timeEnd];
   // 客户确认：横轴刻度一律带两位年份。
   const withYear = true;
@@ -631,7 +796,10 @@ function DistanceEvidenceChart({ relation, subjectName, subjectCode }) {
         React.createElement("text", { x: plot.left - 4, y: yFor(medianNm) + 3, textAnchor: "end", className: "affiliation-evidence-label median" }, formatNumber(medianNm, 2)),
       ) : null,
       React.createElement("text", { x: plot.left, y: 13, className: "affiliation-evidence-label title" }, "距离（海里）"),
-      React.createElement("polyline", { points, className: "affiliation-evidence-line" }),
+      // 空窗断线：每段独立折线；单点段画圆点，孤立点不隐形。
+      segments.map((segment, segIndex) => (segment.length >= 2
+        ? React.createElement("polyline", { key: `seg-${segIndex}`, points: segment.map((entry) => `${xFor(entry.timeMs).toFixed(1)},${yFor(entry.distance).toFixed(1)}`).join(" "), className: "affiliation-evidence-line" })
+        : React.createElement("circle", { key: `seg-${segIndex}`, cx: xFor(segment[0].timeMs), cy: yFor(segment[0].distance), r: 2.5, className: "affiliation-evidence-dot" }))),
       React.createElement("text", { x: width / 2, y: height - 8, textAnchor: "middle", className: "affiliation-evidence-label title" }, `${vesselKindLabel(subjectCode)}实际时间（北京时间）`),
     ),
     ),
@@ -736,8 +904,11 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
   const hasDistanceChart = !isSync && Array.isArray(relation.lag?.distanceSeries) && relation.lag.distanceSeries.length >= 2;
   const basis = distanceBasisLines(relation, followerLabel);
   // 航迹序列优先使用服务端渲染序列（track?render=1），失败侧回退快照抽稀序列；双侧都失败为快照态。
-  const referenceSeries = trackLoad.reference || evidence.referenceTrackSeries;
-  const carrierSeries = trackLoad.carrier || evidence.carrierTrackSeries;
+  const referenceSeries = trackLoad.reference?.points || evidence.referenceTrackSeries;
+  const carrierSeries = trackLoad.carrier?.points || evidence.carrierTrackSeries;
+  // 空窗信息来自服务端在全量轨迹上的检测结果；快照回退态不做空窗判定（抽稀间隔会误判为空窗）。
+  const referenceGaps = trackLoad.reference?.gaps || [];
+  const carrierGaps = trackLoad.carrier?.gaps || [];
   // 只有双侧渲染序列都拉取成功才标注“服务端全量渲染”；任一侧失败/为空必须明确标注回退。
   const trackDataState = trackLoad.reference && trackLoad.carrier ? "full" : trackLoad.reference || trackLoad.carrier ? "partial" : "snapshot";
   return React.createElement(
@@ -850,7 +1021,7 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
               )
             : React.createElement(
                 TrackComparisonChart,
-                { referenceSeries, carrierSeries, referenceLabel: followerLabel, carrierLabel: name, dataState: trackDataState },
+                { referenceSeries, carrierSeries, referenceLabel: followerLabel, carrierLabel: name, dataState: trackDataState, referenceGaps, carrierGaps },
               ),
           hasDistanceChart
             ? React.createElement(DistanceEvidenceChart, { relation, subjectName: followerName, subjectCode: followerCode })

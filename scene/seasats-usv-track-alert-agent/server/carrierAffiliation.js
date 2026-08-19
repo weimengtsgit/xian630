@@ -175,8 +175,11 @@ function range(times) {
   return { startTime: new Date(minTime).toISOString(), endTime: new Date(maxTime).toISOString() };
 }
 
-function courseDifference(a, b) {
-  let difference = Math.abs(a - b);
+// 航向差最小夹角 [0,180]：先 %360 再折返。unwrap 后两侧航向可相差超过 540°，
+// 0721 原公式（>180 则 360-差值）此时会得到负值（实测 maxCourseDifferenceDeg=-523），
+// 使本应被 45° 筛掉的点错误通过；取模后结果始终落在 [0,180]，属数学修正。
+export function courseDifference(a, b) {
+  let difference = Math.abs(a - b) % 360;
   if (difference > 180) difference = 360 - difference;
   return difference;
 }

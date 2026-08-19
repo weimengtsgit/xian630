@@ -21,6 +21,8 @@ registerHooks({
 
 const {
   AffiliationDetailDialog,
+  TrackComparisonChart,
+  findNearestTrackPoint,
   formatLagDays,
   affiliationDetailKey,
   buildAffiliationSummary,
@@ -30,7 +32,7 @@ const {
   trapDialogFocus,
   trackSourceNote,
 } = await import("./VesselFocusPanel.jsx");
-const { decimateTrackForRender, decimateDistanceForRender, buildTrackRenderSeries, RENDER_POINT_LIMIT } = await import("../logic/renderDecimation.js");
+const { decimateTrackForRender, decimateDistanceForRender, buildTrackRenderSeries, findTimeGaps, RENDER_POINT_LIMIT } = await import("../logic/renderDecimation.js");
 
 const lagRelation = {
   carrier: { mmsi: "366984000", name: "CVN-71" },
@@ -262,7 +264,10 @@ test("dialog track chart draws both real tracks and keeps overlapping series dis
   assert.match(markup, /aria-label="航迹图例"/);
   assert.match(markup, /海猎号 无人艇/);
   assert.match(markup, /○ 起点　□ 终点/);
-  assert.match(markup, /红线覆盖在蓝线之上/);
+  assert.match(markup, /蓝线覆盖在红线之上/);
+  // 图例为可点击切换按钮（默认均未隐藏）；蓝线盖红线（ref 在上层）。
+  assert.match(markup, /<button type="button" class="ref"[^>]*aria-pressed="false"/);
+  assert.match(markup, /<button type="button" class="carrier"[^>]*aria-pressed="false"/);
   // 起止时间与“航迹对比图”标题同行（标题行内右对齐），且浮层船名不带“无人艇”后缀。
   assert.match(markup, /class="affiliation-track-head"[\s\S]*?航迹对比图[\s\S]*?aria-label="航迹起止时间"/);
   assert.match(markup, /aria-label="航迹起止时间"/);
@@ -463,6 +468,23 @@ test("decimateDistanceForRender keeps first/last and distance extremes within th
   assert.ok(decimated.includes(globalMin));
 });
 
+test("findNearestTrackPoint returns the closest point within threshold, else null", () => {
+  const ref = [{ lon: 120, lat: 20, time: "2026-08-01T00:00:00.000Z" }, { lon: 121, lat: 21, time: "2026-08-02T00:00:00.000Z" }];
+  const car = [{ lon: 130, lat: 30, time: "2026-08-03T00:00:00.000Z" }];
+  const identity = (v) => v;
+  // 命中无人艇第一点
+  const hitRef = findNearestTrackPoint({ ref, car, ux: 120.05, uy: 20, xFor: identity, yFor: identity, threshold: 0.2, referenceLabel: "海猎号 无人艇", carrierLabel: "罗斯福号" });
+  assert.equal(hitRef.seriesClass, "ref");
+  assert.equal(hitRef.point.time, "2026-08-01T00:00:00.000Z");
+  // 航母点更近时优先航母
+  const hitCar = findNearestTrackPoint({ ref, car, ux: 129.9, uy: 30.05, xFor: identity, yFor: identity, threshold: 0.2, referenceLabel: "海猎号 无人艇", carrierLabel: "罗斯福号" });
+  assert.equal(hitCar.seriesClass, "carrier");
+  // 超阈值返回 null
+  assert.equal(findNearestTrackPoint({ ref, car, ux: 125, uy: 25, xFor: identity, yFor: identity, threshold: 0.2, referenceLabel: "海猎号 无人艇", carrierLabel: "罗斯福号" }), null);
+  // 空序列不报错
+  assert.equal(findNearestTrackPoint({ ref: [], car: [], ux: 0, uy: 0, xFor: identity, yFor: identity, threshold: 1, referenceLabel: "", carrierLabel: "" }), null);
+});
+
 test("buildTrackRenderSeries filters invalid coords and reports source/render counts", () => {
   const points = [];
   for (let index = 0; index < 150_000; index += 1) {
@@ -476,6 +498,76 @@ test("buildTrackRenderSeries filters invalid coords and reports source/render co
   assert.equal(rendered.sourcePointCount, points.length);
   assert.ok(rendered.points.length <= RENDER_POINT_LIMIT + 2);
   assert.ok(rendered.points.every((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat)));
+});
+
+test("findTimeGaps detects gaps over 7 days with true endpoints and count", () => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const base = Date.UTC(2026, 0, 1);
+  const points = [
+    { time: new Date(base).toISOString(), lon: 120, lat: 20 },
+    { time: new Date(base + dayMs).toISOString(), lon: 120.1, lat: 20 },
+    // 空窗 30 天
+    { time: new Date(base + 31 * dayMs).toISOString(), lon: 121, lat: 21 },
+    { time: new Date(base + 32 * dayMs).toISOString(), lon: 121.1, lat: 21 },
+    // 空窗 8 天
+    { time: new Date(base + 40 * dayMs).toISOString(), lon: 122, lat: 22 },
+  ];
+  const { gapCount, gaps } = findTimeGaps(points);
+  assert.equal(gapCount, 2);
+  // 按间隔从大到小排序，端点为全量序列中的真实报点。
+  assert.equal(gaps[0].fromTime, new Date(base + dayMs).toISOString());
+  assert.equal(gaps[0].toTime, new Date(base + 31 * dayMs).toISOString());
+  assert.deepEqual(gaps[0].from, { lon: 120.1, lat: 20 });
+  assert.deepEqual(gaps[0].to, { lon: 121, lat: 21 });
+  assert.equal(gaps[1].fromTime, new Date(base + 32 * dayMs).toISOString());
+  // 无空窗时返回空。
+  const tight = [0, 1, 2, 3].map((index) => ({ time: new Date(base + index * dayMs).toISOString(), lon: 120, lat: 20 }));
+  assert.deepEqual(findTimeGaps(tight), { gapCount: 0, gaps: [] });
+});
+
+test("track chart breaks solid segments and draws dashed connectors at gaps", () => {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const base = Date.UTC(2026, 4, 20);
+  const referenceSeries = [0, 1, 2].map((index) => ({ time: new Date(base + index * dayMs).toISOString(), lon: 120 + index * 0.01, lat: 20 }))
+    .concat([74, 75].map((index) => ({ time: new Date(base + index * dayMs).toISOString(), lon: 121 + index * 0.001, lat: 21 })));
+  const carrierSeries = [0, 1, 2].map((index) => ({ time: new Date(base + index * dayMs).toISOString(), lon: 119.9 + index * 0.01, lat: 19.9 }));
+  const markup = renderToStaticMarkup(React.createElement(TrackComparisonChart, {
+    referenceSeries,
+    carrierSeries,
+    referenceLabel: "海猎号 无人艇",
+    carrierLabel: "西奥多·罗斯福号",
+    dataState: "full",
+    referenceGaps: [{
+      fromTime: new Date(base + 2 * dayMs).toISOString(),
+      toTime: new Date(base + 74 * dayMs).toISOString(),
+      gapMs: 72 * dayMs,
+      from: { lon: 120.02, lat: 20 },
+      to: { lon: 121.074, lat: 21 },
+    }],
+    carrierGaps: [],
+  }));
+  // 空窗处无人艇实线断为两段，虚线连接一条；标注最大空窗（船名无“无人艇”后缀）。
+  const refLineCount = (markup.match(/class="affiliation-track-line ref"/g) || []).length;
+  assert.equal(refLineCount, 2);
+  assert.match(markup, /class="affiliation-track-gap ref"/);
+  assert.doesNotMatch(markup, /class="affiliation-track-gap carrier"/);
+  assert.match(markup, /aria-label="空窗时段"/);
+  assert.match(markup, /海猎号<\/b>空窗 26\/05\/22 ~ 26\/08\/02（72\.0 天）/);
+});
+
+test("track chart without gaps keeps one solid polyline and no annotation", () => {
+  const series = [0, 1, 2].map((index) => ({ time: new Date(Date.UTC(2026, 4, 20) + index * 86400000).toISOString(), lon: 120 + index * 0.01, lat: 20 }));
+  const markup = renderToStaticMarkup(React.createElement(TrackComparisonChart, {
+    referenceSeries: series,
+    carrierSeries: series,
+    referenceLabel: "海猎号 无人艇",
+    carrierLabel: "西奥多·罗斯福号",
+    dataState: "full",
+  }));
+  const refLineCount = (markup.match(/class="affiliation-track-line ref"/g) || []).length;
+  assert.equal(refLineCount, 1);
+  assert.doesNotMatch(markup, /affiliation-track-gap/);
+  assert.doesNotMatch(markup, /aria-label="空窗时段"/);
 });
 
 test("distance chart x-axis shows the year when the series spans multiple years", () => {
@@ -505,6 +597,34 @@ test("distance chart x-axis always shows the year (customer-confirmed)", () => {
   const markup = renderDialog();
   assert.match(markup, /26\/07\/14 00:00/);
   assert.match(markup, /26\/07\/16 10:57/);
+});
+
+test("distance chart breaks the polyline across data gaps longer than 7 days", () => {
+  const gapRelation = {
+    carrier: { mmsi: "366984000", name: "CVN-71" },
+    relationType: "时延跟随",
+    lag: {
+      lagMinutes: -420, matchedPoints: 4, minimumDistanceNm: 2, medianDistanceNm: 30,
+      distanceSeriesSource: "interpolated",
+      distanceSeries: [
+        { time: "2026-05-20T00:00:00.000Z", distanceNm: 3 },
+        { time: "2026-05-21T00:00:00.000Z", distanceNm: 5 },
+        { time: "2026-08-03T00:00:00.000Z", distanceNm: 60 },
+        { time: "2026-08-04T00:00:00.000Z", distanceNm: 55 },
+      ],
+    },
+  };
+  const markup = renderDialog({ relation: gapRelation });
+  // 73 天空窗断为两条独立折线，不出现跨窗斜线。
+  const lineCount = (markup.match(/class="affiliation-evidence-line"/g) || []).length;
+  assert.equal(lineCount, 2);
+});
+
+test("distance chart keeps a single polyline when gaps are within 7 days", () => {
+  // 默认 lagRelation 相邻点间隔 1 天：一条连续折线。
+  const markup = renderDialog();
+  const lineCount = (markup.match(/class="affiliation-evidence-line"/g) || []).length;
+  assert.equal(lineCount, 1);
 });
 
 test("dialog renders 150k-point full tracks and distance series without RangeError", () => {

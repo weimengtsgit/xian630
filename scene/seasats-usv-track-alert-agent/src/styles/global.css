@@ -458,6 +458,8 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 .affiliation-evidence-threshold { stroke: rgba(251, 191, 36, 0.85); stroke-width: 1; stroke-dasharray: 4 3; }
 .affiliation-evidence-threshold-label { fill: #fcd34d; font-size: 8px; }
 .affiliation-evidence-line { fill: none; stroke: #4ade80; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+/* 空窗断线后孤立单点的标记。 */
+.affiliation-evidence-dot { fill: #4ade80; stroke: none; }
 
 /* === 右侧栏：关联紧凑摘要 + 详情弹窗 === */
 /* 命中关联在右侧栏只展示一句摘要与“查看详情”，不再直接渲染研判依据与距离证据。 */
@@ -534,16 +536,34 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 .affiliation-track-label { fill: #9cc5df; font-size: calc(8px / var(--zoom, 1)); }
 .affiliation-track-axis { fill: #b7d9ed; font-size: calc(9px / var(--zoom, 1)); font-weight: 600; }
 .affiliation-track-line { fill: none; stroke-width: calc(2 / var(--zoom, 1)); stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-.affiliation-track-line.ref { stroke: #60a5fa; stroke-width: calc(3 / var(--zoom, 1)); }
-.affiliation-track-line.carrier { stroke: #f87171; stroke-width: calc(2.2 / var(--zoom, 1)); }
+/* 蓝盖红：红色航母航迹（较粗）在下，蓝色无人艇航迹（较细）覆盖其上。 */
+.affiliation-track-line.ref { stroke: #60a5fa; stroke-width: calc(2.2 / var(--zoom, 1)); }
+.affiliation-track-line.carrier { stroke: #f87171; stroke-width: calc(3 / var(--zoom, 1)); }
 .affiliation-track-point { stroke: #f0f9ff; stroke-width: calc(1.3 / var(--zoom, 1)); vector-effect: non-scaling-stroke; }
 .affiliation-track-point.ref { fill: #60a5fa; }
 .affiliation-track-point.carrier { fill: #f87171; }
 .affiliation-track-point.end { stroke-width: calc(1.6 / var(--zoom, 1)); }
+/* 空窗跳变连接：同色虚线，表示两端点间无报点，不冒充真实航程。 */
+.affiliation-track-gap { fill: none; stroke-width: calc(1.5 / var(--zoom, 1)); stroke-dasharray: calc(5 / var(--zoom, 1)) calc(4 / var(--zoom, 1)); vector-effect: non-scaling-stroke; }
+.affiliation-track-gap.ref { stroke: rgba(96, 165, 250, 0.75); }
+.affiliation-track-gap.carrier { stroke: rgba(248, 113, 113, 0.75); }
+/* 空窗时段标注（图例下方）。 */
+.affiliation-track-gaps { display: grid; gap: 2px; color: #9cc5df; font-size: 10px; line-height: 1.5; }
+.affiliation-track-gaps .ref { margin-right: 4px; color: #60a5fa; font-weight: 600; }
+.affiliation-track-gaps .carrier { margin-right: 4px; color: #f87171; font-weight: 600; }
+/* 航迹悬停命中浮层：显示最近点的时间与经纬度。 */
+.affiliation-track-tooltip { position: absolute; z-index: 3; display: grid; gap: 1px; max-width: 168px; padding: 4px 7px; border-radius: 6px; border: 1px solid rgba(103, 232, 249, 0.3); background: rgba(2, 6, 23, 0.88); color: #e0f2fe; font-size: 10px; line-height: 1.45; pointer-events: none; }
+.affiliation-track-tooltip.ref b { color: #60a5fa; }
+.affiliation-track-tooltip.carrier b { color: #f87171; }
 .affiliation-track-html-legend { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 12px; }
-.affiliation-track-html-legend span { min-width: 0; display: flex; align-items: flex-start; gap: 7px; }
-.affiliation-track-html-legend i { flex: 0 0 22px; height: 0; margin-top: 7px; border-top: 3px solid #60a5fa; }
-.affiliation-track-html-legend .carrier i { border-top: 2px solid #f87171; }
+.affiliation-track-html-legend span, .affiliation-track-html-legend button { min-width: 0; display: flex; align-items: flex-start; gap: 7px; }
+/* 图例可点击切换单显：隐藏态降透明度。 */
+.affiliation-track-html-legend button { padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.affiliation-track-html-legend button.off { opacity: 0.4; }
+.affiliation-track-html-legend button:focus-visible { outline: 2px solid #67e8f9; outline-offset: 2px; border-radius: 3px; }
+/* 色块线宽与图线一致：蓝细（上）红粗（下）。 */
+.affiliation-track-html-legend i { flex: 0 0 22px; height: 0; margin-top: 7px; border-top: 2px solid #60a5fa; }
+.affiliation-track-html-legend .carrier i { border-top: 3px solid #f87171; }
 .affiliation-track-html-legend b { min-width: 0; color: #b7d9ed; font-size: 10px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; word-break: break-word; }
 /* 距离图中位距离线 */
 .affiliation-evidence-median { stroke: rgba(94, 234, 212, 0.85); stroke-width: 1; stroke-dasharray: 5 4; }

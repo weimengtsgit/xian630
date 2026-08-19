@@ -55,13 +55,16 @@ test("time-windowed batching and incremental refresh are enforced", () => {
 });
 
 test("ontology-only snapshots, timezone handling, and shared requests are enforced", () => {
-  assert.match(serverSource, /customer-confirmed-v13-20260818/);
+  assert.match(serverSource, /customer-confirmed-v14-20260818/);
   // 快照判废必须同时比较算法版本、RULES 与 dataRules（航向来源/时间精度/去重规则）。
   assert.match(serverSource, /JSON\.stringify\(snapshot\?\.dataRules \|\| \{\}\) !== JSON\.stringify\(CARRIER_AFFILIATION_DATA_RULES\)/);
   // 航迹图渲染序列接口：服务端从全量轨迹生成分桶抽稀序列，前端不再下载十万级点数组。
   assert.match(serverSource, /url\.searchParams\.get\("render"\) === "1"/);
   assert.match(serverSource, /buildTrackRenderSeries\(track\.trackPoints\)/);
   assert.match(serverSource, /renderedFromFullTrack: true/);
+  // 空窗信息由服务端在全量轨迹上检测并随渲染序列下发（前端断线/虚线/标注）。
+  assert.match(serverSource, /renderGaps: rendered\.gaps/);
+  assert.match(serverSource, /renderGapCount: rendered\.gapCount/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);
   assert.match(serverSource, /trackInFlight\.has\(mmsi\)/);

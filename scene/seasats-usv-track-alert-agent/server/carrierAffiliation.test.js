@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeCarrierAffiliations, analyzeVesselCarrierRelations, cleanTrack, resolveAnalysisHeading } from "./carrierAffiliation.js";
+import { analyzeCarrierAffiliations, analyzeVesselCarrierRelations, cleanTrack, courseDifference, resolveAnalysisHeading } from "./carrierAffiliation.js";
 
 function points({ mmsi, startMs, offsetMs = 0, lon = 120, lat = 20 }) {
   return Array.from({ length: 8 }, (_, index) => ({
@@ -224,6 +224,17 @@ test("未命中关联不下发航迹序列，中位距离与阈值内比例为�
   assert.equal(relation.carrierTrackSeries, undefined);
   assert.equal(relation.lag.medianDistanceNm, null);
   assert.equal(relation.lag.withinThresholdRatio, null);
+});
+
+test("courseDifference 取模后始终落在 [0,180]（unwrap 大漂移不产生负值）", () => {
+  // 883° 漂移：%360 = 163°（旧公式 360-883 = -523，会错误通过 45° 筛选）。
+  assert.equal(courseDifference(0, 883), 163);
+  assert.equal(courseDifference(883, 0), 163);
+  assert.equal(courseDifference(350, 10), 20);
+  assert.equal(courseDifference(0, 370), 10);
+  assert.equal(courseDifference(0, 540), 180);
+  assert.equal(courseDifference(0, 181), 179);
+  assert.equal(courseDifference(-10, 350), 0);
 });
 
 // === 2026-08-15 客户确认的数据规则 ===

@@ -30,12 +30,14 @@ export function requestTrackRender(mmsi, fetchImpl = globalThis.fetch, cacheKey 
     entry.promise = fetchImpl(buildRenderTrackUrl(mmsi), { signal: controller.signal })
       .then((response) => (response.ok ? response.json() : null))
       // 空轨迹/异常载荷视为拉取失败（null），调用方回退快照序列。
-      .then((data) => (Array.isArray(data?.trackPoints) && data.trackPoints.length ? data.trackPoints : null))
+      .then((data) => (Array.isArray(data?.trackPoints) && data.trackPoints.length
+        ? { points: data.trackPoints, gaps: Array.isArray(data.renderGaps) ? data.renderGaps : [], gapCount: Number(data.renderGapCount) || 0 }
+        : null))
       .catch(() => null)
-      .then((points) => {
+      .then((result) => {
         entry.settled = true;
-        entry.points = points;
-        return points;
+        entry.result = result;
+        return result;
       });
     cache.set(mmsi, entry);
   }
@@ -58,7 +60,7 @@ export function readSettledTrackRender(referenceMmsi, carrierMmsi, cacheKey = ""
   const reference = cache.get(referenceMmsi);
   const carrier = cache.get(carrierMmsi);
   if (reference?.settled && carrier?.settled && isReusable(reference, cacheKey) && isReusable(carrier, cacheKey)) {
-    return { reference: reference.points, carrier: carrier.points };
+    return { reference: reference.result, carrier: carrier.result };
   }
   return null;
 }

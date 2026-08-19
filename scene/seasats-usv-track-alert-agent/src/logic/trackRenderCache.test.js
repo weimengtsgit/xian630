@@ -40,9 +40,10 @@ test("请求完成后结果缓存复用，失败/空载荷 settle 为 null 供�
   resetTrackRenderCacheForTests();
   const fetchStub = makeFetchStub();
   const entry = requestTrackRender("222222222", fetchStub);
-  fetchStub.resolveNext({ trackPoints: [{ time: "2026-01-01T00:00:00Z", lon: 120, lat: 20 }] });
-  const points = await entry.promise;
-  assert.equal(points.length, 1);
+  fetchStub.resolveNext({ trackPoints: [{ time: "2026-01-01T00:00:00Z", lon: 120, lat: 20 }], renderGaps: [], renderGapCount: 0 });
+  const result = await entry.promise;
+  assert.equal(result.points.length, 1);
+  assert.deepEqual(result.gaps, []);
   assert.equal(entry.settled, true);
   // 再次请求：命中缓存，不再发 fetch。
   const again = requestTrackRender("222222222", fetchStub);
@@ -93,7 +94,7 @@ test("readSettledTrackRender 仅在双侧都 settle 后返回结果", async () =
   await carrier.promise;
   const settled = readSettledTrackRender("555555555", "666666666");
   // 双侧 settle（一侧成功、一侧失败 null）→ 就绪，由调用方按 partial 处理。
-  assert.deepEqual(settled, { reference: [{ time: "2026-01-01T00:00:00Z", lon: 120, lat: 20 }], carrier: null });
+  assert.deepEqual(settled, { reference: { points: [{ time: "2026-01-01T00:00:00Z", lon: 120, lat: 20 }], gaps: [], gapCount: 0 }, carrier: null });
   resetTrackRenderCacheForTests();
 });
 

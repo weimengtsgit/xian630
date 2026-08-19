@@ -4,6 +4,9 @@
 // 航迹渲染序列上限：兼顾细节与弹窗打开性能（服务端 render=1 接口与前端兜底共用）。
 export const RENDER_POINT_LIMIT = 3000;
 
+// 空窗判定阈值：相邻报点间隔超过该值视为数据空窗（距离曲线断线与航迹空窗虚线共用）。
+export const GAP_BREAK_MS = 7 * 24 * 60 * 60 * 1000;
+
 function finiteNumber(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
@@ -66,7 +69,29 @@ export function decimateDistanceForRender(entries, limit = RENDER_POINT_LIMIT) {
   return [...kept].sort((a, b) => a - b).map((index) => entries[index]);
 }
 
-// 服务端航迹渲染序列：合法经纬度过滤 + 分桶极值抽稀 + 保留首尾。
+// 在全量轨迹上检测时间空窗（相邻报点间隔 > GAP_BREAK_MS）。
+// 必须在全量序列上检测：渲染抽稀序列的相邻点间隔是抽稀产物（平均数天），不能用来判定空窗。
+// 返回空窗两端的真实报点（供前端画虚线跳变连接与标注）；gapCount 为总数，gaps 按间隔从大到小保留前 limit 条。
+export function findTimeGaps(points, limit = 50) {
+  const gaps = [];
+  let gapCount = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const gapMs = Date.parse(points[index].time) - Date.parse(points[index - 1].time);
+    if (!Number.isFinite(gapMs) || gapMs <= GAP_BREAK_MS) continue;
+    gapCount += 1;
+    gaps.push({
+      fromTime: points[index - 1].time,
+      toTime: points[index].time,
+      gapMs,
+      from: { lon: points[index - 1].lon, lat: points[index - 1].lat },
+      to: { lon: points[index].lon, lat: points[index].lat },
+    });
+  }
+  gaps.sort((a, b) => b.gapMs - a.gapMs);
+  return { gapCount, gaps: gaps.slice(0, limit) };
+}
+
+// 服务端航迹渲染序列：合法经纬度过滤 + 分桶极值抽稀 + 保留首尾 + 全量空窗检测。
 // 返回源点数与渲染点数，供接口如实标注 renderedFromFullTrack。
 export function buildTrackRenderSeries(points, limit = RENDER_POINT_LIMIT) {
   const source = Array.isArray(points) ? points : [];
@@ -74,8 +99,11 @@ export function buildTrackRenderSeries(points, limit = RENDER_POINT_LIMIT) {
   for (const point of source) {
     if (isValidTrackCoord(point)) valid.push(point);
   }
+  const { gapCount, gaps } = findTimeGaps(valid);
   return {
     sourcePointCount: source.length,
     points: decimateTrackForRender(valid, limit),
+    gapCount,
+    gaps,
   };
 }
