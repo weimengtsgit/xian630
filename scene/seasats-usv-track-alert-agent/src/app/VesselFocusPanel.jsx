@@ -377,14 +377,6 @@ function formatRatio(value) {
   return `${(number * 100).toFixed(number >= 0.1 ? 0 : 1)}%`;
 }
 
-// 航迹图注：文案必须与数据状态一致，不得把服务端抽稀生成的渲染序列说成浏览器“全量逐点绘制”。
-export function trackSourceNote(dataState) {
-  const prefix = "○ 起点　□ 终点　· ";
-  if (dataState === "full") return `${prefix}双方航迹为服务端自 2025-01-01 起全量轨迹生成的渲染序列（保留首尾与分桶极值）；蓝线覆盖在红线之上，重合处仍可辨识双方。`;
-  if (dataState === "partial") return `${prefix}一侧航迹为服务端全量渲染序列，另一侧为快照抽稀回退（拉取未完成或失败）；蓝线覆盖在红线之上。`;
-  return `${prefix}真实 AIS 航迹抽稀后绘制；蓝线覆盖在红线之上，重合处仍可辨识双方。`;
-}
-
 // 悬停命中检测：在两条航迹的绘制序列中找距 (ux, uy) 最近的点，超过阈值返回 null。
 // 纯函数便于单测；threshold 已由调用方换算到 svg 用户坐标系（屏幕 10px）。
 export function findNearestTrackPoint({ ref, car, ux, uy, xFor, yFor, threshold, referenceLabel, carrierLabel }) {
@@ -404,8 +396,7 @@ export function findNearestTrackPoint({ ref, car, ux, uy, xFor, yFor, threshold,
 
 // 航迹对比图：横轴经度、纵轴纬度，两条真实航迹，区分起终点，等比例展示（参考 select0721.py）。
 // 空窗（相邻报点 >7 天）处实线断开，端点间同色虚线连接表示跳变，图注标明最大空窗。
-// dataState：full=双方 2025-01-01 起全量报点；partial=一侧全量一侧快照回退；snapshot=快照抽稀序列。
-export function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel, dataState = "snapshot", referenceGaps = [], carrierGaps = [] }) {
+export function TrackComparisonChart({ referenceSeries, carrierSeries, referenceLabel, carrierLabel, referenceGaps = [], carrierGaps = [] }) {
   // 滚轮缩放 + 拖拽平移：transform 作用于 svg，外层 plot 容器裁剪溢出。
   // hooks 必须在早退返回之前调用，保证渲染分支变化时 hook 顺序稳定。
   const plotRef = useRef(null);
@@ -684,6 +675,8 @@ export function TrackComparisonChart({ referenceSeries, carrierSeries, reference
         },
         React.createElement("i"), React.createElement("b", null, carrierLabel),
       ),
+      // 起终点标记说明并入图例行右端，不占独立行。
+      React.createElement("span", { className: "affiliation-track-endpoint-hint" }, "○ 起点　□ 终点"),
     ),
     // 空窗标注：各船最大空窗时段（>7 天，服务端全量检测）；虚线为跳变连接。
     (refBiggestGap || carBiggestGap)
@@ -704,7 +697,6 @@ export function TrackComparisonChart({ referenceSeries, carrierSeries, reference
             : null,
         )
       : null,
-    React.createElement("span", { className: "affiliation-chart-note" }, trackSourceNote(dataState)),
   );
 }
 
@@ -909,8 +901,6 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
   // 空窗信息来自服务端在全量轨迹上的检测结果；快照回退态不做空窗判定（抽稀间隔会误判为空窗）。
   const referenceGaps = trackLoad.reference?.gaps || [];
   const carrierGaps = trackLoad.carrier?.gaps || [];
-  // 只有双侧渲染序列都拉取成功才标注“服务端全量渲染”；任一侧失败/为空必须明确标注回退。
-  const trackDataState = trackLoad.reference && trackLoad.carrier ? "full" : trackLoad.reference || trackLoad.carrier ? "partial" : "snapshot";
   return React.createElement(
     "div",
     { className: "affiliation-detail-mask", role: "presentation", onClick: onMaskClick },
@@ -1021,7 +1011,7 @@ export function AffiliationDetailDialog({ relation, name, followerName, follower
               )
             : React.createElement(
                 TrackComparisonChart,
-                { referenceSeries, carrierSeries, referenceLabel: followerLabel, carrierLabel: name, dataState: trackDataState, referenceGaps, carrierGaps },
+                { referenceSeries, carrierSeries, referenceLabel: followerLabel, carrierLabel: name, referenceGaps, carrierGaps },
               ),
           hasDistanceChart
             ? React.createElement(DistanceEvidenceChart, { relation, subjectName: followerName, subjectCode: followerCode })

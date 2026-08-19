@@ -555,7 +555,7 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 .affiliation-track-tooltip { position: absolute; z-index: 3; display: grid; gap: 1px; max-width: 168px; padding: 4px 7px; border-radius: 6px; border: 1px solid rgba(103, 232, 249, 0.3); background: rgba(2, 6, 23, 0.88); color: #e0f2fe; font-size: 10px; line-height: 1.45; pointer-events: none; }
 .affiliation-track-tooltip.ref b { color: #60a5fa; }
 .affiliation-track-tooltip.carrier b { color: #f87171; }
-.affiliation-track-html-legend { min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 12px; }
+.affiliation-track-html-legend { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
 .affiliation-track-html-legend span, .affiliation-track-html-legend button { min-width: 0; display: flex; align-items: flex-start; gap: 7px; }
 /* 图例可点击切换单显：隐藏态降透明度。 */
 .affiliation-track-html-legend button { padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -565,6 +565,8 @@ html, body { overflow-x: auto; overflow-y: hidden; }
 .affiliation-track-html-legend i { flex: 0 0 22px; height: 0; margin-top: 7px; border-top: 2px solid #60a5fa; }
 .affiliation-track-html-legend .carrier i { border-top: 3px solid #f87171; }
 .affiliation-track-html-legend b { min-width: 0; color: #b7d9ed; font-size: 10px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; word-break: break-word; }
+/* 起终点标记说明：图例行内右对齐，不占独立行。 */
+.affiliation-track-endpoint-hint { margin-left: auto; align-self: center; color: #9cc5df; font-size: 10px; white-space: nowrap; }
 /* 距离图中位距离线 */
 .affiliation-evidence-median { stroke: rgba(94, 234, 212, 0.85); stroke-width: 1; stroke-dasharray: 5 4; }
 .affiliation-evidence-median-label { fill: #5eead4; font-size: 8px; }

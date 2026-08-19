@@ -30,7 +30,7 @@ const {
   reduceActiveAffiliationKey,
   isDialogMaskClick,
   trapDialogFocus,
-  trackSourceNote,
+
 } = await import("./VesselFocusPanel.jsx");
 const { decimateTrackForRender, decimateDistanceForRender, buildTrackRenderSeries, findTimeGaps, RENDER_POINT_LIMIT } = await import("../logic/renderDecimation.js");
 
@@ -263,8 +263,9 @@ test("dialog track chart draws both real tracks and keeps overlapping series dis
   assert.match(markup, /class="affiliation-track-point carrier end"/);
   assert.match(markup, /aria-label="航迹图例"/);
   assert.match(markup, /海猎号 无人艇/);
-  assert.match(markup, /○ 起点　□ 终点/);
-  assert.match(markup, /蓝线覆盖在红线之上/);
+  // 起终点标记说明并入图例行右端，不再以独立图注行展示；数据来源说明文字已删除。
+  assert.match(markup, /class="affiliation-track-endpoint-hint">○ 起点　□ 终点/);
+  assert.doesNotMatch(markup, /蓝线覆盖在红线之上|渲染序列（保留首尾与分桶极值）|真实 AIS 航迹抽稀后绘制/);
   // 图例为可点击切换按钮（默认均未隐藏）；蓝线盖红线（ref 在上层）。
   assert.match(markup, /<button type="button" class="ref"[^>]*aria-pressed="false"/);
   assert.match(markup, /<button type="button" class="carrier"[^>]*aria-pressed="false"/);
@@ -277,8 +278,6 @@ test("dialog track chart draws both real tracks and keeps overlapping series dis
   // “真实航迹”开头的两行说明文字已删除。
   assert.doesNotMatch(markup, /真实航迹：/);
   assert.doesNotMatch(markup, /双方 AIS 经纬度序列按统一地理比例绘制/);
-  // SSR/全量轨迹未就绪时回退快照抽稀序列，注释如实标注抽稀。
-  assert.match(markup, /真实 AIS 航迹抽稀后绘制/);
 });
 
 test("trajectory chart drops the middle longitude tick when projected labels would overlap", () => {
@@ -421,14 +420,6 @@ test("each relation renders its own detail data when the dialog is bound to it",
 
 // === 2026-08-15 客户确认规则的前端落实 ===
 
-test("trackSourceNote only claims server-rendered series when both sides loaded", () => {
-  assert.match(trackSourceNote("full"), /服务端自 2025-01-01 起全量轨迹生成的渲染序列/);
-  // 单侧失败/未完成：必须明确标注快照回退，不得宣称双侧渲染序列。
-  assert.match(trackSourceNote("partial"), /快照抽稀回退/);
-  assert.doesNotMatch(trackSourceNote("partial"), /双方航迹为服务端/);
-  assert.match(trackSourceNote("snapshot"), /抽稀后绘制/);
-});
-
 test("dialog shows a loading placeholder and no SVG while track render series loads", () => {
   // 传入 MMSI 时弹窗进入 loading 态：只显示占位、不挂载航迹 SVG，杜绝“快照图→全量图”两阶段跳变。
   const markup = renderDialog({ followerMmsi: "413000630" });
@@ -536,7 +527,6 @@ test("track chart breaks solid segments and draws dashed connectors at gaps", ()
     carrierSeries,
     referenceLabel: "海猎号 无人艇",
     carrierLabel: "西奥多·罗斯福号",
-    dataState: "full",
     referenceGaps: [{
       fromTime: new Date(base + 2 * dayMs).toISOString(),
       toTime: new Date(base + 74 * dayMs).toISOString(),
@@ -562,7 +552,6 @@ test("track chart without gaps keeps one solid polyline and no annotation", () =
     carrierSeries: series,
     referenceLabel: "海猎号 无人艇",
     carrierLabel: "西奥多·罗斯福号",
-    dataState: "full",
   }));
   const refLineCount = (markup.match(/class="affiliation-track-line ref"/g) || []).length;
   assert.equal(refLineCount, 1);
