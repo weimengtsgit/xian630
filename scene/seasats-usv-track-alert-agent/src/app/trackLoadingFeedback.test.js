@@ -9,10 +9,13 @@ const focusPanelSource = readFileSync(new URL("./VesselFocusPanel.jsx", import.m
 test("selected-vessel ontology requests expose loading and failure feedback", () => {
   assert.match(appSource, /setTrackLoading\(true\)/);
   assert.match(appSource, /setTrackError\(null\)/);
-  assert.match(appSource, /setTrackError\(error instanceof Error/);
-  assert.match(appSource, /\?fresh=1/);
+  assert.match(appSource, /setTrackError\("本体轨迹查询失败"\)/);
+  assert.match(appSource, /fresh=1/);
   assert.match(appSource, /forceRefreshMmsiRef\.current === selectedMmsi/);
   assert.match(appSource, /if \(repeatedSelection\) setTrackRefreshVersion/);
+  // 点选提速（A 方案）：主图轨迹走渲染序列，详细分析走服务端分析接口。
+  assert.match(appSource, /track\?render=1/);
+  assert.match(appSource, /\/analysis/);
   assert.match(appSource, /target\.dataUnavailable \? "--" : target\.score/);
   assert.match(appSource, /trackLoading=\{trackLoading\}/);
   assert.match(appSource, /trackError=\{trackError\}/);

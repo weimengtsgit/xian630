@@ -70,6 +70,11 @@ test("ontology-only snapshots, timezone handling, and shared requests are enforc
   assert.match(serverSource, /if-none-match/);
   assert.match(serverSource, /writeHead\(304/);
   assert.match(serverSource, /W\\\//);
+  // 点选详细分析接口：服务端按全量轨迹用 analyzePayload 计算（同代码同输入基线），按轨迹对象引用缓存。
+  assert.match(serverSource, /\/analysis\$/);
+  assert.match(serverSource, /buildVesselAnalysis/);
+  assert.match(serverSource, /vesselAnalysisCache/);
+  assert.match(serverSource, /cached\.track === track/);
   assert.match(serverSource, /"Cache-Control": "no-cache", ETag: etag/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);

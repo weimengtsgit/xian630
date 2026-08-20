@@ -674,6 +674,48 @@ function sendJson(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
+// 点选舰艇详细分析缓存：与轨迹对象引用绑定，轨迹 30 分钟增量刷新产生新对象后自动失效重算。
+const vesselAnalysisCache = new Map();
+
+// 点选舰艇的详细分析：服务端按全量轨迹用 analyzePayload 计算（与点选前端原逻辑同代码、同输入基线），
+// 输出与浏览器端逐项一致的指标；浏览器不再下载全量轨迹 JSON。
+async function buildVesselAnalysis(mmsi) {
+  const track = await getOntologyTrack(mmsi);
+  const cached = vesselAnalysisCache.get(mmsi);
+  if (cached && cached.track === track) return { ...cached.result, meta: { ...cached.result.meta, cached: true } };
+  const trackPoints = track.trackPoints || [];
+  const currentTarget = summarySnapshot?.targets?.find((target) => target.mmsi === mmsi);
+  if (!currentTarget) return null;
+  const detailed = analyzePayload({
+    metadata: {}, parameters: JUDGEMENT_PARAMETERS, monitoredAreas: MONITORED_AREAS,
+    targets: [{
+      ...currentTarget,
+      // 与点选前端分析完全一致的船名与 latestOnly 处理，保证指标口径不变。
+      name: currentTarget.rightDisplayName || currentTarget.displayName || currentTarget.name,
+      latestOnly: trackPoints.length <= 1,
+    }],
+    trackPoints,
+  }, coastData);
+  const result = {
+    mmsi,
+    latest: trackPoints.at(-1) || null,
+    detailed: {
+      target: detailed.targets?.[0] || null,
+      segments: detailed.segments || [],
+      aisGaps: detailed.aisGaps || [],
+      alerts: detailed.alerts || [],
+    },
+    meta: {
+      sourcePointCount: trackPoints.length,
+      computedAt: new Date().toISOString(),
+      cached: false,
+      error: track.meta?.error || null,
+    },
+  };
+  vesselAnalysisCache.set(mmsi, { track, result });
+  return result;
+}
+
 // 大快照接口（关联快照 30MB+、态势快照 22MB+，前端 30 秒轮询）支持 ETag/304：
 // 内容未变时返回 304 空响应，浏览器复用本地缓存，避免每次全量下载。
 // Cache-Control: no-cache = 允许缓存但每次先向源站验证（If-None-Match），与“轮询拿最新快照”语义一致。
@@ -717,6 +759,15 @@ createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/seasats/affiliations") {
       if (!affiliationHistory) return sendJson(response, 200, { status: (fleetRefreshPromise || affiliationRefreshPromise) ? "refreshing" : "not-generated", refreshIntervalHours: 5 });
       return sendSnapshotJson(request, response, affiliationHistory, `aff-${affiliationHistory.refreshedAt}-${affiliationHistory.algorithmVersion}`);
+    }
+    const analysisMatch = url.pathname.match(/^\/api\/seasats\/vessels\/(\d+)\/analysis$/);
+    // 点选舰艇详细分析：服务端按全量轨迹计算（浏览器不再下载全量轨迹）。
+    if (request.method === "GET" && analysisMatch) {
+      if (!monitoredMmsiSet.has(analysisMatch[1])) throw new Error("MMSI_NOT_IN_SCOPE");
+      if (!summaryReady || !summarySnapshot) return sendJson(response, 202, { status: "refreshing" });
+      const analysis = await buildVesselAnalysis(analysisMatch[1]);
+      if (!analysis) return sendJson(response, 404, { error: "TARGET_NOT_IN_SUMMARY" });
+      return sendJson(response, 200, analysis);
     }
     const trackMatch = url.pathname.match(/^\/api\/seasats\/vessels\/(\d+)\/track$/);
     // 点选统计只使用本体轨迹；北邮历史轨迹仅由远程地图 iframe 自己加载。

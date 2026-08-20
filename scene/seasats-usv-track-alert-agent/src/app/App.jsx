@@ -174,71 +174,63 @@ function Dashboard({ payload }) {
     let cancelled = false;
     setTrackLoading(true);
     setTrackError(null);
-    const freshQuery = forceRefreshMmsiRef.current === selectedMmsi ? "?fresh=1" : "";
-    fetch(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/track${freshQuery}`)
-      .then(async (response) => {
-        if (!response.ok) {
-          const body = await response.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${response.status}`);
-        }
-        return response.json();
-      })
-      .then((data) => {
-        if (cancelled) return;
-        const points = data.trackPoints || [];
-        const latest = points.at(-1);
-        // 轨迹统计只重新计算当前点选舰艇，保留首屏已原子发布的其它舰艇态势，避免页面出现逐艘跳变。
-        const currentTarget = livePayload.targets.find((target) => target.mmsi === selectedMmsi);
-        const detailed = currentTarget ? analyzePayload({
-          metadata: {}, parameters: livePayload.parameters, monitoredAreas: livePayload.monitoredAreas,
-          // 至少两个有效报点才称为轨迹；仅返回最新单点时须继续标记为“点位”。
-          targets: [{
-            ...currentTarget,
-            // 告警文本也属于右侧详情：有独立中文名时不能跟随最新 AIS 英文名回退。
-            name: currentTarget.rightDisplayName || currentTarget.displayName || currentTarget.name,
-            latestOnly: points.length <= 1,
-          }], trackPoints: points,
-        }, coastData) : null;
-        const detailedTarget = detailed?.targets?.[0] || null;
-        setLivePayload((current) => ({
-          ...current,
-          trackPoints: [...current.trackPoints.filter((point) => point.mmsi !== selectedMmsi), ...points],
-          targets: current.targets.map((target) => target.mmsi !== selectedMmsi ? target : !latest ? {
-            ...target,
-            ...detailedTarget,
-            // 左侧栏双语标签来自首屏的本地名单与本体身份合并结果，不能被轨迹最新点的 shipName 覆盖。
-            displayName: target.displayName,
-            rightDisplayName: target.rightDisplayName,
-            sidebarDisplayName: target.sidebarDisplayName,
-            dataUnavailable: false,
-            trackError: null,
-          } : {
-            ...target,
-            ...detailedTarget,
-            // 左侧栏双语标签来自首屏的本地名单与本体身份合并结果，不能被轨迹最新点的 shipName 覆盖。
-            displayName: target.displayName,
-            rightDisplayName: target.rightDisplayName,
-            sidebarDisplayName: target.sidebarDisplayName,
-            dataUnavailable: false,
-            trackError: null,
-            // 球形地图轨迹不稳定提供船名；通用名或空值均不能覆盖首页已识别的标准船名。
-            name: latest.name && !isGenericVesselName(latest.name) ? latest.name : target.name,
-            latestTime: latest.time, lon: latest.lon, lat: latest.lat,
-            speedKn: latest.speedKn, speedRawDiv10: latest.speedKn == null ? null : latest.speedKn * 10,
-            courseDeg: latest.courseDeg,
-            orientation: latest.orientation ?? latest.courseDeg,
-            heading: latest.heading,
-            rawTypeCode: latest.aisSourceType || target.rawTypeCode,
-          }),
-          segments: [...current.segments.filter((segment) => segment.targetMmsi !== selectedMmsi), ...(detailed?.segments || [])],
-          aisGaps: [...current.aisGaps.filter((gap) => gap.targetMmsi !== selectedMmsi), ...(detailed?.aisGaps || [])],
-          alerts: [...current.alerts.filter((alert) => alert.targetMmsi !== selectedMmsi), ...(detailed?.alerts || [])],
-        }));
-      })
-      .catch((error) => {
-        if (!cancelled) setTrackError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => { if (!cancelled) setTrackLoading(false); });
+    const freshSuffix = forceRefreshMmsiRef.current === selectedMmsi ? "&fresh=1" : "";
+    const fetchJsonOrNull = (url) => fetch(url).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    }).catch(() => null);
+    // 点选提速（A 方案）：主图轨迹走服务端渲染序列（≤3000 点），点选详细分析由服务端
+    // 按全量轨迹用同一份 analyzePayload 算好下发；不再下载全量轨迹 JSON（大船 300MB+）。
+    Promise.all([
+      fetchJsonOrNull(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/track?render=1${freshSuffix}`),
+      fetchJsonOrNull(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/analysis`),
+    ]).then(([renderData, analysisData]) => {
+      if (cancelled) return;
+      const points = renderData?.trackPoints || [];
+      const detailedTarget = analysisData?.detailed?.target || null;
+      const latest = analysisData?.latest || points.at(-1) || null;
+      setLivePayload((current) => ({
+        ...current,
+        trackPoints: [...current.trackPoints.filter((point) => point.mmsi !== selectedMmsi), ...points],
+        targets: current.targets.map((target) => target.mmsi !== selectedMmsi ? target : !latest ? {
+          ...target,
+          ...(detailedTarget || {}),
+          // 左侧栏双语标签来自首屏的本地名单与本体身份合并结果，不能被轨迹最新点的 shipName 覆盖。
+          displayName: target.displayName,
+          rightDisplayName: target.rightDisplayName,
+          sidebarDisplayName: target.sidebarDisplayName,
+          dataUnavailable: false,
+          trackError: null,
+        } : {
+          ...target,
+          ...(detailedTarget || {}),
+          // 左侧栏双语标签来自首屏的本地名单与本体身份合并结果，不能被轨迹最新点的 shipName 覆盖。
+          displayName: target.displayName,
+          rightDisplayName: target.rightDisplayName,
+          sidebarDisplayName: target.sidebarDisplayName,
+          dataUnavailable: false,
+          trackError: null,
+          // 球形地图轨迹不稳定提供船名；通用名或空值均不能覆盖首页已识别的标准船名。
+          name: latest.name && !isGenericVesselName(latest.name) ? latest.name : target.name,
+          latestTime: latest.time, lon: latest.lon, lat: latest.lat,
+          speedKn: latest.speedKn, speedRawDiv10: latest.speedKn == null ? null : latest.speedKn * 10,
+          courseDeg: latest.courseDeg,
+          orientation: latest.orientation ?? latest.courseDeg,
+          heading: latest.heading,
+          rawTypeCode: latest.aisSourceType || target.rawTypeCode,
+        }),
+        // 分析接口成功时替换该船 segments/gaps/alerts；失败时保留现状（降级：主图轨迹仍显示）。
+        ...(analysisData?.detailed ? {
+          segments: [...current.segments.filter((segment) => segment.targetMmsi !== selectedMmsi), ...(analysisData.detailed.segments || [])],
+          aisGaps: [...current.aisGaps.filter((gap) => gap.targetMmsi !== selectedMmsi), ...(analysisData.detailed.aisGaps || [])],
+          alerts: [...current.alerts.filter((alert) => alert.targetMmsi !== selectedMmsi), ...(analysisData.detailed.alerts || [])],
+        } : {}),
+      }));
+      if (!analysisData && !renderData) setTrackError("本体轨迹查询失败");
+    }).finally(() => { if (!cancelled) setTrackLoading(false); });
     return () => { cancelled = true; };
   }, [selectedMmsi, trackRefreshVersion]);
   // Escape 关闭悬浮分析框；仅在打开时挂载监听，避免影响其它快捷键逻辑。
