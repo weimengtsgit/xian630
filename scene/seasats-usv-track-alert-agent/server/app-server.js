@@ -8,7 +8,7 @@ import { Worker } from "node:worker_threads";
 import { MONITORED_VESSELS } from "./seasatsScope.js";
 import { JUDGEMENT_PARAMETERS, MONITORED_AREAS } from "./monitoringRules.js";
 import { CARRIER_AFFILIATION_RULES, CARRIER_AFFILIATION_DATA_RULES } from "./carrierAffiliation.js";
-import { buildTrackRenderSeries, RENDER_POINT_LIMIT } from "../src/logic/renderDecimation.js";
+import { buildTrackRenderSeries, decimateTrackForRender, isValidTrackCoord, RENDER_POINT_LIMIT } from "../src/logic/renderDecimation.js";
 import { VESSEL_NAME_OVERRIDES, getVesselOverride, applyVesselOverride } from "./vesselNames.js";
 import { analyzePayload, sortAnalyses } from "../src/logic/domain.js";
 import { chineseShipName, englishShipName, extractHullCode, vesselPreferredLabel, vesselSidebarLabel } from "../src/logic/vesselLabel.js";
@@ -677,6 +677,46 @@ function sendJson(response, status, data) {
 // 点选舰艇详细分析缓存：与轨迹对象引用绑定，轨迹 30 分钟增量刷新产生新对象后自动失效重算。
 const vesselAnalysisCache = new Map();
 
+// 分析结果内嵌的点（总量约等于全量轨迹，大船 300MB+）按段抽稀+字段精简后才可下发：
+// 每段保留首尾与分桶极值（与航迹渲染序列同算法），点字段精简为地图/图表实际消费的时间/经纬度/速度/航向；
+// 指标已在全量轨迹上算完，抽稀与精简只影响传输，不影响任何指标。
+const SEGMENT_POINT_CAP = 8;
+
+function slimAnalysisPoint(point) {
+  return {
+    time: point.time,
+    lon: point.lon,
+    lat: point.lat,
+    speedKn: point.speedKn ?? null,
+    courseDeg: point.courseDeg ?? null,
+    orientation: point.orientation ?? null,
+    heading: point.heading ?? null,
+  };
+}
+
+function decimateAnalysisResult(detailed) {
+  const decimateSegment = (segment) => {
+    if (!segment || !Array.isArray(segment.points)) return segment;
+    const decimated = segment.points.length <= SEGMENT_POINT_CAP
+      ? segment.points
+      : decimateTrackForRender(segment.points.filter(isValidTrackCoord), SEGMENT_POINT_CAP);
+    return { ...segment, points: decimated.map(slimAnalysisPoint) };
+  };
+  const decimateSegments = (segments) => (Array.isArray(segments) ? segments.map(decimateSegment) : []);
+  const rawTarget = detailed.targets?.[0] || null;
+  const target = rawTarget ? { ...rawTarget, segments: decimateSegments(rawTarget.segments) } : null;
+  const decimatedSegments = decimateSegments(detailed.segments);
+  let analysisPointCount = 0;
+  for (const segment of decimatedSegments) analysisPointCount += segment?.points?.length || 0;
+  return {
+    target,
+    segments: decimatedSegments,
+    aisGaps: detailed.aisGaps || [],
+    alerts: detailed.alerts || [],
+    analysisPointCount,
+  };
+}
+
 // 点选舰艇的详细分析：服务端按全量轨迹用 analyzePayload 计算（与点选前端原逻辑同代码、同输入基线），
 // 输出与浏览器端逐项一致的指标；浏览器不再下载全量轨迹 JSON。
 async function buildVesselAnalysis(mmsi) {
@@ -696,17 +736,20 @@ async function buildVesselAnalysis(mmsi) {
     }],
     trackPoints,
   }, coastData);
+  const decimated = decimateAnalysisResult(detailed);
   const result = {
     mmsi,
     latest: trackPoints.at(-1) || null,
     detailed: {
-      target: detailed.targets?.[0] || null,
-      segments: detailed.segments || [],
-      aisGaps: detailed.aisGaps || [],
-      alerts: detailed.alerts || [],
+      target: decimated.target,
+      segments: decimated.segments,
+      aisGaps: decimated.aisGaps,
+      alerts: decimated.alerts,
     },
     meta: {
       sourcePointCount: trackPoints.length,
+      analysisPointCount: decimated.analysisPointCount,
+      segmentPointCap: SEGMENT_POINT_CAP,
       computedAt: new Date().toISOString(),
       cached: false,
       error: track.meta?.error || null,
