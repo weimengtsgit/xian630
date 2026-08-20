@@ -186,7 +186,8 @@ function Dashboard({ payload }) {
     // 按全量轨迹用同一份 analyzePayload 算好下发；不再下载全量轨迹 JSON（大船 300MB+）。
     Promise.all([
       fetchJsonOrNull(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/track?render=1${freshSuffix}`),
-      fetchJsonOrNull(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/analysis`),
+      // fresh 同步传给分析接口：强制刷新时轨迹与分析都不走缓存。
+      fetchJsonOrNull(`/api/seasats/vessels/${encodeURIComponent(selectedMmsi)}/analysis${freshSuffix ? `?fresh=1` : ""}`),
     ]).then(([renderData, analysisData]) => {
       if (cancelled) return;
       const points = renderData?.trackPoints || [];

@@ -719,8 +719,9 @@ function decimateAnalysisResult(detailed) {
 
 // 点选舰艇的详细分析：服务端按全量轨迹用 analyzePayload 计算（与点选前端原逻辑同代码、同输入基线），
 // 输出与浏览器端逐项一致的指标；浏览器不再下载全量轨迹 JSON。
-async function buildVesselAnalysis(mmsi) {
-  const track = await getOntologyTrack(mmsi);
+// force=true 时强制重取轨迹（与 track 接口 ?fresh=1 语义一致），缓存按新轨迹对象自动失效重算。
+async function buildVesselAnalysis(mmsi, { force = false } = {}) {
+  const track = await getOntologyTrack(mmsi, { force });
   const cached = vesselAnalysisCache.get(mmsi);
   if (cached && cached.track === track) return { ...cached.result, meta: { ...cached.result.meta, cached: true } };
   const trackPoints = track.trackPoints || [];
@@ -808,7 +809,7 @@ createServer(async (request, response) => {
     if (request.method === "GET" && analysisMatch) {
       if (!monitoredMmsiSet.has(analysisMatch[1])) throw new Error("MMSI_NOT_IN_SCOPE");
       if (!summaryReady || !summarySnapshot) return sendJson(response, 202, { status: "refreshing" });
-      const analysis = await buildVesselAnalysis(analysisMatch[1]);
+      const analysis = await buildVesselAnalysis(analysisMatch[1], { force: url.searchParams.get("fresh") === "1" });
       if (!analysis) return sendJson(response, 404, { error: "TARGET_NOT_IN_SUMMARY" });
       return sendJson(response, 200, analysis);
     }
