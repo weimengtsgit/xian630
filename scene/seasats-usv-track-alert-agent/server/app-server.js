@@ -480,7 +480,11 @@ async function buildFastSummary() {
   };
 }
 
-function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
+// 让渡事件循环：30 分钟态势刷新对全名单逐船跑 analyzePayload（大船数秒 CPU），
+// 船与船之间让渡一拍，保证刷新期间的 API 请求（快照轮询/点选/弹窗）不被长时间整段阻塞。
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+
+async function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
   const allAlerts = [];
   const compactTargets = [];
   const initialMmsi = MONITORED_VESSELS[0]?.mmsi;
@@ -499,7 +503,6 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     const resolvedName = overrideName || identity?.name || (latest?.name && !isGenericVesselName(latest.name) ? latest.name : vessel.name || latest?.name || `MMSI ${mmsi}`);
     const rawTarget = {
       mmsi,
-      name: resolvedName,
       ...sidebarFields(applyVesselOverride(vessel), resolvedName, identity?.code, identity?.englishName, identity?.chineseName),
       latestTime: latest?.time || null,
       lon: latest?.lon ?? null,
@@ -516,6 +519,9 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
       vesselCategory: vessel.role,
       rawTypeCode: latest?.aisSourceType ?? null,
     };
+    // 分析用船名与点选取值同口径（中文优先稳定名）：保证预热结果与 /analysis 按需计算逐项一致；
+    // 该名同时用于告警文本，符合“右侧详情用中文名”的既有约定。
+    rawTarget.name = rawTarget.rightDisplayName || rawTarget.displayName || resolvedName;
     // 每艘船在服务端完成与前端一致的研判后立即压缩，只保留评分和证据，避免首屏传输全量报点。
     const analyzed = analyzePayload({
       metadata: {}, parameters: JUDGEMENT_PARAMETERS, monitoredAreas: MONITORED_AREAS,
@@ -530,6 +536,9 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
     }
     const { segments, aisGaps, alerts, ...compactTarget } = target;
     compactTargets.push(compactTarget);
+    // 点选分析预热（A 方案）：刷新本来就要逐船跑同一份 analyzePayload，顺手把抽稀结果
+    // 存入 /analysis 缓存（键为本轮轨迹对象，引用一致零新增计算），用户点选永远缓存命中。
+    vesselAnalysisCache.set(mmsi, { track, result: vesselAnalysisResultFromAnalyzed(mmsi, track, analyzed) });
     // 大轨迹（10w+ 点）下展开传参会触发 V8 参数上限（Maximum call stack size exceeded），改逐个 push。
     for (const alert of analyzed.alerts) allAlerts.push(alert);
     for (const point of trackPoints) { if (point.time) allTimes.push(point.time); }
@@ -538,6 +547,7 @@ function buildSummaryFromTracks(trackEntries, identityByMmsi = new Map()) {
       initialSegments = analyzed.segments;
       initialGaps = analyzed.aisGaps;
     }
+    await yieldToEventLoop();
   }
   const times = allTimes.sort();
   const targets = sortAnalyses(compactTargets);
@@ -600,7 +610,7 @@ async function refreshFleetSnapshot() {
       }),
     ]);
     const identityByMmsi = new Map(identities.map((identity) => [identity.mmsi, identity]));
-    const nextSummary = buildSummaryFromTracks(tracks, identityByMmsi);
+    const nextSummary = await buildSummaryFromTracks(tracks, identityByMmsi);
     const refreshedAt = new Date().toISOString();
     nextSummary.metadata.refreshedAt = refreshedAt;
     // 舰艇态势计算完成即可进入页面；航母关联可能耗时很长，必须与首屏数据解耦。
@@ -717,8 +727,33 @@ function decimateAnalysisResult(detailed) {
   };
 }
 
+// 由 analyzePayload 的逐船结果构造 /analysis 响应（抽稀+精简），供按需计算与刷新预热两条路径共用。
+function vesselAnalysisResultFromAnalyzed(mmsi, track, analyzed) {
+  const trackPoints = track.trackPoints || [];
+  const decimated = decimateAnalysisResult(analyzed);
+  return {
+    mmsi,
+    latest: trackPoints.at(-1) || null,
+    detailed: {
+      target: decimated.target,
+      segments: decimated.segments,
+      aisGaps: decimated.aisGaps,
+      alerts: decimated.alerts,
+    },
+    meta: {
+      sourcePointCount: trackPoints.length,
+      analysisPointCount: decimated.analysisPointCount,
+      segmentPointCap: SEGMENT_POINT_CAP,
+      computedAt: new Date().toISOString(),
+      cached: false,
+      error: track.meta?.error || null,
+    },
+  };
+}
+
 // 点选舰艇的详细分析：服务端按全量轨迹用 analyzePayload 计算（与点选前端原逻辑同代码、同输入基线），
 // 输出与浏览器端逐项一致的指标；浏览器不再下载全量轨迹 JSON。
+// 正常路径直接命中刷新时预热的缓存（零等待）；仅缓存缺失（如 fresh 强刷产生新轨迹对象）时才现算。
 // force=true 时强制重取轨迹（与 track 接口 ?fresh=1 语义一致），缓存按新轨迹对象自动失效重算。
 async function buildVesselAnalysis(mmsi, { force = false } = {}) {
   const track = await getOntologyTrack(mmsi, { force });
@@ -737,25 +772,7 @@ async function buildVesselAnalysis(mmsi, { force = false } = {}) {
     }],
     trackPoints,
   }, coastData);
-  const decimated = decimateAnalysisResult(detailed);
-  const result = {
-    mmsi,
-    latest: trackPoints.at(-1) || null,
-    detailed: {
-      target: decimated.target,
-      segments: decimated.segments,
-      aisGaps: decimated.aisGaps,
-      alerts: decimated.alerts,
-    },
-    meta: {
-      sourcePointCount: trackPoints.length,
-      analysisPointCount: decimated.analysisPointCount,
-      segmentPointCap: SEGMENT_POINT_CAP,
-      computedAt: new Date().toISOString(),
-      cached: false,
-      error: track.meta?.error || null,
-    },
-  };
+  const result = vesselAnalysisResultFromAnalyzed(mmsi, track, detailed);
   vesselAnalysisCache.set(mmsi, { track, result });
   return result;
 }

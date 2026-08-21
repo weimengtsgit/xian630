@@ -75,6 +75,12 @@ test("ontology-only snapshots, timezone handling, and shared requests are enforc
   assert.match(serverSource, /buildVesselAnalysis/);
   assert.match(serverSource, /vesselAnalysisCache/);
   assert.match(serverSource, /cached\.track === track/);
+  // A 方案预热：30 分钟刷新逐船顺手写入 /analysis 缓存（零新增计算），船与船之间让渡事件循环防长时间阻塞。
+  assert.match(serverSource, /await buildSummaryFromTracks/);
+  assert.match(serverSource, /vesselAnalysisCache\.set\(mmsi, \{ track, result: vesselAnalysisResultFromAnalyzed/);
+  assert.match(serverSource, /setImmediate/);
+  // 分析用船名与点选取值同口径（中文优先稳定名），保证预热与按需结果逐项一致。
+  assert.match(serverSource, /rawTarget\.name = rawTarget\.rightDisplayName \|\| rawTarget\.displayName \|\| resolvedName/);
   assert.match(serverSource, /"Cache-Control": "no-cache", ETag: etag/);
   assert.match(serverSource, /affiliationNeedsRefresh[\s\S]*?affiliationHistory = null/);
   assert.match(serverSource, /AbortSignal\.timeout\(120_000\)/);
