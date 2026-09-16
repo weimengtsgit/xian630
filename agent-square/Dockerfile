@@ -6,6 +6,10 @@
 # 部署脚本会先把工厂镜像 retag 成该基，详见 DEPLOYMENT.md。
 FROM docker.m.daocloud.io/library/node:20-alpine AS builder
 WORKDIR /app
+# 演示应用（DEMO_APPS）所在主机，默认 91 生产环境；其他环境构建时覆盖：
+#   podman build --build-arg VITE_DEMO_APP_HOST=http://10.253.28.62 ...
+ARG VITE_DEMO_APP_HOST=""
+ENV VITE_DEMO_APP_HOST=${VITE_DEMO_APP_HOST}
 COPY package.json package-lock.json* ./
 RUN npm ci --legacy-peer-deps
 COPY . .

@@ -1,6 +1,15 @@
 import type { SmartApp, CategoryFilter } from '../types';
 
 /**
+ * 演示应用所在主机的地址前缀（含协议，不带端口）。
+ * 构建期通过 VITE_DEMO_APP_HOST 注入（Dockerfile ARG → ENV），默认指向
+ * 91 生产环境；部署到其他环境时用 --build-arg VITE_DEMO_APP_HOST=http://10.253.28.62
+ * 之类覆盖，无需改代码。
+ */
+const DEMO_APP_HOST_BASE: string =
+  import.meta.env.VITE_DEMO_APP_HOST || 'http://220.154.5.91';
+
+/**
  * 演示数据 — 从线上 18016 当前运行产物还原的内置智能软件目录。
  * 动态新增应用通过 /api/apps 合并进列表。
  */
@@ -17,7 +26,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.9.0',
     vendor: '国防科大，电子云',
     publishDate: '2026-05-21',
-    link: 'http://220.154.5.91:18013/',
+    link: `${DEMO_APP_HOST_BASE}:18013/`,
     favorited: false,
     features: [
       'AIS信号异常监测',
@@ -39,7 +48,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.8.0',
     vendor: '国防科大，中电科十五所',
     publishDate: '2026-05-22',
-    link: 'http://220.154.5.91:18001/',
+    link: `${DEMO_APP_HOST_BASE}:18001/`,
     favorited: false,
     features: [
       '航空轨迹关联',
@@ -83,7 +92,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.0.0',
     vendor: '国防科大，电子云',
     publishDate: '2026-06-18',
-    link: 'http://220.154.5.91:18009/',
+    link: `${DEMO_APP_HOST_BASE}:18009/`,
     favorited: false,
     features: [
       '甲板风窗口评估',
@@ -105,7 +114,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.1.0',
     vendor: '国防科大，电子云',
     publishDate: '2026-05-25',
-    link: 'http://220.154.5.91:18017/',
+    link: `${DEMO_APP_HOST_BASE}:18017/`,
     favorited: false,
     features: ['态势总览大屏', '目标状态汇聚', '告警事件联动', '任务指标监控', '指挥入口整合'],
   },
@@ -121,7 +130,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.0.3',
     vendor: '国防科大，电子云',
     publishDate: '2026-05-24',
-    link: 'http://220.154.5.91:18015/',
+    link: `${DEMO_APP_HOST_BASE}:18015/`,
     favorited: false,
     features: ['部署周期分析', '航线分布统计', '海域活动聚合', '行动模式识别', '规律报告生成'],
   },
@@ -137,7 +146,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.0.0',
     vendor: '国防科大，电子云',
     publishDate: '2026-06-28',
-    link: 'http://220.154.5.91:18000/',
+    link: `${DEMO_APP_HOST_BASE}:18000/`,
     favorited: false,
     features: ['潮汐窗口计算', '吃水阈值校核', '出港风险提示', '母港条件对比', '窗口结果汇总'],
   },
@@ -153,7 +162,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.0.0',
     vendor: '国防科大，电子云',
     publishDate: '2026-06-28',
-    link: 'http://220.154.5.91:18011/',
+    link: `${DEMO_APP_HOST_BASE}:18011/`,
     favorited: false,
     features: ['海域网格统计', '商船密度监测', '异常聚集告警', '航道偏离识别', '重点区域态势'],
   },
@@ -184,7 +193,7 @@ export const DEMO_APPS: SmartApp[] = [
     version: 'v1.0.0',
     vendor: '国防科大，领铄',
     publishDate: '2026-06-28',
-    link: 'http://220.154.5.91:18010/',
+    link: `${DEMO_APP_HOST_BASE}:18010/`,
     favorited: false,
     features: ['活动线索挖掘', '轨迹伴随分析', '起降窗口关联', '异常出动识别', '任务动向研判'],
   },
