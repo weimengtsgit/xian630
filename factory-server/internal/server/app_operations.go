@@ -594,7 +594,17 @@ func writeStaticViteDockerfile(appDir, outputDir string) error {
 	b.WriteString(strings.Trim(outputDir, "/"))
 	b.WriteString("/ /usr/share/nginx/html/\n")
 	if _, err := os.Stat(filepath.Join(appDir, "nginx.conf")); err == nil {
-		b.WriteString("COPY nginx.conf /etc/nginx/conf.d/default.conf\n")
+		// Generated nginx.conf comes in two shapes: a full config (events/http
+		// blocks, as the original multi-stage Dockerfile installed it to
+		// /etc/nginx/nginx.conf) or a bare server block (conf.d style). A full
+		// config copied into conf.d makes nginx fail at startup with
+		// '"events" directive is not allowed here', so install it where it
+		// originally lived.
+		confDest := "/etc/nginx/conf.d/default.conf"
+		if raw, rerr := os.ReadFile(filepath.Join(appDir, "nginx.conf")); rerr == nil && strings.Contains(string(raw), "events") {
+			confDest = "/etc/nginx/nginx.conf"
+		}
+		b.WriteString("COPY nginx.conf " + confDest + "\n")
 	}
 	b.WriteString("EXPOSE 80\n")
 	b.WriteString(`CMD ["nginx", "-g", "daemon off;"]`)

@@ -19,5 +19,13 @@ if [ -n "$NS" ]; then
     echo "entrypoint: nginx resolver set to ${NS}"
 fi
 
+# Optional FACTORY_UPSTREAM (host:port): pin the factory upstream to a static
+# address for runtimes WITHOUT container DNS (e.g. podman 3.x CNI has no
+# aardvark-dns, so the "factory" service name is unresolvable and /api/* 502s).
+if [ -n "$FACTORY_UPSTREAM" ]; then
+    sed -i "s|factory:8787|$FACTORY_UPSTREAM|g" /etc/nginx/conf.d/default.conf
+    echo "entrypoint: factory upstream pinned to ${FACTORY_UPSTREAM}"
+fi
+
 # Chain to the original nginx entrypoint
 exec /docker-entrypoint.sh nginx -g "daemon off;"
