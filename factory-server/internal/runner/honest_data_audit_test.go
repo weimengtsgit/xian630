@@ -158,6 +158,20 @@ func TestAuditHonestDataRejectsBareDataErrorState(t *testing.T) {
 	}
 }
 
+// TestAuditHonestDataAcceptsCssClassDegradedState proves the component signal
+// also matches a degraded state expressed purely via CSS classes
+// (className="degraded-state") with no EmptyState/DegradedState/DataUnavailable
+// component name. The lowercased-body needle was previously mixed-case
+// ("className=\"degraded"), a dead condition that rejected this valid shape.
+func TestAuditHonestDataAcceptsCssClassDegradedState(t *testing.T) {
+	dir := t.TempDir()
+	writeAppFile(t, dir, "src/data/tideProvider.js", "export async function fetchTideSeries(){ const res = await fetch('https://api.tidesandcurrents.noaa.gov/api/prod/datagetter'); if (!res.ok) throw new Error('source failed'); return res.json(); }\n")
+	writeAppFile(t, dir, "src/App.jsx", "export default function App(){ return <main><div className=\"degraded-state\"><div className=\"degraded-state__banner\">数据源不可用 <span>已尝试 NOAA CO-OPS</span></div><button onClick={refetch}>重试</button><a href=\"https://tidesandcurrents.noaa.gov\">官方数据源</a><div className=\"degraded-state__skeleton\"><table><thead><tr><th>时间</th></tr></thead></table></div><p>数据恢复后此处将显示潮汐曲线</p></div></main>; }\n")
+	if err := AuditHonestData(dir, "live_api", []string{"tide-data-skill"}); err != nil {
+		t.Fatalf("err = %v, want nil for CSS-class degraded state", err)
+	}
+}
+
 func TestAuditCarrierOntologyContractFlagsInventedFields(t *testing.T) {
 	dir := t.TempDir()
 	writeAppFile(t, dir, "src/data/ontology-adapter.ts", `

@@ -383,7 +383,11 @@ func (s *degradedStateSignals) observe(body string) {
 	if strings.Contains(body, "EmptyState") ||
 		strings.Contains(body, "DegradedState") ||
 		strings.Contains(body, "DataUnavailable") ||
-		strings.Contains(lower, "className=\"degraded") ||
+		// Needles for the lowercased body must themselves be lowercase:
+		// "className" can never appear in `lower`, so the old mixed-case
+		// needle made this a dead condition and CSS-class degraded states
+		// (e.g. <div className="degraded-state">) never matched.
+		strings.Contains(lower, "classname=\"degraded") ||
 		strings.Contains(lower, "class=\"degraded") {
 		s.component = true
 	}
