@@ -478,7 +478,7 @@ export function ConversationWorkbench({
             <span className="cw-drawer-btn-label">工作空间</span>
           </button>
           <a
-            href="http://220.154.5.91:18016/"
+            href="http://10.253.28.62:18016/"
             target="_blank"
             rel="noopener noreferrer"
             className="cw-store-btn"

@@ -12,8 +12,8 @@ import {
 } from 'lucide-react'
 
 const menuItems = [
-  { label: '首页', icon: Home, href: 'http://220.154.5.91:8000/' },
-  { label: '智能体广场', icon: Store, href: 'http://220.154.5.91:18016/' },
+  { label: '首页', icon: Home, href: 'http://10.253.28.62:8000/' },
+  { label: '智能体广场', icon: Store, href: 'http://10.253.28.62:18016/' },
   { label: '智能体流水线', icon: GitBranch },
   { label: '导航', icon: Compass },
   { label: '图层', icon: Layers },

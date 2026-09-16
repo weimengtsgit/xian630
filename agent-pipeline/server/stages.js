@@ -20,7 +20,7 @@ function readConfig() {
 export function DEFAULT_CONFIG() {
   return [
     { key: 'agent-business', name: '业务逻辑', url: 'https://115.190.228.77:18701' },
-    { key: 'agent-prototype', name: '界面解析', url: 'http://220.154.5.91:18020' },
+    { key: 'agent-prototype', name: '界面解析', url: 'http://10.253.28.62:18020' },
     { key: 'agent-data', name: '数据抓取', url: '' },
     { key: 'agent-production', name: '生产交付', url: '' }
   ]
