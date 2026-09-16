@@ -595,6 +595,9 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	// Stop the OLD effective container (best-effort, outside the tx). The new
 	// one is already running + recorded.
 	f.stopPreviousDeployments(ctx, rt, app.ID, dep.ID)
+	// Agent Square runtime registration (best-effort): surface the freshly
+	// deployed app in the app-square catalog when FACTORY_APP_SQUARE_URL is set.
+	RegisterAppWithSquare(ctx, app, url)
 	// Project-document summary is best-effort and never changes deployment success.
 	if app.Path != "" {
 		_ = (projectdocs.Generator{}).GenerateSummary(filepath.Join(f.Workspace, filepath.FromSlash(app.Path)))

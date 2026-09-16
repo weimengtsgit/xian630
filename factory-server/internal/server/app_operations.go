@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/deploy"
+	"github.com/weimengtsgit/xian630/factory-server/internal/executor"
 	idpkg "github.com/weimengtsgit/xian630/factory-server/internal/id"
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
 	"github.com/weimengtsgit/xian630/factory-server/internal/scanner"
@@ -253,6 +254,10 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	}
 	s.publishDeploymentUpdated(ctx, dep.ID)
 	s.publishAppUpdated(ctx, appID)
+
+	// Agent Square runtime registration (best-effort): surface the running app
+	// in the app-square catalog when FACTORY_APP_SQUARE_URL is set.
+	executor.RegisterAppWithSquare(ctx, *app, url)
 
 	refreshed, _ := s.store.GetApplication(ctx, appID)
 	if refreshed != nil {
