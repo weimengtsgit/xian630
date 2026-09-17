@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "slug": "command-dashboard-2lkb",
+  "name": "美航母海域商船密度网格告警-2LKB",
+  "type": "command-dashboard",
+  "source": "generated",
+  "description": "面向情报分析人员的航母海域商船密度网格告警看板：按美航母主要活动海域划分 50 海里监控网格，每 3 分钟统计网格内在航商船数量并与 30 天滑动平均基线对比，低于基线 70% 黄色预警、低于 50% 红色告警。演示数据口径（mock），界面全局标注，不接入真实 AIS。",
+  "entry": "static-vite",
+  "path": "generated-apps/command-dashboard-2lkb",
+  "tags": ["maritime", "dashboard", "alert", "grid-monitor", "defense-operations"],
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}

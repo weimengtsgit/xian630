@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "slug": "command-dashboard-if2l",
+  "name": "全球海域舰船目击社媒监控-IF2L",
+  "type": "command-dashboard",
+  "source": "generated",
+  "description": "面向海上态势值守监控人员与情报分析人员的全球海域舰船目击社媒监控指挥大屏：多语言关键词（航母/军舰/大船/海上等）每 15 分钟轮询 X（推特）与 Instagram 公开帖文（演示数据驱动），提取 GPS 标签与图片 EXIF 双通道坐标形成全球地图散点，自动聚合高亮同海域短时多账号相似发帖的目击潮事件，预留真实接口接入切换层。",
+  "entry": "static-vite",
+  "path": "generated-apps/command-dashboard-if2l",
+  "tags": ["command_dashboard", "maritime_alert", "social_sighting_cluster", "defense_operations"],
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}

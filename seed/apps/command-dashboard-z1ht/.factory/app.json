@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "slug": "command-dashboard-z1ht",
+  "name": "美海军航母甲板风起降条件评估-Z1HT",
+  "type": "command_dashboard",
+  "source": "generated",
+  "description": "面向作战值班与参谋人员的美海军航母甲板风起降条件评估指挥仪表盘：接入 Open-Meteo GFS 公开朗格 10 米风场与本体 DaaS 公开情报航母位置库，按 20 节甲板风阈值与 30 节最大航速合成可实现甲板风范围 [|W−30|, W+30]，逐艘判定「无弹射器辅助起飞」与「安全着舰」条件，每 5 分钟自动刷新，数据获取失败显式报错、绝不伪造。",
+  "entry": "static-vite",
+  "path": "generated-apps/command-dashboard-z1ht",
+  "tags": ["defense-operations", "maritime", "deck-wind", "carrier"],
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}

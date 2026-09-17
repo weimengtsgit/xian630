@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "slug": "command-dashboard-bv5p",
+  "name": "航母母港潮汐出港窗口监测看板-BV5P",
+  "type": "command-dashboard",
+  "source": "generated",
+  "description": "面向母港出港调度/指挥人员的 2×2 四格航母母港潮汐出港窗口监测看板：运行时接入 NOAA CO-OPS 与 JCG 公开潮汐预测 API，按 12.8 米吃水阈值换算至各港潮高基准计算四港未来 72 小时可出港时间窗，窗口开放显示绿色、关闭显示红色倒计时，每 10 分钟自动刷新，单港取数失败仅该格显式报错。",
+  "entry": "static-vite",
+  "path": "generated-apps/command-dashboard-bv5p",
+  "tags": ["maritime", "command-dashboard", "tide", "defense-operations"],
+  "build": {"command": "npm run build", "outputDir": "dist"},
+  "runtime": {"devCommand": "npm run dev", "defaultPort": 5173},
+  "docker": {"enabled": true, "dockerfile": "Dockerfile", "context": ".", "runtimePort": 80}
+}

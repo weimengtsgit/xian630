@@ -58,6 +58,8 @@ bin/
 
 # SQLite state (runtime data, do not commit)
 *.db
+# …except the fixed local-deploy seed snapshot (docs/local-deployment-startup.md)
+!seed/state.db
 *.db-wal
 *.db-shm
 *.sqlite

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    {
+      "path": "docs/01-requirements.md",
+      "type": "requirements",
+      "displayOrder": 10,
+      "sourceJobId": "job_fbb24f666d6abd0d669bf9a2",
+      "sourceStepId": "step_64fac2c5e8c80c4a6e4ebc40",
+      "attempt": 1,
+      "agentKey": "requirement-analyst",
+      "sourceArtifactId": "art_95c85e26c132147d92e6affc",
+      "sourceChecksum": "sha256:be597df1b95d30dd97bc34edd4d38ba0541ab5e675d8d7687f815a92e0f0b42c",
+      "generatedAt": "2026-09-17T03:41:16Z",
+      "draftState": "none"
+    },
+    {
+      "path": "docs/04-implementation.md",
+      "type": "implementation",
+      "displayOrder": 40,
+      "sourceJobId": "job_fbb24f666d6abd0d669bf9a2",
+      "sourceStepId": "step_b5c93d04ef7f0f6569a66c82",
+      "attempt": 1,
+      "agentKey": "code-generator",
+      "sourceArtifactId": "art_6bc63cefc0643c3b401f39a4",
+      "sourceChecksum": "sha256:bcf6e12958441434e9ffcc40ac7b9d2883cf20b4d457839780a2832dd7df090d",
+      "generatedAt": "2026-09-17T04:52:29Z",
+      "draftState": "none"
+    }
+  ]
+}
