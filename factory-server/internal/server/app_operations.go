@@ -256,8 +256,11 @@ func (s *Server) startAppInternal(ctx context.Context, appID string) (*model.Dep
 	s.publishAppUpdated(ctx, appID)
 
 	// Agent Square runtime registration (best-effort): surface the running app
-	// in the app-square catalog when FACTORY_APP_SQUARE_URL is set.
-	executor.RegisterAppWithSquare(ctx, *app, url)
+	// in the app-square catalog when FACTORY_APP_SQUARE_URL is set. The producing
+	// job (when found) contributes the confirmed requirement's long description
+	// and feature tags.
+	squareJob, _ := s.store.GetLatestJobForApplication(ctx, appID)
+	executor.RegisterAppWithSquare(ctx, *app, url, squareJob)
 
 	refreshed, _ := s.store.GetApplication(ctx, appID)
 	if refreshed != nil {

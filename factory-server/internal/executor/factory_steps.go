@@ -597,7 +597,8 @@ func (f *FactoryRunner) runDeployment(ctx context.Context, job model.Job, step m
 	f.stopPreviousDeployments(ctx, rt, app.ID, dep.ID)
 	// Agent Square runtime registration (best-effort): surface the freshly
 	// deployed app in the app-square catalog when FACTORY_APP_SQUARE_URL is set.
-	RegisterAppWithSquare(ctx, app, url)
+	// The job carries confirmedRequirementJSON (long description / feature tags).
+	RegisterAppWithSquare(ctx, app, url, &job)
 	// Project-document summary is best-effort and never changes deployment success.
 	if app.Path != "" {
 		_ = (projectdocs.Generator{}).GenerateSummary(filepath.Join(f.Workspace, filepath.FromSlash(app.Path)))
