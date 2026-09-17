@@ -206,7 +206,8 @@ func TestFindDialogueByClarificationID(t *testing.T) {
 	}
 }
 
-// TestListDialogueSessionsNewestFirst asserts the list ordering and limit cap.
+// TestListDialogueSessionsNewestFirst asserts that navigation order follows
+// creation time, even when an old session receives a later status update.
 func TestListDialogueSessionsNewestFirst(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -220,6 +221,11 @@ func TestListDialogueSessionsNewestFirst(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("create %s: %v", id, err)
 		}
+	}
+	// Simulate an old conversation receiving a late task/status update. It must
+	// remain behind the newer conversation in the left-side history list.
+	if err := st.UpdateDialogueStatus(ctx, "dlg_old", model.DialogueStatusActive, "", ""); err != nil {
+		t.Fatalf("update old dialogue: %v", err)
 	}
 	got, err := st.ListDialogueSessions(ctx, 50)
 	if err != nil {

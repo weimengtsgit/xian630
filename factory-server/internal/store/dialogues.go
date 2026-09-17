@@ -42,7 +42,8 @@ func (s *Store) GetDialogueSession(ctx context.Context, id string) (*model.Dialo
 	return d, nil
 }
 
-// ListDialogueSessions returns dialogue sessions newest-first (by updated_at).
+// ListDialogueSessions returns dialogue sessions newest-first by creation time.
+// 会话列表是历史导航，不应因某个旧会话后续执行、重试或状态刷新而改变顺序。
 // limit <= 0 defaults to 50; limit > 200 is capped to 200.
 func (s *Store) ListDialogueSessions(ctx context.Context, limit int) ([]model.DialogueSession, error) {
 	if limit <= 0 {
@@ -54,7 +55,7 @@ func (s *Store) ListDialogueSessions(ctx context.Context, limit int) ([]model.Di
 	rows, err := s.db.QueryContext(ctx, `
 SELECT `+dialogueSessionCols+`
 FROM dialogue_sessions
-ORDER BY updated_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT ?`, limit)
 	if err != nil {
 		return nil, err

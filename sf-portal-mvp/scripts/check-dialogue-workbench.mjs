@@ -634,16 +634,16 @@ assert.match(
   'send must clear the optimistic message (rollback) — on error and once the persisted view loads',
 )
 
-// A failed parent dialogue may have NO child clarification (for example a route
-// runner failure). In that case "重试本轮" must not call the child clarification
-// retry endpoint, because the backend correctly 409s with "dialogue has no active
-// clarification child". The hook falls back to creating a fresh dialogue from the
-// original prompt; child clarification failures still use retryDialogueRound.
+// A pipeline failure is owned by the existing seeded job. "重试本轮" must use
+// the same job's retry-current-step endpoint so it has the same rewind/retry
+// semantics as the task drawer and never creates a duplicate dialogue. A child
+// clarification failure still uses retryDialogueRound.
 const retryFnMatch = dialogueHookJs.match(/const retry = useCallback\(async \(\) => \{[\s\S]*?\}, \[loadView, refreshSessions, state\.view, submitting\]\)/)
 assert.ok(retryFnMatch, 'could not locate the retry useCallback body for static checks')
 const retryBody = retryFnMatch[0]
+assert.match(retryBody, /seededJob && seededJob\.status === 'failed'[\s\S]*?retryCurrentStep\(seededJob\.id\)/, 'failed seeded jobs must reuse retryCurrentStep on the same job')
 assert.match(retryBody, /child && child\.status === 'failed'[\s\S]*retryDialogueRound/, 'retry must call child clarification retry only when a failed child exists')
-assert.match(retryBody, /createDialogue\(\{ initialPrompt: prompt \}\)/, 'retry without a failed child must create a fresh dialogue from the original prompt')
+assert.doesNotMatch(retryBody, /createDialogue\(/, 'retry must never create a new dialogue')
 
 // ---- requirement term mapping (Item 2) --------------------------------------
 // The shared term map + text translator live in utils/formatLabels.js so the

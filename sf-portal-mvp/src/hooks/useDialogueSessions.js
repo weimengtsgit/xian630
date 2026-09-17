@@ -469,17 +469,23 @@ export function useDialogueSessions() {
     try {
       const sess = state.view.session
       const child = state.view.child
+      const seededJob = state.view.seededJob
       let view
-      if (child && child.status === 'failed') {
+      // 生成流程失败时，"重试本轮"必须复用同一个任务并交给后端回退/重排
+      // 当前失败阶段；不能重新创建会话，否则左侧会话会多出一条记录，且与
+      // 任务抽屉的"重试当前阶段"语义不一致。
+      if (seededJob && seededJob.status === 'failed') {
+        await factoryApi.retryCurrentStep(seededJob.id)
+        await refreshSessions()
+        view = await loadView(sess.id)
+      } else if (child && child.status === 'failed') {
         view = await factoryApi.retryDialogueRound(sess.id)
       } else {
-        const prompt = String(sess.initial_prompt || '').trim()
-        if (!prompt) throw new Error('无法重试：会话没有可重新提交的原始需求')
-        pendingNewDialogueRef.current = true
-        view = await factoryApi.createDialogue({ initialPrompt: prompt })
-        if (mountedRef.current) refreshSessions().catch(() => {})
+        // 路由或业务 Agent 草稿失败目前没有可安全重放的服务端阶段，因此明确
+        // 提示，而不是悄悄创建一条新会话并让用户误以为原会话已被重试。
+        throw new Error('当前失败阶段暂不支持重试；请在左侧新建会话后重新提交需求')
       }
-      await loadView(view.session.id)
+      if (view && view.session) await loadView(view.session.id)
       return view
     } catch (err) {
       if (mountedRef.current) setError(err.message || String(err))
