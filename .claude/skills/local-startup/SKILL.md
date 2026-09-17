@@ -78,7 +78,9 @@ done
 ```
 
 首次 start 每个应用要 npm install + vite 构建 + podman build，**分钟级**，逐个等
-返回再继续（for 循环天然串行）；再次启动秒级（探活快速路径）。
+返回再继续（for 循环天然串行）；再次启动秒级（探活快速路径）。每次成功重建都会
+自动把该应用的卡写进广场（本地文件，按 id 幂等 upsert）——全新环境下广场的
+4 张卡就是这一步生成的。
 
 ### 6. 验收并汇报
 
@@ -94,19 +96,16 @@ for p in 18000 18001 18002 18003; do curl -s -o /dev/null -w "$p:%{http_code}\n"
 
 ### 7. 收尾提醒（必须告知用户）
 
-本环境新增的会话/智能体/应用**不会自动进 git**（DB 在家目录、`generated-apps/`
-被 ignore），但有两个例外，提交自己的代码前要处理：
-
-1. `agent-square/runtime-data/api-apps.json` 是被跟踪文件——新生成的应用部署后
-   会自动把新卡写进去。提交前还原：
-   `git checkout -- agent-square/runtime-data/api-apps.json`
-2. 新网关 profile 必须用 `local-` 前缀（已 ignore）；否则 key 会被 `git add -A` 带走。
+本环境新增的会话/智能体/应用/广场卡**都不会进 git**：DB 在家目录，
+`generated-apps/` 与 `agent-square/runtime-data/api-apps.json` 均被 ignore
+（广场卡是本地运行时文件，由部署注册链路重建，不入库）。唯一要注意：新网关
+profile 必须用 `local-` 前缀（已 ignore）；否则 key 会被 `git add -A` 带走。
 
 ## 重置子流程（用户说「重置 / 回到初始 4 会话」时）
 
 ```bash
 rm -f ~/.software-factory/state.db ~/.software-factory/state.db-wal ~/.software-factory/state.db-shm
-git checkout -- agent-square/runtime-data/api-apps.json   # 广场回到 4 张卡
+rm -f agent-square/runtime-data/api-apps.json             # 广场卡在第 5 步恢复容器时自动重建为 4 张
 podman rm -f $(podman ps -aq --filter name=sf-command-dashboard) 2>/dev/null   # 否则旧容器占着 18000-18003
 lsof -ti :8787 | xargs kill                                # 重启 factory-server 使新种子生效
 # 等端口释放后重跑第 3、4、5 步（从第 4 步起重新起服务）
@@ -121,4 +120,4 @@ lsof -ti :8787 | xargs kill                                # 重启 factory-serv
 | 漏 `FACTORY_APP_SQUARE_URL` | 部署成功但广场卡不刷新 |
 | 选了 fake 就以为新会话也能用 | 对话路由永远真实 CLI，新会话会失败——应告知用户选 A/C |
 | 重置后不删旧容器 | 旧容器占着 18000-18003，新 start 被迫换端口 |
-| `git add -A` 前不还原 api-apps.json | 用户环境的新卡被提交，污染种子态 |
+| 全新环境不起容器就开广场 | 运行时卡为空属预期——4 张卡由第 5 步恢复容器时自动注册生成 |

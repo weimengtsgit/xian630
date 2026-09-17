@@ -16,7 +16,7 @@
 |---|---|---|
 | 会话（dialogue sessions） | 4 | `seed/state.db` 种子快照 |
 | 门户应用列表 | 5 预置 + 4 生成 | `scene/` 目录扫描 + 种子 |
-| 智能体研判广场卡片 | 4 运行时卡 | `agent-square/runtime-data/api-apps.json`（已入库）+ 部署注册链路自动对齐 |
+| 智能体研判广场卡片 | 4 运行时卡 | 恢复容器时由部署注册链路自动生成（`api-apps.json` 为本地文件，不入库） |
 | 运行中应用容器 | 4（18000-18003） | `seed/apps/` 源码重建 |
 | 流水线智能体（agents 表） | 6 | factory-server 启动时自动 upsert |
 
@@ -96,7 +96,7 @@ done
 
 ```bash
 rm -f ~/.software-factory/state.db ~/.software-factory/state.db-wal ~/.software-factory/state.db-shm
-git checkout -- agent-square/runtime-data/api-apps.json   # 广场回到 4 张卡（新生成的卡不入种子）
+rm -f agent-square/runtime-data/api-apps.json             # 广场卡由 4.4 恢复容器时自动重建为 4 张
 podman rm -f $(podman ps -aq --filter name=sf-command-dashboard) 2>/dev/null   # 旧容器占着 18000-18003
 lsof -ti :8787 | xargs kill                                # factory-server 需重启使新种子生效
 # 等端口释放后重跑 3.1 / 3.2，再按第 4 节顺序重新起服务与容器
@@ -132,7 +132,9 @@ cd agent-square && npm install && npm run dev
 ```
 
 广场的运行时卡片来自本地 `/api/apps`（vite middleware 读写
-`runtime-data/api-apps.json`，该文件已入库且含 4 张卡）。
+`runtime-data/api-apps.json`）。该文件**不入库**（已 ignore）：全新环境克隆后
+它不存在、广场运行时卡为空，属预期——4 张卡由 4.4 节恢复容器时的部署注册
+链路自动重建。
 
 ### 4.3 sf-portal-mvp（门户，:3001）
 
@@ -217,9 +219,11 @@ for p in 18000 18001 18002 18003; do curl -s -o /dev/null -w "$p:%{http_code}\n"
    `export NODE_TLS_REJECT_UNAUTHORIZED=0`，仅限本地开发。
 8. **重置后容器仍在跑**：第 3 节重置只清数据库；旧容器用
    `podman ps` / `podman rm -f sf-command-dashboard-*` 清理后再重新 start。
-9. **提交隔离（两个例外）**：新增会话/智能体/应用本身不会进 git（DB 在家目录、
-   `generated-apps/` 被 ignore），但 ① `agent-square/runtime-data/api-apps.json`
-   是被跟踪文件，新应用部署后自动写入新卡——提交自己代码前先
-   `git checkout -- agent-square/runtime-data/api-apps.json` 还原；② 新建模型网关
-   profile 必须用 `local-` 前缀（`deploy/gateways/local-*.env` 已被 ignore），
-   其他名字的 `.env` 不受 ignore 保护，`git add -A` 会把真实 key 提交进仓库。
+9. **提交隔离**：新增会话/智能体/应用/广场卡**都不会进 git**——DB 在家目录、
+   `generated-apps/` 与 `agent-square/runtime-data/api-apps.json`（广场运行时
+   注册表，本地由部署注册链路重建）均被 ignore。唯一例外：新建模型网关 profile
+   必须用 `local-` 前缀（`deploy/gateways/local-*.env` 已被 ignore），其他名字的
+   `.env` 不受 ignore 保护，`git add -A` 会把真实 key 提交进仓库。
+10. **广场卡的注册时机**：卡片只在应用**重建部署**成功时写入（探活快速路径不
+   重复注册）。若容器都在跑而 `api-apps.json` 被手动删除，广场会暂时为空，重新
+   start 任一应用（或等下次重建）即恢复。

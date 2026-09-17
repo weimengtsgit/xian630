@@ -41,6 +41,9 @@ lerna-debug.log*
 # Local-only model gateway profiles (real keys, never commit; see docs/local-deployment-startup.md)
 deploy/gateways/local-*.env
 
+# Agent-square runtime registry (rebuilt locally by deploy registration; never commit)
+/agent-square/runtime-data/api-apps.json
+
 # Testing
 coverage/
 .nyc_output/
