@@ -58,15 +58,17 @@
 - `FACTORY_FAKE_CLAUDE=1` **只**替换流水线三步（需求分析/方案设计/代码生成）
   为确定性假执行；对话路由、需求澄清、业务智能体起草**不受它影响，永远真实**。
   所以即使选 B，新会话仍需可用的 claude CLI/网关。
-- 网关 profile 建议落盘为 `deploy/gateways/<名字>.env`（三行 export 即可），
-  启动前 `set -a; source deploy/gateways/<名字>.env; set +a`。
+- 网关 profile 落盘为 `deploy/gateways/local-<名字>.env`（三行 export 即可），
+  启动前 `set -a; source deploy/gateways/local-<名字>.env; set +a`。
+  **文件名必须带 `local-` 前缀**——只有该前缀被 .gitignore 排除，其他名字的
+  `.env` 会被 `git add -A` 把真实 key 提交进仓库。
   仓库现存的 `anthropic.env / cc580.env / volc-ark.env` 的 key 均已失效，仅作
   格式参考；`fake.env` 等价于选项 B，仍然可用。
 
 profile 模板：
 
 ```bash
-# deploy/gateways/my-gateway.env
+# deploy/gateways/local-my-gateway.env
 export ANTHROPIC_BASE_URL="https://<网关地址>"
 export ANTHROPIC_AUTH_TOKEN="<新 key>"
 export ANTHROPIC_MODEL="<模型名>"
@@ -94,7 +96,10 @@ done
 
 ```bash
 rm -f ~/.software-factory/state.db ~/.software-factory/state.db-wal ~/.software-factory/state.db-shm
-# 然后重跑 3.1 / 3.2 并重启 factory-server
+git checkout -- agent-square/runtime-data/api-apps.json   # 广场回到 4 张卡（新生成的卡不入种子）
+podman rm -f $(podman ps -aq --filter name=sf-command-dashboard) 2>/dev/null   # 旧容器占着 18000-18003
+lsof -ti :8787 | xargs kill                                # factory-server 需重启使新种子生效
+# 等端口释放后重跑 3.1 / 3.2，再按第 4 节顺序重新起服务与容器
 ```
 
 ## 4. 启动顺序
@@ -212,3 +217,9 @@ for p in 18000 18001 18002 18003; do curl -s -o /dev/null -w "$p:%{http_code}\n"
    `export NODE_TLS_REJECT_UNAUTHORIZED=0`，仅限本地开发。
 8. **重置后容器仍在跑**：第 3 节重置只清数据库；旧容器用
    `podman ps` / `podman rm -f sf-command-dashboard-*` 清理后再重新 start。
+9. **提交隔离（两个例外）**：新增会话/智能体/应用本身不会进 git（DB 在家目录、
+   `generated-apps/` 被 ignore），但 ① `agent-square/runtime-data/api-apps.json`
+   是被跟踪文件，新应用部署后自动写入新卡——提交自己代码前先
+   `git checkout -- agent-square/runtime-data/api-apps.json` 还原；② 新建模型网关
+   profile 必须用 `local-` 前缀（`deploy/gateways/local-*.env` 已被 ignore），
+   其他名字的 `.env` 不受 ignore 保护，`git add -A` 会把真实 key 提交进仓库。

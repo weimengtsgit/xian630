@@ -38,6 +38,9 @@ lerna-debug.log*
 .env.*.local
 .factory-secrets/
 
+# Local-only model gateway profiles (real keys, never commit; see docs/local-deployment-startup.md)
+deploy/gateways/local-*.env
+
 # Testing
 coverage/
 .nyc_output/
