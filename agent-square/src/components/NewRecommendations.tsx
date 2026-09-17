@@ -38,7 +38,7 @@ const NewRecommendations: React.FC<NewRecommendationsProps> = ({ apps, onSelect 
             </span>
             <div className="new-rec-card__meta">
               <span className="new-rec-card__version">{app.version}</span>
-              <span className="new-rec-card__vendor">{app.vendor || '国防科大，电子云'}</span>
+              <span className="new-rec-card__vendor">{app.vendor || '电子云'}</span>
             </div>
           </div>
         ))}

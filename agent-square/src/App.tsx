@@ -34,7 +34,7 @@ const normalizeStoreApp = (input: IncomingStoreApp): SmartApp => {
     category: (input.category || input['类别'] || '其他') as SmartApp['category'],
     status: '新品',
     version: String(input.version || input['版本'] || 'v1.0.0'),
-    vendor: String(input.vendor || input['厂商'] || '国防科大，电子云'),
+    vendor: String(input.vendor || input['厂商'] || '电子云'),
     publishDate: String(input.publishDate || new Date().toISOString().slice(0, 10)),
     link: String(input.link || input.url || '#'),
     favorited: false,

@@ -76,7 +76,7 @@ const AppDetail: React.FC<AppDetailProps> = ({ app, onClose, onToggleFavorite, o
             </div>
             <div className="app-detail__info-item">
               <span className="app-detail__info-label">软件厂商</span>
-              <span className="app-detail__info-value">{app.vendor || '国防科大，电子云'}</span>
+              <span className="app-detail__info-value">{app.vendor || '电子云'}</span>
             </div>
             <div className="app-detail__info-item">
               <span className="app-detail__info-label">状态</span>

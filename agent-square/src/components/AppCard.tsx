@@ -54,7 +54,7 @@ const AppCard: React.FC<AppCardProps> = ({ app, onSelect, onToggleFavorite }) =>
         </span>
         <div className="app-card__meta">
           <span className="app-card__version">{app.version}</span>
-          <span className="app-card__vendor">{app.vendor || '国防科大，电子云'}</span>
+          <span className="app-card__vendor">{app.vendor || '电子云'}</span>
         </div>
       </div>
     </div>

@@ -6,17 +6,10 @@
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const APP_TIME_METRICS = {
-    'app-seasats': { name: '“光鱼”无人艇跟监告警智能体', vendor: '国防科大，电子云', version: 'v1.8.15', timeKind: 'iteration', durationSeconds: 1775 },
-    'app-001': { name: '美航母AIS异常监测', vendor: '国防科大，电子云', version: 'v1.9.0', timeKind: 'iteration', durationSeconds: 1366 },
-    'app-002': { name: '舰载机归属判断', vendor: '国防科大，中电科十五所', version: 'v1.8.0', timeKind: 'iteration', durationSeconds: 1542 },
-    'app-003': { name: '华盛顿号航母打击群西太地区活动规律分析智能体', vendor: '国防科大，电信十所', version: 'v1.2.0', timeKind: 'iteration', durationSeconds: 1598 },
-    'app-004': { name: '航母甲板风条件评估看板', vendor: '国防科大，电子云', version: 'v1.0.0', durationSeconds: 2004 },
-    'app-005': { name: '航母态势指挥仪表盘', vendor: '国防科大，电子云', version: 'v1.1.0', timeKind: 'iteration', durationSeconds: 1196 },
-    'app-006': { name: '航母打击群活动规律分析', vendor: '国防科大，电子云', version: 'v1.0.3', timeKind: 'iteration', durationSeconds: 1467 },
-    'app-007': { name: '航母母港潮汐出港窗口计算器', vendor: '国防科大，电子云', version: 'v1.0.0', durationSeconds: 2110 },
-    'app-008': { name: '海域网格商船密度异常告警器', vendor: '国防科大，电子云', version: 'v1.0.0', durationSeconds: 2548 },
-    'app-009': { name: '航母及舰载机时空伴随关系分析智能体', vendor: '国防科大，电信十所', version: 'v1.0.0', durationSeconds: 2945 },
-    'app-010': { name: '航母舰载机挖掘分析', vendor: '国防科大，领铄', version: 'v1.0.0', durationSeconds: 2736 },
+    // 仅统计在架应用（91 实测：app-005 mock；app-007 公网）；app-008 内置样本实测为
+    // 本体平台（ontology）实测航母编队 AIS 快照，已隐藏；厂商统一为电子云。
+    'app-005': { name: '航母态势指挥仪表盘', vendor: '电子云', version: 'v1.1.0', timeKind: 'iteration', durationSeconds: 1196 },
+    'app-007': { name: '航母母港潮汐出港窗口计算器', vendor: '电子云', version: 'v1.0.0', durationSeconds: 2110 },
   }
 
   // 新增应用 fallback：按名称缓存，稳定随机耗时，避免每秒刷新抖动

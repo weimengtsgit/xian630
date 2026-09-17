@@ -32,7 +32,7 @@ func RegisterAppWithSquare(ctx context.Context, app model.Application, url strin
 		"name":        app.Name,
 		"description": app.Description,
 		"link":        url,
-		"vendor":      "软件工厂",
+		"vendor":      "电子云",
 		"category":    "生成应用",
 		"version":     "v1.0.0",
 	}
