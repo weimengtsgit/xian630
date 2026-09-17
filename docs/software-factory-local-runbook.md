@@ -1,5 +1,8 @@
 # Software Factory — Local Runbook
 
+> 全新环境一键拉起（固定 4 会话 + 智能体研判广场 + 模型选择）请先看
+> [local-deployment-startup.md](local-deployment-startup.md)；本手册是深入细节参考。
+
 End-to-end local bring-up of the intelligent software factory MVP: the
 **cc-status** observation service, the **factory-server** orchestration API, and
 the **sf-portal-mvp** front end. Verified commands for a clean checkout.
