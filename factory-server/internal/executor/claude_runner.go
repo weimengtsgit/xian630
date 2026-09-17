@@ -445,6 +445,42 @@ func (o dataIntegrationStepOutput) hasDataAccessResult() bool {
 	return raw != "" && raw != "null"
 }
 
+// flattenedDataAccessFields reports whether a data_integration output that is
+// MISSING the nested dataAccessResult object nonetheless carries
+// dataAccessResult's characteristic fields at the TOP LEVEL (canFinalize,
+// dataNeeds, sourceCandidates, …). This is a recurring model drift: the fields
+// are all there, just one level too high. Accepting such an output as a plain
+// collaboration producer marks the step succeeded without ever writing
+// data-access/versions — code_generation's finalized-data-access guard then
+// kills the job at second zero with schema_validation_failed (observed on
+// job_aab0f4a92248b7087f614f31). Callers map this to output_invalid_json so the
+// existing bounded auto-retry re-runs the step (the model usually nests
+// correctly on the next attempt).
+func flattenedDataAccessFields(outputPath string) bool {
+	var raw struct {
+		CanFinalize      *bool            `json:"canFinalize"`
+		DataNeeds        json.RawMessage  `json:"dataNeeds"`
+		SchemaVersion    json.RawMessage  `json:"schemaVersion"`
+		SourceCandidates json.RawMessage  `json:"sourceCandidates"`
+		ProbeResults     json.RawMessage  `json:"probeResults"`
+		FieldMappings    json.RawMessage  `json:"fieldMappings"`
+		BlockingIssues   json.RawMessage  `json:"blockingIssues"`
+		DataAccessMode   string           `json:"dataAccessMode"`
+	}
+	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
+		return false
+	}
+	nonEmptyRaw := func(v json.RawMessage) bool {
+		t := strings.TrimSpace(string(v))
+		return t != "" && t != "null" && t != "[]" && t != "{}"
+	}
+	if raw.CanFinalize != nil || raw.DataAccessMode != "" || nonEmptyRaw(raw.SchemaVersion) {
+		return true
+	}
+	return nonEmptyRaw(raw.DataNeeds) || nonEmptyRaw(raw.SourceCandidates) ||
+		nonEmptyRaw(raw.ProbeResults) || nonEmptyRaw(raw.FieldMappings) || nonEmptyRaw(raw.BlockingIssues)
+}
+
 func dataIntegrationUsesFinalDataAccessContract(outputPath string) bool {
 	var raw dataIntegrationStepOutput
 	if err := runner.ReadAndDecode(outputPath, &raw); err != nil {
@@ -459,6 +495,12 @@ func (c *ClaudeStepRunner) finishDataIntegration(ctx context.Context, trace runn
 		return c.failureFromError(err)
 	}
 	if !raw.hasDataAccessResult() {
+		// The final-data-access contract route requires the nested object. A
+		// flattened drift must fail as output_invalid_json (bounded auto-retry),
+		// never fall through as a plain producer success.
+		if flattenedDataAccessFields(outputPath) {
+			return c.failureFromError(fmt.Errorf("dataAccessResult must be a nested object (found its fields flattened at the top level): %w", runner.ErrOutputInvalidJSON))
+		}
 		out, err := validateCollaborationProducer(step.Kind, outputPath)
 		return c.resultFromValidatedOutput(ctx, trace, out, outputPath, err)
 	}

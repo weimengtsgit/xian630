@@ -1743,7 +1743,18 @@ func (s *Server) openDialogueApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "application not found")
 		return
 	}
-	if !slugInRecommendation(route, app.Slug) {
+	// The recommendation list stores routing-time slugs (often the internal
+	// blueprint slug), but a generation dialogue's job produces a DIFFERENT
+	// random-suffixed slug (e.g. carrier-homeport-tide-window →
+	// command-dashboard-j98t). Strict recommendation matching therefore made it
+	// IMPOSSIBLE to ever open (and thus resolve) a generated app from its own
+	// producer dialogue. Also accept: an app this dialogue's job produced, and
+	// the app the dialogue is already resolved to.
+	ownsGenerated := false
+	if s.store != nil {
+		ownsGenerated, _ = s.store.DialogueOwnsJobWithSlug(r.Context(), id, app.Slug)
+	}
+	if !slugInRecommendation(route, app.Slug) && !ownsGenerated && dlg.ResolvedApplicationID != appID {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "application is not in the persisted recommendation"})
 		return
 	}

@@ -303,7 +303,7 @@ func (w *TurnWorker) failTurn(ctx context.Context, dialogueID string, turn *mode
 	if err := w.store.CompleteDialogueTurn(ctx, turn.ID, model.TurnStatusFailed); err != nil {
 		failTransition("complete(failed)", dialogueID, turn.ID, err)
 	}
-	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusActive)
+	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, w.statusPreservingResolved(ctx, dialogueID, model.DialogueStatusActive))
 	if w.server != nil {
 		w.server.publishDialogueSimple("dialogue.turn.failed", dialogueID, map[string]any{"turn_id": turn.ID})
 	}
@@ -318,7 +318,7 @@ func (w *TurnWorker) finalizeCanceled(ctx context.Context, dialogueID string, tu
 			failTransition("cancel", dialogueID, turn.ID, err)
 		}
 	}
-	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, model.DialogueStatusActive)
+	_ = w.serverUpdateDialogueStatus(ctx, dialogueID, w.statusPreservingResolved(ctx, dialogueID, model.DialogueStatusActive))
 	if w.server != nil {
 		w.server.publishDialogueSimple("dialogue.turn.canceled", dialogueID, map[string]any{"turn_id": turn.ID})
 	}
@@ -331,7 +331,7 @@ func (w *TurnWorker) completeTurn(ctx context.Context, dialogueID string, turn *
 	if err := w.store.CompleteDialogueTurn(ctx, turn.ID, model.TurnStatusCompleted); err != nil {
 		failTransition("complete", dialogueID, turn.ID, err)
 	}
-	status := model.DialogueStatusActive
+	status := w.statusPreservingResolved(ctx, dialogueID, model.DialogueStatusActive)
 	if out.Intent == model.TurnIntentApplicationModification {
 		if w.dialogueHasResolvedApplication(ctx, dialogueID) {
 			status = model.DialogueStatusChangeConfirmation
@@ -364,6 +364,20 @@ func (w *TurnWorker) serverUpdateDialogueStatus(ctx context.Context, dialogueID 
 		return st.UpdateDialogueStatus(ctx, dialogueID, status, "", "")
 	}
 	return nil
+}
+
+// statusPreservingResolved keeps a dialogue that already reached its terminal
+// resolved outcome (app linked + resolved_at stamped) in "resolved" instead of
+// bouncing it back to "active" when a later turn ends. Without this the session
+// list flips an already-completed session back to 进行中 the moment any follow-up
+// turn finishes (observed on dlg_508abae48dcfe45dcc16c016: resolved_at stamped,
+// status overwritten to active within the same second).
+func (w *TurnWorker) statusPreservingResolved(ctx context.Context, dialogueID string, fallback model.DialogueStatus) model.DialogueStatus {
+	dlg, err := w.store.GetDialogueSession(ctx, dialogueID)
+	if err == nil && dlg != nil && dlg.ResolvedAt != nil && dlg.ResolvedApplicationID != "" {
+		return model.DialogueStatusResolved
+	}
+	return fallback
 }
 
 // emitFn returns the SSE publish callback handed to the classifier. It is nil in

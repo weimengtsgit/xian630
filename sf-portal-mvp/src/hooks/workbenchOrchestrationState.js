@@ -188,10 +188,21 @@ function aggregateProductionState(steps) {
   return { state: 'ready', subStage: '' }
 }
 
+// 与后端 shouldAutoRepair（factory-server/internal/executor/executor.go）保持
+// 一致：只有 code_review / security_review / product_acceptance /
+// test_verification / image_build 步骤的失败会被自动回卷修复（deployment 仅
+// health_check_failed）。code_generation / data_integration 自身的失败（如
+// schema_validation_failed 守卫拒绝）从不自动修复——若在此显示"自动修复中"，
+// 界面会永远停在一个早已终态 failed 的任务上（observed: AZ2F job）。
+const AUTO_REPAIR_STEP_KINDS = new Set([
+  'code_review', 'security_review', 'product_acceptance', 'test_verification', 'image_build',
+])
+
 function productionFailureState(step) {
   const code = step.errorCode || step.error_code || ''
-  const repairable = new Set(['blocking_review', 'schema_validation_failed', 'file_constraint_violated'])
-  if (repairable.has(code)) return 'auto_repairing'
+  const kind = step.kind || ''
+  if (AUTO_REPAIR_STEP_KINDS.has(kind)) return 'auto_repairing'
+  if (kind === 'deployment' && code === 'health_check_failed') return 'auto_repairing'
   return 'failed'
 }
 

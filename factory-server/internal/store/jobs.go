@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/weimengtsgit/xian630/factory-server/internal/model"
@@ -502,38 +503,165 @@ UPDATE jobs SET current_step_kind = ?, updated_at = ? WHERE id = ?`,
 // MarkJobCompleted sets a job to its terminal completed state with ended_at.
 func (s *Store) MarkJobCompleted(ctx context.Context, jobID string) error {
 	now := ms(time.Now())
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?`,
-		string(model.JobStatusCompleted), now, now, jobID)
-	return err
+		string(model.JobStatusCompleted), now, now, jobID); err != nil {
+		return err
+	}
+	if err := finalizeDialogueForJob(ctx, tx, jobID, model.JobStatusCompleted, "", "", now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // MarkJobFailed sets a job to its terminal failed state with ended_at.
 func (s *Store) MarkJobFailed(ctx context.Context, jobID string) error {
+	return s.markJobFailedWithCode(ctx, jobID, "", "")
+}
+
+// MarkJobFailedWithCode is MarkJobFailed plus the failure identity propagated to
+// the dialogue row (code/message), so the session list shows why it failed.
+func (s *Store) MarkJobFailedWithCode(ctx context.Context, jobID string, code, message string) error {
+	return s.markJobFailedWithCode(ctx, jobID, code, message)
+}
+
+// markJobFailedWithCode is MarkJobFailed plus the failure identity propagated to
+// the dialogue row (code/message), so the session list shows why it failed.
+func (s *Store) markJobFailedWithCode(ctx context.Context, jobID string, code, message string) error {
 	now := ms(time.Now())
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?`,
-		string(model.JobStatusFailed), now, now, jobID)
-	return err
+		string(model.JobStatusFailed), now, now, jobID); err != nil {
+		return err
+	}
+	if err := finalizeDialogueForJob(ctx, tx, jobID, model.JobStatusFailed, code, message, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// finalizeDialogueForJob mirrors a job's terminal state onto its dialogue row.
+// A generation job's session otherwise never leaves active/task_running on its
+// own — SetJobCreatedApp only does task_running→active and nothing runtime-side
+// ever writes resolved (observed: completed jobs showing 进行中 forever). Rules:
+//   - completed: status→resolved, resolved_application_id←created_app_id (when
+//     set), resolved_at stamped unless already resolved. An already-resolved
+//     session (user opened the app) is left untouched.
+//   - failed: only a task_running session flips to failed — it is the state the
+//     dialogue sat in while the job ran; other states mean the user moved on.
+//   - canceled: a task_running session returns to active (interactive again).
+//
+// Best-effort per row: legacy jobs with no dialogue link are skipped.
+func finalizeDialogueForJob(ctx context.Context, tx *sql.Tx, jobID string, terminal model.JobStatus, code, message string, now int64) error {
+	var dialogueID string
+	if err := tx.QueryRowContext(ctx, `SELECT dialogue_id FROM jobs WHERE id = ?`, jobID).Scan(&dialogueID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if dialogueID == "" {
+		return nil
+	}
+	switch terminal {
+	case model.JobStatusCompleted:
+		var appID string
+		if err := tx.QueryRowContext(ctx, `SELECT created_app_id FROM jobs WHERE id = ?`, jobID).Scan(&appID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET status = ?, resolved_application_id = CASE WHEN ? != '' THEN ? ELSE resolved_application_id END,
+    resolved_at = COALESCE(resolved_at, ?), updated_at = ?
+WHERE id = ? AND status != ?`,
+			string(model.DialogueStatusResolved), appID, appID, now, now, dialogueID, string(model.DialogueStatusResolved))
+		return err
+	case model.JobStatusFailed:
+		// task_running: the dialogue sat in it while the job ran. failed: the
+		// job already failed once (user retried, it failed again) — refresh the
+		// error so the banner names the LATEST failure.
+		_, err := tx.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET status = ?, error_code = ?, error_message = ?, updated_at = ?
+WHERE id = ? AND status IN (?, ?)`,
+			string(model.DialogueStatusFailed), code, message, now, dialogueID,
+			string(model.DialogueStatusTaskRunning), string(model.DialogueStatusFailed))
+		return err
+	case model.JobStatusCanceled:
+		_, err := tx.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET status = ?, updated_at = ?
+WHERE id = ? AND status = ?`,
+			string(model.DialogueStatusActive), now, dialogueID, string(model.DialogueStatusTaskRunning))
+		return err
+	}
+	return nil
 }
 
 // MarkJobQueued flips a job back to queued (used on retry). updated_at bumped.
+// A failed dialogue linked to the job comes back to task_running (error cleared)
+// so the session list and the failure banner reflect the re-run instead of
+// staying stuck on the previous failure (observed: user retried the failed
+// step, the job ran again, but the session kept showing 已失败).
 func (s *Store) MarkJobQueued(ctx context.Context, jobID string) error {
 	now := ms(time.Now())
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
-		string(model.JobStatusQueued), now, jobID)
-	return err
+		string(model.JobStatusQueued), now, jobID); err != nil {
+		return err
+	}
+	var dialogueID string
+	if err := tx.QueryRowContext(ctx, `SELECT dialogue_id FROM jobs WHERE id = ?`, jobID).Scan(&dialogueID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		dialogueID = ""
+	}
+	if dialogueID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET status = ?, error_code = '', error_message = '', updated_at = ?
+WHERE id = ? AND status = ?`,
+			string(model.DialogueStatusTaskRunning), now, dialogueID, string(model.DialogueStatusFailed)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // MarkJobCanceled sets a job to the terminal canceled state with ended_at. Used
 // by the executor when an in-flight step's ctx is cancelled.
 func (s *Store) MarkJobCanceled(ctx context.Context, jobID string) error {
 	now := ms(time.Now())
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 UPDATE jobs SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?`,
-		string(model.JobStatusCanceled), now, now, jobID)
-	return err
+		string(model.JobStatusCanceled), now, now, jobID); err != nil {
+		return err
+	}
+	if err := finalizeDialogueForJob(ctx, tx, jobID, model.JobStatusCanceled, "", "", now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) MarkJobWaitingUser(ctx context.Context, jobID string) error {
 	now := ms(time.Now())

@@ -616,7 +616,9 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 			e.notify(ctx, jobID, stepID)
 			return nil
 		}
-		if err := e.store.MarkJobFailed(ctx, jobID); err != nil {
+		// The failure identity propagates to the job's dialogue row so the
+		// session list can show why the task failed.
+		if err := e.store.MarkJobFailedWithCode(ctx, jobID, string(res.ErrorCode), res.ErrorMessage); err != nil {
 			return err
 		}
 		e.notify(ctx, jobID, stepID)
@@ -638,10 +640,11 @@ func (e *Executor) finalize(ctx context.Context, jobID, stepID string, res StepR
 		return nil
 	default:
 		// Treat an unexpected status as unknown failure.
-		if err := e.store.MarkStepFailed(ctx, stepID, model.ErrorUnknown, fmt.Sprintf("runner returned status %s", res.Status)); err != nil {
+		msg := fmt.Sprintf("runner returned status %s", res.Status)
+		if err := e.store.MarkStepFailed(ctx, stepID, model.ErrorUnknown, msg); err != nil {
 			return err
 		}
-		if err := e.store.MarkJobFailed(ctx, jobID); err != nil {
+		if err := e.store.MarkJobFailedWithCode(ctx, jobID, string(model.ErrorUnknown), msg); err != nil {
 			return err
 		}
 		e.notify(ctx, jobID, stepID)
@@ -859,6 +862,28 @@ func (e *Executor) RetryCurrentStep(ctx context.Context, jobID string) (model.Jo
 	if step == nil {
 		return model.Job{}, fmt.Errorf("no step for current kind %s", job.CurrentStepKind)
 	}
+	// The finalized-data-access guard failure cannot be cleared by re-running
+	// code_generation — rewind to data_integration instead so the artifact is
+	// re-produced (and re-confirmed) first.
+	if isFinalizedDataAccessGuardFailure(*step) {
+		rewound, rerr := e.rewindToDataIntegration(ctx, jobID)
+		if rerr != nil {
+			return model.Job{}, rerr
+		}
+		if rewound {
+			e.rewindToDataIntegrationRecord(ctx, *job, *step, "retry_current_step")
+			updated, err := e.store.GetJob(ctx, jobID)
+			if err != nil || updated == nil {
+				if err == nil {
+					err = fmt.Errorf("job %s vanished after retry", jobID)
+				}
+				return model.Job{}, err
+			}
+			e.Signal()
+			return *updated, nil
+		}
+		// No data_integration step — fall through to the plain retry.
+	}
 	if err := e.store.ResetStepToPending(ctx, step.ID); err != nil {
 		return model.Job{}, fmt.Errorf("reset step: %w", err)
 	}
@@ -1075,6 +1100,64 @@ func isDataAccessSummaryConfirmationPayload(raw string) bool {
 	return false
 }
 
+// isFinalizedDataAccessGuardFailure reports the code_generation start-guard
+// rejection: the step failed at second zero because no finalized data-access
+// artifact exists (data_integration never produced it). Re-running
+// code_generation alone can never clear it — the guard fires again
+// immediately (observed: job_aab0f4a92248b7087f614f31, attempts 1→4 identical
+// zero-second failures while the user clicked retry). Recovery must rewind to
+// data_integration and let it re-produce the artifact.
+func isFinalizedDataAccessGuardFailure(step model.JobStep) bool {
+	return step.Kind == model.StepCodeGeneration &&
+		strings.HasPrefix(strings.TrimSpace(step.ErrorMessage), "finalized data access required")
+}
+
+// rewindToDataIntegration resets data_integration and every step after it to
+// pending, points the job at data_integration, and re-queues it. Returns
+// (false, nil) when the job has no data_integration step (caller falls back to
+// its default retry/repair behavior).
+func (e *Executor) rewindToDataIntegration(ctx context.Context, jobID string) (bool, error) {
+	steps, err := e.store.ListJobSteps(ctx, jobID)
+	if err != nil {
+		return false, fmt.Errorf("list job steps for rewind: %w", err)
+	}
+	diSeq := 0
+	for _, s := range steps {
+		if s.Kind == model.StepDataIntegration {
+			diSeq = s.Seq
+			break
+		}
+	}
+	if diSeq == 0 {
+		return false, nil
+	}
+	for _, s := range steps {
+		if s.Seq < diSeq {
+			continue
+		}
+		if err := e.store.ResetStepToPending(ctx, s.ID); err != nil {
+			return false, fmt.Errorf("reset step %s: %w", s.Kind, err)
+		}
+	}
+	if err := e.store.AdvanceJobStep(ctx, jobID, model.StepDataIntegration); err != nil {
+		return false, fmt.Errorf("rewind job to data_integration: %w", err)
+	}
+	if err := e.store.MarkJobQueued(ctx, jobID); err != nil {
+		return false, fmt.Errorf("requeue job: %w", err)
+	}
+	return true, nil
+}
+
+// repairFromFailureRecord emits the audit-trail record documenting a
+// rewind-to-data_integration recovery on the failed step's prior attempt.
+func (e *Executor) rewindToDataIntegrationRecord(ctx context.Context, job model.Job, failedStep model.JobStep, via string) {
+	emitter := e.newStepEmitter(job.ID, failedStep.ID, job.DialogueID, failedStep.Attempt, failedStep.AgentKey)
+	if maxSeq, err := e.store.MaxStepExecutionRecordSequence(ctx, job.ID, failedStep.ID, failedStep.Attempt); err == nil {
+		emitter.nextSeq = maxSeq + 1
+	}
+	emitter.emit(ctx, model.ExecutionRecordSystem, via+": failure is the finalized-data-access start guard — rewound to data_integration to re-produce the artifact")
+}
+
 // RepairFromFailure rewinds a failed test_verification, image_build, or
 // health-check-failed deployment step to code_generation with a tightly-scoped
 // repair prompt. It is intentionally separate from RetryCurrentStep: retry
@@ -1103,6 +1186,28 @@ func (e *Executor) RepairFromFailure(ctx context.Context, jobID string) (model.J
 	}
 	if !repairableFailureKind(failedStep.Kind, failedStep.ErrorCode) {
 		return model.Job{}, fmt.Errorf("step %s (%s) cannot be repaired by code_generation", failedStep.Kind, failedStep.ErrorCode)
+	}
+	// The finalized-data-access guard failure is "repairable" per the code
+	// above, but repairing code_generation alone just re-trips the guard at
+	// second zero — rewind to data_integration to re-produce the artifact.
+	if isFinalizedDataAccessGuardFailure(*failedStep) {
+		rewound, rerr := e.rewindToDataIntegration(ctx, jobID)
+		if rerr != nil {
+			return model.Job{}, rerr
+		}
+		if rewound {
+			e.rewindToDataIntegrationRecord(ctx, *job, *failedStep, "repair_from_failure")
+			updated, err := e.store.GetJob(ctx, jobID)
+			if err != nil || updated == nil {
+				if err == nil {
+					err = fmt.Errorf("job %s vanished after repair", jobID)
+				}
+				return model.Job{}, err
+			}
+			e.Signal()
+			return *updated, nil
+		}
+		// No data_integration step — fall through to the default repair.
 	}
 
 	repairPrompt := e.buildRepairPrompt(ctx, *job, *failedStep)
