@@ -439,12 +439,11 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.store.ReconcileDialogueClarificationFailures(ctx); err != nil {
 		log.Printf("reconcile clarification dialogue failures: %v", err)
 	}
-	// Idempotently transition legacy resolved dialogues into continuing active
-	// sessions so a dialogue whose first application is deployed stays open for
-	// follow-up modification/inquiry turns (Task 2). Best-effort, like the
-	// clarification backfill above.
-	if err := s.store.BackfillResolvedDialoguesToActive(ctx); err != nil {
-		log.Printf("backfill resolved dialogues to active: %v", err)
+	// Repair historic rows that the old continuing-session migration displayed
+	// as active even though their application or Agent had already resolved.
+	// Best-effort, like the clarification backfill above.
+	if err := s.store.ReconcileResolvedDialogues(ctx); err != nil {
+		log.Printf("reconcile resolved dialogues: %v", err)
 	}
 
 	s.srv = &http.Server{Addr: s.cfg.Addr, Handler: corsMiddleware(s.routes())}

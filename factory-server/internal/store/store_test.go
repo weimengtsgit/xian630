@@ -122,7 +122,7 @@ func TestOpenMigratesStepExecutionRecordsIdempotently(t *testing.T) {
 //   - the application_versions, dialogue_turns, and work_trace_events tables are
 //     created (CREATE TABLE IF NOT EXISTS);
 //   - a legacy RESOLVED dialogue is backfilled to ACTIVE by
-//     BackfillResolvedDialoguesToActive, preserving its audit links;
+//     ReconcileResolvedDialogues, preserving its audit links;
 //   - the pre-existing dialogue/job/application/deployment rows remain readable
 //     (no data loss);
 //   - re-opening the upgraded DB is a no-op (idempotent).
@@ -357,16 +357,16 @@ func TestOpenMigratesContinuousWorkbenchLegacyDB(t *testing.T) {
 		t.Fatalf("work_trace_events not migrated/usable: %v", err)
 	}
 
-	// --- Phase 3: the startup backfill flips resolved → active, preserving audit. ---
-	if err := st.BackfillResolvedDialoguesToActive(ctx); err != nil {
-		t.Fatalf("backfill resolved→active: %v", err)
+	// --- Phase 3: already-resolved rows stay resolved, preserving audit. ---
+	if err := st.ReconcileResolvedDialogues(ctx); err != nil {
+		t.Fatalf("reconcile resolved dialogue: %v", err)
 	}
 	dlg, err := st.GetDialogueSession(ctx, "dlg_legacy")
 	if err != nil || dlg == nil {
 		t.Fatalf("legacy dialogue unreadable after backfill: %v", err)
 	}
-	if dlg.Status != model.DialogueStatusActive {
-		t.Fatalf("resolved dialogue not backfilled to active: %q", dlg.Status)
+	if dlg.Status != model.DialogueStatusResolved {
+		t.Fatalf("resolved dialogue changed unexpectedly: %q", dlg.Status)
 	}
 	if dlg.ResolvedApplicationID != "app_legacy" {
 		t.Fatalf("audit link lost in backfill: resolved_application_id=%q", dlg.ResolvedApplicationID)
@@ -393,11 +393,11 @@ func TestOpenMigratesContinuousWorkbenchLegacyDB(t *testing.T) {
 		t.Fatalf("idempotent reopen: %v", err)
 	}
 	t.Cleanup(func() { _ = st2.Close() })
-	if err := st2.BackfillResolvedDialoguesToActive(ctx); err != nil {
-		t.Fatalf("idempotent backfill: %v", err)
+	if err := st2.ReconcileResolvedDialogues(ctx); err != nil {
+		t.Fatalf("idempotent reconcile: %v", err)
 	}
 	dlg2, _ := st2.GetDialogueSession(ctx, "dlg_legacy")
-	if dlg2 == nil || dlg2.Status != model.DialogueStatusActive {
+	if dlg2 == nil || dlg2.Status != model.DialogueStatusResolved {
 		t.Fatalf("dialogue status changed on idempotent reopen: %+v", dlg2)
 	}
 	job2, _ := st2.GetJob(ctx, "job_legacy")

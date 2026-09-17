@@ -236,6 +236,39 @@ func TestListDialogueSessionsNewestFirst(t *testing.T) {
 	}
 }
 
+// TestReconcileResolvedDialogues repairs the historical "active despite a
+// completed result" rows without changing genuinely active conversations.
+func TestReconcileResolvedDialogues(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: "dlg_completed", InitialPrompt: "复用现有智能体", Status: model.DialogueStatusActive,
+		Intent: model.DialogueIntentExistingApplication, RouteLocked: true,
+		ResolvedApplicationID: "app_existing", ResolvedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create completed dialogue: %v", err)
+	}
+	if err := st.CreateDialogueSession(ctx, model.DialogueSession{
+		ID: "dlg_active", InitialPrompt: "继续补充需求", Status: model.DialogueStatusActive,
+		Intent: model.DialogueIntentApplicationGeneration, RouteLocked: true,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create active dialogue: %v", err)
+	}
+	if err := st.ReconcileResolvedDialogues(ctx); err != nil {
+		t.Fatalf("reconcile resolved dialogues: %v", err)
+	}
+	completed, _ := st.GetDialogueSession(ctx, "dlg_completed")
+	if completed == nil || completed.Status != model.DialogueStatusResolved {
+		t.Fatalf("completed dialogue = %#v, want resolved", completed)
+	}
+	active, _ := st.GetDialogueSession(ctx, "dlg_active")
+	if active == nil || active.Status != model.DialogueStatusActive {
+		t.Fatalf("active dialogue = %#v, want active", active)
+	}
+}
+
 // TestAgentCategoryPromptRoundTrip verifies the new category/prompt columns
 // persist and round-trip through upsert/get/list.
 func TestAgentCategoryPromptRoundTrip(t *testing.T) {

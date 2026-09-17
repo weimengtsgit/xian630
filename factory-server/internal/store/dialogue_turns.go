@@ -183,18 +183,21 @@ func scanDialogueTurn(sc scanner) (*model.DialogueTurn, error) {
 	return &t, nil
 }
 
-// BackfillResolvedDialoguesToActive is the idempotent one-time migration that
-// transitions every legacy resolved dialogue into a continuing active session,
-// so a dialogue whose first application is deployed stays open for follow-up
-// modification/inquiry turns (Task 2). It preserves resolved_application_id /
-// created_agent_id / resolved_at (the audit links) and only flips status +
-// clears the resolved terminal marker semantics — the dialogue is still
-// "resolved" in lineage terms but its interaction state is now active.
+// ReconcileResolvedDialogues corrects rows written by the old continuing-session
+// migration. A dialogue that has already produced an application or Agent is a
+// completed conversation until the user starts another concrete process; showing
+// it as "进行中" makes the left navigation disagree with the actual flow.
 //
-// Re-running is safe: only rows whose status is exactly 'resolved' are flipped,
-// so an already-active session is a no-op.
-func (s *Store) BackfillResolvedDialoguesToActive(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE dialogue_sessions SET status = 'active' WHERE status = 'resolved'`)
+// The update is deliberately narrow: it repairs only active rows that have a
+// durable resolved marker and a concrete result link. Active dialogues without
+// a resolved result remain available for their normal follow-up flow.
+func (s *Store) ReconcileResolvedDialogues(ctx context.Context) error {
+	now := ms(time.Now())
+	_, err := s.db.ExecContext(ctx, `
+UPDATE dialogue_sessions
+SET status = 'resolved', updated_at = ?
+WHERE status = 'active'
+  AND resolved_at IS NOT NULL
+  AND (resolved_application_id != '' OR created_agent_id != '')`, now)
 	return err
 }
