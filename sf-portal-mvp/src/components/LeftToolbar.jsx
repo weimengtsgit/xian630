@@ -13,8 +13,9 @@ import {
 
 const menuItems = [
   { label: '首页', icon: Home, page: 'workbench' },
-  { label: '智能体广场', icon: Store, href: 'http://10.253.28.62:18016/' },
-  { label: '智能体流水线', icon: GitBranch, href: 'http://10.253.28.62:18002/' },
+  // 本地联调时跳转到本机启动的智能体服务。
+  { label: '智能体广场', icon: Store, href: 'http://127.0.0.1:5173/' },
+  { label: '智能体流水线', icon: GitBranch, href: 'http://127.0.0.1:18002/' },
   { label: '导航', icon: Compass },
   { label: '图层', icon: Layers },
   { label: '文档', icon: FileText },
