@@ -151,11 +151,29 @@ prototype/
   "prototypeStatus": "unconfirmed_reference",
   "downstreamConstraintLevel": "reference",
   "immutable": false,
-  "prototype": {"style": "enterprise_dense", "defaultPage": "home", "pages": []},
+  "prototype": {
+    "style": "enterprise_dense",
+    "defaultPage": "home",
+    "pages": [
+      {
+        "id": "home",
+        "title": "首页",
+        "purpose": "承载核心任务入口、关键指标和主要操作流",
+        "generated": true,
+        "visibleByDefault": true,
+        "sections": [
+          {"id": "overview", "title": "总览区", "content": "核心指标、状态摘要、风险提示"}
+        ],
+        "states": ["default", "empty", "loading", "error"]
+      }
+    ]
+  },
   "designDocument": {},
   "assumedDataFields": []
 }
 ```
+
+`sections` 必须与 preview-manifest.json 的 sections 同构：对象数组，每项含 `id`、`title`、`content` 三个字符串字段。严禁写成字符串 ID 数组（如 `["topbar", "port_grid"]`）——Factory 用强类型解析该字段，字符串形式会被判定为生成失败。
 
 Required top-level stdout JSON fields:
 

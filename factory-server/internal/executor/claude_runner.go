@@ -1552,6 +1552,7 @@ func designContractPrompt(job model.Job, ws runner.AttemptWorkspace) string {
 		"允许在当前 attempt 目录下写入 prototype/index.html、prototype/styles.css、prototype/preview-manifest.json、prototype/prototype-contract.json；禁止写入仓库工作目录或最终应用目录，禁止调用 Bash。" +
 		"必须把最终 JSON 对象写入 output.json：" + absolutePath(ws.OutputPath()) + "。文件不要 Markdown，不要代码块；最终 assistant 消息可以只给简短确认。" +
 		"JSON 必须包含：status、summary、needsUserInput、questions、designDocument、assumedDataFields、prototype、workLog、warnings。" +
+		"强契约类型：prototype-contract.json 与 output.json 中 prototype.pages[].sections 必须是对象数组，每项包含 id、title、content 三个字符串字段（与 preview-manifest.json 的 sections 同构），严禁写成字符串 ID 数组（如 [\"topbar\"]，Factory 强类型解析会直接判定生成失败）。" +
 		"designDocument 与 prototype 必须描述同一套页面设计；如用户后续确认原型，预览将成为后续验收基线。" +
 		"所有人类可读文本必须使用简体中文；只有标识符、路径、枚举值和代码符号可以保留英文。用户需求：" + job.UserPrompt
 }
